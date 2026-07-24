@@ -29,6 +29,13 @@ test('builds the isolated static preview foundation', async () => {
     assert.match(runtime, /IntersectionObserver/);
     assert.match(runtime, /prefers-reduced-motion/);
     assert.match(runtime, /data-counter/);
+    assert.match(runtime, /counterDetails/);
+    assert.match(runtime, /sfCounterAnimated/);
+    assert.match(runtime, /if \(!reducedMotion\)/);
+    assert.match(runtime, /data-siteforge-brand-logo/);
+    assert.match(runtime, /siteforge-brand-intro/);
+    assert.match(runtime, /sessionStorage/);
+    assert.match(runtime, /prefers-reduced-motion/);
     await assert.rejects(stat(join(directory, 'dist', 'assets', '.gitkeep')));
   } finally {
     await rm(directory, { recursive: true, force: true });

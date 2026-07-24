@@ -4,7 +4,9 @@ import {
   Ban,
   Check,
   CheckCheck,
+  ChevronDown,
   CircleAlert,
+  CircleHelp,
   ClipboardCheck,
   Clock3,
   ExternalLink,
@@ -17,6 +19,7 @@ import {
   ListChecks,
   PackageCheck,
   Play,
+  Plus,
   RotateCcw,
   Save,
   Search,
@@ -27,6 +30,7 @@ import {
   SlidersHorizontal,
   Trash2,
   UsersRound,
+  WalletCards,
   X,
 } from 'lucide-react';
 import {
@@ -42,6 +46,10 @@ import {
 } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import * as Dialog from '@radix-ui/react-dialog';
+import builderContractSource from '../worker/codex-builder-contract.md?raw';
+import builderInstructionsSource from '../worker/builder-template/AGENTS.md?raw';
+import builderPackageSource from '../worker/builder-template/package.json?raw';
+import motionRuntimeSource from '../worker/builder-template/src/main.js?raw';
 import { AppShell, type AppPage } from './components/AppShell';
 import {
   Button,
@@ -59,10 +67,14 @@ import {
   type Business,
   type AuditFinding,
   type AssetAnnotation,
+  type AgentPackage,
+  type AgentPackageProposal,
   type BrandKit,
   type CapabilityDecision,
   type BriefSourceSelections,
+  type BuilderArtifact,
   type BuilderPreviewMode,
+  type BuilderRunEvidence,
   type BuilderRunMode,
   type BuilderRun,
   type BuilderEvent,
@@ -75,7 +87,7 @@ import {
   type Task,
 } from './lib/domain';
 import { SupabaseWorkspaceRepository } from './lib/cloud-repository';
-import { manifestSourceMatchesBrief } from './lib/build-manifest';
+import { codexBuilderContractVersion, manifestSourceMatchesBrief } from './lib/build-manifest';
 import { brandColourEvidenceSummary, rankBrandColourEvidence } from './lib/brand-colours';
 import { detectCapabilities } from './lib/capability-inventory';
 import { siteforgeRepository, type WorkspaceRepository } from './lib/repository';
@@ -91,10 +103,13 @@ type WorkspaceTab =
   | 'redesign'
   | 'report'
   | 'activity';
+type AgentStudioSection = 'refine' | 'agent';
 type Route =
   | { page: 'today' }
   | { page: 'data' }
+  | { page: 'usage' }
   | { page: 'settings' }
+  | { page: 'agent-studio'; section?: AgentStudioSection; businessId?: string }
   | { page: 'prospects'; businessId?: string; versionId?: string; tab?: WorkspaceTab };
 
 const lastRouteStorageKey = 'siteforge-os.last-route';
@@ -115,6 +130,10 @@ function isWorkspaceTab(value: string | undefined): value is WorkspaceTab {
   return workspaceTabs.some((tab) => tab.id === value);
 }
 
+function isAgentStudioSection(value: string | undefined): value is AgentStudioSection {
+  return value === 'refine' || value === 'agent';
+}
+
 function routeFromHash(hash: string): Route {
   const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   if (parts[0] === 'prospects') {
@@ -126,7 +145,19 @@ function routeFromHash(hash: string): Route {
     };
   }
   if (parts[0] === 'settings') return { page: 'settings' };
+  if (parts[0] === 'usage') return { page: 'usage' };
   if (parts[0] === 'data') return { page: 'data' };
+  if (parts[0] === 'agent-studio') {
+    if (isAgentStudioSection(parts[1])) {
+      return {
+        page: 'agent-studio',
+        section: parts[1],
+        businessId: parts[2],
+      };
+    }
+    // Preserve direct links created before Agent Studio had its two dedicated pages.
+    return { page: 'agent-studio', section: 'refine', businessId: parts[1] };
+  }
   return { page: 'today' };
 }
 
@@ -134,6 +165,11 @@ function hrefForRoute(route: Route) {
   if (route.page === 'today') return '#/today';
   if (route.page === 'settings') return '#/settings';
   if (route.page === 'data') return '#/data';
+  if (route.page === 'usage') return '#/usage';
+  if (route.page === 'agent-studio') {
+    const section = route.section ?? 'refine';
+    return `#/agent-studio/${section}${route.businessId ? `/${route.businessId}` : ''}`;
+  }
   return `#/prospects${route.businessId ? `/${route.businessId}${route.versionId ? `/versions/${route.versionId}` : ''}${route.tab ? `/${route.tab}` : ''}` : ''}`;
 }
 
@@ -277,17 +313,21 @@ function EmptyState({
   title,
   detail,
   action,
+  headingLevel = 3,
 }: {
   icon: typeof ClipboardCheck;
   title: string;
   detail: string;
   action?: ReactNode;
+  headingLevel?: 2 | 3;
 }) {
+  const Heading = headingLevel === 2 ? 'h2' : 'h3';
+
   return (
     <div className="empty-state">
       <Icon aria-hidden="true" size={22} />
       <div>
-        <h3>{title}</h3>
+        <Heading>{title}</Heading>
         <p>{detail}</p>
         {action}
       </div>
@@ -664,18 +704,21 @@ function WorkspaceHeader({
       </header>
       {workspace.redesignBriefs.length > 1 ? (
         <label className="workspace-version-picker">
-          <span>Workspace version</span>
-          <select
-            aria-label="Workspace version"
-            onChange={(event) => onVersionChange?.(event.target.value)}
-            value={workspace.redesignBrief?.id ?? ''}
-          >
-            {workspace.redesignBriefs.map((brief) => (
-              <option key={brief.id} value={brief.id}>
-                Version {brief.version} · {brief.status}
-              </option>
-            ))}
-          </select>
+          <span className="workspace-version-picker__label">Workspace version</span>
+          <span className="workspace-version-picker__control">
+            <select
+              aria-label="Workspace version"
+              onChange={(event) => onVersionChange?.(event.target.value)}
+              value={workspace.redesignBrief?.id ?? ''}
+            >
+              {workspace.redesignBriefs.map((brief) => (
+                <option key={brief.id} value={brief.id}>
+                  Version {brief.version} · {brief.status}
+                </option>
+              ))}
+            </select>
+            <ChevronDown aria-hidden="true" className="workspace-version-picker__icon" size={16} />
+          </span>
         </label>
       ) : null}
       {(isApproved || canApprove) && (
@@ -2044,6 +2087,327 @@ function usePrivateArtifactUrls(artifacts: PrivateArtifactReference[], errorMess
   }, [client, errorMessage, stableArtifacts]);
 
   return { urls, loadError };
+}
+
+function isImagePreviewFile(file: BuilderArtifact) {
+  return (
+    file.contentType?.startsWith('image/') === true ||
+    /\.(avif|gif|jpe?g|png|svg|webp)$/i.test(file.storagePath)
+  );
+}
+
+function isTextPreviewFile(file: BuilderArtifact) {
+  return (
+    file.contentType?.startsWith('text/') === true ||
+    /\.(css|csv|html?|js|json|jsx|md|mjs|svg|ts|tsx|txt|xml|ya?ml)$/i.test(file.storagePath)
+  );
+}
+
+function changedLineNumbers(previous: string, current: string) {
+  const before = previous.split('\n');
+  const after = current.split('\n');
+  let start = 0;
+  while (start < before.length && start < after.length && before[start] === after[start])
+    start += 1;
+  if (start === before.length && start === after.length) return [];
+
+  let beforeEnd = before.length - 1;
+  let afterEnd = after.length - 1;
+  while (beforeEnd >= start && afterEnd >= start && before[beforeEnd] === after[afterEnd]) {
+    beforeEnd -= 1;
+    afterEnd -= 1;
+  }
+  return Array.from({ length: afterEnd - start + 1 }, (_, index) => start + index + 1);
+}
+
+function SourcePreview({
+  content,
+  highlightedLines = [],
+}: {
+  content: string;
+  highlightedLines?: number[];
+}) {
+  const highlighted = new Set(highlightedLines);
+  if (!highlighted.size)
+    return <pre className="builder-file-preview-dialog__source">{content}</pre>;
+  return (
+    <pre className="builder-file-preview-dialog__source builder-file-preview-dialog__source--diff">
+      {content.split('\n').map((line, index) => (
+        <span
+          className={highlighted.has(index + 1) ? 'is-changed' : undefined}
+          key={`${index}-${line}`}
+        >
+          <span aria-hidden="true" className="builder-file-preview-dialog__line-number">
+            {index + 1}
+          </span>
+          {line}
+          {'\n'}
+        </span>
+      ))}
+    </pre>
+  );
+}
+
+function BuilderPreviewFileEntry({
+  file,
+  previousFile,
+  changeKind,
+}: {
+  file: BuilderArtifact;
+  previousFile?: BuilderArtifact;
+  changeKind?: 'added' | 'edited';
+}) {
+  const image = isImagePreviewFile(file);
+  const textFile = isTextPreviewFile(file);
+  const [open, setOpen] = useState(false);
+  const [content, setContent] = useState('');
+  const [contentError, setContentError] = useState('');
+  const signedArtifacts = image || open ? [file, ...(previousFile ? [previousFile] : [])] : [];
+  const { urls, loadError } = usePrivateArtifactUrls(
+    signedArtifacts,
+    'This private preview file could not be loaded.',
+  );
+  const fileUrl = urls[file.id];
+  const previousFileUrl = previousFile ? urls[previousFile.id] : undefined;
+  const [previousContent, setPreviousContent] = useState('');
+
+  useEffect(() => {
+    if (!open || !textFile || !fileUrl) return;
+    const controller = new AbortController();
+    setContent('');
+    setContentError('');
+    void fetch(fileUrl, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('The private file could not be loaded.');
+        const source = await response.text();
+        return source.length > 500_000
+          ? `${source.slice(0, 500_000)}\n\n… Preview truncated.`
+          : source;
+      })
+      .then(setContent)
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        setContentError(
+          error instanceof Error ? error.message : 'The private file could not be loaded.',
+        );
+      });
+    return () => controller.abort();
+  }, [fileUrl, open, textFile]);
+
+  useEffect(() => {
+    if (!open || !textFile || !previousFileUrl) {
+      setPreviousContent('');
+      return;
+    }
+    const controller = new AbortController();
+    void fetch(previousFileUrl, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('The earlier private file could not be loaded.');
+        return response.text();
+      })
+      .then(setPreviousContent)
+      .catch(() => {
+        if (!controller.signal.aborted) setPreviousContent('');
+      });
+    return () => controller.abort();
+  }, [open, previousFileUrl, textFile]);
+
+  if (image) {
+    return (
+      <li>
+        {fileUrl ? (
+          <ExpandableImage
+            alt={file.label}
+            className="builder-run-inspector__file-button builder-run-inspector__file-button--image"
+            label={file.label}
+            src={fileUrl}
+          >
+            <img alt="" src={fileUrl} />
+            <span>
+              <strong>{file.label}</strong>
+              <small>{file.storagePath}</small>
+            </span>
+          </ExpandableImage>
+        ) : (
+          <span className="builder-run-inspector__file-button">
+            <FileImage aria-hidden="true" size={18} />
+            <span>
+              <strong>{file.label}</strong>
+              <small>
+                {loadError ? 'Image preview could not be loaded.' : 'Loading image preview…'}
+              </small>
+            </span>
+          </span>
+        )}
+      </li>
+    );
+  }
+
+  return (
+    <li>
+      <button
+        aria-label={`View ${file.label}`}
+        className="builder-run-inspector__file-button"
+        onClick={() => setOpen(true)}
+        type="button"
+      >
+        {image ? (
+          <FileImage aria-hidden="true" size={18} />
+        ) : (
+          <FileText aria-hidden="true" size={18} />
+        )}
+        <span>
+          <strong>{file.label}</strong>
+          <small>
+            {file.storagePath}
+            {file.byteSize ? ` · ${formatStorageSize(file.byteSize)}` : ''}
+          </small>
+          {changeKind ? (
+            <small>
+              {changeKind === 'added' ? 'Whole new file' : 'Edited for this refinement'}
+            </small>
+          ) : null}
+        </span>
+      </button>
+      <Dialog.Root onOpenChange={setOpen} open={open}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="builder-file-preview-overlay" />
+          <Dialog.Content
+            aria-describedby="builder-file-preview-description"
+            className="builder-file-preview-dialog"
+          >
+            <div className="builder-file-preview-dialog__header">
+              <div>
+                <Eyebrow>Private preview file</Eyebrow>
+                <Dialog.Title>{file.label}</Dialog.Title>
+              </div>
+              <Dialog.Close asChild>
+                <Button aria-label={`Close ${file.label}`} size="compact" variant="quiet">
+                  <X aria-hidden="true" size={18} />
+                </Button>
+              </Dialog.Close>
+            </div>
+            <Dialog.Description className="muted-copy" id="builder-file-preview-description">
+              {file.storagePath}
+            </Dialog.Description>
+            {changeKind ? (
+              <p className="builder-file-preview-dialog__change-note">
+                {changeKind === 'added'
+                  ? 'New file in this refinement. Its full source is shown without line highlights.'
+                  : 'Changed lines compared with the previous saved test are highlighted.'}
+              </p>
+            ) : null}
+            {loadError || contentError ? (
+              <p className="form-message form-message--error" role="alert">
+                {loadError || contentError}
+              </p>
+            ) : !fileUrl ? (
+              <p className="muted-copy" role="status">
+                Loading private file…
+              </p>
+            ) : textFile ? (
+              content ? (
+                <SourcePreview
+                  content={content}
+                  highlightedLines={
+                    changeKind === 'edited' && previousContent
+                      ? changedLineNumbers(previousContent, content)
+                      : []
+                  }
+                />
+              ) : (
+                <p className="muted-copy" role="status">
+                  Reading private file…
+                </p>
+              )
+            ) : (
+              <iframe
+                className="builder-file-preview-dialog__frame"
+                sandbox=""
+                src={fileUrl}
+                title={`Private preview of ${file.label}`}
+              />
+            )}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </li>
+  );
+}
+
+function TestDirectionResults({
+  run,
+  artifacts,
+  previousArtifacts = [],
+  onOpen,
+}: {
+  run: BuilderRun;
+  artifacts: BuilderArtifact[];
+  previousArtifacts?: BuilderArtifact[];
+  onOpen?: () => void;
+}) {
+  const directions = (run.buildInstruction ?? '')
+    .split(/\n\s*\n/)
+    .map((direction) => direction.trim())
+    .filter(Boolean);
+  const sourceFiles = artifacts.filter(
+    (artifact) => artifact.kind === 'draft_file' && isTextPreviewFile(artifact),
+  );
+  const previousByPath = new Map(
+    previousArtifacts
+      .filter((artifact) => artifact.kind === 'draft_file')
+      .map((artifact) => [artifact.label, artifact]),
+  );
+
+  if (!directions.length) return null;
+  return (
+    <section className="builder-direction-results" aria-label="Applied test directions">
+      <Eyebrow>Applied test directions</Eyebrow>
+      {directions.map((direction, index) => (
+        <details
+          key={`${run.id}-${index}`}
+          onToggle={(event) => event.currentTarget.open && onOpen?.()}
+        >
+          <summary>
+            <span>
+              <strong>Direction {index + 1}</strong>
+              <small>{direction}</small>
+            </span>
+            <span>
+              {sourceFiles.length} changed source file{sourceFiles.length === 1 ? '' : 's'}
+            </span>
+          </summary>
+          <div>
+            <p>
+              These files are the saved result of this test run. When a run has multiple directions,
+              SiteForge shows the run&apos;s resulting changes rather than claiming a file came from
+              one sentence alone.
+            </p>
+            {sourceFiles.length ? (
+              <ul className="builder-run-inspector__files">
+                {sourceFiles.map((file) => {
+                  const previousFile = previousByPath.get(file.label);
+                  return (
+                    <BuilderPreviewFileEntry
+                      changeKind={previousFile ? 'edited' : 'added'}
+                      file={file}
+                      key={file.id}
+                      previousFile={previousFile}
+                    />
+                  );
+                })}
+              </ul>
+            ) : (
+              <p className="muted-copy">
+                No saved source-file changes are available yet. Files appear after the private build
+                has written and saved its draft.
+              </p>
+            )}
+          </div>
+        </details>
+      ))}
+    </section>
+  );
 }
 
 function VisualAssetCatalog({ assets }: { assets: ResearchArtifact[] }) {
@@ -4007,6 +4371,63 @@ function builderRunLabel(status: BuilderRun['status']) {
   return 'Build cancelled';
 }
 
+function builderRunModeLabel(mode: BuilderRunMode) {
+  if (mode === 'homepage_test') return 'Homepage test';
+  if (mode === 'page_test') return 'Page test';
+  return 'Complete prospect build';
+}
+
+function testBuildChangeSummary(run: BuilderRun, previousRun?: BuilderRun) {
+  if (!previousRun)
+    return 'Baseline test. This is the first completed agent contract in this series.';
+
+  const changes: string[] = [];
+  if (run.templateVersion !== previousRun.templateVersion) {
+    changes.push(`Builder contract ${previousRun.templateVersion} → ${run.templateVersion}`);
+  }
+  if (run.buildInstruction !== previousRun.buildInstruction) {
+    changes.push(
+      run.buildInstruction
+        ? 'Agent refinement directions updated'
+        : 'Agent refinement directions removed',
+    );
+  }
+  if (
+    run.buildMode !== previousRun.buildMode ||
+    run.targetSourceUrl !== previousRun.targetSourceUrl
+  ) {
+    changes.push(`Test target changed to ${builderRunModeLabel(run.buildMode).toLowerCase()}`);
+  }
+
+  return changes.length
+    ? changes.join(' · ')
+    : `No agent-contract change from the previous test (${run.templateVersion}).`;
+}
+
+function buildProgressMilestones(run: BuilderRun, screenshots: BuilderArtifact[]) {
+  if (!run.totalItems) return [];
+
+  const initialMilestones = [
+    'Prepare private workspace',
+    'Stage approved inputs',
+    'Build website with Codex',
+    'Run browser quality checks',
+  ];
+  if (run.totalItems <= initialMilestones.length) {
+    return initialMilestones.slice(0, run.totalItems);
+  }
+
+  const captureCount = Math.max(0, run.totalItems - initialMilestones.length - 1);
+  const captureMilestones = Array.from({ length: captureCount }, (_, index) => {
+    const screenshot = screenshots[index];
+    return screenshot
+      ? `Capture ${screenshot.label.toLowerCase()}`
+      : `Capture responsive preview ${index + 1}`;
+  });
+
+  return [...initialMilestones, ...captureMilestones, 'Save outputs and finalise preview'];
+}
+
 function builderEventContext(event: BuilderEvent) {
   const context = [`Recorded as step ${event.sequence}.`];
   const page = typeof event.metadata.page === 'string' ? event.metadata.page : undefined;
@@ -4076,26 +4497,172 @@ function BuilderTimelineItem({ event }: { event: BuilderEvent }) {
   );
 }
 
+type BuilderRunEvidenceState =
+  | { status: 'loading' }
+  | { status: 'ready'; evidence: BuilderRunEvidence }
+  | { status: 'error'; message: string };
+
+function BuilderHistoryEntry({
+  run,
+  state,
+  previousState,
+  onLoad,
+  onLoadPrevious,
+}: {
+  run: BuilderRun;
+  state?: BuilderRunEvidenceState;
+  previousState?: BuilderRunEvidenceState;
+  onLoad: (builderRunId: string) => Promise<void>;
+  onLoadPrevious?: () => void;
+}) {
+  const screenshots =
+    state?.status === 'ready'
+      ? state.evidence.artifacts.filter((artifact) => artifact.kind === 'screenshot')
+      : [];
+  const { urls, loadError } = usePrivateArtifactUrls(
+    screenshots,
+    'Private screenshots from this earlier build could not be loaded.',
+  );
+
+  return (
+    <details
+      className="builder-history__entry"
+      onToggle={(event) => {
+        if (event.currentTarget.open && (!state || state.status === 'error')) void onLoad(run.id);
+      }}
+    >
+      <summary>
+        <span>
+          <strong>{builderRunModeLabel(run.buildMode)}</strong>
+          <small>{formatDateTime(run.createdAt)}</small>
+        </span>
+        <StatusBadge tone={builderRunTone(run.status)}>{builderRunLabel(run.status)}</StatusBadge>
+      </summary>
+      {!state || state.status === 'loading' ? (
+        <p className="muted-copy" role="status">
+          Loading this private build&apos;s logs and captures…
+        </p>
+      ) : state.status === 'error' ? (
+        <p className="form-message form-message--error" role="alert">
+          {state.message}
+        </p>
+      ) : (
+        <div className="builder-history__evidence">
+          <p className="muted-copy">
+            {state.evidence.events.length} log entries · {screenshots.length} responsive captures
+          </p>
+          {state.evidence.events.length ? (
+            <ol className="builder-history__logs">
+              {[...state.evidence.events].reverse().map((event) => (
+                <li key={event.id}>
+                  <strong>{event.kind}</strong>
+                  <span>{event.message}</span>
+                  <time dateTime={event.createdAt}>{formatDateTime(event.createdAt)}</time>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="muted-copy">No saved build logs are available for this test.</p>
+          )}
+          {run.buildMode !== 'full_site' ? (
+            <TestDirectionResults
+              artifacts={state.evidence.artifacts}
+              onOpen={onLoadPrevious}
+              previousArtifacts={
+                previousState?.status === 'ready' ? previousState.evidence.artifacts : []
+              }
+              run={run}
+            />
+          ) : null}
+          {screenshots.length ? (
+            <div className="builder-screenshots__history" aria-label="Earlier build captures">
+              {screenshots.map((screenshot) =>
+                urls[screenshot.id] ? (
+                  <ExpandableImage
+                    alt={`${screenshot.label} of the earlier private preview`}
+                    className="builder-screenshots__image"
+                    key={screenshot.id}
+                    label={screenshot.label}
+                    src={urls[screenshot.id]}
+                  >
+                    <img alt="" src={urls[screenshot.id]} />
+                    <span>{screenshot.label}</span>
+                  </ExpandableImage>
+                ) : null,
+              )}
+              {loadError ? <p className="form-message form-message--error">{loadError}</p> : null}
+            </div>
+          ) : null}
+        </div>
+      )}
+    </details>
+  );
+}
+
 function BuilderRunPanel({
   workspace,
+  buildKind,
+  agentPackages = [],
   onRequestBuild,
   onCancelBuild,
   onDeleteBuild,
   onOpenPreview,
+  onLoadBuildEvidence,
 }: {
   workspace: ProspectWorkspace;
-  onRequestBuild: (mode: BuilderRunMode, targetSourceUrl?: string) => Promise<void>;
+  buildKind: 'test' | 'prospect';
+  agentPackages?: AgentPackage[];
+  onRequestBuild: (
+    mode: BuilderRunMode,
+    targetSourceUrl?: string,
+    buildInstruction?: string,
+    agentPackageId?: string,
+  ) => Promise<void>;
   onCancelBuild: () => Promise<void>;
   onDeleteBuild: (businessId: string) => Promise<void>;
   onOpenPreview: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
+  onLoadBuildEvidence: (builderRunId: string) => Promise<BuilderRunEvidence>;
 }) {
-  const run = workspace.latestBuilderRun;
+  const isTestBuild = buildKind === 'test';
+  const runs = workspace.builderRuns.filter((candidate) =>
+    isTestBuild ? candidate.buildMode !== 'full_site' : candidate.buildMode === 'full_site',
+  );
+  const run = runs[0];
+  const runIsLatest = run?.id === workspace.latestBuilderRun?.id;
   const [isRequesting, setIsRequesting] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isOpeningPreview, setIsOpeningPreview] = useState(false);
   const [message, setMessage] = useState('');
   const [targetSourceUrl, setTargetSourceUrl] = useState('');
+  const [buildDirections, setBuildDirections] = useState<string[]>([]);
+  const testPackages = agentPackages.filter(
+    (agentPackage) => agentPackage.status === 'published' || agentPackage.status === 'test_ready',
+  );
+  const publishedPackage = agentPackages.find(
+    (agentPackage) => agentPackage.status === 'published',
+  );
+  const [selectedAgentPackageId, setSelectedAgentPackageId] = useState<string>();
+  const selectedAgentPackage = agentPackages.find(
+    (agentPackage) => agentPackage.id === selectedAgentPackageId,
+  );
+  const inheritedAgentPackage = selectedAgentPackage?.basePackageId
+    ? agentPackages.find((agentPackage) => agentPackage.id === selectedAgentPackage.basePackageId)
+    : undefined;
+  const inheritedPackageLabel = inheritedAgentPackage
+    ? `Inherited from package v${inheritedAgentPackage.version}`
+    : `Package v${selectedAgentPackage?.version ?? publishedPackage?.version ?? 4} baseline`;
+  const includesBrandIntroduction = Boolean(
+    selectedAgentPackage &&
+    (selectedAgentPackage.version >= 5 ||
+      /brand[-\s]introduction/i.test(selectedAgentPackage.capabilityProposal ?? '')),
+  );
+  const [sessionBuildRunId, setSessionBuildRunId] = useState<string>();
+  const [pendingBuild, setPendingBuild] = useState<{ previousRunId?: string }>();
+  const [inspector, setInspector] = useState<'steps' | 'files'>();
+  const [historyEvidence, setHistoryEvidence] = useState<
+    Record<string, BuilderRunEvidenceState | undefined>
+  >({});
   const pageTestOptions = (workspace.buildManifest?.data.selectedPages ?? []).filter((page) => {
     try {
       return new URL(page.url).pathname.replace(/\/+$/, '') !== '';
@@ -4103,35 +4670,67 @@ function BuilderRunPanel({
       return false;
     }
   });
+  useEffect(() => {
+    if (selectedAgentPackageId && testPackages.some((item) => item.id === selectedAgentPackageId)) {
+      return;
+    }
+    setSelectedAgentPackageId(
+      testPackages.find((item) => item.status === 'test_ready')?.id ??
+        publishedPackage?.id ??
+        testPackages[0]?.id,
+    );
+  }, [publishedPackage?.id, selectedAgentPackageId, testPackages]);
   const homepageTestReady = workspace.builderRuns.some(
     (candidate) =>
       candidate.buildManifestId === workspace.buildManifest?.id &&
       candidate.buildMode === 'homepage_test' &&
+      (!selectedAgentPackageId || candidate.agentPackageId === selectedAgentPackageId) &&
       (candidate.status === 'ready' || candidate.status === 'review_required'),
   );
-  const screenshots = workspace.builderArtifacts.filter(
-    (artifact) => artifact.kind === 'screenshot',
-  );
+  const currentArtifacts = runIsLatest
+    ? workspace.builderArtifacts.filter((artifact) => artifact.builderRunId === run?.id)
+    : [];
+  const currentEvents = runIsLatest
+    ? workspace.builderEvents.filter((event) => event.builderRunId === run?.id)
+    : [];
+  const previewFiles = currentArtifacts.filter((artifact) => artifact.kind === 'site_file');
+  const screenshots = currentArtifacts.filter((artifact) => artifact.kind === 'screenshot');
+  const progressMilestones = run ? buildProgressMilestones(run, screenshots) : [];
   const { urls: screenshotUrls, loadError } = usePrivateArtifactUrls(
     screenshots,
     'Private preview screenshots could not be loaded. Refresh and check storage access.',
   );
   const active = run?.status === 'queued' || run?.status === 'running' || run?.status === 'paused';
+  const runId = run?.id;
+  useEffect(() => {
+    if (active && runId && !pendingBuild) setSessionBuildRunId(runId);
+  }, [active, pendingBuild, runId]);
+
+  useEffect(() => {
+    if (!pendingBuild || !runId || runId === pendingBuild.previousRunId) return;
+    setSessionBuildRunId(runId);
+    setPendingBuild(undefined);
+  }, [pendingBuild, runId]);
+
+  const showCurrentRunLogs = Boolean(
+    !pendingBuild && run && (active || sessionBuildRunId === run.id),
+  );
   const frozenDraft =
     run?.status === 'paused' || run?.status === 'failed' || run?.status === 'cancelled';
-  const draftAvailable = workspace.builderArtifacts.some(
+  const draftAvailable = currentArtifacts.some(
     (artifact) => artifact.kind === 'draft_file' && artifact.label === 'index.html',
   );
-  const checkpointAvailable = workspace.builderArtifacts.some(
+  const checkpointAvailable = currentArtifacts.some(
     (artifact) =>
       artifact.kind === 'checkpoint' && artifact.label === 'Latest private source checkpoint',
   );
   const savedSourceAvailable =
-    checkpointAvailable ||
-    workspace.builderArtifacts.some((artifact) => artifact.kind === 'draft_file');
-  const codexStreamEvents = workspace.builderEvents.filter(isCodexStreamEvent);
-  const diagnosticEvents = workspace.builderEvents.filter((event) => event.kind === 'diagnostic');
-  const timelineEvents = workspace.builderEvents.filter(
+    checkpointAvailable || currentArtifacts.some((artifact) => artifact.kind === 'draft_file');
+  const homepageSelected = !targetSourceUrl;
+  const selectedPageCanBuild = homepageSelected || homepageTestReady;
+  const codexStreamEvents = currentEvents.filter(isCodexStreamEvent);
+  const diagnosticEvents = currentEvents.filter((event) => event.kind === 'diagnostic');
+  const timelineEvents = currentEvents.filter(
     (event) => !isCodexStreamEvent(event) && event.kind !== 'diagnostic',
   );
   const failedOutputPath =
@@ -4148,13 +4747,54 @@ function BuilderRunPanel({
       : undefined;
   const failedDiagnostic =
     typeof run?.failureContext.detail === 'string' ? run.failureContext.detail : undefined;
+  const historyRuns = runs.filter((candidate) => !showCurrentRunLogs || candidate.id !== run?.id);
+  const latestHistoryState = historyRuns[0] ? historyEvidence[historyRuns[0].id] : undefined;
+  const completedTestRuns = isTestBuild
+    ? runs.filter(
+        (candidate) => candidate.status === 'ready' || candidate.status === 'review_required',
+      )
+    : [];
+
+  async function loadHistoryEvidence(builderRunId: string) {
+    if (historyEvidence[builderRunId]?.status === 'loading') return;
+    setHistoryEvidence((current) => ({ ...current, [builderRunId]: { status: 'loading' } }));
+    try {
+      const evidence = await onLoadBuildEvidence(builderRunId);
+      setHistoryEvidence((current) => ({
+        ...current,
+        [builderRunId]: { status: 'ready', evidence },
+      }));
+    } catch (error) {
+      setHistoryEvidence((current) => ({
+        ...current,
+        [builderRunId]: {
+          status: 'error',
+          message:
+            error instanceof Error
+              ? error.message
+              : 'This private build history could not be loaded.',
+        },
+      }));
+    }
+  }
 
   async function requestBuild(mode: BuilderRunMode, targetSourceUrl?: string) {
     setIsRequesting(true);
     setMessage('');
+    setSessionBuildRunId(undefined);
+    setPendingBuild({ previousRunId: run?.id });
     try {
-      await onRequestBuild(mode, targetSourceUrl);
+      await onRequestBuild(
+        mode,
+        targetSourceUrl,
+        buildDirections
+          .map((direction) => direction.trim())
+          .filter(Boolean)
+          .join('\n\n'),
+        isTestBuild ? selectedAgentPackageId : undefined,
+      );
     } catch (error) {
+      setPendingBuild(undefined);
       setMessage(
         error instanceof Error ? error.message : 'The private preview could not be queued.',
       );
@@ -4181,7 +4821,7 @@ function BuilderRunPanel({
     if (
       !run ||
       !window.confirm(
-        'Delete every private build attempt, draft, screenshot, log, and preview link for this prospect? Research and the Build Manifest are kept. This cannot be undone.',
+        'Delete every private test and prospect build, draft, screenshot, log, and preview link for this prospect? Research and the Build Manifest are kept. This cannot be undone.',
       )
     )
       return;
@@ -4198,14 +4838,13 @@ function BuilderRunPanel({
     }
   }
 
-  async function openPreview(mode: BuilderPreviewMode) {
-    if (!run) return;
+  async function openPreview(builderRunId: string, mode: BuilderPreviewMode) {
     const previewTab = window.open('about:blank', '_blank');
     if (previewTab) previewTab.opener = null;
     setIsOpeningPreview(true);
     setMessage('');
     try {
-      const previewUrl = await onOpenPreview(run.id, mode);
+      const previewUrl = await onOpenPreview(builderRunId, mode);
       if (previewTab && !previewTab.closed) {
         previewTab.location.replace(previewUrl);
       } else {
@@ -4229,11 +4868,14 @@ function BuilderRunPanel({
     <section className="builder-run" aria-labelledby="builder-run-title">
       <div className="brief-panel__header">
         <div>
-          <Eyebrow>Private preview</Eyebrow>
-          <h3 id="builder-run-title">Codex website builder</h3>
+          <Eyebrow>{isTestBuild ? 'Private test build' : 'Private prospect build'}</Eyebrow>
+          <h3 id="builder-run-title">
+            {isTestBuild ? 'Codex test builder' : 'Complete prospect website'}
+          </h3>
           <p className="muted-copy">
-            Builds an isolated website from this approved manifest, then saves source, responsive
-            captures, and automated checks for your review. It does not publish or contact anyone.
+            {isTestBuild
+              ? 'Tests one approved page against this manifest, then saves a private draft and logs for agent refinement. It does not publish or contact anyone.'
+              : 'Builds this prospect’s complete private website from its immutable Build Manifest, then saves source, responsive captures, and automated checks for review. It does not publish or contact anyone.'}
           </p>
         </div>
         {run ? (
@@ -4241,107 +4883,304 @@ function BuilderRunPanel({
         ) : null}
       </div>
 
-      <div className="brief-panel__actions">
-        {run?.status === 'ready' || run?.status === 'review_required' ? (
-          <Button
-            disabled={isOpeningPreview}
-            onClick={() => void openPreview('ready')}
-            type="button"
-          >
-            <ArrowUpRight aria-hidden="true" size={16} />
-            {isOpeningPreview ? 'Opening preview' : 'Open private preview'}
-          </Button>
+      <div className="builder-run__actions">
+        {isTestBuild && !active ? (
+          <div className="builder-run__tests">
+            <label className="builder-run__package-picker">
+              <span>Test package</span>
+              <select
+                aria-label="Test agent package"
+                disabled={isRequesting || !testPackages.length}
+                onChange={(event) => setSelectedAgentPackageId(event.target.value)}
+                value={selectedAgentPackageId ?? ''}
+              >
+                {testPackages.map((agentPackage) => (
+                  <option key={agentPackage.id} value={agentPackage.id}>
+                    v{agentPackage.version} ·{' '}
+                    {agentPackage.status === 'published' ? 'Current production' : 'Approved test'}
+                  </option>
+                ))}
+              </select>
+              <small>
+                {selectedAgentPackageId === publishedPackage?.id
+                  ? 'This test uses the current production package.'
+                  : 'This test is pinned to a derived package and cannot change the production package.'}
+              </small>
+            </label>
+            <p className="builder-run__action-label">Test a page</p>
+            <div className="builder-page-test">
+              <label>
+                <span>Approved page</span>
+                <select
+                  aria-label="Page to test"
+                  disabled={isRequesting}
+                  onChange={(event) => setTargetSourceUrl(event.target.value)}
+                  value={targetSourceUrl}
+                >
+                  <option value="">Homepage</option>
+                  {pageTestOptions.map((page) => (
+                    <option key={page.url} value={page.url}>
+                      {page.title || new URL(page.url).pathname}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <Button
+                disabled={isRequesting || !selectedPageCanBuild || !selectedAgentPackageId}
+                onClick={() =>
+                  void requestBuild(
+                    homepageSelected ? 'homepage_test' : 'page_test',
+                    targetSourceUrl || undefined,
+                  )
+                }
+                type="button"
+                variant="secondary"
+              >
+                <Play aria-hidden="true" size={16} />
+                {isRequesting ? 'Queueing builder' : 'Build test page'}
+              </Button>
+              <small>
+                {homepageSelected
+                  ? 'Creates a private homepage test. If a saved private homepage checkpoint is available, it continues that draft; it never changes the prospect’s public website.'
+                  : homepageTestReady
+                    ? 'Creates a private test from the approved homepage direction. It never changes the prospect’s public website.'
+                    : 'Complete and review the homepage test before testing another selected page.'}
+              </small>
+            </div>
+          </div>
         ) : null}
-        {(run?.status === 'running' || frozenDraft) && draftAvailable ? (
-          <Button
-            disabled={isOpeningPreview}
-            onClick={() => void openPreview('draft')}
-            type="button"
-            variant="secondary"
-          >
-            <ArrowUpRight aria-hidden="true" size={16} />
-            {isOpeningPreview
-              ? 'Opening draft'
-              : frozenDraft
-                ? 'Open frozen draft'
-                : 'View working draft'}
-          </Button>
-        ) : null}
-        {active ? (
-          <Button
-            disabled={isCancelling || Boolean(run?.cancelRequestedAt)}
-            onClick={() => void cancelBuild()}
-            type="button"
-            variant="secondary"
-          >
-            <Ban aria-hidden="true" size={16} />
-            {isCancelling ? 'Cancelling build' : 'Cancel build'}
-          </Button>
-        ) : (
-          <>
-            <Button
-              disabled={isRequesting}
-              onClick={() => void requestBuild('homepage_test')}
-              type="button"
-              variant="secondary"
-            >
-              <Play aria-hidden="true" size={16} />
-              {isRequesting ? 'Queueing builder' : 'Test homepage'}
-            </Button>
-            {pageTestOptions.length ? (
-              <div className="builder-page-test">
-                <label>
-                  <span>Test one approved page</span>
-                  <select
-                    aria-label="Page to test"
-                    disabled={isRequesting || !homepageTestReady}
-                    onChange={(event) => setTargetSourceUrl(event.target.value)}
-                    value={targetSourceUrl}
-                  >
-                    <option value="">Choose a page</option>
-                    {pageTestOptions.map((page) => (
-                      <option key={page.url} value={page.url}>
-                        {page.title || new URL(page.url).pathname}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+
+        {isTestBuild && !active ? (
+          <section className="builder-workflow" aria-labelledby="builder-workflow-title">
+            <div className="builder-workflow__header">
+              <Eyebrow>Test-only refinement</Eyebrow>
+              <h4 id="builder-workflow-title">Package capabilities &amp; test directions</h4>
+              <p>
+                Built-in capabilities come from the selected builder agent package. Directions below
+                are saved with this test run and passed to Codex as scoped refinement guidance; they
+                do not change the package.
+              </p>
+            </div>
+            <details className="builder-workflow__motion">
+              <summary>
+                <Sparkles aria-hidden="true" size={18} />
+                <span>
+                  <strong>Inherited package behaviour</strong>
+                  <small>
+                    {inheritedPackageLabel} · {includesBrandIntroduction ? '2' : '1'} built-in
+                    capabilit{includesBrandIntroduction ? 'ies' : 'y'} already in this package
+                  </small>
+                </span>
+                <ChevronDown aria-hidden="true" size={18} />
+              </summary>
+              <div className="builder-workflow__capability">
+                <strong>Built-in capability · motion runtime</strong>
+                <p>
+                  A tested builder-foundation capability: the local runtime reveals headings and
+                  content containers as they enter view, and uses counters only for genuine metrics.
+                  It respects reduced motion on every generated preview. A direction can request a
+                  different use of it, but cannot alter or create a shared capability.
+                </p>
+              </div>
+              {includesBrandIntroduction ? (
+                <div className="builder-workflow__capability">
+                  <strong>Built-in capability · brand introduction</strong>
+                  <p>
+                    On a first visit, the approved logo may appear as a short brand intro before
+                    moving into the real navigation logo. The builder chooses a restrained treatment
+                    for the brand; it skips the transition for reduced-motion users, never fakes
+                    loading progress, and never replaces the approved logo with a generic mark.
+                  </p>
+                </div>
+              ) : null}
+            </details>
+            <div className="builder-workflow__directions">
+              <div className="builder-workflow__directions-header">
+                <div>
+                  <h5 id="builder-directions-title">Test directions</h5>
+                  <p>
+                    Optional guidance stored on this one build run and sent to Codex. It can refine
+                    hierarchy, visuals, or interactions, and can identify a capability worth
+                    proposing, but it never overrides approved facts, scope, assets, or the locked
+                    builder rules.
+                  </p>
+                </div>
                 <Button
-                  disabled={isRequesting || !homepageTestReady || !targetSourceUrl}
-                  onClick={() => void requestBuild('page_test', targetSourceUrl)}
+                  disabled={isRequesting}
+                  onClick={() => setBuildDirections((current) => [...current, ''])}
                   type="button"
                   variant="secondary"
                 >
-                  <Play aria-hidden="true" size={16} />
-                  {isRequesting ? 'Queueing builder' : 'Test selected page'}
+                  <Plus aria-hidden="true" size={16} />
+                  {buildDirections.length ? 'Add another' : 'Add direction'}
                 </Button>
-                {!homepageTestReady ? (
-                  <small>Complete a homepage test before testing another page.</small>
-                ) : null}
               </div>
-            ) : null}
+              {buildDirections.length ? (
+                <div className="builder-workflow__direction-list">
+                  {buildDirections.map((direction, index) => (
+                    <div className="builder-workflow__direction" key={index}>
+                      <label htmlFor={`builder-direction-${index}`}>Direction {index + 1}</label>
+                      <span className="builder-workflow__direction-input">
+                        <textarea
+                          aria-label={`Build direction ${index + 1}`}
+                          disabled={isRequesting}
+                          id={`builder-direction-${index}`}
+                          maxLength={4000}
+                          onChange={(event) =>
+                            setBuildDirections((current) =>
+                              current.map((item, itemIndex) =>
+                                itemIndex === index ? event.target.value : item,
+                              ),
+                            )
+                          }
+                          placeholder="For example: make the hero calmer and foreground the booking flow."
+                          rows={2}
+                          value={direction}
+                        />
+                        <Button
+                          aria-label={`Remove direction ${index + 1}`}
+                          disabled={isRequesting}
+                          onClick={() =>
+                            setBuildDirections((current) =>
+                              current.filter((_, itemIndex) => itemIndex !== index),
+                            )
+                          }
+                          size="compact"
+                          type="button"
+                          variant="quiet"
+                        >
+                          <X aria-hidden="true" size={16} />
+                        </Button>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </section>
+        ) : null}
+
+        {!isTestBuild && !active ? (
+          <div className="builder-run__tests">
+            <p className="builder-run__action-label">Prospect build</p>
+            <div className="builder-page-test">
+              <p>
+                Build the complete private website for this prospect from its approved Build
+                Manifest. This is separate from Agent Studio test runs.
+              </p>
+              <Button
+                disabled={isRequesting || !homepageTestReady}
+                onClick={() => void requestBuild('full_site')}
+                type="button"
+              >
+                <Play aria-hidden="true" size={16} />
+                {isRequesting ? 'Queueing prospect build' : 'Build complete prospect website'}
+              </Button>
+              <small>
+                {homepageTestReady
+                  ? 'A homepage test for this Build Manifest is ready. The complete prospect build remains private until separately approved for sharing.'
+                  : 'Complete and review a homepage test in Agent Studio for this Build Manifest before starting the complete prospect build.'}
+              </small>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="builder-run__primary-actions">
+          {!isTestBuild && (run?.status === 'ready' || run?.status === 'review_required') ? (
             <Button
-              disabled={isRequesting}
-              onClick={() => void requestBuild('full_site')}
+              disabled={isOpeningPreview}
+              onClick={() => run && void openPreview(run.id, 'ready')}
               type="button"
             >
-              <Play aria-hidden="true" size={16} />
-              {isRequesting ? 'Queueing builder' : 'Continue developing'}
+              <ArrowUpRight aria-hidden="true" size={16} />
+              {isOpeningPreview ? 'Opening preview' : 'Open private prospect preview'}
             </Button>
-          </>
-        )}
-        {run && !active ? (
-          <Button
-            disabled={isDeleting}
-            onClick={() => void deleteBuild()}
-            type="button"
-            variant="quiet"
-          >
-            <Trash2 aria-hidden="true" size={16} />
-            {isDeleting ? 'Deleting builds' : 'Delete all builds'}
-          </Button>
+          ) : null}
+          {active ? (
+            <Button
+              disabled={isCancelling || Boolean(run?.cancelRequestedAt)}
+              onClick={() => void cancelBuild()}
+              type="button"
+              variant="secondary"
+            >
+              <Ban aria-hidden="true" size={16} />
+              {isCancelling ? 'Cancelling build' : 'Cancel build'}
+            </Button>
+          ) : null}
+        </div>
+
+        {((run?.status === 'running' || frozenDraft) && draftAvailable) || (run && !active) ? (
+          <div className="builder-run__utility-actions">
+            {(run?.status === 'running' || frozenDraft) && draftAvailable ? (
+              <Button
+                disabled={isOpeningPreview}
+                onClick={() => run && void openPreview(run.id, 'draft')}
+                type="button"
+                variant="quiet"
+              >
+                <ClipboardCheck aria-hidden="true" size={18} />
+                {isOpeningPreview
+                  ? 'Opening draft'
+                  : frozenDraft
+                    ? 'Open frozen draft'
+                    : 'View working draft'}
+              </Button>
+            ) : null}
+            {run && !active && !isTestBuild ? (
+              <Button
+                disabled={isDeleting}
+                onClick={() => void deleteBuild()}
+                type="button"
+                variant="quiet"
+              >
+                <Trash2 aria-hidden="true" size={16} />
+                {isDeleting ? 'Deleting builds' : 'Delete test and prospect builds'}
+              </Button>
+            ) : null}
+          </div>
         ) : null}
       </div>
+
+      {isTestBuild && completedTestRuns.length ? (
+        <section className="test-build-versions" aria-labelledby="test-build-versions-title">
+          <div className="test-build-versions__header">
+            <div>
+              <Eyebrow>Private previews</Eyebrow>
+              <h4 id="test-build-versions-title">Test versions</h4>
+              <p className="muted-copy">
+                Each completed test is a private preview of the agent contract used for that run.
+              </p>
+            </div>
+          </div>
+          <ol>
+            {completedTestRuns.map((testRun, index) => (
+              <li key={testRun.id}>
+                <div className="test-build-versions__summary">
+                  <div>
+                    <div className="test-build-versions__labels">
+                      <strong>Test {completedTestRuns.length - index}</strong>
+                      {index === 0 ? <StatusBadge tone="success">Newest build</StatusBadge> : null}
+                    </div>
+                    <small>
+                      {builderRunModeLabel(testRun.buildMode)} · {formatDateTime(testRun.createdAt)}
+                    </small>
+                    <p>{testBuildChangeSummary(testRun, completedTestRuns[index + 1])}</p>
+                  </div>
+                  <Button
+                    disabled={isOpeningPreview}
+                    onClick={() => void openPreview(testRun.id, 'ready')}
+                    type="button"
+                    variant="secondary"
+                  >
+                    <ArrowUpRight aria-hidden="true" size={16} />
+                    {isOpeningPreview ? 'Opening preview' : 'Open preview'}
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
 
       {run ? (
         <>
@@ -4359,39 +5198,81 @@ function BuilderRunPanel({
               </div>
             </dl>
           ) : (
-            <dl className="builder-run-summary" aria-label="Private preview build progress">
-              <div>
-                <dt>Build stage</dt>
-                <dd>{run.progressPhase.replaceAll('_', ' ')}</dd>
+            <section className="builder-run-overview" aria-labelledby="builder-run-overview-title">
+              <div className="builder-run-overview__header">
+                <Eyebrow>Current run</Eyebrow>
+                <h4 id="builder-run-overview-title">Build status</h4>
               </div>
-              <div>
-                <dt>Completed steps</dt>
-                <dd>{run.totalItems > 0 ? `${run.completedItems}/${run.totalItems}` : '—'}</dd>
-              </div>
-              <div>
-                <dt>Quality status</dt>
-                <dd>{run.qualitySummary.status.replaceAll('_', ' ')}</dd>
-              </div>
-              <div>
-                <dt>Preview files</dt>
-                <dd>
-                  {
-                    workspace.builderArtifacts.filter((artifact) => artifact.kind === 'site_file')
-                      .length
-                  }
-                </dd>
-              </div>
-            </dl>
+              <dl className="builder-run-summary" aria-label="Private preview build progress">
+                <div>
+                  <dt>Build stage</dt>
+                  <dd>{run.progressPhase.replaceAll('_', ' ')}</dd>
+                </div>
+                <div>
+                  <dt>Completed milestones</dt>
+                  <dd>
+                    <button
+                      aria-label="Open build milestones"
+                      className="builder-run-summary__action"
+                      onClick={() => setInspector('steps')}
+                      type="button"
+                    >
+                      {run.totalItems > 0 ? `${run.completedItems}/${run.totalItems}` : '—'}
+                    </button>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Quality status</dt>
+                  <dd>{run.qualitySummary.status.replaceAll('_', ' ')}</dd>
+                </div>
+                <div>
+                  <dt>Preview files</dt>
+                  <dd>
+                    <button
+                      aria-label="Open preview files"
+                      className="builder-run-summary__action"
+                      onClick={() => setInspector('files')}
+                      type="button"
+                    >
+                      {previewFiles.length}
+                    </button>
+                  </dd>
+                </div>
+              </dl>
+            </section>
           )}
           <p className="builder-run__detail" role={active ? 'status' : undefined}>
             {run.progressDetail || 'Waiting for the builder worker.'}
           </p>
-          {active || codexStreamEvents.length ? (
+          {isTestBuild && !active ? (
+            <TestDirectionResults
+              artifacts={currentArtifacts}
+              onOpen={
+                historyRuns[0] ? () => void loadHistoryEvidence(historyRuns[0].id) : undefined
+              }
+              previousArtifacts={
+                latestHistoryState?.status === 'ready' ? latestHistoryState.evidence.artifacts : []
+              }
+              run={run}
+            />
+          ) : null}
+          {showCurrentRunLogs ? (
+            <div className="builder-activity-heading">
+              <Eyebrow>Current run</Eyebrow>
+              <h3>Build activity</h3>
+              <p className="muted-copy">
+                Live Codex updates, diagnostics, and completed build stages for this run only.
+              </p>
+            </div>
+          ) : null}
+          {showCurrentRunLogs ? (
             <section className="builder-codex-stream" aria-labelledby="builder-codex-stream-title">
               <div className="builder-codex-stream__header">
                 <div>
                   <Eyebrow>Codex activity</Eyebrow>
-                  <h4 id="builder-codex-stream-title">Live build stream</h4>
+                  <h4 id="builder-codex-stream-title">
+                    {active ? 'Live build stream' : 'Latest completed build'}
+                  </h4>
                 </div>
                 {active ? <StatusBadge tone="warning">Live</StatusBadge> : null}
               </div>
@@ -4410,13 +5291,14 @@ function BuilderRunPanel({
                 </ol>
               ) : (
                 <p className="muted-copy">
-                  Waiting for Codex&apos;s first visible build update. The working preview will
-                  appear once it saves a homepage draft.
+                  {active
+                    ? "Waiting for Codex's first visible build update. The working preview will appear once it saves a homepage draft."
+                    : 'No visible Codex activity was recorded for this build.'}
                 </p>
               )}
             </section>
           ) : null}
-          {
+          {showCurrentRunLogs ? (
             <section className="builder-diagnostics" aria-labelledby="builder-diagnostics-title">
               <div className="builder-diagnostics__header">
                 <div>
@@ -4481,14 +5363,14 @@ function BuilderRunPanel({
                 <p className="muted-copy">
                   {active
                     ? 'Waiting for the worker to record its first diagnostic.'
-                    : 'This older build has no diagnostic entries. Resume or start a build to create a private command and browser record here.'}
+                    : 'No private diagnostics were recorded for this build.'}
                 </p>
               )}
             </section>
-          }
-          {timelineEvents.length ? (
+          ) : null}
+          {showCurrentRunLogs && timelineEvents.length ? (
             <section className="builder-timeline" aria-labelledby="builder-timeline-title">
-              <Eyebrow>Live build timeline</Eyebrow>
+              <Eyebrow>{active ? 'Live build timeline' : 'Latest build timeline'}</Eyebrow>
               <h4 id="builder-timeline-title">What the builder has completed</h4>
               <ol>
                 {timelineEvents
@@ -4635,10 +5517,106 @@ function BuilderRunPanel({
               </div>
             </section>
           ) : null}
+          <Dialog.Root
+            onOpenChange={(open) => !open && setInspector(undefined)}
+            open={Boolean(inspector)}
+          >
+            <Dialog.Portal>
+              <Dialog.Overlay className="builder-settings-overlay" />
+              <Dialog.Content
+                aria-describedby="builder-run-inspector-description"
+                className="builder-settings-panel builder-run-inspector"
+              >
+                <div className="builder-settings-panel__header">
+                  <div>
+                    <Eyebrow>Current run</Eyebrow>
+                    <Dialog.Title>
+                      {inspector === 'steps' ? 'Build milestones' : 'Preview files'}
+                    </Dialog.Title>
+                  </div>
+                  <Dialog.Close asChild>
+                    <Button aria-label="Close build inspector" size="compact" variant="quiet">
+                      <X aria-hidden="true" size={20} />
+                    </Button>
+                  </Dialog.Close>
+                </div>
+                <Dialog.Description className="muted-copy" id="builder-run-inspector-description">
+                  {inspector === 'steps'
+                    ? 'The same counted milestones shown in Build status. Detailed worker events remain in Build activity.'
+                    : 'Saved private website files from this build only.'}
+                </Dialog.Description>
+                {inspector === 'steps' ? (
+                  progressMilestones.length ? (
+                    <ol className="builder-run-inspector__steps">
+                      {progressMilestones.map((milestone, index) => {
+                        const completed = index < run.completedItems;
+                        return (
+                          <li key={milestone}>
+                            <StatusBadge tone={completed ? 'success' : 'neutral'}>
+                              {completed ? 'completed' : 'pending'}
+                            </StatusBadge>
+                            <span>
+                              <strong>{milestone}</strong>
+                              <small>
+                                Milestone {index + 1} of {progressMilestones.length}
+                              </small>
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  ) : (
+                    <p className="muted-copy">No build milestones have been recorded yet.</p>
+                  )
+                ) : previewFiles.length ? (
+                  <ul className="builder-run-inspector__files">
+                    {previewFiles.map((file) => (
+                      <BuilderPreviewFileEntry file={file} key={file.id} />
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="muted-copy">No private preview files have been saved yet.</p>
+                )}
+              </Dialog.Content>
+            </Dialog.Portal>
+          </Dialog.Root>
         </>
       ) : (
-        <p className="muted-copy">No website has been generated from this manifest yet.</p>
+        <p className="muted-copy">
+          {isTestBuild
+            ? 'No test build has been generated from this manifest yet.'
+            : 'No prospect build has been generated from this manifest yet.'}
+        </p>
       )}
+
+      {historyRuns.length ? (
+        <section className="builder-history" aria-labelledby="builder-history-title">
+          <Eyebrow>{isTestBuild ? 'Test build history' : 'Prospect build history'}</Eyebrow>
+          <h4 id="builder-history-title">Open a run to inspect its private logs</h4>
+          <p className="muted-copy">
+            Stored {isTestBuild ? 'test' : 'prospect'} build evidence stays out of the current
+            workspace. Open a run only when you need to inspect its private logs or responsive
+            captures.
+          </p>
+          <div>
+            {historyRuns.map((earlierRun, index) => {
+              const previousRun = historyRuns[index + 1];
+              return (
+                <BuilderHistoryEntry
+                  key={earlierRun.id}
+                  onLoad={loadHistoryEvidence}
+                  onLoadPrevious={
+                    previousRun ? () => void loadHistoryEvidence(previousRun.id) : undefined
+                  }
+                  previousState={previousRun ? historyEvidence[previousRun.id] : undefined}
+                  run={earlierRun}
+                  state={historyEvidence[earlierRun.id]}
+                />
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
 
       {message ? (
         <p className="form-message form-message--error" role="alert">
@@ -4714,6 +5692,49 @@ function BuilderSettingsControl({
               <dd>Build, responsive capture, and axe</dd>
             </div>
           </dl>
+          <section
+            className="builder-settings-package"
+            aria-labelledby="builder-settings-package-title"
+          >
+            <div>
+              <Eyebrow>Shared builder package</Eyebrow>
+              <h3 id="builder-settings-package-title">What every build receives</h3>
+              <p className="muted-copy">
+                These source-controlled components are locked during a build and reused for every
+                prospect.
+              </p>
+            </div>
+            <dl>
+              <div>
+                <dt>Builder contract</dt>
+                <dd>
+                  <code>worker/codex-builder-contract.md</code>
+                  <span>Evidence, brand, page coverage, accessibility, and motion boundaries.</span>
+                </dd>
+              </div>
+              <div>
+                <dt>Template guidance</dt>
+                <dd>
+                  <code>worker/builder-template/AGENTS.md</code>
+                  <span>Mobile-first implementation and reusable static-site rules.</span>
+                </dd>
+              </div>
+              <div>
+                <dt>Built-in motion</dt>
+                <dd>
+                  <code>worker/builder-template/src/main.js</code>
+                  <span>Viewport reveals, factual counters, and reduced-motion support.</span>
+                </dd>
+              </div>
+              <div>
+                <dt>Quality gate</dt>
+                <dd>
+                  <code>worker/builder-worker.mjs</code>
+                  <span>Static build, page coverage, responsive captures, and axe checks.</span>
+                </dd>
+              </div>
+            </dl>
+          </section>
           <section
             className="builder-settings-panel__notice"
             aria-label="Runtime configuration notice"
@@ -4840,9 +5861,30 @@ function DataManagementPanel({
     }
     return entries.map((entry) => ({ ...entry, workspace }));
   });
-  const recordGroups = records.reduce<Map<string, ManagedRecord[]>>((groups, record) => {
-    const key = `${record.workspace.business.id}:${record.versionId ?? record.id}`;
-    groups.set(key, [...(groups.get(key) ?? []), record]);
+  const prospectGroups = records.reduce<
+    Map<
+      string,
+      {
+        workspace: ProspectWorkspace;
+        sourceRecords: ManagedRecord[];
+        versions: Map<string, ManagedRecord[]>;
+      }
+    >
+  >((groups, record) => {
+    const existing = groups.get(record.workspace.business.id) ?? {
+      workspace: record.workspace,
+      sourceRecords: [],
+      versions: new Map<string, ManagedRecord[]>(),
+    };
+    if (record.versionId) {
+      existing.versions.set(record.versionId, [
+        ...(existing.versions.get(record.versionId) ?? []),
+        record,
+      ]);
+    } else {
+      existing.sourceRecords.push(record);
+    }
+    groups.set(record.workspace.business.id, existing);
     return groups;
   }, new Map());
 
@@ -4881,67 +5923,76 @@ function DataManagementPanel({
       </div>
       {records.length ? (
         <div className="data-management__list">
-          {[...recordGroups.values()].map((group) => (
-            <section
-              className="data-management__group"
-              key={`${group[0].workspace.business.id}-${group[0].versionId ?? group[0].id}`}
-            >
-              <div className="data-management__group-title">
+          {[...prospectGroups.values()].map(({ workspace, sourceRecords, versions }) => (
+            <section className="data-management__prospect" key={workspace.business.id}>
+              <div className="data-management__prospect-title">
                 <div>
-                  <strong>{group[0].workspace.business.name}</strong>
+                  <strong>{workspace.business.name}</strong>
                   <span>
-                    {group[0].versionId
-                      ? `Build package · Brief v${group.find((item) => item.kind === 'brief')?.label.match(/v(\d+)/)?.[1] ?? 'workspace'} · ${group.length} linked records`
-                      : 'Source records'}
+                    {versions.size} {versions.size === 1 ? 'brief version' : 'brief versions'} ·{' '}
+                    {sourceRecords.length}{' '}
+                    {sourceRecords.length === 1 ? 'source record' : 'source records'}
                   </span>
                 </div>
-                {group[0].versionId ? (
-                  <Button
-                    onClick={() =>
-                      setPendingPackage({
-                        businessId: group[0].workspace.business.id,
-                        redesignBriefId: group[0].versionId!,
-                        name: `${group[0].workspace.business.name} build package`,
-                        recordCount: group.length,
-                      })
-                    }
-                    size="compact"
-                    variant="quiet"
-                  >
-                    <Trash2 aria-hidden="true" size={16} /> Delete package
-                  </Button>
-                ) : null}
               </div>
-              {group.map((record) => (
-                <div className="data-management__record" key={`${record.kind}-${record.id}`}>
-                  <div>
-                    <strong>{record.workspace.business.name}</strong>
-                    <span>{record.label}</span>
-                    <small>Saved {formatDateTime(record.date)}</small>
-                  </div>
-                  <div className="data-management__actions">
-                    <span className="data-management__size">
-                      {record.sizeIsEstimated ? 'Metadata ' : ''}
-                      {formatStorageSize(record.size)}
-                    </span>
-                    <Button onClick={() => setSelected(record)} size="compact" variant="secondary">
-                      Open <ArrowUpRight aria-hidden="true" size={15} />
-                    </Button>
-                    <Button
-                      aria-label={`Delete ${record.label} for ${record.workspace.business.name}`}
-                      className="data-management__delete"
-                      onClick={() =>
+              {sourceRecords.length ? (
+                <section className="data-management__record-set" aria-label="Source records">
+                  <h3>Source records</h3>
+                  {sourceRecords.map((record) => (
+                    <DataManagementRecord
+                      key={`${record.kind}-${record.id}`}
+                      onDelete={() =>
                         setPending({ kind: record.kind, id: record.id, name: record.label })
                       }
-                      size="compact"
-                      title={`Delete ${record.label}`}
-                      variant="quiet"
+                      onOpen={() => setSelected(record)}
+                      record={record}
+                    />
+                  ))}
+                </section>
+              ) : null}
+              {[...versions.entries()]
+                .sort(([, left], [, right]) => right[0].date.localeCompare(left[0].date))
+                .map(([versionId, versionRecords]) => {
+                  const brief = versionRecords.find((record) => record.kind === 'brief');
+                  const versionLabel = brief?.label.match(/Brief v(\d+)/)?.[1] ?? 'workspace';
+                  return (
+                    <section
+                      className="data-management__version"
+                      key={versionId}
+                      aria-label={`Build package for brief version ${versionLabel}`}
                     >
-                      <Trash2 aria-hidden="true" size={17} />
-                    </Button>
-                  </div>
-                </div>
-              ))}
+                      <div className="data-management__version-title">
+                        <div>
+                          <h3>Build package · Brief v{versionLabel}</h3>
+                          <span>{versionRecords.length} linked records</span>
+                        </div>
+                        <Button
+                          onClick={() =>
+                            setPendingPackage({
+                              businessId: workspace.business.id,
+                              redesignBriefId: versionId,
+                              name: `${workspace.business.name} build package`,
+                              recordCount: versionRecords.length,
+                            })
+                          }
+                          variant="quiet"
+                        >
+                          <Trash2 aria-hidden="true" size={16} /> Delete package
+                        </Button>
+                      </div>
+                      {versionRecords.map((record) => (
+                        <DataManagementRecord
+                          key={`${record.kind}-${record.id}`}
+                          onDelete={() =>
+                            setPending({ kind: record.kind, id: record.id, name: record.label })
+                          }
+                          onOpen={() => setSelected(record)}
+                          record={record}
+                        />
+                      ))}
+                    </section>
+                  );
+                })}
             </section>
           ))}
         </div>
@@ -5024,6 +6075,44 @@ function DataManagementPanel({
   );
 }
 
+function DataManagementRecord({
+  record,
+  onOpen,
+  onDelete,
+}: {
+  record: ManagedRecord;
+  onOpen: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="data-management__record">
+      <div className="data-management__record-summary">
+        <strong>{record.label}</strong>
+        <small>Saved {formatDateTime(record.date)}</small>
+      </div>
+      <span className="data-management__size">
+        {record.sizeIsEstimated ? 'Metadata ' : ''}
+        {formatStorageSize(record.size)}
+      </span>
+      <div className="data-management__actions">
+        <Button aria-label={`Open ${record.label}`} onClick={onOpen} variant="secondary">
+          Open <ArrowUpRight aria-hidden="true" size={15} />
+        </Button>
+        <Button
+          aria-label={`Delete ${record.label} for ${record.workspace.business.name}`}
+          className="data-management__delete"
+          onClick={onDelete}
+          size="compact"
+          title={`Delete ${record.label}`}
+          variant="quiet"
+        >
+          <Trash2 aria-hidden="true" size={17} />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function DataManagementPage({
   workspaces,
   onOpenWorkspace,
@@ -5049,6 +6138,211 @@ function DataManagementPage({
   );
 }
 
+function formatUsd(value: number) {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: value > 0 && value < 0.01 ? 4 : 2,
+    maximumFractionDigits: value > 0 && value < 0.01 ? 4 : 2,
+  }).format(value);
+}
+
+function formatTokens(value: number) {
+  return new Intl.NumberFormat('en-US', {
+    notation: value >= 10_000 ? 'compact' : 'standard',
+  }).format(value);
+}
+
+function UsageMetric({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return (
+    <article className="usage-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{detail}</small>
+    </article>
+  );
+}
+
+function UsagePage({
+  workspaces,
+  onOpenWorkspace,
+}: {
+  workspaces: ProspectWorkspace[];
+  onOpenWorkspace: (businessId: string) => void;
+}) {
+  const records = useMemo(
+    () =>
+      workspaces.flatMap((workspace) =>
+        workspace.aiUsageRecords.map((record) => ({ record, workspace })),
+      ),
+    [workspaces],
+  );
+  const pricedRecords = records.filter(({ record }) => typeof record.costUsd === 'number');
+  const totalCost = pricedRecords.reduce((total, { record }) => total + (record.costUsd ?? 0), 0);
+  const totalTokens = records.reduce((total, { record }) => total + record.totalTokens, 0);
+  const unpricedCount = records.filter(({ record }) => record.costSource === 'unavailable').length;
+  const prospectRows = workspaces
+    .map((workspace) => {
+      const usage = workspace.aiUsageRecords;
+      return {
+        workspace,
+        totalTokens: usage.reduce((total, record) => total + record.totalTokens, 0),
+        cost: usage.reduce((total, record) => total + (record.costUsd ?? 0), 0),
+        unpriced: usage.filter((record) => record.costSource === 'unavailable').length,
+        operations: usage.length,
+        providers: [...new Set(usage.map((record) => record.provider))].join(', '),
+      };
+    })
+    .filter((row) => row.operations)
+    .sort((left, right) => right.cost - left.cost || right.totalTokens - left.totalTokens);
+  const buildRows = records
+    .filter(({ record }) => record.builderRunId)
+    .map(({ record, workspace }) => ({
+      record,
+      workspace,
+      run: workspace.builderRuns.find((run) => run.id === record.builderRunId),
+    }))
+    .sort((left, right) => right.record.createdAt.localeCompare(left.record.createdAt));
+
+  return (
+    <section className="usage-page" aria-labelledby="usage-page-title">
+      <PageHeader
+        eyebrow="Operations finance"
+        title="AI usage & spend"
+        detail="Live provider usage grouped by prospect and build. Dollar totals include only calls with a recorded cost; unpriced usage remains visible instead of being estimated silently."
+      />
+
+      <section aria-label="AI usage totals" className="usage-metric-grid">
+        <UsageMetric
+          detail={
+            pricedRecords.length ? 'recorded or configured-rate calls' : 'no priced calls yet'
+          }
+          label="Recorded spend"
+          value={formatUsd(totalCost)}
+        />
+        <UsageMetric
+          detail={`${records.length} tracked AI ${records.length === 1 ? 'operation' : 'operations'}`}
+          label="Tokens used"
+          value={formatTokens(totalTokens)}
+        />
+        <UsageMetric
+          detail={
+            unpricedCount
+              ? 'needs provider billing or a rate configuration'
+              : 'every tracked call is priced'
+          }
+          label="Unpriced operations"
+          value={String(unpricedCount)}
+        />
+      </section>
+
+      <section className="usage-panel" aria-labelledby="usage-by-prospect-title">
+        <div className="section-heading">
+          <div>
+            <Eyebrow>Prospects</Eyebrow>
+            <h2 id="usage-by-prospect-title">Spend by prospect</h2>
+          </div>
+          <WalletCards aria-hidden="true" size={19} />
+        </div>
+        {prospectRows.length ? (
+          <div className="usage-table-wrap">
+            <table className="usage-table">
+              <thead>
+                <tr>
+                  <th scope="col">Prospect</th>
+                  <th scope="col">AI services</th>
+                  <th scope="col">Operations</th>
+                  <th scope="col">Tokens</th>
+                  <th scope="col">Spend</th>
+                  <th scope="col">Coverage</th>
+                </tr>
+              </thead>
+              <tbody>
+                {prospectRows.map((row) => (
+                  <tr key={row.workspace.business.id}>
+                    <th scope="row">
+                      <button
+                        onClick={() => onOpenWorkspace(row.workspace.business.id)}
+                        type="button"
+                      >
+                        {row.workspace.business.name} <ArrowUpRight aria-hidden="true" size={14} />
+                      </button>
+                    </th>
+                    <td>{row.providers}</td>
+                    <td>{row.operations}</td>
+                    <td>{formatTokens(row.totalTokens)}</td>
+                    <td>{formatUsd(row.cost)}</td>
+                    <td>{row.unpriced ? `${row.unpriced} unpriced` : 'Fully priced'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <EmptyState
+            detail="Usage will appear after an AI analysis or Codex build runs through the protected workers."
+            icon={WalletCards}
+            title="No AI usage recorded yet"
+          />
+        )}
+      </section>
+
+      <section className="usage-panel" aria-labelledby="usage-by-build-title">
+        <div className="section-heading">
+          <div>
+            <Eyebrow>Builds</Eyebrow>
+            <h2 id="usage-by-build-title">Codex build usage</h2>
+          </div>
+          <Sparkles aria-hidden="true" size={19} />
+        </div>
+        {buildRows.length ? (
+          <div className="usage-table-wrap">
+            <table className="usage-table">
+              <thead>
+                <tr>
+                  <th scope="col">Prospect / build</th>
+                  <th scope="col">Model</th>
+                  <th scope="col">Tokens</th>
+                  <th scope="col">Spend</th>
+                  <th scope="col">Recorded</th>
+                </tr>
+              </thead>
+              <tbody>
+                {buildRows.map(({ record, workspace, run }) => (
+                  <tr key={record.id}>
+                    <th scope="row">
+                      <button onClick={() => onOpenWorkspace(workspace.business.id)} type="button">
+                        {workspace.business.name} ·{' '}
+                        {run?.buildMode.replace('_', ' ') ?? 'Codex build'}
+                        <ArrowUpRight aria-hidden="true" size={14} />
+                      </button>
+                    </th>
+                    <td>{record.model}</td>
+                    <td>{formatTokens(record.totalTokens)}</td>
+                    <td>
+                      {typeof record.costUsd === 'number' ? formatUsd(record.costUsd) : 'Unpriced'}
+                    </td>
+                    <td>{formatDateTime(record.createdAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="muted-copy">No completed or stopped Codex build has reported usage yet.</p>
+        )}
+      </section>
+
+      <p className="usage-note">
+        Costs are shown in USD. The worker stores API token usage after each call. To turn
+        token-only records into priced totals, set a reviewed <code>SITEFORGE_AI_PRICING_JSON</code>{' '}
+        rate card in the protected worker environment; subscriptions and provider invoice
+        adjustments remain unpriced.
+      </p>
+    </section>
+  );
+}
+
 function BuilderSettingsPage() {
   return (
     <section className="settings-page" aria-labelledby="settings-page-title">
@@ -5068,20 +6362,835 @@ function BuilderSettingsPage() {
   );
 }
 
-function BuildManifestPanel({
-  workspace,
-  onCreate,
+const currentAgentPackageFiles = [
+  {
+    group: 'Agent policy',
+    path: 'worker/codex-builder-contract.md',
+    label: 'Builder contract',
+    detail: 'Global safety, evidence, accessibility, and motion rules.',
+    content: builderContractSource,
+  },
+  {
+    group: 'Agent policy',
+    path: 'worker/builder-template/AGENTS.md',
+    label: 'Template instructions',
+    detail: 'Codex instructions for implementing a private website.',
+    content: builderInstructionsSource,
+  },
+  {
+    group: 'Builder foundation',
+    path: 'worker/builder-template/src/main.js',
+    label: 'Motion runtime',
+    detail: 'Local viewport-reveal and factual-counter behaviour.',
+    content: motionRuntimeSource,
+  },
+  {
+    group: 'Builder foundation',
+    path: 'worker/builder-template/package.json',
+    label: 'Template packages',
+    detail: 'Locked static-preview build command and package boundary.',
+    content: builderPackageSource,
+  },
+] as const;
+
+const agentPackageBaseline = [
+  {
+    label: 'Policy',
+    detail:
+      'The builder contract treats restrained viewport motion and factual metric counters as built-in behaviour, with accessibility and evidence boundaries.',
+  },
+  {
+    label: 'Foundation',
+    detail:
+      'The template keeps a local motion runtime, a locked static build command, and implementation instructions that every generated site receives.',
+  },
+  {
+    label: 'Quality gate',
+    detail:
+      'The protected worker checks that generated pages retain the local runtime, replace the locked starter page, and pass the private quality workflow.',
+  },
+  {
+    label: 'Studio workflow',
+    detail:
+      'Homepage and page tests keep their own directions, previews, files, diagnostics, and history instead of changing a prospect’s full-site build in place.',
+  },
+] as const;
+
+const agentArchitectureLayers = [
+  {
+    name: 'Builder foundation',
+    purpose:
+      'The tested template code and locked package boundary every generated site starts from.',
+    behaviour:
+      'It provides the static website shell, local runtime, build command, and the quality checks the protected worker expects.',
+    files: ['Motion runtime', 'Template packages'],
+  },
+  {
+    name: 'Built-in capabilities',
+    purpose: 'Reusable behaviours the foundation can safely provide to every appropriate build.',
+    behaviour:
+      'Motion runtime is the current capability: viewport reveals for headings and containers, plus counters only for genuine metrics. It respects reduced motion.',
+    files: ['Motion runtime'],
+  },
+  {
+    name: 'Agent package',
+    purpose:
+      'An immutable, versioned release: the foundation plus its Markdown contract and instructions.',
+    behaviour:
+      'A prospect build is pinned to the current published package. A derived package can be tested and deliberately promoted without changing earlier runs.',
+    files: ['Builder contract', 'Template instructions'],
+  },
+  {
+    name: 'Build direction',
+    purpose: 'Optional guidance for one private test or prospect build.',
+    behaviour:
+      'It can refine a single result or propose a future capability, but it cannot rewrite the published package, foundation, approved facts, or other builds.',
+    files: [],
+  },
+] as const;
+
+function AgentStudioSectionNavigation({
+  section,
+  onSelectSection,
+}: {
+  section: AgentStudioSection;
+  onSelectSection: (section: AgentStudioSection) => void;
+}) {
+  return (
+    <nav aria-label="Agent Studio sections" className="agent-studio__section-nav">
+      <Button
+        aria-current={section === 'refine' ? 'page' : undefined}
+        className={section === 'refine' ? 'agent-studio__section-link--active' : undefined}
+        onClick={() => onSelectSection('refine')}
+        type="button"
+        variant="secondary"
+      >
+        <SlidersHorizontal aria-hidden="true" size={17} />
+        Refine
+      </Button>
+      <Button
+        aria-current={section === 'agent' ? 'page' : undefined}
+        className={section === 'agent' ? 'agent-studio__section-link--active' : undefined}
+        onClick={() => onSelectSection('agent')}
+        type="button"
+        variant="secondary"
+      >
+        <FolderTree aria-hidden="true" size={17} />
+        Agent architecture
+      </Button>
+    </nav>
+  );
+}
+
+function AgentPackageConfiguration({
+  packages,
+  proposals,
+  testedPackageIds,
+  onRequestProposal,
+  onApproveForTesting,
+  onPromote,
+}: {
+  packages: AgentPackage[];
+  proposals: AgentPackageProposal[];
+  testedPackageIds: Set<string>;
+  onRequestProposal: (basePackageId: string, direction: string) => Promise<void>;
+  onApproveForTesting: (packageId: string) => Promise<void>;
+  onPromote: (packageId: string) => Promise<void>;
+}) {
+  const [selectedFile, setSelectedFile] = useState<(typeof currentAgentPackageFiles)[number]>();
+  const [direction, setDirection] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [actionPackageId, setActionPackageId] = useState<string>();
+  const [message, setMessage] = useState('');
+  const publishedPackage = packages.find((item) => item.status === 'published');
+  const draftPackages = packages.filter(
+    (item) => item.status === 'draft' || item.status === 'test_ready',
+  );
+
+  async function submitProposal(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!publishedPackage || !direction.trim()) return;
+    setIsSubmitting(true);
+    setMessage('');
+    try {
+      await onRequestProposal(publishedPackage.id, direction.trim());
+      setDirection('');
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : 'The package proposal could not be queued.',
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function runPackageAction(packageId: string, action: 'approve' | 'promote') {
+    setActionPackageId(packageId);
+    setMessage('');
+    try {
+      if (action === 'approve') await onApproveForTesting(packageId);
+      else await onPromote(packageId);
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : 'The package state could not be updated.',
+      );
+    } finally {
+      setActionPackageId(undefined);
+    }
+  }
+
+  return (
+    <section className="agent-package-config" aria-labelledby="agent-package-config-title">
+      <div className="agent-package-config__header">
+        <div>
+          <Eyebrow>Published builder agent</Eyebrow>
+          <h2 id="agent-package-config-title">
+            Builder agent package · v{publishedPackage?.version ?? 4}
+          </h2>
+          <p className="muted-copy">
+            This is the source-controlled package used by every private prospect build. It combines
+            the agent policy with the tested builder foundation; it is not a single test direction.
+          </p>
+        </div>
+        <StatusBadge tone="success">Published</StatusBadge>
+      </div>
+
+      <dl className="agent-package-config__identity">
+        <div>
+          <dt>Published version</dt>
+          <dd>
+            <strong>v{publishedPackage?.version ?? 4} · Current production package</strong>
+            <code>{publishedPackage?.builderContractVersion ?? codexBuilderContractVersion}</code>
+          </dd>
+        </div>
+        <div>
+          <dt>Used by</dt>
+          <dd>Every complete private prospect website build.</dd>
+        </div>
+        <div>
+          <dt>Studio state</dt>
+          <dd>
+            {draftPackages.length
+              ? `${draftPackages.length} draft test package${draftPackages.length === 1 ? '' : 's'} derived from this production package.`
+              : 'No unpublished package exists yet. Test directions are per-run input until you create a package proposal.'}
+          </dd>
+        </div>
+      </dl>
+
+      <section
+        aria-labelledby="agent-package-layers-title"
+        className="agent-package-config__explanation"
+      >
+        <div>
+          <Eyebrow>Architecture map</Eyebrow>
+          <h3 id="agent-package-layers-title">How a website build is assembled</h3>
+          <p>
+            These layers have different jobs. A build direction uses a package; a package uses
+            tested capabilities and its foundation.
+          </p>
+        </div>
+        <ol className="agent-package-config__architecture-map">
+          {agentArchitectureLayers.map((layer, index) => (
+            <li key={layer.name}>
+              <span aria-hidden="true" className="agent-package-config__architecture-number">
+                {index + 1}
+              </span>
+              <div>
+                <strong>{layer.name}</strong>
+                <p>{layer.purpose}</p>
+                <small>{layer.behaviour}</small>
+                {layer.files.length ? (
+                  <div className="agent-package-config__layer-files">
+                    {layer.files.map((label) => {
+                      const file = currentAgentPackageFiles.find((item) => item.label === label);
+                      return file ? (
+                        <button key={file.path} onClick={() => setSelectedFile(file)} type="button">
+                          <FileText aria-hidden="true" size={14} />
+                          View {file.label}
+                        </button>
+                      ) : null;
+                    })}
+                  </div>
+                ) : (
+                  <span className="agent-package-config__run-scoped">Stored with each run</span>
+                )}
+              </div>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      <section className="agent-package-config__delivery" aria-labelledby="agent-delivery-title">
+        <div>
+          <Eyebrow>Protected delivery system</Eyebrow>
+          <h3 id="agent-delivery-title">How the package reaches a private preview</h3>
+        </div>
+        <p>
+          The server-side builder worker creates a disposable workspace from the locked foundation,
+          supplies the selected package and build direction to Codex, then saves source, logs,
+          screenshots, and quality results against that run. It never publishes a prospect site.
+        </p>
+      </section>
+
+      <section
+        aria-labelledby="agent-capability-decision-title"
+        className="agent-package-config__decision"
+      >
+        <div>
+          <Eyebrow>Refinement boundary</Eyebrow>
+          <h3 id="agent-capability-decision-title">
+            Directions can propose a capability, not create one
+          </h3>
+          <p>
+            A test direction can change how the current package is used, or reveal that a new
+            capability would be useful. It must not silently write a shared runtime for future
+            builds.
+          </p>
+        </div>
+        <ol>
+          <li>
+            <strong>Test direction</strong>
+            <span>Scoped to one private build and stored with that run.</span>
+          </li>
+          <li>
+            <strong>Capability proposal</strong>
+            <span>Review whether the idea needs policy only or new tested source code.</span>
+          </li>
+          <li>
+            <strong>Package release</strong>
+            <span>Test, document, version, and publish the approved change for future builds.</span>
+          </li>
+        </ol>
+      </section>
+
+      <section
+        aria-labelledby="agent-package-versions-title"
+        className="agent-package-config__versions"
+      >
+        <div>
+          <Eyebrow>Package versions</Eyebrow>
+          <h3 id="agent-package-versions-title">Published baseline</h3>
+          <p>
+            Published and test-ready packages are immutable. A test package is always derived from a
+            published base; a complete prospect build uses only the currently published package.
+          </p>
+        </div>
+        <div className="agent-package-config__version-row">
+          <StatusBadge tone="success">Published</StatusBadge>
+          <strong>v{publishedPackage?.version ?? 4} · Current production package</strong>
+          <span>Prospect builds use this package today.</span>
+        </div>
+      </section>
+
+      <section
+        className="agent-package-config__proposal"
+        aria-labelledby="agent-package-proposal-title"
+      >
+        <div>
+          <Eyebrow>Refine the package</Eyebrow>
+          <h3 id="agent-package-proposal-title">Create a derived test package</h3>
+          <p>
+            Describe the behaviour you want to improve. The protected refinement worker turns it
+            into reviewable Markdown addenda, or flags that a builder-foundation code change is
+            required instead.
+          </p>
+        </div>
+        <form onSubmit={(event) => void submitProposal(event)}>
+          <label>
+            <span>Direction for a v{(publishedPackage?.version ?? 4) + 1} test package</span>
+            <textarea
+              disabled={!publishedPackage || isSubmitting}
+              maxLength={4000}
+              onChange={(event) => setDirection(event.target.value)}
+              placeholder="For example: use quieter staggered reveals only for service groups; keep the hero immediate."
+              rows={4}
+              value={direction}
+            />
+          </label>
+          <Button disabled={!publishedPackage || !direction.trim() || isSubmitting} type="submit">
+            <Sparkles aria-hidden="true" size={16} />
+            {isSubmitting ? 'Creating proposal' : 'Create package proposal'}
+          </Button>
+        </form>
+      </section>
+
+      {proposals.length || draftPackages.length ? (
+        <section
+          className="agent-package-config__drafts"
+          aria-labelledby="agent-package-drafts-title"
+        >
+          <div>
+            <Eyebrow>Derived test versions</Eyebrow>
+            <h3 id="agent-package-drafts-title">Review, test, then promote</h3>
+            <p>
+              Test versions are pinned to their derived package. Promotion is deliberate: it never
+              rewrites an earlier test or prospect build.
+            </p>
+          </div>
+          <div className="agent-package-config__draft-list">
+            {proposals.map((proposal) => {
+              const draft = packages.find((item) => item.id === proposal.draftPackageId);
+              const basePackage = packages.find((item) => item.id === proposal.basePackageId);
+              return (
+                <article key={proposal.id}>
+                  <div>
+                    <strong>
+                      {draft
+                        ? `v${draft.version} test package · derived from v${basePackage?.version ?? '?'}`
+                        : 'Package proposal'}
+                    </strong>
+                    <StatusBadge
+                      tone={
+                        proposal.status === 'failed' || proposal.status === 'rejected'
+                          ? 'danger'
+                          : proposal.status === 'ready' || proposal.status === 'accepted'
+                            ? 'success'
+                            : 'warning'
+                      }
+                    >
+                      {proposal.status.replace('_', ' ')}
+                    </StatusBadge>
+                  </div>
+                  <p>{proposal.summary ?? proposal.direction}</p>
+                  {proposal.capabilityAssessment === 'foundation_change_required' ? (
+                    <p className="agent-package-config__foundation-note">
+                      <strong>Foundation change required.</strong> {proposal.capabilityProposal}
+                    </p>
+                  ) : null}
+                  {proposal.errorSummary ? (
+                    <p className="error-copy">{proposal.errorSummary}</p>
+                  ) : null}
+                  {draft ? (
+                    <details className="agent-package-config__draft-diff">
+                      <summary>Review v{draft.version} package addenda</summary>
+                      {draft.contractAddendum ? (
+                        <div>
+                          <strong>Builder contract addendum</strong>
+                          <pre>{draft.contractAddendum}</pre>
+                        </div>
+                      ) : null}
+                      {draft.instructionsAddendum ? (
+                        <div>
+                          <strong>Template instructions addendum</strong>
+                          <pre>{draft.instructionsAddendum}</pre>
+                        </div>
+                      ) : null}
+                      {!draft.contractAddendum && !draft.instructionsAddendum ? (
+                        <p>
+                          No Markdown addendum was generated for this foundation-change proposal.
+                        </p>
+                      ) : null}
+                    </details>
+                  ) : null}
+                  {draft?.status === 'draft' && proposal.capabilityAssessment === 'policy_only' ? (
+                    <Button
+                      disabled={actionPackageId === draft.id}
+                      onClick={() => void runPackageAction(draft.id, 'approve')}
+                      type="button"
+                      variant="secondary"
+                    >
+                      <Check aria-hidden="true" size={16} />
+                      {actionPackageId === draft.id
+                        ? 'Approving package'
+                        : `Approve v${draft.version} for testing`}
+                    </Button>
+                  ) : null}
+                  {draft?.status === 'test_ready' ? (
+                    <>
+                      <Button
+                        disabled={actionPackageId === draft.id || !testedPackageIds.has(draft.id)}
+                        onClick={() => void runPackageAction(draft.id, 'promote')}
+                        type="button"
+                      >
+                        <CheckCheck aria-hidden="true" size={16} />
+                        {actionPackageId === draft.id
+                          ? 'Promoting package'
+                          : `Promote v${draft.version} to production`}
+                      </Button>
+                      {!testedPackageIds.has(draft.id) ? (
+                        <p>Complete a private homepage test using this package before promotion.</p>
+                      ) : null}
+                    </>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
+      {message ? (
+        <p className="error-copy" role="alert">
+          {message}
+        </p>
+      ) : null}
+
+      <section
+        className="agent-package-config__details"
+        aria-labelledby="agent-package-files-title"
+      >
+        <div className="agent-package-config__details-header">
+          <div>
+            <Eyebrow>Inspectable files</Eyebrow>
+            <h3 id="agent-package-files-title">Open the package source</h3>
+            <p>
+              These are the source-controlled files behind the current package. Select one to read
+              it in a focused, scrollable viewer.
+            </p>
+          </div>
+          <small>{currentAgentPackageFiles.length} protected policy and foundation files</small>
+        </div>
+        <div className="agent-package-config__file-list">
+          {currentAgentPackageFiles.map((file) => (
+            <button key={file.path} onClick={() => setSelectedFile(file)} type="button">
+              <FileText aria-hidden="true" size={18} />
+              <span>
+                <small>{file.group}</small>
+                <strong>{file.label}</strong>
+                <small>{file.detail}</small>
+                <code>{file.path}</code>
+              </span>
+              <ArrowUpRight aria-hidden="true" size={16} />
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section
+        aria-labelledby="agent-package-baseline-title"
+        className="agent-package-config__baseline"
+      >
+        <div>
+          <Eyebrow>Current baseline changes</Eyebrow>
+          <h3 id="agent-package-baseline-title">What is in the package and Studio now</h3>
+          <p>
+            This is a current-state record, not an invented historical changelog. Future package
+            releases save an immutable policy diff and promotion record here.
+          </p>
+        </div>
+        <ul>
+          {agentPackageBaseline.map((item) => (
+            <li key={item.label}>
+              <strong>{item.label}</strong>
+              <span>{item.detail}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <Dialog.Root
+        onOpenChange={(open) => !open && setSelectedFile(undefined)}
+        open={Boolean(selectedFile)}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="builder-file-preview-overlay" />
+          <Dialog.Content className="builder-file-preview-dialog agent-package-config__dialog">
+            <div className="builder-file-preview-dialog__header">
+              <div>
+                <Eyebrow>
+                  {selectedFile?.group ?? 'Agent package'} · v{publishedPackage?.version ?? 4}
+                </Eyebrow>
+                <Dialog.Title>{selectedFile?.label}</Dialog.Title>
+              </div>
+              <Dialog.Close asChild>
+                <Button aria-label="Close agent file" size="compact" variant="quiet">
+                  <X aria-hidden="true" size={18} />
+                </Button>
+              </Dialog.Close>
+            </div>
+            <Dialog.Description className="muted-copy">
+              <code>{selectedFile?.path}</code>
+            </Dialog.Description>
+            <pre className="builder-file-preview-dialog__source">{selectedFile?.content}</pre>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </section>
+  );
+}
+
+function AgentStudioPage({
+  workspaces,
+  agentPackages,
+  agentPackageProposals,
+  section,
+  selectedBusinessId,
+  onSelectSection,
+  onSelectWorkspace,
+  onOpenProspect,
   onRequestBuild,
   onCancelBuild,
   onDeleteBuild,
   onOpenPreview,
+  onLoadBuildEvidence,
+  onRequestAgentPackageProposal,
+  onApproveAgentPackageForTesting,
+  onPromoteAgentPackage,
+}: {
+  workspaces: ProspectWorkspace[];
+  agentPackages: AgentPackage[];
+  agentPackageProposals: AgentPackageProposal[];
+  section: AgentStudioSection;
+  selectedBusinessId?: string;
+  onSelectSection: (section: AgentStudioSection) => void;
+  onSelectWorkspace: (businessId: string) => void;
+  onOpenProspect: (businessId: string) => void;
+  onRequestBuild: (
+    businessId: string,
+    mode: BuilderRunMode,
+    targetSourceUrl?: string,
+    buildInstruction?: string,
+    agentPackageId?: string,
+  ) => Promise<void>;
+  onCancelBuild: (businessId: string) => Promise<void>;
+  onDeleteBuild: (businessId: string) => Promise<void>;
+  onOpenPreview: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
+  onLoadBuildEvidence: (builderRunId: string) => Promise<BuilderRunEvidence>;
+  onRequestAgentPackageProposal: (basePackageId: string, direction: string) => Promise<void>;
+  onApproveAgentPackageForTesting: (packageId: string) => Promise<void>;
+  onPromoteAgentPackage: (packageId: string) => Promise<void>;
+}) {
+  const testWorkspaces = workspaces.filter(
+    (workspace) =>
+      workspace.buildManifest &&
+      workspace.redesignBrief?.status === 'approved' &&
+      workspace.buildManifest.redesignBriefId === workspace.redesignBrief.id,
+  );
+  const selectedWorkspace = testWorkspaces.find(
+    (workspace) => workspace.business.id === selectedBusinessId,
+  );
+  const testProspectLogos = testWorkspaces.flatMap((workspace) => {
+    const logoId = workspace.brandKit?.primaryLogoAssetId;
+    const logo = logoId
+      ? workspace.artifacts.find((artifact) => artifact.id === logoId)
+      : undefined;
+    return logo ? [logo] : [];
+  });
+  const { urls: testProspectLogoUrls } = usePrivateArtifactUrls(
+    testProspectLogos,
+    'Some prospect logos could not be loaded.',
+  );
+  const [prospectPickerOpen, setProspectPickerOpen] = useState(false);
+  const selectedLogo = selectedWorkspace?.brandKit?.primaryLogoAssetId
+    ? selectedWorkspace.artifacts.find(
+        (artifact) => artifact.id === selectedWorkspace.brandKit?.primaryLogoAssetId,
+      )
+    : undefined;
+  const isArchitecturePage = section === 'agent';
+  const testedPackageIds = new Set(
+    workspaces.flatMap((workspace) =>
+      workspace.builderRuns
+        .filter(
+          (run) =>
+            run.buildMode === 'homepage_test' &&
+            (run.status === 'ready' || run.status === 'review_required') &&
+            Boolean(run.agentPackageId),
+        )
+        .map((run) => run.agentPackageId as string),
+    ),
+  );
+
+  return (
+    <section className="agent-studio" aria-labelledby="agent-studio-title">
+      <div className="agent-studio__header">
+        <div>
+          <Eyebrow>Agent Studio</Eyebrow>
+          <h1 id="agent-studio-title">
+            {isArchitecturePage
+              ? 'Builder agent architecture'
+              : 'Refine the builder, not a prospect'}
+          </h1>
+          <p className="muted-copy">
+            {isArchitecturePage
+              ? 'See the published agent package, its policy, built-in capabilities, protected delivery system, and the boundary between a test direction and a production release.'
+              : 'Use a prepared prospect only as a private test harness. Directions refine one test run; the published package remains unchanged until a reviewed release exists.'}
+          </p>
+        </div>
+        <div className="agent-studio__header-actions">
+          <StatusBadge tone="success">Published v4</StatusBadge>
+          <BuilderSettingsControl />
+        </div>
+      </div>
+
+      <AgentStudioSectionNavigation onSelectSection={onSelectSection} section={section} />
+
+      {isArchitecturePage ? (
+        <AgentPackageConfiguration
+          onApproveForTesting={onApproveAgentPackageForTesting}
+          onPromote={onPromoteAgentPackage}
+          onRequestProposal={onRequestAgentPackageProposal}
+          packages={agentPackages}
+          proposals={agentPackageProposals}
+          testedPackageIds={testedPackageIds}
+        />
+      ) : testWorkspaces.length ? (
+        <section className="agent-studio__test" aria-labelledby="agent-studio-test-title">
+          <div className="agent-studio__test-header">
+            <div>
+              <div className="agent-studio__test-eyebrow">
+                <Eyebrow>Testing with</Eyebrow>
+                <span className="agent-studio__test-help">
+                  <button aria-describedby="agent-studio-test-help-copy" type="button">
+                    <CircleHelp aria-hidden="true" size={18} />
+                    <span className="sr-only">About private test builds</span>
+                  </button>
+                  <span id="agent-studio-test-help-copy" role="tooltip">
+                    A test uses approved research and brand context for a private run. It never
+                    changes the prospect’s live website.
+                  </span>
+                </span>
+              </div>
+              <h2 className="sr-only" id="agent-studio-test-title">
+                Choose a prepared prospect
+              </h2>
+              <div className="agent-studio__prospect-picker">
+                <Button
+                  aria-controls="agent-studio-prospect-options"
+                  aria-expanded={prospectPickerOpen}
+                  aria-haspopup="listbox"
+                  className="agent-studio__prospect-picker-trigger"
+                  onClick={() => setProspectPickerOpen((open) => !open)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') setProspectPickerOpen(false);
+                  }}
+                  type="button"
+                  variant="secondary"
+                >
+                  {selectedLogo && testProspectLogoUrls[selectedLogo.id] ? (
+                    <img alt="" src={testProspectLogoUrls[selectedLogo.id]} />
+                  ) : (
+                    <span aria-hidden="true" className="agent-studio__prospect-picker-monogram">
+                      {(selectedWorkspace?.business.name ?? 'Choose').slice(0, 1)}
+                    </span>
+                  )}
+                  <span>
+                    <small>Prepared prospect</small>
+                    <strong>{selectedWorkspace?.business.name ?? 'Choose a prospect'}</strong>
+                  </span>
+                  <ChevronDown aria-hidden="true" size={20} />
+                </Button>
+                {prospectPickerOpen ? (
+                  <div
+                    aria-label="Prepared prospects"
+                    className="agent-studio__prospect-picker-menu"
+                    id="agent-studio-prospect-options"
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') setProspectPickerOpen(false);
+                    }}
+                    role="listbox"
+                  >
+                    {testWorkspaces.map((workspace) => {
+                      const logoId = workspace.brandKit?.primaryLogoAssetId;
+                      const logo = logoId
+                        ? workspace.artifacts.find((artifact) => artifact.id === logoId)
+                        : undefined;
+                      const selected = workspace.business.id === selectedWorkspace?.business.id;
+                      return (
+                        <button
+                          aria-selected={selected}
+                          className="agent-studio__prospect-picker-option"
+                          key={workspace.business.id}
+                          onClick={() => {
+                            onSelectWorkspace(workspace.business.id);
+                            setProspectPickerOpen(false);
+                          }}
+                          role="option"
+                          type="button"
+                        >
+                          {logo && testProspectLogoUrls[logo.id] ? (
+                            <img alt="" src={testProspectLogoUrls[logo.id]} />
+                          ) : (
+                            <span
+                              aria-hidden="true"
+                              className="agent-studio__prospect-picker-monogram"
+                            >
+                              {workspace.business.name.slice(0, 1)}
+                            </span>
+                          )}
+                          <span>{workspace.business.name}</span>
+                          {selected ? <Check aria-hidden="true" size={18} /> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+            {selectedWorkspace ? (
+              <Button
+                aria-label="Review prospect inputs"
+                className="agent-studio__review-inputs"
+                onClick={() => onOpenProspect(selectedWorkspace.business.id)}
+                title="Review prospect inputs"
+                type="button"
+                variant="secondary"
+              >
+                <ArrowUpRight aria-hidden="true" size={16} />
+                <span aria-hidden="true" className="agent-studio__review-inputs-label">
+                  Review prospect inputs
+                </span>
+              </Button>
+            ) : null}
+          </div>
+          {selectedWorkspace ? (
+            <BuilderRunPanel
+              agentPackages={agentPackages}
+              buildKind="test"
+              onCancelBuild={() => onCancelBuild(selectedWorkspace.business.id)}
+              onDeleteBuild={onDeleteBuild}
+              onLoadBuildEvidence={onLoadBuildEvidence}
+              onOpenPreview={onOpenPreview}
+              onRequestBuild={(mode, targetSourceUrl, buildInstruction, agentPackageId) =>
+                onRequestBuild(
+                  selectedWorkspace.business.id,
+                  mode,
+                  targetSourceUrl,
+                  buildInstruction,
+                  agentPackageId,
+                )
+              }
+              workspace={selectedWorkspace}
+            />
+          ) : (
+            <p className="muted-copy">
+              Choose a prepared prospect to open the private test controls.
+            </p>
+          )}
+        </section>
+      ) : (
+        <EmptyState
+          detail="Approve a redesign brief and prepare its Build Manifest in a prospect workspace before using it to test the builder."
+          headingLevel={2}
+          icon={PackageCheck}
+          title="No prepared test prospects"
+        />
+      )}
+    </section>
+  );
+}
+
+function BuildManifestPanel({
+  workspace,
+  onCreate,
+  onOpenAgentStudio,
+  onRequestBuild,
+  onCancelBuild,
+  onDeleteBuild,
+  onOpenPreview,
+  onLoadBuildEvidence,
 }: {
   workspace: ProspectWorkspace;
   onCreate: () => Promise<void>;
-  onRequestBuild: (mode: BuilderRunMode, targetSourceUrl?: string) => Promise<void>;
+  onOpenAgentStudio: () => void;
+  onRequestBuild: (
+    mode: BuilderRunMode,
+    targetSourceUrl?: string,
+    buildInstruction?: string,
+  ) => Promise<void>;
   onCancelBuild: () => Promise<void>;
   onDeleteBuild: (businessId: string) => Promise<void>;
   onOpenPreview: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
+  onLoadBuildEvidence: (builderRunId: string) => Promise<BuilderRunEvidence>;
 }) {
   const [isPreparing, setIsPreparing] = useState(false);
   const [isManifestOpen, setIsManifestOpen] = useState(false);
@@ -5163,7 +7272,6 @@ function BuildManifestPanel({
           <Eyebrow>Builder handoff</Eyebrow>
           <div className="builder-handoff__actions">
             <StatusBadge tone="success">Ready for builder</StatusBadge>
-            <BuilderSettingsControl iconOnly />
           </div>
         </div>
         <div>
@@ -5293,9 +7401,26 @@ function BuildManifestPanel({
         </Dialog.Portal>
       </Dialog.Root>
 
+      <section className="agent-studio-handoff" aria-labelledby="agent-studio-handoff-title">
+        <div>
+          <Eyebrow>Agent refinement</Eyebrow>
+          <h3 id="agent-studio-handoff-title">Test this package in Agent Studio</h3>
+          <p className="muted-copy">
+            Use Agent Studio for homepage and page-level test builds. Those runs refine the shared
+            builder without becoming this prospect’s complete website.
+          </p>
+        </div>
+        <Button onClick={onOpenAgentStudio} type="button">
+          <Sparkles aria-hidden="true" size={16} />
+          Open Agent Studio
+        </Button>
+      </section>
+
       <BuilderRunPanel
+        buildKind="prospect"
         onCancelBuild={onCancelBuild}
         onDeleteBuild={onDeleteBuild}
+        onLoadBuildEvidence={onLoadBuildEvidence}
         onOpenPreview={onOpenPreview}
         onRequestBuild={onRequestBuild}
         workspace={workspace}
@@ -5731,10 +7856,12 @@ function WorkspaceContent({
   updateRedesignBrief,
   approveRedesignBrief,
   createBuildManifest,
-  requestWebsiteBuild,
-  cancelWebsiteBuild,
-  deleteWebsiteBuild,
-  createBuilderPreviewUrl,
+  openAgentStudio,
+  requestProspectBuild,
+  cancelProspectBuild,
+  deleteProspectBuilds,
+  openBuilderPreview,
+  loadBuilderRunEvidence,
   approveAllAuditFindings,
   updateAuditFinding,
 }: {
@@ -5771,10 +7898,16 @@ function WorkspaceContent({
   ) => Promise<void>;
   approveRedesignBrief: (brief: RedesignBrief) => Promise<void>;
   createBuildManifest: () => Promise<void>;
-  requestWebsiteBuild: (mode: BuilderRunMode, targetSourceUrl?: string) => Promise<void>;
-  cancelWebsiteBuild: () => Promise<void>;
-  deleteWebsiteBuild: (businessId: string) => Promise<void>;
-  createBuilderPreviewUrl: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
+  openAgentStudio: () => void;
+  requestProspectBuild: (
+    mode: BuilderRunMode,
+    targetSourceUrl?: string,
+    buildInstruction?: string,
+  ) => Promise<void>;
+  cancelProspectBuild: () => Promise<void>;
+  deleteProspectBuilds: (businessId: string) => Promise<void>;
+  openBuilderPreview: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
+  loadBuilderRunEvidence: (builderRunId: string) => Promise<BuilderRunEvidence>;
   approveAllAuditFindings: () => Promise<void>;
   updateAuditFinding: (
     finding: AuditFinding,
@@ -5944,11 +8077,13 @@ function WorkspaceContent({
     return (
       <div className="workspace-content-stack">
         <BuildManifestPanel
-          onCancelBuild={cancelWebsiteBuild}
-          onDeleteBuild={deleteWebsiteBuild}
+          onCancelBuild={cancelProspectBuild}
           onCreate={createBuildManifest}
-          onOpenPreview={createBuilderPreviewUrl}
-          onRequestBuild={requestWebsiteBuild}
+          onDeleteBuild={deleteProspectBuilds}
+          onLoadBuildEvidence={loadBuilderRunEvidence}
+          onOpenAgentStudio={openAgentStudio}
+          onOpenPreview={openBuilderPreview}
+          onRequestBuild={requestProspectBuild}
           workspace={workspace}
         />
       </div>
@@ -6027,10 +8162,12 @@ function WorkspacePage({
   onUpdateRedesignBrief,
   onApproveRedesignBrief,
   onCreateBuildManifest,
-  onRequestWebsiteBuild,
-  onCancelWebsiteBuild,
-  onDeleteWebsiteBuild,
-  onCreateBuilderPreviewUrl,
+  onOpenAgentStudio,
+  onRequestProspectBuild,
+  onCancelProspectBuild,
+  onDeleteProspectBuilds,
+  onOpenBuilderPreview,
+  onLoadBuilderRunEvidence,
   onApproveAllAuditFindings,
   onUpdateAuditFinding,
   onVersionChange,
@@ -6072,10 +8209,16 @@ function WorkspacePage({
   ) => Promise<void>;
   onApproveRedesignBrief: (brief: RedesignBrief) => Promise<void>;
   onCreateBuildManifest: () => Promise<void>;
-  onRequestWebsiteBuild: (mode: BuilderRunMode, targetSourceUrl?: string) => Promise<void>;
-  onCancelWebsiteBuild: () => Promise<void>;
-  onDeleteWebsiteBuild: (businessId: string) => Promise<void>;
-  onCreateBuilderPreviewUrl: (builderRunId: string) => Promise<string>;
+  onOpenAgentStudio: () => void;
+  onRequestProspectBuild: (
+    mode: BuilderRunMode,
+    targetSourceUrl?: string,
+    buildInstruction?: string,
+  ) => Promise<void>;
+  onCancelProspectBuild: () => Promise<void>;
+  onDeleteProspectBuilds: (businessId: string) => Promise<void>;
+  onOpenBuilderPreview: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
+  onLoadBuilderRunEvidence: (builderRunId: string) => Promise<BuilderRunEvidence>;
   onApproveAllAuditFindings: () => Promise<void>;
   onUpdateAuditFinding: (
     finding: AuditFinding,
@@ -6136,10 +8279,12 @@ function WorkspacePage({
           createRedesignBrief={onCreateRedesignBrief}
           refreshRedesignBriefArchitecture={onRefreshRedesignBriefArchitecture}
           createBuildManifest={onCreateBuildManifest}
-          requestWebsiteBuild={onRequestWebsiteBuild}
-          cancelWebsiteBuild={onCancelWebsiteBuild}
-          deleteWebsiteBuild={onDeleteWebsiteBuild}
-          createBuilderPreviewUrl={onCreateBuilderPreviewUrl}
+          openAgentStudio={onOpenAgentStudio}
+          requestProspectBuild={onRequestProspectBuild}
+          cancelProspectBuild={onCancelProspectBuild}
+          deleteProspectBuilds={onDeleteProspectBuilds}
+          openBuilderPreview={onOpenBuilderPreview}
+          loadBuilderRunEvidence={onLoadBuilderRunEvidence}
           requestAssetAnalysis={onRequestAssetAnalysis}
           cancelAssetAnalysis={onCancelAssetAnalysis}
           setAssetAnalysisSelected={onSetAssetAnalysisSelected}
@@ -6181,6 +8326,8 @@ function WorkspaceApp({
   const [route, setRoute] = useState<Route>(initialRoute);
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [workspaces, setWorkspaces] = useState<ProspectWorkspace[]>([]);
+  const [agentPackages, setAgentPackages] = useState<AgentPackage[]>([]);
+  const [agentPackageProposals, setAgentPackageProposals] = useState<AgentPackageProposal[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingPresentation, setLoadingPresentation] = useState(true);
   const [storageError, setStorageError] = useState('');
@@ -6196,12 +8343,27 @@ function WorkspaceApp({
 
   const refreshData = useCallback(
     async ({ announce = false }: { announce?: boolean } = {}) => {
-      const [nextBusinesses, nextWorkspaces] = await Promise.all([
-        repository.listBusinesses(),
-        repository.listWorkspaces(),
-      ]);
+      const [nextBusinesses, nextWorkspaces, nextAgentPackages, nextAgentPackageProposals] =
+        await Promise.all([
+          repository.listBusinesses(),
+          repository.listWorkspaces(),
+          repository.listAgentPackages(),
+          repository.listAgentPackageProposals(),
+        ]);
       const nextFingerprint = JSON.stringify({
         businesses: nextBusinesses.map((business) => [business.id, business.updatedAt]),
+        agentPackages: nextAgentPackages.map((agentPackage) => [
+          agentPackage.id,
+          agentPackage.version,
+          agentPackage.status,
+          agentPackage.updatedAt,
+        ]),
+        agentPackageProposals: nextAgentPackageProposals.map((proposal) => [
+          proposal.id,
+          proposal.status,
+          proposal.updatedAt,
+          proposal.draftPackageId,
+        ]),
         captures: nextWorkspaces.map((workspace) => [
           workspace.business.id,
           workspace.latestCapture?.id,
@@ -6237,6 +8399,8 @@ function WorkspaceApp({
       dataFingerprintRef.current = nextFingerprint;
       setBusinesses(nextBusinesses);
       setWorkspaces(nextWorkspaces);
+      setAgentPackages(nextAgentPackages);
+      setAgentPackageProposals(nextAgentPackageProposals);
       if (announce && changed) {
         setNotice({
           id: crypto.randomUUID(),
@@ -6265,15 +8429,32 @@ function WorkspaceApp({
     async function initialise() {
       try {
         await repository.bootstrap();
-        const [nextBusinesses, nextWorkspaces] = await Promise.all([
-          repository.listBusinesses(),
-          repository.listWorkspaces(),
-        ]);
+        const [nextBusinesses, nextWorkspaces, nextAgentPackages, nextAgentPackageProposals] =
+          await Promise.all([
+            repository.listBusinesses(),
+            repository.listWorkspaces(),
+            repository.listAgentPackages(),
+            repository.listAgentPackageProposals(),
+          ]);
         if (!active) return;
         setBusinesses(nextBusinesses);
         setWorkspaces(nextWorkspaces);
+        setAgentPackages(nextAgentPackages);
+        setAgentPackageProposals(nextAgentPackageProposals);
         dataFingerprintRef.current = JSON.stringify({
           businesses: nextBusinesses.map((business) => [business.id, business.updatedAt]),
+          agentPackages: nextAgentPackages.map((agentPackage) => [
+            agentPackage.id,
+            agentPackage.version,
+            agentPackage.status,
+            agentPackage.updatedAt,
+          ]),
+          agentPackageProposals: nextAgentPackageProposals.map((proposal) => [
+            proposal.id,
+            proposal.status,
+            proposal.updatedAt,
+            proposal.draftPackageId,
+          ]),
           captures: nextWorkspaces.map((workspace) => [
             workspace.business.id,
             workspace.latestCapture?.id,
@@ -6343,6 +8524,30 @@ function WorkspaceApp({
       document.removeEventListener('visibilitychange', refreshInBackground);
     };
   }, [loading, refreshData]);
+
+  const hasActiveAiUsage = workspaces.some(
+    (candidate) =>
+      candidate.assetAnalysis?.status === 'queued' ||
+      candidate.assetAnalysis?.status === 'running' ||
+      candidate.latestBuilderRun?.status === 'queued' ||
+      candidate.latestBuilderRun?.status === 'running' ||
+      candidate.latestBuilderRun?.status === 'paused',
+  );
+  const hasActiveAgentPackageProposal = agentPackageProposals.some(
+    (proposal) => proposal.status === 'queued' || proposal.status === 'running',
+  );
+
+  useEffect(() => {
+    if (route.page !== 'usage' || !hasActiveAiUsage) return;
+    const interval = window.setInterval(() => void refreshData(), 3_000);
+    return () => window.clearInterval(interval);
+  }, [hasActiveAiUsage, refreshData, route.page]);
+
+  useEffect(() => {
+    if (route.page !== 'agent-studio' || !hasActiveAgentPackageProposal) return;
+    const interval = window.setInterval(() => void refreshData(), 3_000);
+    return () => window.clearInterval(interval);
+  }, [hasActiveAgentPackageProposal, refreshData, route.page]);
 
   const baseWorkspace =
     route.page === 'prospects' && route.businessId
@@ -6683,24 +8888,78 @@ function WorkspaceApp({
     });
   }
 
-  async function requestWebsiteBuild(mode: BuilderRunMode, targetSourceUrl?: string) {
-    if (!workspace) return;
+  async function requestAgentPackageProposal(basePackageId: string, direction: string) {
+    const proposal = await repository.requestAgentPackageProposal(basePackageId, direction);
+    if (!proposal) throw new Error('The agent package proposal could not be queued.');
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Package proposal queued',
+      detail:
+        'The protected refinement worker will prepare a Markdown policy proposal derived from the published package.',
+      tone: 'warning',
+    });
+  }
+
+  async function approveAgentPackageForTesting(packageId: string) {
+    const agentPackage = await repository.approveAgentPackageForTesting(packageId);
+    if (!agentPackage) throw new Error('The test package could not be approved.');
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: `Package v${agentPackage.version} ready for testing`,
+      detail: 'Select it in Refine to pin a private homepage or page test to this package.',
+      tone: 'success',
+    });
+  }
+
+  async function promoteAgentPackage(packageId: string) {
+    const agentPackage = await repository.promoteAgentPackage(packageId);
+    if (!agentPackage) throw new Error('The agent package could not be promoted.');
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: `Package v${agentPackage.version} published`,
+      detail:
+        'Future complete prospect builds now pin this package. Earlier tests and prospect builds remain unchanged.',
+      tone: 'success',
+    });
+  }
+
+  async function requestWebsiteBuildForBusiness(
+    businessId: string,
+    mode: BuilderRunMode,
+    targetSourceUrl?: string,
+    buildInstruction?: string,
+    agentPackageId?: string,
+  ) {
+    const targetWorkspace = workspaces.find((candidate) => candidate.business.id === businessId);
+    if (!targetWorkspace) throw new Error('The selected test prospect is no longer available.');
+    const requestedInstruction = buildInstruction?.trim() || undefined;
     const resumeRun =
-      (workspace.latestBuilderRun?.status === 'failed' ||
-        workspace.latestBuilderRun?.status === 'cancelled') &&
-      workspace.latestBuilderRun?.buildMode === mode &&
-      workspace.latestBuilderRun?.targetSourceUrl === targetSourceUrl &&
-      workspace.builderArtifacts.some(
+      (targetWorkspace.latestBuilderRun?.status === 'failed' ||
+        targetWorkspace.latestBuilderRun?.status === 'cancelled') &&
+      targetWorkspace.latestBuilderRun?.buildMode === mode &&
+      targetWorkspace.latestBuilderRun?.targetSourceUrl === targetSourceUrl &&
+      targetWorkspace.latestBuilderRun?.buildInstruction === requestedInstruction &&
+      targetWorkspace.latestBuilderRun?.agentPackageId === agentPackageId &&
+      targetWorkspace.builderArtifacts.some(
         (artifact) =>
           (artifact.kind === 'checkpoint' &&
             artifact.label === 'Latest private source checkpoint') ||
           artifact.kind === 'draft_file',
       )
-        ? workspace.latestBuilderRun
+        ? targetWorkspace.latestBuilderRun
         : undefined;
     const run = resumeRun
       ? await repository.resumeWebsiteBuild(resumeRun.id)
-      : await repository.requestWebsiteBuild(workspace.business.id, mode, targetSourceUrl);
+      : await repository.requestWebsiteBuild(
+          targetWorkspace.business.id,
+          mode,
+          targetSourceUrl,
+          requestedInstruction,
+          agentPackageId,
+        );
     if (!run) throw new Error('The private preview could not be queued.');
     await refreshData();
     setNotice({
@@ -6711,21 +8970,20 @@ function WorkspaceApp({
           ? 'Homepage test queued'
           : mode === 'page_test'
             ? 'Selected page test queued'
-            : 'Full website build queued',
+            : 'Prospect build queued',
       detail: resumeRun
-        ? 'The protected builder will restore the saved source, then Codex will continue the website build.'
+        ? 'The protected builder will restore the saved private source, then Codex will continue the private website build. The prospect’s public website is unchanged.'
         : mode === 'homepage_test'
-          ? 'The protected builder will create only the homepage for you to review and refine.'
+          ? 'The protected builder will create a private homepage test. When a saved homepage checkpoint exists, it will refine that private draft; the prospect’s public website is unchanged.'
           : mode === 'page_test'
-            ? 'The protected builder will restore the refined homepage, then create only the selected approved page for review.'
-            : 'The protected builder will create the full website from the approved homepage direction and Build Manifest.',
+            ? 'The protected builder will use the approved homepage direction, then create only the selected private test page. The prospect’s public website is unchanged.'
+            : 'The protected builder will create this prospect’s complete private website from the approved homepage direction and Build Manifest. The prospect’s public website is unchanged.',
       tone: 'success',
     });
   }
 
-  async function cancelWebsiteBuild() {
-    if (!workspace) return;
-    await repository.cancelWebsiteBuild(workspace.business.id);
+  async function cancelWebsiteBuildForBusiness(businessId: string) {
+    await repository.cancelWebsiteBuild(businessId);
     await refreshData();
     setNotice({
       id: crypto.randomUUID(),
@@ -6835,9 +9093,13 @@ function WorkspaceApp({
               ? { page: 'today' }
               : page === 'data'
                 ? { page: 'data' }
-                : page === 'settings'
-                  ? { page: 'settings' }
-                  : { page: 'prospects' },
+                : page === 'usage'
+                  ? { page: 'usage' }
+                  : page === 'settings'
+                    ? { page: 'settings' }
+                    : page === 'agent-studio'
+                      ? { page: 'agent-studio', section: 'refine' }
+                      : { page: 'prospects' },
           )
         }
         onSignOut={onSignOut}
@@ -6863,8 +9125,43 @@ function WorkspaceApp({
             }
             workspaces={workspaces}
           />
+        ) : route.page === 'usage' ? (
+          <UsagePage onOpenWorkspace={openWorkspace} workspaces={workspaces} />
         ) : route.page === 'settings' ? (
           <BuilderSettingsPage />
+        ) : route.page === 'agent-studio' ? (
+          <AgentStudioPage
+            agentPackageProposals={agentPackageProposals}
+            agentPackages={agentPackages}
+            onApproveAgentPackageForTesting={approveAgentPackageForTesting}
+            onCancelBuild={cancelWebsiteBuildForBusiness}
+            onDeleteBuild={deleteWebsiteBuild}
+            onLoadBuildEvidence={(builderRunId) => repository.getBuilderRunEvidence(builderRunId)}
+            onOpenPreview={createBuilderPreviewUrl}
+            onOpenProspect={(businessId) =>
+              navigate({ page: 'prospects', businessId, tab: 'redesign' })
+            }
+            onRequestBuild={requestWebsiteBuildForBusiness}
+            onRequestAgentPackageProposal={requestAgentPackageProposal}
+            onPromoteAgentPackage={promoteAgentPackage}
+            onSelectSection={(section) =>
+              navigate({
+                page: 'agent-studio',
+                section,
+                businessId: route.businessId,
+              })
+            }
+            onSelectWorkspace={(businessId) =>
+              navigate({
+                page: 'agent-studio',
+                section: 'refine',
+                businessId: businessId || undefined,
+              })
+            }
+            section={route.section ?? 'refine'}
+            selectedBusinessId={route.businessId}
+            workspaces={workspaces}
+          />
         ) : route.businessId && workspace ? (
           <WorkspacePage
             onApprove={approveWorkspace}
@@ -6873,10 +9170,27 @@ function WorkspaceApp({
             onApproveAllAuditFindings={approveAllAuditFindings}
             onApproveRedesignBrief={approveRedesignBrief}
             onCreateBuildManifest={createBuildManifest}
-            onRequestWebsiteBuild={requestWebsiteBuild}
-            onCancelWebsiteBuild={cancelWebsiteBuild}
-            onDeleteWebsiteBuild={deleteWebsiteBuild}
-            onCreateBuilderPreviewUrl={createBuilderPreviewUrl}
+            onOpenAgentStudio={() =>
+              navigate({
+                page: 'agent-studio',
+                section: 'refine',
+                businessId: workspace.business.id,
+              })
+            }
+            onRequestProspectBuild={(mode, targetSourceUrl, buildInstruction) =>
+              requestWebsiteBuildForBusiness(
+                workspace.business.id,
+                mode,
+                targetSourceUrl,
+                buildInstruction,
+              )
+            }
+            onCancelProspectBuild={() => cancelWebsiteBuildForBusiness(workspace.business.id)}
+            onDeleteProspectBuilds={deleteWebsiteBuild}
+            onOpenBuilderPreview={createBuilderPreviewUrl}
+            onLoadBuilderRunEvidence={(builderRunId) =>
+              repository.getBuilderRunEvidence(builderRunId)
+            }
             onCreateRedesignBrief={createRedesignBrief}
             onRefreshRedesignBriefArchitecture={refreshRedesignBriefArchitecture}
             onRequestAssetAnalysis={requestAssetAnalysis}

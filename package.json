@@ -23,6 +23,7 @@
     "worker:capture": "node worker/capture-worker.mjs",
     "worker:audit": "node worker/audit-worker.mjs",
     "worker:assets": "node worker/asset-analysis-worker.mjs",
+    "worker:agent-package": "node worker/agent-package-worker.mjs",
     "worker:builder": "node worker/builder-worker.mjs",
     "workers": "node worker/supervisor.mjs",
     "test:worker": "node --test tests/worker/*.test.mjs",

@@ -7,7 +7,7 @@ import type {
 } from './domain';
 
 export const buildManifestSchemaVersion = 1;
-export const codexBuilderContractVersion = 'siteforge-codex-builder-v3';
+export const codexBuilderContractVersion = 'siteforge-codex-builder-v4';
 
 const builderRules = [
   'Build a complete mobile-first website from this manifest, not a superficial reskin of the captured website.',
@@ -15,7 +15,7 @@ const builderRules = [
   'Treat selected pages and selected assets as research context. Only approved asset guidance authorises visual reuse in the redesign.',
   'When a Brand Kit is present, use its staged primary logo in the header and footer, use its reviewed primary and accent colours as brand tokens, and derive accessible neutral, background, surface, muted, and border tokens rather than copying a weak legacy palette or substituting a generic identity.',
   'Use semantic HTML, labelled forms, keyboard-accessible controls, accessible colour contrast, and a clear focus order.',
-  'Create a clear visual hierarchy with purposeful typography, spacing, navigation, calls to action, trust presentation, and restrained animation.',
+  'Create a clear visual hierarchy with purposeful typography, spacing, navigation, calls to action, trust presentation, and restrained motion. Viewport reveals for headings and containers, plus counters for real metrics, are built-in defaults: apply them where they support scanning without waiting for a separate motion prompt.',
   'Design responsive mobile, tablet, and desktop layouts. Do not rely on desktop layouts shrinking into mobile.',
   'Keep performance, privacy, maintainability, local SEO foundations, and reusable design tokens as first-class implementation constraints.',
   'Surface open questions and uncertainties for human review rather than resolving them with assumptions.',

@@ -398,6 +398,43 @@ export type BuilderRunStatus =
   'queued' | 'running' | 'paused' | 'ready' | 'review_required' | 'failed' | 'cancelled';
 export type BuilderQualityStatus = 'passed' | 'needs_review' | 'failed' | 'not_run';
 export type BuilderRunMode = 'homepage_test' | 'page_test' | 'full_site';
+export type AgentPackageStatus = 'draft' | 'test_ready' | 'published' | 'superseded';
+export type AgentPackageProposalStatus =
+  'queued' | 'running' | 'ready' | 'failed' | 'accepted' | 'rejected';
+export type AgentPackageCapabilityAssessment = 'policy_only' | 'foundation_change_required';
+
+export type AgentPackage = {
+  id: string;
+  version: number;
+  status: AgentPackageStatus;
+  basePackageId?: string;
+  builderContractVersion: string;
+  foundationVersion: string;
+  foundationChecksum?: string;
+  contractAddendum: string;
+  instructionsAddendum: string;
+  summary: string;
+  capabilityAssessment: AgentPackageCapabilityAssessment;
+  capabilityProposal?: string;
+  createdAt: string;
+  updatedAt: string;
+  approvedAt?: string;
+  publishedAt?: string;
+};
+
+export type AgentPackageProposal = {
+  id: string;
+  basePackageId: string;
+  draftPackageId?: string;
+  direction: string;
+  status: AgentPackageProposalStatus;
+  summary?: string;
+  capabilityAssessment?: AgentPackageCapabilityAssessment;
+  capabilityProposal?: string;
+  errorSummary?: string;
+  createdAt: string;
+  updatedAt: string;
+};
 export type BuilderPreviewMode = 'ready' | 'draft';
 export type BuilderEventKind = 'stage' | 'activity' | 'file' | 'quality' | 'diagnostic' | 'error';
 
@@ -421,6 +458,9 @@ export type BuilderRun = {
   buildManifestId: string;
   buildMode: BuilderRunMode;
   targetSourceUrl?: string;
+  buildInstruction?: string;
+  agentPackageId?: string;
+  agentPackageVersion?: number;
   status: BuilderRunStatus;
   templateVersion: string;
   model?: string;
@@ -466,6 +506,33 @@ export type BuilderEvent = {
   sequence: number;
   kind: BuilderEventKind;
   message: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type BuilderRunEvidence = {
+  artifacts: BuilderArtifact[];
+  events: BuilderEvent[];
+};
+
+export type AiUsageSource = 'asset_analysis' | 'capability_analysis' | 'codex_build';
+export type AiUsageCostSource = 'provider_reported' | 'configured_rate' | 'unavailable';
+
+export type AiUsageRecord = {
+  id: string;
+  businessId: string;
+  builderRunId?: string;
+  source: AiUsageSource;
+  provider: string;
+  model: string;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+  costUsd?: number;
+  costSource: AiUsageCostSource;
+  pricingVersion?: string;
   metadata: Record<string, unknown>;
   createdAt: string;
 };
@@ -568,6 +635,7 @@ export type ProspectWorkspace = {
   builderRuns: BuilderRun[];
   builderArtifacts: BuilderArtifact[];
   builderEvents: BuilderEvent[];
+  aiUsageRecords: AiUsageRecord[];
   previousCapture?: ResearchCapture;
   previousFacts: EvidenceFact[];
   previousArtifacts: ResearchArtifact[];

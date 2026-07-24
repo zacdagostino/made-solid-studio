@@ -1,5 +1,6 @@
 import { hostname } from 'node:os';
 import { createClient } from '@supabase/supabase-js';
+import { recordAiUsage } from './ai-usage.mjs';
 
 const artifactBucket = 'siteforge-artifacts';
 const timeoutMs = 120_000;
@@ -174,10 +175,18 @@ async function interpret(apiKey, model, input) {
     }),
   });
   if (!response.ok) throw new Error(`The capability model returned ${response.status}.`);
-  const parsed = JSON.parse(outputText(await response.json()));
-  return parsed.capabilities
-    .filter((item) => item.evidence.every((entry) => allowedUrls.has(entry.sourceUrl)))
-    .map((item, index) => ({ ...item, id: `${item.kind}:${index + 1}`, decision: 'needs_review' }));
+  const responseBody = await response.json();
+  const parsed = JSON.parse(outputText(responseBody));
+  return {
+    capabilities: parsed.capabilities
+      .filter((item) => item.evidence.every((entry) => allowedUrls.has(entry.sourceUrl)))
+      .map((item, index) => ({
+        ...item,
+        id: `${item.kind}:${index + 1}`,
+        decision: 'needs_review',
+      })),
+    usage: responseBody.usage,
+  };
 }
 
 async function processJob(client, job, workerId, apiKey, model) {
@@ -191,7 +200,16 @@ async function processJob(client, job, workerId, apiKey, model) {
     })
     .eq('id', job.id)
     .eq('worker_id', workerId);
-  const capabilities = await interpret(apiKey, model, { pages });
+  const analysis = await interpret(apiKey, model, { pages });
+  const capabilities = analysis.capabilities;
+  await recordAiUsage(client, {
+    organizationId: job.organization_id,
+    businessId: job.business_id,
+    source: 'capability_analysis',
+    model,
+    usage: analysis.usage,
+    metadata: { capabilityAnalysisJobId: job.id, researchPacketId: packet.id },
+  });
   const data = record(packet.data);
   const { error: packetError } = await client
     .from('research_packets')

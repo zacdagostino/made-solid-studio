@@ -6,6 +6,7 @@ const workerScripts = [
   ['audit', 'audit-worker.mjs'],
   ['assets', 'asset-analysis-worker.mjs'],
   ['capabilities', 'capability-analysis-worker.mjs'],
+  ['agent-packages', 'agent-package-worker.mjs'],
   ['builder', 'builder-worker.mjs'],
 ];
 const restartDelayMs = 2_000;
@@ -39,6 +40,6 @@ process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
 
 console.log(
-  '[worker-supervisor] starting capture, logo, audit, asset-analysis, capability-analysis, and builder workers.',
+  '[worker-supervisor] starting capture, logo, audit, asset-analysis, capability-analysis, agent-package, and builder workers.',
 );
 workerScripts.forEach(([name, script]) => startWorker(name, script));

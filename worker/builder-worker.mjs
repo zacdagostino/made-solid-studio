@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { constants as fsConstants } from 'node:fs';
 import { createServer } from 'node:http';
 import { hostname, tmpdir } from 'node:os';
 import {
+  access,
   cp,
   mkdir,
   mkdtemp,
@@ -19,6 +21,7 @@ import { createClient } from '@supabase/supabase-js';
 import AxeBuilder from '@axe-core/playwright';
 import { chromium } from 'playwright';
 import { createDiagnosticWriter, diagnosticText } from './diagnostics.mjs';
+import { codexUsage, recordAiUsage } from './ai-usage.mjs';
 import { normaliseSourceUrl, sourcePagePlan } from './source-page-plan.mjs';
 
 const artifactBucket = 'siteforge-artifacts';
@@ -96,6 +99,52 @@ function requiredEnvironment(name) {
   return value;
 }
 
+async function executableFile(path) {
+  if (!path) return false;
+  try {
+    await access(path, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function codexBinary() {
+  const configured = process.env.SITEFORGE_CODEX_BIN?.trim();
+  if (configured) return configured;
+
+  const pathEntries = (process.env.PATH || '').split(':').filter(Boolean);
+  for (const directory of pathEntries) {
+    const candidate = join(directory, 'codex');
+    if (await executableFile(candidate)) return candidate;
+  }
+
+  // The desktop Codex extension bundles the CLI but its bin directory is not
+  // necessarily inherited by long-lived background workers. Discover it as a
+  // last-resort local installation so a worker restart does not lose builds.
+  const extensionsDirectory = join(process.env.HOME || '', '.vscode', 'extensions');
+  try {
+    const extensions = await readdir(extensionsDirectory, { withFileTypes: true });
+    const extension = extensions
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith('openai.chatgpt-'))
+      .sort((left, right) => right.name.localeCompare(left.name))[0];
+    if (extension) {
+      const candidate = join(
+        extensionsDirectory,
+        extension.name,
+        'bin',
+        process.platform === 'darwin' ? 'darwin-arm64' : 'linux-x86_64',
+        'codex',
+      );
+      if (await executableFile(candidate)) return candidate;
+    }
+  } catch {
+    // A normal PATH lookup below produces the actionable configuration error.
+  }
+
+  return 'codex';
+}
+
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
 }
@@ -148,6 +197,13 @@ function storageErrorIsRetryable(providerCode) {
 
 function isPlaceholderOutputFile(file) {
   return basename(file).toLowerCase() === '.gitkeep';
+}
+
+function isLockedStarterDocument(html) {
+  return (
+    /<h1[^>]*>\s*private preview\s*<\/h1>/i.test(html) &&
+    /this file is replaced by the siteforge builder\./i.test(html)
+  );
 }
 
 function safeErrorSummary(error) {
@@ -1060,6 +1116,23 @@ async function prepareWorkspace(client, run, manifest, workerId, diagnostics) {
     cwd: runDirectory,
     env: process.env,
   });
+  const { data: agentPackage, error: packageError } = await client
+    .from('agent_packages')
+    .select(
+      'id, version, status, builder_contract_version, foundation_version, contract_addendum, instructions_addendum, capability_assessment',
+    )
+    .eq('id', run.agent_package_id)
+    .eq('organization_id', run.organization_id)
+    .single();
+  if (packageError || !agentPackage) {
+    throw new Error('The agent package pinned to this private build could not be loaded.');
+  }
+  if (agentPackage.foundation_version !== run.template_version) {
+    throw new Error('The agent package foundation no longer matches this immutable private build.');
+  }
+  if (run.build_mode === 'full_site' && agentPackage.status !== 'published') {
+    throw new Error('A complete prospect build must use a published agent package.');
+  }
 
   const manifestPath = join(inputDirectory, 'manifest.json');
   const manifestText = JSON.stringify(manifest.data, null, 2);
@@ -1151,6 +1224,7 @@ async function prepareWorkspace(client, run, manifest, workerId, diagnostics) {
     restoredFromLegacyDrafts: checkpoint.restoredFromLegacyDrafts,
     restoredCheckpointFileCount: checkpoint.fileCount ?? 0,
     restoredHomepageTest: sourceRun.id !== run.id,
+    agentPackage,
   };
 }
 
@@ -1163,10 +1237,20 @@ async function assertLockedFiles(siteDirectory, lockedFiles) {
   }
 }
 
-function buildPrompt(restoredCheckpoint, buildMode, stagedSourcePages) {
+function buildPrompt(
+  restoredCheckpoint,
+  buildMode,
+  stagedSourcePages,
+  buildInstruction,
+  agentPackage,
+) {
   const homepageTest = buildMode === 'homepage_test';
   const pageTest = buildMode === 'page_test';
   const selectedPage = stagedSourcePages[0];
+  const safeInstruction =
+    typeof buildInstruction === 'string' && buildInstruction.trim()
+      ? buildInstruction.trim()
+      : undefined;
   return [
     homepageTest
       ? 'You are the SiteForge website builder. Build and refine only the private homepage test preview now. Do not create any other public page output.'
@@ -1175,18 +1259,38 @@ function buildPrompt(restoredCheckpoint, buildMode, stagedSourcePages) {
         : 'You are the SiteForge website builder. Build the complete private redesign now.',
     'Read ../input/manifest.json, ../input/approved-assets.json, and ../input/source-pages/index.json before writing any website files.',
     'Follow AGENTS.md exactly. The manifest is factual context and a hard boundary, not a loose suggestion.',
+    `This run is pinned to builder agent package v${agentPackage.version} (${agentPackage.id}). Its builder foundation is locked and may not be edited.`,
     homepageTest
       ? 'source-pages/index.json contains the single approved homepage source. Read it and create only its matching index.html output inside src/.'
       : pageTest
         ? `source-pages/index.json contains the single approved page selected for this test. Read it and create only its matching ${selectedPage?.outputPath ?? 'output'} inside src/.`
         : 'Every entry in source-pages/index.json is an explicitly selected source page. Read its linked content file and create the matching outputPath inside src/ for every entry. The compact page plan is not the full page scope and does not permit omitting selected pages.',
     'Add <meta name="siteforge-source-url" content="the exact sourceUrl from the source-page index"> to each generated selected-page HTML file. Keep the outputPath exactly as specified so SiteForge can verify coverage.',
+    'Replace the locked starter document content. Never leave the default “Private preview” heading or its “This file is replaced by the SiteForge builder.” message in any output. Before running the build, inspect the generated selected-page HTML files to confirm they contain the real redesign.',
     "Use the captured text, headings, forms, navigation, and content blocks as source material. Rewrite, condense, group, and improve the wording where it helps clarity, scanning, hierarchy, and conversion, but preserve each page's necessary services, operational details, calls to action, forms or tools, legal content, and resource content. Do not silently drop material facts or make captured claims stronger.",
     'Read approvedCapabilities in manifest.json. They are the only approved dynamic scope. This preview is static: for approved managed content, accounts, payments, external integrations, or server-side workflows, build the honest visitor-facing interface and write src/BUILD_NOTES.md explaining the production service, data, and approval boundary. Never fabricate credentials, live submissions, transactions, accounts, or backend behaviour.',
     'Do not invent or imply unsupported business facts. Preserve unresolved items for the human reviewer rather than guessing.',
     'Use only local approved assets in src/assets/. Do not make network requests or add dependencies.',
     'When manifest.json contains a Brand Kit, its primary logo asset is mandatory in the header and footer. Use its reviewed primary and accent colours as brand tokens, then design coherent accessible neutrals, surfaces, and backgrounds yourself; do not copy a weak legacy colour system or replace the identity with a generic one.',
-    'Keep src/main.js and load it with a local <script src="main.js"></script> on every generated page. It is the required built-in motion runtime: it progressively reveals titles and content containers as they enter the viewport, and supports intentional number counters marked with data-counter. When captured content includes a factual metric, add data-counter when that supports scanning; never invent a number just to animate it. Do not add a motion library or remote scripts, and preserve reduced-motion behaviour.',
+    'Keep src/main.js and load it with a local deferred <script src="main.js" defer></script> on every generated page. It is the required built-in motion runtime: it progressively reveals titles and content containers as they enter the viewport, supports intentional number counters marked with data-counter, and can introduce the approved primary logo before carrying it into the header on a first visit. Mark the real header logo image or its immediate wrapper with data-siteforge-brand-logo. Choose an understated brand-appropriate treatment; data-siteforge-intro="quiet" is available on html for quieter sites. Do not add a second loader, fake progress, generic wordmark, motion library, remote script, or any transition that delays reduced-motion users or access to content.',
+    ...(agentPackage.contract_addendum
+      ? [
+          'Apply this approved additive builder-contract policy from the pinned agent package. It does not override the manifest, safety boundary, approved assets, or locked foundation:',
+          agentPackage.contract_addendum,
+        ]
+      : []),
+    ...(agentPackage.instructions_addendum
+      ? [
+          'Apply this approved additive implementation guidance from the pinned agent package. It does not authorise changes to locked files or dependencies:',
+          agentPackage.instructions_addendum,
+        ]
+      : []),
+    ...(safeInstruction
+      ? [
+          `Apply this workspace-member build direction where it improves the requested preview: ${safeInstruction}`,
+          'This direction can guide visual, interaction, and content-hierarchy decisions, but it never overrides the Build Manifest, approved assets, permitted facts, selected-page scope, locked files, or safety constraints above.',
+        ]
+      : []),
     restoredCheckpoint
       ? 'A private source checkpoint has been restored into src/. Inspect and preserve the useful existing work, but extend or correct it until it covers every selected source-page outputPath.'
       : 'Start from the locked builder template in src/.',
@@ -1249,6 +1353,24 @@ function motionRuntimeProblems(htmlFiles, allFiles) {
   return problems;
 }
 
+function brandIntroProblems(manifest, htmlFiles, allFiles) {
+  const brandKit = recordValue(recordValue(manifest.data).brandKit);
+  if (!brandKit.primaryLogoAssetId) return [];
+  const problems = [];
+  const runtime = allFiles.find((file) => basename(file) === 'main.js');
+  if (!runtime?.contents.includes('data-siteforge-brand-logo')) {
+    problems.push('The required brand-introduction runtime is missing from main.js.');
+  }
+  for (const file of htmlFiles) {
+    if (!/data-siteforge-brand-logo/i.test(file.contents)) {
+      problems.push(
+        `${file.relativePath} does not mark its header logo for the brand introduction.`,
+      );
+    }
+  }
+  return problems;
+}
+
 async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, diagnostics) {
   await assertBuildActive(client, run, workerId);
   await updateProgress(client, run, workerId, {
@@ -1258,8 +1380,14 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
     completed_items: 2,
   });
   await eventWriter('stage', 'Codex has started the private website build.');
-  const codexBinary = process.env.SITEFORGE_CODEX_BIN?.trim() || 'codex';
-  const codexHome = join(workspace.runDirectory, '.codex-home');
+  const codexExecutable = await codexBinary();
+  // Codex installs its workspace-sandbox helper under its home directory. It
+  // deliberately refuses temporary homes, so keep this isolated worker home
+  // outside the disposable website workspace while the generated project
+  // itself remains restricted to workspace-write.
+  const codexHome =
+    process.env.SITEFORGE_CODEX_HOME?.trim() ||
+    join(process.env.HOME?.trim() || workerRoot, '.siteforge-codex-builder');
   const model = process.env.SITEFORGE_CODEX_MODEL?.trim();
   await mkdir(codexHome, { recursive: true });
   const outputPath = join(workspace.runDirectory, 'codex-final-message.txt');
@@ -1296,9 +1424,15 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
   ];
   if (model) codexArguments.push('--model', model);
   codexArguments.push(
-    buildPrompt(workspace.restoredCheckpoint, workspace.buildMode, workspace.stagedSourcePages),
+    buildPrompt(
+      workspace.restoredCheckpoint,
+      workspace.buildMode,
+      workspace.stagedSourcePages,
+      run.build_instruction,
+      workspace.agentPackage,
+    ),
   );
-  const child = spawn(codexBinary, codexArguments, {
+  const child = spawn(codexExecutable, codexArguments, {
     cwd: workspace.siteDirectory,
     env: {
       HOME: codexHome,
@@ -1439,6 +1573,15 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
     stderr,
     metadata: { eventCount: events.length, exitCode: exit.code, signal: exit.signal ?? undefined },
   });
+  await recordAiUsage(client, {
+    organizationId: run.organization_id,
+    businessId: run.business_id,
+    builderRunId: run.id,
+    source: 'codex_build',
+    model: model || run.model || 'Codex CLI',
+    usage: codexUsage(events),
+    metadata: { exitCode: exit.code, signal: exit.signal ?? null, eventCount: events.length },
+  });
   if (cancelled) throw new BuilderCancelledError();
   await assertBuildActive(client, run, workerId);
   if (exit.code !== 0) {
@@ -1542,6 +1685,12 @@ function structuralCheck(htmlFiles) {
   return problems;
 }
 
+function starterTemplateCheck(htmlFiles) {
+  return htmlFiles
+    .filter((file) => isLockedStarterDocument(file.contents))
+    .map((file) => `${file.relativePath} still contains the locked starter document.`);
+}
+
 function sourceUrlMarker(html) {
   const tags = html.match(/<meta\b[^>]*>/gi) ?? [];
   for (const tag of tags) {
@@ -1626,6 +1775,7 @@ async function runQualityChecks(
   const totalPreviewCaptures = scopedHtmlFiles.length * previewViewports.length;
   const totalItems = 5 + totalPreviewCaptures;
   const structuralProblems = structuralCheck(scopedHtmlFiles);
+  const starterTemplateProblems = starterTemplateCheck(scopedHtmlFiles);
   const selectedPageCoverage = selectedPageCoverageCheck(
     manifest,
     scopedHtmlFiles,
@@ -1634,6 +1784,7 @@ async function runQualityChecks(
   );
   const brandCheckProblems = await brandProblems(manifest, workspace.stagedAssets, allFiles);
   const motionProblems = motionRuntimeProblems(scopedHtmlFiles, allFiles);
+  const brandIntroCheckProblems = brandIntroProblems(manifest, scopedHtmlFiles, allFiles);
   const checks = [
     {
       id: 'static-structure',
@@ -1642,6 +1793,14 @@ async function runQualityChecks(
       detail: structuralProblems.length
         ? structuralProblems.join(' ')
         : `${scopedHtmlFiles.length} page${scopedHtmlFiles.length === 1 ? '' : 's'} include a title, main landmark, and H1.`,
+    },
+    {
+      id: 'generated-output',
+      label: 'Generated website output',
+      status: starterTemplateProblems.length ? 'failed' : 'passed',
+      detail: starterTemplateProblems.length
+        ? starterTemplateProblems.join(' ')
+        : 'The locked starter document was replaced by generated website output.',
     },
     {
       id: 'brand-kit-usage',
@@ -1658,6 +1817,14 @@ async function runQualityChecks(
       detail: motionProblems.length
         ? motionProblems.join(' ')
         : 'Every generated page loads the local viewport-motion runtime with reduced-motion support.',
+    },
+    {
+      id: 'brand-introduction',
+      label: 'Built-in brand introduction',
+      status: brandIntroCheckProblems.length ? 'failed' : 'passed',
+      detail: brandIntroCheckProblems.length
+        ? brandIntroCheckProblems.join(' ')
+        : 'The approved header logo is ready for the short first-visit introduction.',
     },
     {
       id: 'selected-page-coverage',
@@ -1901,7 +2068,14 @@ async function saveOutputs(
     diagnostics,
     'source_archive',
     'tar',
-    ['-czf', sourceArchivePath, '-C', workspace.runDirectory, 'website'],
+    [
+      '--exclude=website/src/assets',
+      '-czf',
+      sourceArchivePath,
+      '-C',
+      workspace.runDirectory,
+      'website',
+    ],
     {
       cwd: workspace.runDirectory,
       env: process.env,
@@ -1913,7 +2087,11 @@ async function saveOutputs(
     relativePath: 'source/website-source.tgz',
     body: await readFile(sourceArchivePath),
     contentType: 'application/gzip',
-    metadata: { templateVersion: run.template_version },
+    metadata: {
+      templateVersion: run.template_version,
+      excludedPath: 'website/src/assets',
+      assetHandling: 'Approved assets are already persisted as individual private draft files.',
+    },
   });
   for (const file of quality.allFiles) {
     if (isPlaceholderOutputFile(file)) continue;
@@ -1999,6 +2177,14 @@ async function processBuild(client, run, workerId, apiKey) {
           ? `Saved draft source restored with ${workspace.restoredCheckpointFileCount} file${workspace.restoredCheckpointFileCount === 1 ? '' : 's'}; Codex will continue from it and create a full checkpoint.`
           : `Private source checkpoint restored with ${workspace.restoredCheckpointFileCount} file${workspace.restoredCheckpointFileCount === 1 ? '' : 's'}; Codex will continue from it.`
         : `Manifest, ${workspace.stagedSourcePages.length} selected page source${workspace.stagedSourcePages.length === 1 ? '' : 's'}, and ${workspace.stagedAssets.length} approved asset${workspace.stagedAssets.length === 1 ? '' : 's'} staged for Codex.`,
+    );
+    await eventWriter(
+      'stage',
+      `Builder agent package v${workspace.agentPackage.version} is pinned to this private build.`,
+      {
+        agentPackageId: workspace.agentPackage.id,
+        agentPackageVersion: workspace.agentPackage.version,
+      },
     );
     const codexOutput = await runCodex(
       client,

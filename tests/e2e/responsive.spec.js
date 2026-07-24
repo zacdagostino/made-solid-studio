@@ -105,6 +105,28 @@ test('renders without unintended horizontal overflow', async ({ page }) => {
   expect(hasHorizontalOverflow).toBe(false);
 });
 
+test('keeps the AI usage page responsive and reachable from navigation', async ({
+  page,
+}, testInfo) => {
+  await page.goto('/#/usage');
+  await expect(page.getByLabel('Loading SiteForge OS workspace')).toBeHidden();
+  await expect(page.getByRole('heading', { name: 'AI usage & spend' })).toBeVisible();
+  await expect(page.getByText('No AI usage recorded yet')).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    const trigger = page.getByRole('button', { name: 'Open navigation menu' });
+    await trigger.click();
+    const drawer = page.getByRole('dialog', { name: 'Navigation' });
+    await expect(drawer.getByRole('button', { name: 'AI usage' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(trigger).toBeFocused();
+  }
+});
+
 test('contains page content horizontally across workspace sections', async ({ page }) => {
   const sections = ['overview', 'research', 'assets', 'audit', 'brief', 'redesign', 'settings'];
 
@@ -231,7 +253,9 @@ test('positions the workspace loading title for each viewport', async ({ page },
   const expectedCenter =
     testInfo.project.name === 'mobile' ? viewportHeight / 2 - 48 : viewportHeight / 2;
   expect(Math.abs(titleCenter - expectedCenter)).toBeLessThanOrEqual(1);
-  expect(descriptionBox.y - (titleBox.y + titleBox.height)).toBeLessThanOrEqual(48);
+  const descriptionGap = descriptionBox.y - (titleBox.y + titleBox.height);
+  expect(descriptionGap).toBeGreaterThanOrEqual(24);
+  expect(descriptionGap).toBeLessThanOrEqual(56);
 });
 
 test('gives the page a restrained elastic response at its scroll boundaries', async ({ page }) => {
@@ -292,14 +316,62 @@ test('uses a persistent desktop sidebar', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'This behavior is specific to the desktop shell.');
   await page.goto('/');
 
-  await expect(page.locator('.sidebar')).toBeVisible();
+  const sidebar = page.locator('.sidebar');
+  await expect(sidebar).toBeVisible();
+  await expect(sidebar).toHaveCSS('position', 'fixed');
   await expect(page.getByRole('button', { name: 'Open navigation menu' })).toBeHidden();
   await expect(page.getByRole('button', { name: 'Today' }).first()).toBeVisible();
+
+  await page.evaluate(() => {
+    document.body.insertAdjacentHTML('beforeend', '<div style="height: 1200px"></div>');
+    window.scrollTo(0, 600);
+  });
+  await expect
+    .poll(async () => {
+      const box = await sidebar.boundingBox();
+      return box?.y;
+    })
+    .toBe(0);
 });
 
-test('puts the build manifest package before the private preview and opens its details', async ({
+test('keeps the persistent sidebar beside content above the compact-navigation breakpoint', async ({
   page,
-}) => {
+}, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'This behavior is covered by the desktop shell.');
+  await page.setViewportSize({ width: 1100, height: 900 });
+  await page.goto('/');
+  await expect(page.getByLabel('Loading SiteForge OS workspace')).toBeHidden();
+
+  await expect(page.locator('.sidebar')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open navigation menu' })).toBeHidden();
+
+  const [sidebar, main, today, prospects] = await Promise.all([
+    page.locator('.sidebar').boundingBox(),
+    page.locator('main').boundingBox(),
+    page.getByRole('button', { name: 'Today' }).first().boundingBox(),
+    page.getByRole('button', { name: 'Prospects' }).first().boundingBox(),
+  ]);
+  expect(sidebar).not.toBeNull();
+  expect(main).not.toBeNull();
+  expect(today).not.toBeNull();
+  expect(prospects).not.toBeNull();
+  expect(main.x).toBeGreaterThanOrEqual(sidebar.width);
+  expect(Math.abs(prospects.x - today.x)).toBeLessThan(3);
+  expect(prospects.y).toBeGreaterThan(today.y);
+  await expect(page).toHaveScreenshot('desktop-sidebar-intermediate.png');
+
+  await page.goto('/#/agent-studio');
+  await expect(page.getByLabel('Loading SiteForge OS workspace')).toBeHidden();
+  const testBox = await page.locator('.agent-studio__test').boundingBox();
+  expect(testBox).not.toBeNull();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+});
+
+test('keeps the build manifest package separate from the Agent Studio test controls', async ({
+  page,
+}, testInfo) => {
   await openReadyBuildManifest(page);
 
   await expect(page.locator('.brief-panel')).toHaveScreenshot('build-manifest-ready.png');
@@ -313,28 +385,17 @@ test('puts the build manifest package before the private preview and opens its d
   ]);
   expect(firstItem).not.toBeNull();
   expect(secondItem).not.toBeNull();
-  const buildAction = page.getByRole('button', { name: 'Continue developing' });
-  const handoffActions = page.locator('.builder-handoff__actions');
-  const [buildActionBox, settingsBox, statusBox] = await Promise.all([
-    buildAction.boundingBox(),
-    handoffActions.getByRole('button', { name: 'Builder settings' }).boundingBox(),
-    handoffActions.locator('.status-badge').boundingBox(),
-  ]);
-  expect(buildActionBox).not.toBeNull();
-  expect(settingsBox).not.toBeNull();
-  expect(statusBox).not.toBeNull();
-  if (!firstItem || !buildActionBox || !settingsBox || !statusBox) return;
-  expect(firstItem.y + firstItem.height).toBeLessThanOrEqual(buildActionBox.y);
-  expect(
-    Math.abs(settingsBox.y + settingsBox.height / 2 - (statusBox.y + statusBox.height / 2)),
-  ).toBeLessThanOrEqual(1);
+  const studioAction = page.getByRole('button', { name: 'Open Agent Studio' });
+  const prospectBuildAction = page.getByRole('button', {
+    name: 'Build complete prospect website',
+  });
+  await expect(prospectBuildAction).toBeVisible();
+  await expect(prospectBuildAction).toBeDisabled();
+  const studioActionBox = await studioAction.boundingBox();
+  expect(studioActionBox).not.toBeNull();
+  if (!firstItem || !studioActionBox) return;
+  expect(firstItem.y + firstItem.height).toBeLessThanOrEqual(studioActionBox.y);
   expect(Math.abs(secondItem.y - firstItem.y)).toBeLessThan(3);
-
-  const pagePicker = page.getByLabel('Page to test');
-  await expect(pagePicker).toBeDisabled();
-  await expect(
-    page.getByText('Complete a homepage test before testing another page.'),
-  ).toBeVisible();
 
   await manifestPackage.click();
   const dialog = page.getByRole('dialog', { name: 'Build Manifest ready' });
@@ -347,20 +408,181 @@ test('puts the build manifest package before the private preview and opens its d
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
     .toBe(true);
+
+  await studioAction.click();
+  await expect(page).toHaveURL(/\/agent-studio\/refine\/business-demo-local-services$/);
+  await expect(
+    page.getByRole('heading', { name: 'Refine the builder, not a prospect' }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: /prepared prospect demo local services/i }),
+  ).toBeVisible();
+  await expect(page.getByLabel('Page to test')).toHaveValue('');
+  await expect(page.getByLabel('Test agent package')).toHaveValue('agent-package-local-v4');
+  await expect(page.getByRole('button', { name: 'Build test page' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Build complete prospect website' })).toHaveCount(
+    0,
+  );
+  await expect(page.getByText('it never changes the prospect’s public website')).toBeVisible();
+  const inheritedBehaviour = page.getByText('Inherited package behaviour');
+  await expect(inheritedBehaviour).toBeVisible();
+  await expect(page.getByText('Built-in capability · motion runtime')).toBeHidden();
+  await inheritedBehaviour.click();
+  await expect(page.getByText('Built-in capability · motion runtime')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Agent architecture' })).toBeVisible();
+  await expect(page.getByText('Codex activity')).toHaveCount(0);
+  await expect(page.getByText('Build diagnostics')).toHaveCount(0);
+  const reviewInputs = page.getByRole('button', { name: 'Review prospect inputs' });
+  await expect(reviewInputs).toHaveAttribute('title', 'Review prospect inputs');
+  await expect.poll(async () => (await reviewInputs.boundingBox())?.width).toBe(44);
+  await reviewInputs.hover();
+  await expect.poll(async () => (await reviewInputs.boundingBox())?.width).toBeGreaterThan(44);
+  await expect(reviewInputs.locator('.agent-studio__review-inputs-label')).toHaveCSS(
+    'opacity',
+    '1',
+  );
+  await page.mouse.move(0, 0);
+  const studioActions = page.locator('.agent-studio__header-actions');
+  const [settingsBox, statusBox] = await Promise.all([
+    studioActions.getByRole('button', { name: 'Builder settings' }).boundingBox(),
+    studioActions.locator('.status-badge').boundingBox(),
+  ]);
+  expect(settingsBox).not.toBeNull();
+  expect(statusBox).not.toBeNull();
+  if (!settingsBox || !statusBox) return;
+  if (testInfo.project.name === 'mobile') {
+    expect(settingsBox.y).toBeGreaterThan(statusBox.y + statusBox.height);
+  } else {
+    expect(
+      Math.abs(settingsBox.y + settingsBox.height / 2 - (statusBox.y + statusBox.height / 2)),
+    ).toBeLessThanOrEqual(1);
+  }
+  await expect(page.getByRole('button', { name: 'About private test builds' })).toBeVisible();
+  await expect(page.locator('.agent-studio')).toHaveScreenshot('agent-studio.png');
+  await page.getByRole('button', { name: 'Add direction' }).click();
+  await expect(page.getByRole('textbox', { name: 'Build direction 1' })).toBeVisible();
+  await page
+    .getByRole('textbox', { name: 'Build direction 1' })
+    .fill('Keep the homepage calm and focused.');
+  await page.getByRole('button', { name: 'Add another' }).click();
+  await expect(page.getByRole('textbox', { name: 'Build direction 2' })).toBeVisible();
+  await page.getByRole('button', { name: 'Remove direction 2' }).click();
+  await expect(page.getByRole('textbox', { name: 'Build direction 2' })).toBeHidden();
+  await page.getByLabel('Page to test').selectOption('https://example.com/services');
+  await expect(page.getByRole('button', { name: 'Build test page' })).toBeDisabled();
+  await expect(
+    page.getByText('Complete and review the homepage test before testing another selected page.'),
+  ).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+});
+
+test('separates test refinement from the published builder agent package', async ({ page }) => {
+  await page.goto('/#/agent-studio/refine/business-demo-local-services');
+  await expect(page.getByLabel('Loading SiteForge OS workspace')).toBeHidden();
+  await page.getByRole('button', { name: 'Agent architecture' }).click();
+  await expect(page).toHaveURL(/\/agent-studio\/agent\/business-demo-local-services$/);
+  await expect(page.getByRole('heading', { name: 'Builder agent architecture' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Agent architecture' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  await expect(page.getByRole('heading', { name: /Builder agent package/i })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'How a website build is assembled' }),
+  ).toBeVisible();
+  await expect(page.getByText('Built-in capabilities', { exact: true })).toBeVisible();
+  await expect(page.getByText('Build direction', { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Directions can propose a capability, not create one' }),
+  ).toBeVisible();
+  await expect(page.getByText('No unpublished package exists yet.')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Create a derived test package' })).toBeVisible();
+  await expect(page.getByLabel(/Direction for a v5 test package/i)).toBeVisible();
+  await expect(page.locator('.agent-package-config')).toHaveScreenshot(
+    'agent-package-architecture.png',
+  );
+
+  await page.getByRole('button', { name: 'Agent policy Builder contract' }).click();
+  const fileDialog = page.getByRole('dialog', { name: 'Builder contract' });
+  await expect(fileDialog).toBeVisible();
+  await expect(fileDialog.locator('pre')).toContainText('SiteForge Codex Builder Contract');
+  await page.keyboard.press('Escape');
+  await expect(fileDialog).toBeHidden();
+
+  await page.getByRole('button', { name: 'Refine' }).click();
+  await expect(page).toHaveURL(/\/agent-studio\/refine\/business-demo-local-services$/);
+  await expect(
+    page.getByRole('heading', { name: 'Refine the builder, not a prospect' }),
+  ).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Builder agent package' })).toHaveCount(0);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
 });
 
 test('groups linked build records and offers one package deletion action in Data', async ({
   page,
 }) => {
   await openReadyBuildManifest(page);
+  await page.evaluate(async () => {
+    const database = await new Promise((resolve, reject) => {
+      const request = window.indexedDB.open('siteforge-os');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const transaction = database.transaction(['briefs', 'buildManifests'], 'readonly');
+    const readComplete = new Promise((resolve, reject) => {
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    });
+    const brief = await new Promise((resolve, reject) => {
+      const request = transaction.objectStore('briefs').get('brief-manifest-layout-check');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const manifest = await new Promise((resolve, reject) => {
+      const request = transaction.objectStore('buildManifests').get('manifest-layout-check');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await readComplete;
+    const writeTransaction = database.transaction(['briefs', 'buildManifests'], 'readwrite');
+    writeTransaction.objectStore('briefs').put({
+      ...brief,
+      id: 'brief-manifest-layout-check-v2',
+      version: 2,
+      updatedAt: new Date(Date.now() + 1_000).toISOString(),
+    });
+    writeTransaction.objectStore('buildManifests').put({
+      ...manifest,
+      id: 'manifest-layout-check-v2',
+      redesignBriefId: 'brief-manifest-layout-check-v2',
+    });
+    await new Promise((resolve, reject) => {
+      writeTransaction.oncomplete = resolve;
+      writeTransaction.onerror = () => reject(writeTransaction.error);
+      writeTransaction.onabort = () => reject(writeTransaction.error);
+    });
+    database.close();
+  });
+  await page.reload();
+  await expect(page.getByLabel('Loading SiteForge OS workspace')).toBeHidden();
   await page.goto('/#/data');
 
-  const buildPackage = page.locator('.data-management__group').filter({
+  const prospect = page.locator('.data-management__prospect').filter({
+    hasText: 'Demo Local Services',
+  });
+  await expect(prospect).toContainText('2 brief versions');
+  const buildPackage = prospect.locator('.data-management__version').filter({
     hasText: 'Build package · Brief v1',
   });
   await expect(buildPackage).toContainText('Brief v1 · approved');
   await expect(buildPackage).toContainText('Build Manifest · Version 1');
   await expect(buildPackage.getByRole('button', { name: 'Delete package' })).toBeVisible();
+  await expect(prospect.locator('.data-management__version')).toHaveCount(2);
+  await expect(prospect).toContainText('Build package · Brief v2');
 
   await buildPackage.getByRole('button', { name: 'Delete package' }).click();
   const dialog = page.getByRole('dialog', { name: 'Delete build package' });
@@ -386,11 +608,12 @@ test('opens the shared builder settings panel from the navigation settings page'
   await expect(page.getByRole('button', { name: 'Builder settings' })).toBeFocused();
 });
 
-test('opens builder settings from the Builder handoff header', async ({ page }) => {
+test('opens builder settings from the Agent Studio header', async ({ page }) => {
   await openReadyBuildManifest(page);
+  await page.getByRole('button', { name: 'Open Agent Studio' }).click();
 
-  const handoff = page.locator('.brief-panel__header').first();
-  const settingsButton = handoff.getByRole('button', { name: 'Builder settings' });
+  const studio = page.locator('.agent-studio');
+  const settingsButton = studio.getByRole('button', { name: 'Builder settings' });
   await expect(settingsButton).toBeVisible();
   await settingsButton.click();
   const panel = page.getByRole('dialog', { name: 'Builder settings' });

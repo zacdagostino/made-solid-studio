@@ -41,6 +41,10 @@ function parseRequest(request: Request) {
   return { runId, token, filePath, previewMode };
 }
 
+function wantsSandboxedDocument(request: Request) {
+  return new URL(request.url).searchParams.get('render') === 'srcdoc';
+}
+
 function previewCsp() {
   return [
     "default-src 'self' data: blob:",
@@ -52,6 +56,13 @@ function previewCsp() {
     "form-action 'none'",
     "base-uri 'self'",
   ].join('; ');
+}
+
+function isLockedStarterDocument(html: string) {
+  return (
+    /<h1[^>]*>\s*private preview\s*<\/h1>/i.test(html) &&
+    /this file is replaced by the siteforge builder\./i.test(html)
+  );
 }
 
 const previewNavigationScript = `
@@ -187,12 +198,25 @@ Deno.serve(async (request) => {
     const base = `${supabaseUrl}/functions/v1/siteforge-preview/${parsed.runId}/${parsed.token}/${draftPrefix}`;
     const navigationScript = `<script src="${base}__siteforge_preview_navigation__.js" defer></script>`;
     const source = await file.text();
+    if (isLockedStarterDocument(source)) {
+      return response(
+        409,
+        'This test saved the locked starter document instead of generated website output. Run a fresh test build before opening its private preview.',
+      );
+    }
     const htmlWithHead = source.replace(
       /<head(\s[^>]*)?>/i,
       (match) => `${match}<base href="${base}">${navigationScript}`,
     );
     const html = htmlWithHead === source ? `${navigationScript}${source}` : htmlWithHead;
-    headers.set('content-type', 'text/html; charset=utf-8');
+    // Supabase Edge Functions intentionally rewrite HTML GET responses to
+    // text/plain. The SiteForge shell requests this JSON representation and
+    // renders it into its already-sandboxed iframe via srcDoc instead.
+    if (wantsSandboxedDocument(request)) {
+      headers.set('content-type', 'application/json; charset=utf-8');
+      return new Response(JSON.stringify({ html }), { headers });
+    }
+    headers.set('content-type', 'text/plain; charset=utf-8');
     return new Response(html, { headers });
   }
   return new Response(file.stream(), { headers });

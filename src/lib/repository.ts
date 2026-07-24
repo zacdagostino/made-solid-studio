@@ -1,5 +1,7 @@
 import type {
   Activity,
+  AgentPackage,
+  AgentPackageProposal,
   AssetAnnotation,
   AssetAnalysisJob,
   AssetRefreshJob,
@@ -8,6 +10,7 @@ import type {
   AuditFinding,
   BuildManifest,
   BuilderPreviewMode,
+  BuilderRunEvidence,
   BuilderRunMode,
   BuilderRun,
   CapturedPage,
@@ -33,9 +36,18 @@ import { createBriefDraft } from './redesign-brief';
 
 export type WorkspaceRepository = {
   bootstrap(): Promise<void>;
+  listAgentPackages(): Promise<AgentPackage[]>;
+  listAgentPackageProposals(): Promise<AgentPackageProposal[]>;
+  requestAgentPackageProposal(
+    basePackageId: string,
+    direction: string,
+  ): Promise<AgentPackageProposal | undefined>;
+  approveAgentPackageForTesting(packageId: string): Promise<AgentPackage | undefined>;
+  promoteAgentPackage(packageId: string): Promise<AgentPackage | undefined>;
   listBusinesses(): Promise<Business[]>;
   getWorkspace(businessId: string): Promise<ProspectWorkspace | undefined>;
   listWorkspaces(): Promise<ProspectWorkspace[]>;
+  getBuilderRunEvidence(builderRunId: string): Promise<BuilderRunEvidence>;
   createProspect(rawUrl: string, providedName?: string): Promise<ProspectWorkspace | undefined>;
   requestResearchCapture(businessId: string): Promise<ResearchCapture | undefined>;
   continueResearchCapture(businessId: string): Promise<ResearchCapture | undefined>;
@@ -77,6 +89,8 @@ export type WorkspaceRepository = {
     businessId: string,
     mode?: BuilderRunMode,
     targetSourceUrl?: string,
+    buildInstruction?: string,
+    agentPackageId?: string,
   ): Promise<BuilderRun | undefined>;
   resumeWebsiteBuild(builderRunId: string): Promise<BuilderRun | undefined>;
   cancelWebsiteBuild(businessId: string): Promise<void>;
@@ -96,6 +110,7 @@ export type WorkspaceRepository = {
 const databaseName = 'siteforge-os';
 const databaseVersion = 4;
 const legacyStorageKey = 'siteforge-os.records.v2';
+const localAgentPackageKey = 'agent-package-v4';
 
 type StoreName =
   | 'activities'
@@ -277,6 +292,53 @@ export class SiteforgeRepository {
     if ((await this.listBusinesses()).length === 0) {
       await this.seedDemoWorkspace();
     }
+    if (!(await this.get<MetaRecord>('meta', localAgentPackageKey))) {
+      await this.put('meta', {
+        id: localAgentPackageKey,
+        value: JSON.stringify({
+          id: 'agent-package-local-v4',
+          version: 4,
+          status: 'published',
+          builderContractVersion: codexBuilderContractVersion,
+          foundationVersion: 'siteforge-static-builder-v1',
+          foundationChecksum: 'local-source-controlled-foundation',
+          contractAddendum: '',
+          instructionsAddendum: '',
+          summary: 'Current source-controlled production builder package.',
+          capabilityAssessment: 'policy_only',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          publishedAt: new Date().toISOString(),
+        } satisfies AgentPackage),
+      } satisfies MetaRecord);
+    }
+  }
+
+  async listAgentPackages() {
+    const packageRecord = await this.get<MetaRecord>('meta', localAgentPackageKey);
+    if (!packageRecord) return [];
+    try {
+      const parsed = JSON.parse(packageRecord.value) as AgentPackage;
+      return parsed?.id ? [parsed] : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async listAgentPackageProposals(): Promise<AgentPackageProposal[]> {
+    return [];
+  }
+
+  async requestAgentPackageProposal(): Promise<AgentPackageProposal | undefined> {
+    throw new Error('Agent package proposals require the protected Supabase refinement worker.');
+  }
+
+  async approveAgentPackageForTesting(): Promise<AgentPackage | undefined> {
+    throw new Error('Agent package approval requires the protected Supabase refinement worker.');
+  }
+
+  async promoteAgentPackage(): Promise<AgentPackage | undefined> {
+    throw new Error('Agent package promotion requires the protected Supabase refinement worker.');
   }
 
   private async migrateLegacyRecords() {
@@ -464,6 +526,7 @@ export class SiteforgeRepository {
       builderArtifacts: [],
       builderEvents: [],
       builderRuns: [],
+      aiUsageRecords: [],
       concept: concepts[0],
       report: reports[0],
       tasks: tasks.sort((left, right) => left.state.localeCompare(right.state)),
@@ -477,6 +540,11 @@ export class SiteforgeRepository {
       businesses.map((business) => this.getWorkspace(business.id)),
     );
     return workspaces.filter((workspace): workspace is ProspectWorkspace => Boolean(workspace));
+  }
+
+  async getBuilderRunEvidence(): Promise<BuilderRunEvidence> {
+    // Local mode cannot create protected builder output, so there is no history to retrieve.
+    return { artifacts: [], events: [] };
   }
 
   async createProspect(rawUrl: string, providedName?: string) {

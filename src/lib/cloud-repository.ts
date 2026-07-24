@@ -1,6 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type {
   Activity,
+  AgentPackage,
+  AgentPackageProposal,
+  AiUsageRecord,
   AssetAnalysisJob,
   AssetAnnotation,
   BrandColourEvidence,
@@ -11,6 +14,7 @@ import type {
   BuilderArtifact,
   BuilderEvent,
   BuilderPreviewMode,
+  BuilderRunEvidence,
   BuilderRun,
   BuilderRunMode,
   CapturedPage,
@@ -118,6 +122,16 @@ function factFromRow(row: DatabaseRow): EvidenceFact {
 
 function readNumber(row: DatabaseRow, key: string) {
   return typeof row[key] === 'number' ? row[key] : 0;
+}
+
+function readOptionalNumber(row: DatabaseRow, key: string) {
+  const value = row[key];
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
 }
 
 function captureFromRow(row: DatabaseRow, businessId: string, website?: Website): ResearchCapture {
@@ -429,8 +443,70 @@ function builderQualitySummary(value: unknown): BuilderRun['qualitySummary'] {
   };
 }
 
+function agentPackageFromRow(row: DatabaseRow): AgentPackage {
+  const status = readString(row, 'status');
+  return {
+    id: readString(row, 'id'),
+    version: readNumber(row, 'version'),
+    status:
+      status === 'draft' ||
+      status === 'test_ready' ||
+      status === 'published' ||
+      status === 'superseded'
+        ? status
+        : 'draft',
+    basePackageId: readOptionalString(row, 'base_package_id'),
+    builderContractVersion: readString(row, 'builder_contract_version'),
+    foundationVersion: readString(row, 'foundation_version'),
+    foundationChecksum: readOptionalString(row, 'foundation_checksum'),
+    contractAddendum: readOptionalString(row, 'contract_addendum') ?? '',
+    instructionsAddendum: readOptionalString(row, 'instructions_addendum') ?? '',
+    summary: readOptionalString(row, 'summary') ?? '',
+    capabilityAssessment:
+      readString(row, 'capability_assessment') === 'foundation_change_required'
+        ? 'foundation_change_required'
+        : 'policy_only',
+    capabilityProposal: readOptionalString(row, 'capability_proposal'),
+    createdAt: readString(row, 'created_at'),
+    updatedAt: readString(row, 'updated_at'),
+    approvedAt: readOptionalString(row, 'approved_at'),
+    publishedAt: readOptionalString(row, 'published_at'),
+  };
+}
+
+function agentPackageProposalFromRow(row: DatabaseRow): AgentPackageProposal {
+  const status = readString(row, 'status');
+  return {
+    id: readString(row, 'id'),
+    basePackageId: readString(row, 'base_package_id'),
+    draftPackageId: readOptionalString(row, 'draft_package_id'),
+    direction: readString(row, 'direction'),
+    status:
+      status === 'queued' ||
+      status === 'running' ||
+      status === 'ready' ||
+      status === 'failed' ||
+      status === 'accepted' ||
+      status === 'rejected'
+        ? status
+        : 'failed',
+    summary: readOptionalString(row, 'summary'),
+    capabilityAssessment:
+      readString(row, 'capability_assessment') === 'foundation_change_required'
+        ? 'foundation_change_required'
+        : readString(row, 'capability_assessment') === 'policy_only'
+          ? 'policy_only'
+          : undefined,
+    capabilityProposal: readOptionalString(row, 'capability_proposal'),
+    errorSummary: readOptionalString(row, 'error_summary'),
+    createdAt: readString(row, 'created_at'),
+    updatedAt: readString(row, 'updated_at'),
+  };
+}
+
 function builderRunFromRow(row: DatabaseRow): BuilderRun {
   const status = readString(row, 'status');
+  const agentPackage = recordValue(row.agent_packages);
   return {
     id: readString(row, 'id'),
     businessId: readString(row, 'business_id'),
@@ -442,6 +518,9 @@ function builderRunFromRow(row: DatabaseRow): BuilderRun {
           ? 'page_test'
           : 'homepage_test',
     targetSourceUrl: readOptionalString(row, 'target_source_url'),
+    buildInstruction: readOptionalString(row, 'build_instruction'),
+    agentPackageId: readOptionalString(row, 'agent_package_id'),
+    agentPackageVersion: readOptionalNumber(agentPackage, 'version'),
     status:
       status === 'queued' ||
       status === 'running' ||
@@ -506,6 +585,35 @@ function builderEventFromRow(row: DatabaseRow): BuilderEvent {
         ? kind
         : 'activity',
     message: readString(row, 'message'),
+    metadata: recordValue(row.metadata),
+    createdAt: readString(row, 'created_at'),
+  };
+}
+
+function aiUsageRecordFromRow(row: DatabaseRow): AiUsageRecord {
+  const source = readString(row, 'source');
+  const costSource = readString(row, 'cost_source');
+  return {
+    id: readString(row, 'id'),
+    businessId: readString(row, 'business_id'),
+    builderRunId: readOptionalString(row, 'builder_run_id'),
+    source:
+      source === 'asset_analysis' || source === 'capability_analysis' || source === 'codex_build'
+        ? source
+        : 'asset_analysis',
+    provider: readString(row, 'provider'),
+    model: readString(row, 'model'),
+    inputTokens: readNumber(row, 'input_tokens'),
+    cachedInputTokens: readNumber(row, 'cached_input_tokens'),
+    outputTokens: readNumber(row, 'output_tokens'),
+    reasoningTokens: readNumber(row, 'reasoning_tokens'),
+    totalTokens: readNumber(row, 'total_tokens'),
+    costUsd: readOptionalNumber(row, 'cost_usd'),
+    costSource:
+      costSource === 'provider_reported' || costSource === 'configured_rate'
+        ? costSource
+        : 'unavailable',
+    pricingVersion: readOptionalString(row, 'pricing_version'),
     metadata: recordValue(row.metadata),
     createdAt: readString(row, 'created_at'),
   };
@@ -625,6 +733,57 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     private readonly organizationId: string,
   ) {}
 
+  async listAgentPackages() {
+    const { data, error } = await this.client
+      .from('agent_packages')
+      .select('*')
+      .eq('organization_id', this.organizationId)
+      .order('version', { ascending: false });
+    throwIfError(error);
+    return (data ?? []).map((row) => agentPackageFromRow(row as DatabaseRow));
+  }
+
+  async listAgentPackageProposals() {
+    const { data, error } = await this.client
+      .from('agent_package_proposals')
+      .select('*')
+      .eq('organization_id', this.organizationId)
+      .order('created_at', { ascending: false });
+    throwIfError(error);
+    return (data ?? []).map((row) => agentPackageProposalFromRow(row as DatabaseRow));
+  }
+
+  async requestAgentPackageProposal(basePackageId: string, direction: string) {
+    const { data, error } = await this.client.rpc('request_agent_package_proposal', {
+      target_base_package_id: basePackageId,
+      requested_direction: direction.trim(),
+    });
+    throwIfError(error);
+    const { data: proposal, error: proposalError } = await this.client
+      .from('agent_package_proposals')
+      .select('*')
+      .eq('id', data)
+      .single();
+    throwIfError(proposalError);
+    return agentPackageProposalFromRow(proposal as DatabaseRow);
+  }
+
+  async approveAgentPackageForTesting(packageId: string) {
+    const { data, error } = await this.client.rpc('approve_agent_package_for_testing', {
+      target_package_id: packageId,
+    });
+    throwIfError(error);
+    return agentPackageFromRow(data as DatabaseRow);
+  }
+
+  async promoteAgentPackage(packageId: string) {
+    const { data, error } = await this.client.rpc('promote_agent_package', {
+      target_package_id: packageId,
+    });
+    throwIfError(error);
+    return agentPackageFromRow(data as DatabaseRow);
+  }
+
   async bootstrap() {
     // Authentication and organization membership are established before this adapter is created.
   }
@@ -662,6 +821,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       reports,
       tasks,
       activity,
+      aiUsageRecords,
     ] = await Promise.all([
       this.client.from('websites').select('*').eq('business_id', businessId).limit(1),
       this.client.from('contacts').select('*').eq('business_id', businessId),
@@ -689,7 +849,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         .order('generated_at', { ascending: false }),
       this.client
         .from('builder_runs')
-        .select('*')
+        .select('*, agent_packages(version)')
         .eq('business_id', businessId)
         .order('created_at', { ascending: false }),
       this.client
@@ -715,6 +875,11 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         .select('*')
         .eq('business_id', businessId)
         .order('created_at', { ascending: false }),
+      this.client
+        .from('ai_usage_records')
+        .select('*')
+        .eq('business_id', businessId)
+        .order('created_at', { ascending: false }),
     ]);
     [
       websites,
@@ -729,6 +894,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       reports,
       tasks,
       activity,
+      aiUsageRecords,
     ].forEach((result) => throwIfError(result.error));
 
     const website = (websites.data ?? [])[0]
@@ -919,6 +1085,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       builderEvents: ((builderEventsResult.data ?? []) as DatabaseRow[])
         .map(builderEventFromRow)
         .reverse(),
+      aiUsageRecords: ((aiUsageRecords.data ?? []) as DatabaseRow[]).map(aiUsageRecordFromRow),
       previousCapture,
       previousFacts: previousCapture
         ? ((facts.data ?? []) as DatabaseRow[])
@@ -953,6 +1120,36 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       businesses.map((business) => this.getWorkspace(business.id)),
     );
     return workspaces.filter((workspace): workspace is ProspectWorkspace => Boolean(workspace));
+  }
+
+  async getBuilderRunEvidence(builderRunId: string): Promise<BuilderRunEvidence> {
+    const { data: run, error: runError } = await this.client
+      .from('builder_runs')
+      .select('id')
+      .eq('id', builderRunId)
+      .eq('organization_id', this.organizationId)
+      .maybeSingle();
+    throwIfError(runError);
+    if (!run) throw new Error('This private build is unavailable.');
+
+    const [artifacts, events] = await Promise.all([
+      this.client
+        .from('builder_artifacts')
+        .select('*')
+        .eq('builder_run_id', builderRunId)
+        .order('created_at'),
+      this.client
+        .from('builder_events')
+        .select('*')
+        .eq('builder_run_id', builderRunId)
+        .order('sequence', { ascending: false }),
+    ]);
+    throwIfError(artifacts.error);
+    throwIfError(events.error);
+    return {
+      artifacts: ((artifacts.data ?? []) as DatabaseRow[]).map(builderArtifactFromRow),
+      events: ((events.data ?? []) as DatabaseRow[]).map(builderEventFromRow).reverse(),
+    };
   }
 
   async createProspect(rawUrl: string, providedName?: string) {
@@ -1541,11 +1738,15 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     businessId: string,
     mode: BuilderRunMode = 'homepage_test',
     targetSourceUrl?: string,
+    buildInstruction?: string,
+    agentPackageId?: string,
   ) {
     const { error } = await this.client.rpc('request_website_build', {
       target_business_id: businessId,
       requested_mode: mode,
       requested_target_source_url: targetSourceUrl ?? null,
+      requested_build_instruction: buildInstruction?.trim() || null,
+      requested_agent_package_id: agentPackageId ?? null,
     });
     throwIfError(error);
     const workspace = await this.getWorkspace(businessId);
@@ -1559,7 +1760,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     throwIfError(error);
     const { data: run, error: runError } = await this.client
       .from('builder_runs')
-      .select('*')
+      .select('*, agent_packages(version)')
       .eq('id', builderRunId)
       .single();
     throwIfError(runError);

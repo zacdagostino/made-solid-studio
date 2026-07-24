@@ -1,5 +1,6 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import {
+  Bot,
   CalendarDays,
   Database,
   LogOut,
@@ -8,12 +9,13 @@ import {
   Settings,
   Sun,
   UsersRound,
+  WalletCards,
   X,
 } from 'lucide-react';
 import { useEffect, useRef, useState, type PropsWithChildren } from 'react';
 import { Button } from './ui';
 
-export type AppPage = 'today' | 'prospects' | 'data' | 'settings';
+export type AppPage = 'today' | 'prospects' | 'agent-studio' | 'usage' | 'data' | 'settings';
 type Theme = 'light' | 'dark';
 
 const themeStorageKey = 'siteforge-os.theme';
@@ -21,6 +23,8 @@ const themeStorageKey = 'siteforge-os.theme';
 const navigation = [
   { page: 'today' as const, label: 'Today', icon: CalendarDays },
   { page: 'prospects' as const, label: 'Prospects', icon: UsersRound },
+  { page: 'agent-studio' as const, label: 'Agent Studio', icon: Bot },
+  { page: 'usage' as const, label: 'AI usage', icon: WalletCards },
   { page: 'data' as const, label: 'Data', icon: Database },
   { page: 'settings' as const, label: 'Settings', icon: Settings },
 ];

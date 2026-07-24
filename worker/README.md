@@ -1,6 +1,6 @@
 # Protected Workers
 
-These are separate, server-only processes. The capture worker claims website-capture jobs, validates public targets, respects applicable `robots.txt` rules, discovers crawlable internal pages, captures responsive screenshots, stores private artifacts, extracts source evidence, and runs automated accessibility checks. The audit worker reads only those saved private artifacts and produces editable, evidence-linked findings. The asset-analysis worker sends each captured public image and its saved page context to a vision model, then saves private, editable suggestions for human review. It also collects deterministic, reviewable brand-colour evidence from SVG logo fills/strokes, logo-image pixels, CSS variables, and repeated rendered interface controls. The builder worker runs Codex in a disposable workspace to create a private website preview from an approved Build Manifest.
+These are separate, server-only processes. The capture worker claims website-capture jobs, validates public targets, respects applicable `robots.txt` rules, discovers crawlable internal pages, captures responsive screenshots, stores private artifacts, extracts source evidence, and runs automated accessibility checks. The audit worker reads only those saved private artifacts and produces editable, evidence-linked findings. The asset-analysis worker sends each captured public image and its saved page context to a vision model, then saves private, editable suggestions for human review. It also collects deterministic, reviewable brand-colour evidence from SVG logo fills/strokes, logo-image pixels, CSS variables, and repeated rendered interface controls. The agent-package worker turns a refinement direction into a reviewable draft package derived from the published package; it cannot silently change the shared runtime or publish a package. The builder worker runs Codex in a disposable workspace to create a private website preview from an approved Build Manifest.
 
 ## Runtime
 
@@ -39,7 +39,14 @@ SITEFORGE_CAPTURE_POLL_MS=5000
 SITEFORGE_ASSET_VISION_MODEL=gpt-5
 SITEFORGE_CODEX_MODEL=gpt-5.6
 SITEFORGE_CODEX_BIN=codex
+SITEFORGE_AGENT_PACKAGE_MODEL=gpt-5.6
+# Optional rate card for the in-app AI usage page. Values are USD per 1M tokens.
+SITEFORGE_AI_PRICING_JSON='{"gpt-5":{"inputPerMillion":0,"cachedInputPerMillion":0,"outputPerMillion":0},"default":{"inputPerMillion":0,"cachedInputPerMillion":0,"outputPerMillion":0}}'
 ```
+
+The worker always records provider token usage. It records a dollar value only when this reviewed
+rate card is set (or when a future provider returns a billed amount directly), so the in-app total
+never treats an unpriced subscription or unknown rate as a real cost.
 
 ## Run
 
@@ -105,6 +112,12 @@ Run the private website builder continuously:
 
 ```bash
 npm run worker:builder
+```
+
+Process one queued Agent Studio package proposal and exit:
+
+```bash
+npm run worker:agent-package -- --once
 ```
 
 Asset descriptions are suggestions, not verified facts. The worker instructs the model to describe only what is visible and to treat page context as non-evidentiary. It does not approve an asset, publish anything, contact a business, or assert business ownership, credentials, relationships, projects, locations, or claims. Review and approve each asset in the **Assets** tab before its description can enter a redesign brief.

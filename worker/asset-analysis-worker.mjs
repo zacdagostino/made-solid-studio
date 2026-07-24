@@ -5,6 +5,7 @@ import { hostname } from 'node:os';
 import { createClient } from '@supabase/supabase-js';
 import ImageTracer from 'imagetracerjs';
 import { chromium } from 'playwright';
+import { recordAiUsage } from './ai-usage.mjs';
 import { assertPublicUrl } from './security.mjs';
 import { coloursFromSvg, isBrandColour } from './brand-evidence.mjs';
 
@@ -600,7 +601,8 @@ async function analyzeAsset({ apiKey, model, blob, context, signal }) {
     }),
   });
   if (!response.ok) throw new Error(`The vision provider returned ${response.status}.`);
-  const output = JSON.parse(outputText(await response.json()));
+  const responseBody = await response.json();
+  const output = JSON.parse(outputText(responseBody));
   return {
     observedDescription: readString(output.observed_description),
     visibleText: readStringList(output.visible_text),
@@ -612,6 +614,7 @@ async function analyzeAsset({ apiKey, model, blob, context, signal }) {
     cautions: readStringList(output.cautions),
     confidence: supportedConfidence.has(output.confidence) ? output.confidence : 'low',
     raw: output,
+    usage: responseBody.usage,
   };
 }
 
@@ -823,6 +826,16 @@ async function processJob(client, job, workerId, apiKey, model) {
           confidence: 'low',
           raw: { processingStatus: 'unavailable', detail },
         };
+      }
+      if (annotation.usage) {
+        await recordAiUsage(client, {
+          organizationId: job.organization_id,
+          businessId: job.business_id,
+          source: 'asset_analysis',
+          model,
+          usage: annotation.usage,
+          metadata: { analysisJobId: job.id, assetId: asset.id, crawlRunId: job.crawl_run_id },
+        });
       }
       await cancellation.assertActive();
       const { error: annotationError } = await client.from('asset_annotations').upsert(
