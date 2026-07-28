@@ -1100,6 +1100,60 @@ async function stageSelectedPageContent(
   return stagedPages;
 }
 
+function selectedSourcePages(manifest, buildMode, targetSourceUrl) {
+  const data = recordValue(manifest.data);
+  const allPages = sourcePagePlan(Array.isArray(data.selectedPages) ? data.selectedPages : []);
+  const pages =
+    buildMode === 'homepage_test'
+      ? allPages.filter((page) => page.outputPath === 'index.html').slice(0, 1)
+      : buildMode === 'page_test'
+        ? allPages.filter((page) => page.sourceUrl === targetSourceUrl).slice(0, 1)
+        : allPages;
+  if (!pages.length) {
+    throw new Error(
+      buildMode === 'homepage_test'
+        ? 'The approved Build Manifest does not contain a homepage source page.'
+        : buildMode === 'page_test'
+          ? 'The selected page is not part of this approved Build Manifest.'
+          : 'The approved Build Manifest does not contain any selected source pages.',
+    );
+  }
+  return pages;
+}
+
+async function stageRevisionScope(manifest, inputDirectory, buildMode, targetSourceUrl) {
+  const selectedPage = selectedSourcePages(manifest, buildMode, targetSourceUrl)[0];
+  const data = recordValue(manifest.data);
+  const brandKit = recordValue(data.brandKit);
+  const allowedSourcePaths = [...new Set([selectedPage.outputPath, 'styles.css'])];
+  const scope = {
+    purpose:
+      'A narrowly scoped private page refinement. The restored private source is the baseline; do not create new business claims or rebuild unrelated pages.',
+    selectedPage: {
+      sourceUrl: selectedPage.sourceUrl,
+      outputPath: selectedPage.outputPath,
+      title: selectedPage.title,
+    },
+    allowedSourcePaths,
+    brandKit: {
+      primaryLogoAssetId: brandKit.primaryLogoAssetId,
+      editableLogoAssetId: brandKit.editableLogoAssetId,
+      palette: recordValue(brandKit.palette),
+    },
+    rules: [
+      'Preserve the restored page content, provenance marker, approved local assets, and existing navigation unless the workspace direction requires a change.',
+      'Do not add or strengthen business claims, prices, testimonials, guarantees, contact details, locations, services, or integrations.',
+      'Do not edit other page files, locked runtime files, dependencies, or build tooling.',
+      'Use only approved local assets already present in src/assets/.',
+    ],
+  };
+  const scopePath = join(inputDirectory, 'revision-scope.json');
+  const scopeText = JSON.stringify(scope, null, 2);
+  await writeFile(scopePath, scopeText);
+  await chmod(scopePath, 0o444);
+  return { scopePath, scopeText, selectedPage, allowedSourcePaths };
+}
+
 async function prepareWorkspace(client, run, manifest, workerId, diagnostics) {
   await updateProgress(client, run, workerId, {
     progress_phase: 'preparing_workspace',
@@ -1134,10 +1188,6 @@ async function prepareWorkspace(client, run, manifest, workerId, diagnostics) {
     throw new Error('A complete prospect build must use a published agent package.');
   }
 
-  const manifestPath = join(inputDirectory, 'manifest.json');
-  const manifestText = JSON.stringify(manifest.data, null, 2);
-  await writeFile(manifestPath, manifestText);
-  await chmod(manifestPath, 0o444);
   const buildMode =
     run.build_mode === 'full_site'
       ? 'full_site'
@@ -1148,20 +1198,6 @@ async function prepareWorkspace(client, run, manifest, workerId, diagnostics) {
     typeof run.target_source_url === 'string' && run.target_source_url
       ? normaliseSourceUrl(run.target_source_url)
       : undefined;
-  const stagedSourcePages = await stageSelectedPageContent(
-    client,
-    manifest,
-    inputDirectory,
-    buildMode,
-    targetSourceUrl,
-  );
-  const stagedAssets = await stageApprovedAssets(client, manifest, siteDirectory);
-  await writeFile(
-    join(inputDirectory, 'approved-assets.json'),
-    JSON.stringify(stagedAssets, null, 2),
-  );
-  await chmod(join(inputDirectory, 'approved-assets.json'), 0o444);
-  const initialSourceHashes = await sourceFileHashes(siteDirectory);
   let sourceRun = run;
   if (run.parent_builder_run_id) {
     const { data: parentRun, error: parentError } = await client
@@ -1179,12 +1215,42 @@ async function prepareWorkspace(client, run, manifest, workerId, diagnostics) {
     }
     sourceRun = parentRun;
   }
+  const scopedRevision = sourceRun.id !== run.id;
+  let manifestText;
+  let manifestPath;
+  let stagedSourcePages;
+  let revisionScope;
+  if (scopedRevision) {
+    revisionScope = await stageRevisionScope(manifest, inputDirectory, buildMode, targetSourceUrl);
+    manifestText = revisionScope.scopeText;
+    manifestPath = revisionScope.scopePath;
+    stagedSourcePages = [revisionScope.selectedPage];
+  } else {
+    manifestPath = join(inputDirectory, 'manifest.json');
+    manifestText = JSON.stringify(manifest.data, null, 2);
+    await writeFile(manifestPath, manifestText);
+    await chmod(manifestPath, 0o444);
+    stagedSourcePages = await stageSelectedPageContent(
+      client,
+      manifest,
+      inputDirectory,
+      buildMode,
+      targetSourceUrl,
+    );
+  }
+  const stagedAssets = await stageApprovedAssets(client, manifest, siteDirectory);
+  await writeFile(
+    join(inputDirectory, 'approved-assets.json'),
+    JSON.stringify(stagedAssets, null, 2),
+  );
+  await chmod(join(inputDirectory, 'approved-assets.json'), 0o444);
   const checkpoint = await restoreSourceCheckpoint(
     client,
     run,
     join(siteDirectory, 'src'),
     sourceRun,
   );
+  const initialSourceHashes = await sourceFileHashes(siteDirectory);
 
   const lockedFiles = await Promise.all(
     ['package.json', 'scripts/build.mjs', 'AGENTS.md', 'src/main.js'].map(async (relativePath) => {
@@ -1198,8 +1264,8 @@ async function prepareWorkspace(client, run, manifest, workerId, diagnostics) {
     progress_phase: 'preparing_workspace',
     progress_detail: checkpoint.restored
       ? checkpoint.restoredFromLegacyDrafts
-        ? `Restored ${checkpoint.fileCount} saved draft file${checkpoint.fileCount === 1 ? '' : 's'} into the isolated workspace.`
-        : `Restored a private source checkpoint with ${checkpoint.fileCount} file${checkpoint.fileCount === 1 ? '' : 's'} into the isolated workspace.`
+        ? `Restored ${checkpoint.fileCount} saved draft file${checkpoint.fileCount === 1 ? '' : 's'} into the isolated workspace${scopedRevision ? ' for a scoped refinement' : ''}.`
+        : `Restored a private source checkpoint with ${checkpoint.fileCount} file${checkpoint.fileCount === 1 ? '' : 's'} into the isolated workspace${scopedRevision ? ' for a scoped refinement' : ''}.`
       : `Manifest, ${stagedSourcePages.length} selected page source${stagedSourcePages.length === 1 ? '' : 's'}, and ${stagedAssets.length} approved asset${stagedAssets.length === 1 ? '' : 's'} staged in the isolated workspace.`,
     total_items: 7,
     completed_items: 1,
@@ -1224,6 +1290,9 @@ async function prepareWorkspace(client, run, manifest, workerId, diagnostics) {
     restoredFromLegacyDrafts: checkpoint.restoredFromLegacyDrafts,
     restoredCheckpointFileCount: checkpoint.fileCount ?? 0,
     restoredHomepageTest: sourceRun.id !== run.id,
+    scopedRevision,
+    revisionScopePath: revisionScope?.scopePath,
+    allowedSourcePaths: revisionScope?.allowedSourcePaths ?? [],
     agentPackage,
   };
 }
@@ -1237,13 +1306,32 @@ async function assertLockedFiles(siteDirectory, lockedFiles) {
   }
 }
 
-function buildPrompt(
-  restoredCheckpoint,
-  buildMode,
-  stagedSourcePages,
-  buildInstruction,
-  agentPackage,
-) {
+async function assertScopedRevisionFiles(workspace) {
+  if (!workspace.scopedRevision) return;
+  const allowed = new Set(workspace.allowedSourcePaths);
+  const currentHashes = await sourceFileHashes(workspace.siteDirectory);
+  const paths = new Set([...workspace.initialSourceHashes.keys(), ...currentHashes.keys()]);
+  const outOfScopeChanges = [...paths]
+    .filter((path) => workspace.initialSourceHashes.get(path) !== currentHashes.get(path))
+    .filter((path) => !allowed.has(path));
+  if (outOfScopeChanges.length) {
+    throw new Error(
+      `The scoped refinement changed files outside its allowed page scope: ${outOfScopeChanges
+        .slice(0, 5)
+        .join(', ')}.`,
+    );
+  }
+}
+
+function buildPrompt(workspace, buildInstruction) {
+  const {
+    restoredCheckpoint,
+    buildMode,
+    stagedSourcePages,
+    agentPackage,
+    scopedRevision,
+    allowedSourcePaths,
+  } = workspace;
   const homepageTest = buildMode === 'homepage_test';
   const pageTest = buildMode === 'page_test';
   const selectedPage = stagedSourcePages[0];
@@ -1251,6 +1339,36 @@ function buildPrompt(
     typeof buildInstruction === 'string' && buildInstruction.trim()
       ? buildInstruction.trim()
       : undefined;
+  if (scopedRevision) {
+    return [
+      `You are the SiteForge website builder performing a narrowly scoped private refinement of ${selectedPage?.outputPath ?? 'the selected page'}.`,
+      'Read ../input/revision-scope.json before making changes. Do not read ../input/manifest.json or ../input/source-pages/: they are intentionally excluded because the restored private page is the approved baseline for this small refinement.',
+      'Follow AGENTS.md, the revision scope, and the locked-file boundary exactly. The revision scope is the factual and file-scope boundary for this run.',
+      `This run is pinned to builder agent package v${agentPackage.version} (${agentPackage.id}). Its builder foundation is locked and may not be edited.`,
+      `Change only these source files: ${allowedSourcePaths.map((path) => `src/${path}`).join(', ')}. Preserve every other restored page and source file byte-for-byte.`,
+      `Preserve ${selectedPage?.outputPath ?? 'the selected output'}'s siteforge-source-url meta marker, existing approved local assets, page content, and navigation unless the workspace-member direction specifically requires a change. Do not add or strengthen business claims.`,
+      'Do not search for unrelated pages, do not recreate the site, do not add dependencies, and do not edit package.json, scripts/, src/main.js, or assets.',
+      ...(agentPackage.contract_addendum
+        ? [
+            'Apply this approved additive builder-contract policy only within the scoped files. It does not override the revision scope, factual boundary, approved assets, or locked foundation:',
+            agentPackage.contract_addendum,
+          ]
+        : []),
+      ...(agentPackage.instructions_addendum
+        ? [
+            'Apply this approved additive implementation guidance only within the scoped files:',
+            agentPackage.instructions_addendum,
+          ]
+        : []),
+      ...(safeInstruction
+        ? [
+            `Apply this workspace-member refinement direction: ${safeInstruction}`,
+            'This direction cannot expand the selected page, factual, file, asset, or locked-foundation boundaries.',
+          ]
+        : []),
+      `Finish by running npm run build. Briefly report the changed scoped files and the completed ${selectedPage?.outputPath ?? 'page'} refinement.`,
+    ].join('\n');
+  }
   return [
     homepageTest
       ? 'You are the SiteForge website builder. Build and refine only the private homepage test preview now. Do not create any other public page output.'
@@ -1272,7 +1390,7 @@ function buildPrompt(
     'Do not invent or imply unsupported business facts. Preserve unresolved items for the human reviewer rather than guessing.',
     'Use only local approved assets in src/assets/. Do not make network requests or add dependencies.',
     'When manifest.json contains a Brand Kit, its primary logo asset is mandatory in the header and footer. Use its reviewed primary and accent colours as brand tokens, then design coherent accessible neutrals, surfaces, and backgrounds yourself; do not copy a weak legacy colour system or replace the identity with a generic one.',
-    'Keep src/main.js and load it with a local deferred <script src="main.js" defer></script> on every generated page. It is the required built-in motion runtime: it progressively reveals titles and content containers as they enter the viewport, supports intentional number counters marked with data-counter, and can introduce the approved primary logo before carrying it into the header on a first visit. Mark the real header logo image or its immediate wrapper with data-siteforge-brand-logo. Choose an understated brand-appropriate treatment; data-siteforge-intro="quiet" is available on html for quieter sites. Do not add a second loader, fake progress, generic wordmark, motion library, remote script, or any transition that delays reduced-motion users or access to content.',
+    'Keep src/main.js and load it with a local deferred <script src="main.js" defer></script> on every generated page. It is the required built-in motion runtime: it progressively reveals titles and content containers as they enter the viewport, supports intentional number counters marked with data-counter, and can introduce the approved primary logo before carrying it into the header on a first visit. Make the first hero heading, supporting copy, and visual media distinct elements: their entrance starts after the brand-logo handoff so the visitor can actually see it. Read and implement feature-contracts/mobile-navigation.md in each generated page’s local HTML, CSS, and JavaScript. This is a required accessibility contract, but the visual and motion design is yours to make brand-specific: create the trigger, icon animation, drawer, link sequence, and scroll-aware header behaviour rather than inheriting a fixed SiteForge component. Put the complete generated visual system in src/styles.css by default, including the header, hero, sections, controls, desktop, tablet, mobile, and navigation states. Do not reference homepage.css, app.css, or another local stylesheet unless that exact file is created in src; a missing stylesheet produces an unusable raw-HTML preview. Before npm run build, verify every local stylesheet and script referenced by each HTML page exists under src. Mark the real header logo image or its immediate wrapper with data-siteforge-brand-logo. Choose an understated brand-appropriate treatment; data-siteforge-intro="quiet" is available on html for quieter sites. Do not add a second loader, fake progress, generic wordmark, motion library, remote script, or any transition that delays reduced-motion users or access to content.',
     ...(agentPackage.contract_addendum
       ? [
           'Apply this approved additive builder-contract policy from the pinned agent package. It does not override the manifest, safety boundary, approved assets, or locked foundation:',
@@ -1308,6 +1426,8 @@ function brandProblems(manifest, stagedAssets, allFiles) {
   const problems = [];
   const primaryLogoId =
     typeof brandKit.primaryLogoAssetId === 'string' ? brandKit.primaryLogoAssetId : '';
+  const editableLogoId =
+    typeof brandKit.editableLogoAssetId === 'string' ? brandKit.editableLogoAssetId : '';
   const primaryAsset = stagedAssets.find((asset) => asset.assetId === primaryLogoId);
   if (!primaryAsset) {
     problems.push('The approved primary brand logo was not staged for the builder.');
@@ -1320,6 +1440,14 @@ function brandProblems(manifest, stagedAssets, allFiles) {
     const combined = contents.join('\n').toLowerCase();
     if (!combined.includes(basename(primaryAsset.relativePath).toLowerCase())) {
       problems.push('The approved primary brand logo is not referenced by the generated website.');
+    }
+    if (editableLogoId) {
+      const editableAsset = stagedAssets.find((asset) => asset.assetId === editableLogoId);
+      if (!editableAsset) {
+        problems.push('The approved editable SVG logo was not staged for the builder.');
+      } else if (!combined.includes(basename(editableAsset.relativePath).toLowerCase())) {
+        problems.push('The approved editable SVG logo is not referenced by the generated website.');
+      }
     }
     const palette = recordValue(brandKit.palette);
     for (const role of ['primary', 'accent']) {
@@ -1358,7 +1486,7 @@ function brandIntroProblems(manifest, htmlFiles, allFiles) {
   if (!brandKit.primaryLogoAssetId) return [];
   const problems = [];
   const runtime = allFiles.find((file) => basename(file) === 'main.js');
-  if (!runtime?.contents.includes('data-siteforge-brand-logo')) {
+  if (!runtime?.contents?.includes('data-siteforge-brand-logo')) {
     problems.push('The required brand-introduction runtime is missing from main.js.');
   }
   for (const file of htmlFiles) {
@@ -1373,13 +1501,22 @@ function brandIntroProblems(manifest, htmlFiles, allFiles) {
 
 async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, diagnostics) {
   await assertBuildActive(client, run, workerId);
+  const codexBuildDetail = workspace.scopedRevision
+    ? 'Codex is applying the requested scoped page refinement.'
+    : 'Codex is designing and implementing the private website.';
   await updateProgress(client, run, workerId, {
     progress_phase: 'building_website',
-    progress_detail: 'Codex is designing and implementing the private website.',
+    progress_detail: codexBuildDetail,
     total_items: 7,
     completed_items: 2,
   });
-  await eventWriter('stage', 'Codex has started the private website build.');
+  await eventWriter(
+    'stage',
+    workspace.scopedRevision
+      ? 'Codex has started the scoped private page refinement.'
+      : 'Codex has started the private website build.',
+    { scope: workspace.scopedRevision ? 'scoped_revision' : 'website_build' },
+  );
   const codexExecutable = await codexBinary();
   // Codex installs its workspace-sandbox helper under its home directory. It
   // deliberately refuses temporary homes, so keep this isolated worker home
@@ -1392,7 +1529,9 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
   await mkdir(codexHome, { recursive: true });
   const outputPath = join(workspace.runDirectory, 'codex-final-message.txt');
   const events = [];
-  let latestDetail = 'Codex is designing the private website.';
+  let latestDetail = workspace.scopedRevision
+    ? 'Codex is applying the requested scoped page refinement.'
+    : 'Codex is designing the private website.';
   let lastProgressAt = 0;
   let lastActivity = '';
   let syncingDraft = false;
@@ -1423,15 +1562,7 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
     outputPath,
   ];
   if (model) codexArguments.push('--model', model);
-  codexArguments.push(
-    buildPrompt(
-      workspace.restoredCheckpoint,
-      workspace.buildMode,
-      workspace.stagedSourcePages,
-      run.build_instruction,
-      workspace.agentPackage,
-    ),
-  );
+  codexArguments.push(buildPrompt(workspace, run.build_instruction));
   const child = spawn(codexExecutable, codexArguments, {
     cwd: workspace.siteDirectory,
     env: {
@@ -1515,7 +1646,9 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
           }
         }
         if (item.type === 'agent_message') {
-          latestDetail = 'Codex is refining the private website.';
+          latestDetail = workspace.scopedRevision
+            ? 'Codex is refining the selected private page.'
+            : 'Codex is refining the private website.';
           const text = textFromCodexItem(item);
           if (text) {
             writeCodexStream(text, { eventType: 'agent_message' });
@@ -1590,6 +1723,7 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
     );
   }
   await assertLockedFiles(workspace.siteDirectory, workspace.lockedFiles);
+  await assertScopedRevisionFiles(workspace);
   await syncDraftFiles(client, run, workspace, eventWriter);
   await eventWriter(
     'stage',
@@ -1691,6 +1825,36 @@ function starterTemplateCheck(htmlFiles) {
     .map((file) => `${file.relativePath} still contains the locked starter document.`);
 }
 
+function missingLocalRuntimeFiles(htmlFiles, allFiles, outputDirectory) {
+  const generatedPaths = new Set(
+    allFiles.map((file) => relative(outputDirectory, file).split(sep).join('/')),
+  );
+  const problems = [];
+  for (const file of htmlFiles) {
+    const tags = file.contents.match(/<(?:link|script)\b[^>]*>/gi) ?? [];
+    for (const tag of tags) {
+      const isStylesheet = /^<link\b/i.test(tag) && /\brel\s*=\s*["']stylesheet["']/i.test(tag);
+      const isScript = /^<script\b/i.test(tag);
+      if (!isStylesheet && !isScript) continue;
+      const reference = isStylesheet
+        ? /\bhref\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1]
+        : /\bsrc\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1];
+      if (!reference || /^(?:[a-z]+:|\/\/|#)/i.test(reference)) continue;
+      const cleanReference = reference.split(/[?#]/, 1)[0];
+      const generatedPath = relative(
+        outputDirectory,
+        resolve(outputDirectory, dirname(file.relativePath), cleanReference),
+      )
+        .split(sep)
+        .join('/');
+      if (generatedPath.startsWith('../') || !generatedPaths.has(generatedPath)) {
+        problems.push(`${file.relativePath} references missing local file ${reference}.`);
+      }
+    }
+  }
+  return problems;
+}
+
 function sourceUrlMarker(html) {
   const tags = html.match(/<meta\b[^>]*>/gi) ?? [];
   for (const tag of tags) {
@@ -1773,9 +1937,10 @@ async function runQualityChecks(
           )
         : htmlFiles;
   const totalPreviewCaptures = scopedHtmlFiles.length * previewViewports.length;
-  const totalItems = 5 + totalPreviewCaptures;
+  const totalItems = 6 + totalPreviewCaptures;
   const structuralProblems = structuralCheck(scopedHtmlFiles);
   const starterTemplateProblems = starterTemplateCheck(scopedHtmlFiles);
+  const missingLocalFiles = missingLocalRuntimeFiles(scopedHtmlFiles, allFiles, outputDirectory);
   const selectedPageCoverage = selectedPageCoverageCheck(
     manifest,
     scopedHtmlFiles,
@@ -1801,6 +1966,14 @@ async function runQualityChecks(
       detail: starterTemplateProblems.length
         ? starterTemplateProblems.join(' ')
         : 'The locked starter document was replaced by generated website output.',
+    },
+    {
+      id: 'local-runtime-files',
+      label: 'Required local styles and scripts',
+      status: missingLocalFiles.length ? 'failed' : 'passed',
+      detail: missingLocalFiles.length
+        ? missingLocalFiles.join(' ')
+        : 'Every local stylesheet and script referenced by the generated pages is present.',
     },
     {
       id: 'brand-kit-usage',
@@ -1839,7 +2012,7 @@ async function runQualityChecks(
     progress_phase: 'quality_checks',
     progress_detail: `Checking ${scopedHtmlFiles.length} generated page${scopedHtmlFiles.length === 1 ? '' : 's'} in a private browser.`,
     total_items: totalItems,
-    completed_items: 4,
+    completed_items: 5,
   });
   await eventWriter(
     'quality',
@@ -2172,11 +2345,14 @@ async function processBuild(client, run, workerId, apiKey) {
     workspace = await prepareWorkspace(client, run, manifest, workerId, diagnostics);
     await eventWriter(
       'stage',
-      workspace.restoredCheckpoint
-        ? workspace.restoredFromLegacyDrafts
-          ? `Saved draft source restored with ${workspace.restoredCheckpointFileCount} file${workspace.restoredCheckpointFileCount === 1 ? '' : 's'}; Codex will continue from it and create a full checkpoint.`
-          : `Private source checkpoint restored with ${workspace.restoredCheckpointFileCount} file${workspace.restoredCheckpointFileCount === 1 ? '' : 's'}; Codex will continue from it.`
-        : `Manifest, ${workspace.stagedSourcePages.length} selected page source${workspace.stagedSourcePages.length === 1 ? '' : 's'}, and ${workspace.stagedAssets.length} approved asset${workspace.stagedAssets.length === 1 ? '' : 's'} staged for Codex.`,
+      workspace.scopedRevision
+        ? `Scoped refinement prepared for ${workspace.stagedSourcePages[0]?.outputPath ?? 'the selected page'}; only the selected page and shared stylesheet are writable.`
+        : workspace.restoredCheckpoint
+          ? workspace.restoredFromLegacyDrafts
+            ? `Saved draft source restored with ${workspace.restoredCheckpointFileCount} file${workspace.restoredCheckpointFileCount === 1 ? '' : 's'}; Codex will continue from it and create a full checkpoint.`
+            : `Private source checkpoint restored with ${workspace.restoredCheckpointFileCount} file${workspace.restoredCheckpointFileCount === 1 ? '' : 's'}; Codex will continue from it.`
+          : `Manifest, ${workspace.stagedSourcePages.length} selected page source${workspace.stagedSourcePages.length === 1 ? '' : 's'}, and ${workspace.stagedAssets.length} approved asset${workspace.stagedAssets.length === 1 ? '' : 's'} staged for Codex.`,
+      { scope: workspace.scopedRevision ? 'scoped_revision' : 'website_build' },
     );
     await eventWriter(
       'stage',
@@ -2401,10 +2577,17 @@ async function main() {
   } while (!stopping);
 }
 
-main().catch((error) => {
-  console.error(
-    '[builder-worker] stopped unexpectedly',
-    error instanceof Error ? error.message : error,
-  );
-  process.exitCode = 1;
-});
+export { buildPrompt, selectedSourcePages };
+
+const isMainModule =
+  Boolean(process.argv[1]) && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isMainModule) {
+  main().catch((error) => {
+    console.error(
+      '[builder-worker] stopped unexpectedly',
+      error instanceof Error ? error.message : error,
+    );
+    process.exitCode = 1;
+  });
+}

@@ -1,10 +1,56 @@
 import { expect, test } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 
 const expectedViewports = {
   mobile: { width: 375, height: 812 },
   tablet: { width: 768, height: 1024 },
   desktop: { width: 1440, height: 900 },
 };
+
+const brandIntroRuntime = new URL('../../worker/builder-template/src/main.js', import.meta.url);
+const mobileNavigationContract = new URL(
+  '../../worker/builder-template/feature-contracts/mobile-navigation.md',
+  import.meta.url,
+);
+
+async function mountBrandIntro(page) {
+  await page.goto('/');
+  await page.setContent(`
+    <style>
+      body { margin: 0; font: 16px system-ui, sans-serif; }
+      header { display: flex; align-items: center; min-height: 72px; padding: 0 24px; background: white; }
+      header img { width: 124px; height: 40px; }
+      main { padding: 48px 24px; }
+      .hero { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr) minmax(120px, 0.65fr); align-items: center; }
+      .hero figure { margin: 0; }
+      .hero figure img { display: block; width: 100%; max-width: 260px; border-radius: 16px; }
+    </style>
+    <header><a href="#main" data-siteforge-brand-logo><img alt="Demo brand" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='124' height='40'%3E%3Crect width='124' height='40' rx='8' fill='%23155e75'/%3E%3Ctext x='16' y='26' fill='white' font-size='18'%3EDemo%3C/text%3E%3C/svg%3E"></a></header>
+    <main id="main"><section class="hero"><div><h1>Private preview</h1><p>The preview remains available while the logo enters.</p></div><figure><img alt="Preview detail" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='260' height='160'%3E%3Crect width='260' height='160' rx='16' fill='%23e2e8f0'/%3E%3Ccircle cx='130' cy='80' r='42' fill='%23c2410c'/%3E%3C/svg%3E"></figure></section></main>
+  `);
+  await page.addScriptTag({ content: await readFile(brandIntroRuntime, 'utf8') });
+}
+
+async function mountResponsiveSidebar(page, { reducedMotion = true } = {}) {
+  await page.emulateMedia({ reducedMotion: reducedMotion ? 'reduce' : 'no-preference' });
+  await page.goto('/');
+  await page.evaluate(() => window.sessionStorage.setItem('siteforge-brand-intro', 'seen'));
+  await page.setContent(`
+    <style>
+      :root { --color-brand: #0f766e; --color-primary: #0f766e; }
+      body { margin: 0; color: #173344; background: #f7fbfa; font: 16px system-ui, sans-serif; }
+      header { display: flex; align-items: center; gap: 16px; min-height: 72px; padding: 0 24px; border-bottom: 1px solid #b6d8d3; background: #ffffff; }
+      header > a { display: inline-flex; color: #0f766e; font-weight: 800; text-decoration: none; }
+      header > a img { width: 124px; height: 40px; }
+      header nav { display: flex; align-items: center; gap: 16px; margin-left: auto; }
+      header nav a { color: #173344; font-weight: 700; text-decoration: none; }
+      main { min-height: 200vh; padding: 48px 24px; }
+    </style>
+    <header><a href="#top" data-siteforge-brand-logo><img alt="Demo brand" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='124' height='40'%3E%3Crect width='124' height='40' rx='8' fill='%230f766e'/%3E%3Ctext x='16' y='26' fill='white' font-size='18'%3EDemo%3C/text%3E%3C/svg%3E"></a><nav aria-label="Primary navigation"><a href="#top">Home</a><a href="#services">Services</a><a href="#contact">Contact</a></nav></header>
+    <main id="top"><h1>Private preview</h1><p id="services">A responsive navigation test.</p><p id="contact">Contact details.</p></main>
+  `);
+  await page.addScriptTag({ content: await readFile(brandIntroRuntime, 'utf8') });
+}
 
 async function openReadyBuildManifest(page) {
   await page.goto('/');
@@ -111,6 +157,10 @@ test('keeps the AI usage page responsive and reachable from navigation', async (
   await page.goto('/#/usage');
   await expect(page.getByLabel('Loading SiteForge OS workspace')).toBeHidden();
   await expect(page.getByRole('heading', { name: 'AI usage & spend' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Usage scope' })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'View' })).toHaveValue('overview');
+  await expect(page.getByRole('combobox', { name: 'Prospect' })).toHaveValue('all');
+  await expect(page.getByRole('combobox', { name: 'Build' })).toBeDisabled();
   await expect(page.getByText('No AI usage recorded yet')).toBeVisible();
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
@@ -125,6 +175,153 @@ test('keeps the AI usage page responsive and reachable from navigation', async (
     await page.keyboard.press('Escape');
     await expect(trigger).toBeFocused();
   }
+});
+
+test('centres the brand intro before carrying the logo into navigation', async ({
+  page,
+}, testInfo) => {
+  await mountBrandIntro(page);
+
+  const intro = page.locator('.sf-brand-intro');
+  await expect(intro).toBeVisible();
+  await expect(intro).toHaveClass(/is-entered/);
+  await expect(intro).toHaveClass(/is-showcasing/);
+  await expect(intro.locator('.sf-brand-intro__status')).toHaveText('Preparing your site');
+  await expect(intro.locator('.sf-brand-intro__mark')).toBeVisible();
+  const heroTitle = page.getByRole('heading', { name: 'Private preview' });
+  const heroMedia = page.getByAltText('Preview detail');
+  await expect(heroTitle).toHaveAttribute('data-sf-hero-copy', 'true');
+  await expect(heroMedia).toHaveAttribute('data-sf-hero-media', 'true');
+  await expect(heroTitle).not.toHaveClass(/is-visible/);
+  await expect(heroMedia).not.toHaveClass(/is-visible/);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+
+  await page.screenshot({ path: testInfo.outputPath(`brand-intro-${testInfo.project.name}.png`) });
+  await expect(intro).toBeHidden({ timeout: 3_000 });
+  await expect(page.locator('[data-siteforge-brand-logo] img')).toHaveCSS('opacity', '1');
+  await expect(heroTitle).toHaveClass(/is-visible/);
+  await expect(heroMedia).toHaveClass(/is-visible/);
+  await page.screenshot({
+    path: testInfo.outputPath(`hero-after-intro-${testInfo.project.name}.png`),
+  });
+});
+
+test('skips the brand intro for reduced-motion users', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'This accessibility behavior is checked once.');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await mountBrandIntro(page);
+  await expect(page.locator('.sf-brand-intro')).toHaveCount(0);
+  await expect(page.locator('[data-siteforge-brand-logo] img')).toHaveCSS('opacity', '1');
+});
+
+test('provides a collapsible sidebar menu on mobile and tablet', async ({ page }, testInfo) => {
+  test.skip(true, 'Mobile navigation is now generated from the feature contract, not main.js.');
+  await mountResponsiveSidebar(page);
+
+  const sourceNavigation = page.locator('header nav');
+  const trigger = page.getByRole('button', { name: 'Open navigation menu' });
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+
+  if (testInfo.project.name === 'desktop') {
+    await expect(trigger).toBeHidden();
+    await expect(sourceNavigation).toBeVisible();
+    return;
+  }
+
+  await expect(trigger).toBeVisible();
+  await expect(sourceNavigation).toBeHidden();
+  const [triggerBox, brandBox] = await Promise.all([
+    trigger.boundingBox(),
+    page.getByRole('link', { name: 'Demo brand' }).boundingBox(),
+  ]);
+  expect(triggerBox).not.toBeNull();
+  expect(brandBox).not.toBeNull();
+  if (!triggerBox || !brandBox) return;
+  expect(triggerBox.x).toBeLessThanOrEqual(brandBox.x);
+  await expect(page).toHaveScreenshot('responsive-sidebar-closed.png');
+
+  await trigger.click();
+  const sidebar = page.locator('.sf-sidebar');
+  const sidebarPanel = page.getByRole('dialog', { name: 'Site navigation' });
+  const close = sidebarPanel.getByRole('button', { name: 'Close navigation menu' });
+  await expect(sidebarPanel).toBeVisible();
+  await expect(sidebar).toHaveAttribute('data-side', 'left');
+  await expect(sidebarPanel.locator('.sf-sidebar__brand img')).toBeVisible();
+  const panelBox = await sidebarPanel.boundingBox();
+  expect(panelBox).not.toBeNull();
+  if (!panelBox) return;
+  expect(panelBox.x).toBeLessThanOrEqual(1);
+  await expect(close).toBeFocused();
+  await expect(page).toHaveScreenshot('responsive-sidebar-open.png');
+  await page.keyboard.press('Tab');
+  await expect(sidebarPanel.getByRole('link', { name: 'Home' })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(sidebarPanel).toBeHidden();
+  await expect(trigger).toBeFocused();
+
+  await trigger.click();
+  await sidebarPanel.getByRole('link', { name: 'Services' }).click();
+  await expect(sidebarPanel).toBeHidden();
+
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await trigger.click();
+    await expect(sidebarPanel).toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    await page.keyboard.press('Escape');
+  }
+});
+
+test('hides the header after downward scrolling and restores it on any upward scroll', async ({
+  page,
+}, testInfo) => {
+  test.skip(true, 'Mobile navigation is now generated from the feature contract, not main.js.');
+  test.skip(
+    testInfo.project.name !== 'desktop',
+    'The runtime behavior is shared across breakpoints.',
+  );
+  await mountResponsiveSidebar(page, { reducedMotion: false });
+  const header = page.locator('header');
+
+  await expect(header).toHaveClass(/sf-scroll-header/);
+  await page.evaluate(() => window.scrollTo(0, 280));
+  await expect(header).toHaveClass(/is-hidden/);
+  await page.evaluate(() => window.scrollTo(0, 276));
+  await expect(header).not.toHaveClass(/is-hidden/);
+});
+
+test('resumes scroll hiding after the mobile sidebar closes', async ({ page }, testInfo) => {
+  test.skip(true, 'Mobile navigation is now generated from the feature contract, not main.js.');
+  test.skip(testInfo.project.name !== 'mobile', 'The drawer is a compact-navigation behavior.');
+  await mountResponsiveSidebar(page, { reducedMotion: false });
+  const header = page.locator('header');
+  const trigger = page.getByRole('button', { name: 'Open navigation menu' });
+
+  await trigger.click();
+  const sidebarPanel = page.getByRole('dialog', { name: 'Site navigation' });
+  await sidebarPanel.getByRole('button', { name: 'Close navigation menu' }).click();
+  await expect(sidebarPanel).toBeHidden();
+  await expect(trigger).toBeFocused();
+  await page.evaluate(() => window.scrollTo(0, 280));
+  await expect(header).toHaveClass(/is-hidden/);
+});
+
+test('defines the generated mobile navigation contract with creative ownership', async () => {
+  const contract = await readFile(mobileNavigationContract, 'utf8');
+  expect(contract).toContain('Implement this feature in the generated page');
+  expect(contract).toContain('Creative ownership');
+  expect(contract).toContain('icon choreography');
+  expect(contract).toContain('first link begins first');
+  expect(contract).toContain('coherent, accessible colour relationship');
+  expect(contract).toContain('overall colour coherence');
+  expect(contract).toContain('Escape');
+  expect(contract).toContain('320x568');
 });
 
 test('contains page content horizontally across workspace sections', async ({ page }) => {
@@ -160,11 +357,75 @@ test('lays out asset selections as a responsive image grid', async ({ page }, te
   expect(first).not.toBeNull();
   expect(second).not.toBeNull();
 
+  const reflowsWithoutOverlap =
+    second.y >= first.y + first.height - 1 || second.x >= first.x + first.width - 1;
+  expect(reflowsWithoutOverlap).toBe(true);
+  if (testInfo.project.name === 'mobile') {
+    expect(second.x + second.width).toBeLessThanOrEqual(375);
+  }
+});
+
+test('keeps transparent logo versions responsive while the SVG converter stays collapsed', async ({
+  page,
+}, testInfo) => {
+  await page.goto('/');
+  await page.evaluate(() => {
+    document.body.insertAdjacentHTML(
+      'beforeend',
+      `<main class="page-shell"><section class="brand-kit__logo-versions" aria-labelledby="logo-versions-test-title">
+        <div><p class="eyebrow">Normal logo workflow</p><h3 id="logo-versions-test-title">High-fidelity logo versions</h3><p>Transparent logo versions.</p></div>
+        <div class="brand-kit__alpha-matte"><button class="brand-kit__logo-version-preview" aria-label="Open saved alpha matte"><img alt="Saved black and white alpha matte" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='96'%3E%3Crect width='240' height='96' fill='white'/%3E%3Crect x='48' y='24' width='144' height='48' fill='black'/%3E%3C/svg%3E"></button><span><strong>Saved alpha matte</strong><small>Black is logo coverage; white is removed background.</small></span></div>
+        <div class="brand-kit__logo-version-grid">
+          <article class="brand-kit__logo-version"><button class="brand-kit__logo-version-preview" aria-label="Open Original colours"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='96'%3E%3Crect width='240' height='96' fill='%230f766e'/%3E%3C/svg%3E"></button><strong>Original colours</strong><span>Transparent PNG</span></article>
+          <article class="brand-kit__logo-version"><button class="brand-kit__logo-version-preview" aria-label="Open Black"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='96'%3E%3Crect width='240' height='96' fill='%23000'/%3E%3C/svg%3E"></button><strong>Black</strong><span>Transparent PNG</span></article>
+          <article class="brand-kit__logo-version"><button class="brand-kit__logo-version-preview" aria-label="Open White"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='96'%3E%3Crect width='240' height='96' fill='white'/%3E%3C/svg%3E"></button><strong>White</strong><span>Transparent PNG</span></article>
+        </div>
+        <div class="brand-kit__logo-version-actions">
+          <div><button class="button" type="button">Push &amp; update build assets</button><p class="muted-copy">Approves these transparent logo versions and refreshes the Brand Kit, Brief, and Build Manifest in one step. The alpha matte is never included.</p></div>
+          <button class="button" type="button">Refresh logo versions</button>
+        </div>
+      </section><details class="brand-kit__svg-beta"><summary>Experimental SVG converter <span class="brand-kit__beta-tag">Beta</span></summary><fieldset class="brand-kit__editable-logo"><legend>Editable SVG logo</legend></fieldset></details></main>`,
+    );
+  });
+
+  const versions = page.locator('.brand-kit__logo-version');
+  const beta = page.locator('.brand-kit__svg-beta');
+  const alphaMatte = page.locator('.brand-kit__alpha-matte');
+  const pushButton = page.getByRole('button', { name: 'Push & update build assets' });
+  await expect(versions).toHaveCount(3);
+  await expect(alphaMatte).toBeVisible();
+  await expect(pushButton).toBeVisible();
+  await expect(page.getByText('The alpha matte is never included.')).toBeVisible();
+  await expect(beta).not.toHaveAttribute('open', '');
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+
+  const [first, second] = await Promise.all([
+    versions.nth(0).boundingBox(),
+    versions.nth(1).boundingBox(),
+  ]);
+  expect(first).not.toBeNull();
+  expect(second).not.toBeNull();
+  if (!first || !second) return;
   if (testInfo.project.name === 'mobile') {
     expect(second.y).toBeGreaterThan(first.y);
+    const matteText = await alphaMatte.locator('span').boundingBox();
+    const mattePreview = await alphaMatte.locator('button').boundingBox();
+    expect(matteText?.y).toBeGreaterThan((mattePreview?.y ?? 0) + (mattePreview?.height ?? 0) - 1);
+    const action = await pushButton.boundingBox();
+    const actionGroup = await page.locator('.brand-kit__logo-version-actions').boundingBox();
+    expect(action?.width).toBeGreaterThanOrEqual((actionGroup?.width ?? 0) - 1);
   } else {
     expect(Math.abs(second.y - first.y)).toBeLessThan(3);
   }
+
+  await pushButton.focus();
+  await expect(pushButton).toBeFocused();
+
+  await beta.locator('summary').click();
+  await expect(beta).toHaveAttribute('open', '');
+  await expect(beta.locator('.brand-kit__editable-logo')).toBeVisible();
 });
 
 test('supports keyboard navigation', async ({ page }) => {
@@ -203,6 +464,7 @@ test('keeps the prospect identity controls in a full-width header container', as
   const identityRow = page.locator('.workspace-header__identity-row');
   const identity = identityRow.locator('.business-identity--title');
   const settings = page.getByLabel('Open prospect settings');
+  await expect(identity.locator('.image-file-type')).toHaveCount(0);
   const [headerBox, identityBox, businessBox, settingsBox] = await Promise.all([
     header.boundingBox(),
     identityRow.boundingBox(),
@@ -409,6 +671,64 @@ test('keeps the build manifest package separate from the Agent Studio test contr
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
     .toBe(true);
 
+  await page.evaluate(async () => {
+    const database = await new Promise((resolve, reject) => {
+      const request = window.indexedDB.open('siteforge-os');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const transaction = database.transaction('meta', 'readwrite');
+    const store = transaction.objectStore('meta');
+    const packageRecord = await new Promise((resolve, reject) => {
+      const request = store.get('agent-package-v4');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const publishedPackage = JSON.parse(packageRecord.value);
+    const now = new Date().toISOString();
+    store.put({
+      id: 'agent-package-v4',
+      value: JSON.stringify([
+        publishedPackage,
+        {
+          ...publishedPackage,
+          id: 'agent-package-local-v5',
+          version: 5,
+          status: 'test_ready',
+          basePackageId: publishedPackage.id,
+          summary:
+            'Derived v5 test package: verified brand-aware first-visit logo introduction with a safe header handoff.',
+          capabilityAssessment: 'foundation_change_required',
+          capabilityProposal:
+            'The v5 foundation adds a local, dependency-free brand-introduction runtime and an automated quality check for the real header-logo target.',
+          updatedAt: now,
+          approvedAt: now,
+          publishedAt: undefined,
+        },
+        {
+          ...publishedPackage,
+          id: 'agent-package-local-v6',
+          version: 6,
+          status: 'production_ready',
+          basePackageId: publishedPackage.id,
+          summary: 'A saved production draft that must not be reused as a test package.',
+          capabilityAssessment: 'policy_only',
+          updatedAt: now,
+          approvedAt: now,
+          publishedAt: undefined,
+        },
+      ]),
+    });
+    await new Promise((resolve, reject) => {
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+    database.close();
+  });
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Build Manifest ready' })).toBeVisible();
+
   await studioAction.click();
   await expect(page).toHaveURL(/\/agent-studio\/refine\/business-demo-local-services$/);
   await expect(
@@ -418,29 +738,133 @@ test('keeps the build manifest package separate from the Agent Studio test contr
     page.getByRole('button', { name: /prepared prospect demo local services/i }),
   ).toBeVisible();
   await expect(page.getByLabel('Page to test')).toHaveValue('');
-  await expect(page.getByLabel('Test agent package')).toHaveValue('agent-package-local-v4');
+  await expect(page.getByLabel('Test agent package')).toHaveValue('agent-package-local-v5');
+  expect(
+    await page.getByLabel('Test agent package').locator('option').allTextContents(),
+  ).not.toContain('v6 · Production draft');
   await expect(page.getByRole('button', { name: 'Build test page' })).toBeVisible();
+  await expect(page.getByRole('radio', { name: 'Create page from scratch' })).toBeChecked();
+  await page.getByRole('radio', { name: 'Revise previous page' }).check();
+  await expect(page.getByLabel('Previous built page')).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Revise private page' })).toBeDisabled();
+  await expect(page.getByText('There are no completed private tests to revise yet.')).toBeVisible();
+  await page.getByRole('radio', { name: 'Create page from scratch' }).check();
+  await expect(page.getByLabel('Page to test')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Build complete prospect website' })).toHaveCount(
     0,
   );
-  await expect(page.getByText('it never changes the prospect’s public website')).toBeVisible();
+  await expect(
+    page.getByText('It does not read, continue, or change an earlier private draft'),
+  ).toBeVisible();
   const inheritedBehaviour = page.getByText('Inherited package behaviour');
   await expect(inheritedBehaviour).toBeVisible();
   await expect(page.getByText('Built-in capability · motion runtime')).toBeHidden();
+  const testingBehaviour = page.locator('.builder-workflow__testing-behaviour');
+  await expect(testingBehaviour).toBeVisible();
+  await expect(testingBehaviour).toContainText('Testing behaviour');
+  await expect(testingBehaviour).toContainText('Package v5 testing behaviour');
+  await expect(testingBehaviour).toContainText('brand-introduction runtime');
+  await expect(testingBehaviour).toContainText('Visible hero entrance after the logo handoff');
+  await expect(testingBehaviour).toContainText('Mobile & tablet sidebar navigation');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v5.3');
+  await expect(testingBehaviour).toContainText(
+    'navigation is now generated from its Markdown feature contract',
+  );
+  await expect(testingBehaviour).toContainText(
+    'Select behaviours to stage for the next production draft',
+  );
+  await expect(
+    testingBehaviour.getByRole('checkbox', { name: 'Mobile & tablet sidebar navigation' }),
+  ).not.toBeChecked();
+  await expect(
+    testingBehaviour.getByRole('button', { name: 'Stage selected for production draft' }),
+  ).toBeVisible();
+  await testingBehaviour
+    .locator('article', { hasText: 'Visible hero entrance after the logo handoff' })
+    .getByRole('button', { name: 'Workshop behaviour' })
+    .click();
+  const behaviourWorkshop = page.getByRole('dialog', {
+    name: 'Entrance motion & factual counters',
+  });
+  await expect(behaviourWorkshop).toContainText('Foundation workshop');
+  await expect(behaviourWorkshop.getByText('Workshoped', { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(
+    testingBehaviour
+      .locator('article', { hasText: 'Mobile & tablet sidebar navigation' })
+      .getByRole('button', { name: 'Workshop behaviour' }),
+  ).toHaveCount(0);
+  const testFeatureFiles = page.locator('.feature-implementation-files--compact');
+  await expect(testFeatureFiles).not.toHaveAttribute('open', '');
+  await testFeatureFiles.locator('summary').click();
+  await expect(testFeatureFiles).toHaveAttribute('open', '');
+  await expect(
+    testFeatureFiles.getByRole('heading', { name: 'Files behind this test' }),
+  ).toBeVisible();
+  await expect(testFeatureFiles).toContainText('Brand introduction');
+  await testFeatureFiles
+    .getByRole('button', { name: 'Workshop JavaScript: Motion runtime' })
+    .first()
+    .click();
+  const fileWorkshop = page.getByRole('dialog', { name: 'Entrance motion & factual counters' });
+  await expect(fileWorkshop).toContainText('Foundation workshop');
+  await page.keyboard.press('Escape');
+  await testFeatureFiles
+    .getByRole('button', { name: /worker\/builder-template\/src\/main\.js/i })
+    .last()
+    .click();
+  const testFeatureDialog = page.getByRole('dialog', { name: 'Motion runtime' });
+  await expect(testFeatureDialog.getByRole('button', { name: 'Full file' })).toBeVisible();
+  await expect(testFeatureDialog.locator('.is-changed')).not.toHaveCount(0);
+  await testFeatureDialog.getByRole('button', { name: 'Full file' }).click();
+  await expect(testFeatureDialog.getByRole('button', { name: 'Excerpt' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await testFeatureFiles.locator('summary').click();
+  await expect(testFeatureFiles).not.toHaveAttribute('open', '');
   await inheritedBehaviour.click();
   await expect(page.getByText('Built-in capability · motion runtime')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Agent architecture' })).toBeVisible();
   await expect(page.getByText('Codex activity')).toHaveCount(0);
   await expect(page.getByText('Build diagnostics')).toHaveCount(0);
   const reviewInputs = page.getByRole('button', { name: 'Review prospect inputs' });
+  const prospectPicker = page.locator('.agent-studio__prospect-picker');
   await expect(reviewInputs).toHaveAttribute('title', 'Review prospect inputs');
   await expect.poll(async () => (await reviewInputs.boundingBox())?.width).toBe(44);
   await reviewInputs.hover();
-  await expect.poll(async () => (await reviewInputs.boundingBox())?.width).toBeGreaterThan(44);
-  await expect(reviewInputs.locator('.agent-studio__review-inputs-label')).toHaveCSS(
-    'opacity',
-    '1',
-  );
+  if (testInfo.project.name === 'mobile') {
+    const [pickerBox, reviewBox] = await Promise.all([
+      prospectPicker.boundingBox(),
+      reviewInputs.boundingBox(),
+    ]);
+    expect(pickerBox).not.toBeNull();
+    expect(reviewBox).not.toBeNull();
+    if (!pickerBox || !reviewBox) return;
+    expect(reviewBox.x).toBeGreaterThan(pickerBox.x);
+    expect(
+      Math.abs(reviewBox.y + reviewBox.height - (pickerBox.y + pickerBox.height)),
+    ).toBeLessThanOrEqual(1);
+    await expect.poll(async () => (await reviewInputs.boundingBox())?.width).toBe(44);
+    await expect(reviewInputs.locator('.agent-studio__review-inputs-label')).toHaveCSS(
+      'opacity',
+      '0',
+    );
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+
+    await page.setViewportSize({ width: 320, height: 568 });
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    await expect.poll(async () => (await reviewInputs.boundingBox())?.width).toBe(44);
+    await page.setViewportSize({ width: 375, height: 812 });
+  } else {
+    await expect.poll(async () => (await reviewInputs.boundingBox())?.width).toBeGreaterThan(44);
+    await expect(reviewInputs.locator('.agent-studio__review-inputs-label')).toHaveCSS(
+      'opacity',
+      '1',
+    );
+  }
   await page.mouse.move(0, 0);
   const studioActions = page.locator('.agent-studio__header-actions');
   const [settingsBox, statusBox] = await Promise.all([
@@ -458,7 +882,18 @@ test('keeps the build manifest package separate from the Agent Studio test contr
     ).toBeLessThanOrEqual(1);
   }
   await expect(page.getByRole('button', { name: 'About private test builds' })).toBeVisible();
+  await inheritedBehaviour.click();
+  await expect(page.locator('details.builder-workflow__motion')).not.toHaveAttribute('open', '');
   await expect(page.locator('.agent-studio')).toHaveScreenshot('agent-studio.png');
+  const advancedDirections = page.locator('details.builder-workflow__directions');
+  await expect(advancedDirections).not.toHaveAttribute('open', '');
+  await expect(page.getByRole('button', { name: 'Add direction' })).toBeHidden();
+  await advancedDirections.locator('summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(advancedDirections).toHaveAttribute('open', '');
+  await expect(
+    page.getByText('Prefer a conversation with Codex for agent refinements.'),
+  ).toBeVisible();
   await page.getByRole('button', { name: 'Add direction' }).click();
   await expect(page.getByRole('textbox', { name: 'Build direction 1' })).toBeVisible();
   await page
@@ -494,6 +929,25 @@ test('separates test refinement from the published builder agent package', async
   ).toBeVisible();
   await expect(page.getByText('Built-in capabilities', { exact: true })).toBeVisible();
   await expect(page.getByText('Build direction', { exact: true })).toBeVisible();
+  const featureImplementation = page.locator('.feature-implementation-files').filter({
+    has: page.getByRole('heading', { name: 'Built-in feature implementation' }),
+  });
+  await expect(featureImplementation).toContainText('Brand introduction');
+  await expect(featureImplementation).toContainText('Scoped page refinement');
+  const navigationFeature = featureImplementation.locator('article').filter({
+    hasText: 'Mobile & tablet sidebar navigation',
+  });
+  await expect(navigationFeature.getByRole('button', { name: 'Workshop feature' })).toHaveCount(0);
+  await navigationFeature
+    .getByRole('button', {
+      name: /worker\/builder-template\/feature-contracts\/mobile-navigation\.md/i,
+    })
+    .click();
+  const navigationContractDialog = page.getByRole('dialog', { name: 'Mobile navigation contract' });
+  await expect(navigationContractDialog).toContainText('Creative ownership');
+  await expect(navigationContractDialog.locator('.is-changed')).not.toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(navigationContractDialog).toBeHidden();
   await expect(
     page.getByRole('heading', { name: 'Directions can propose a capability, not create one' }),
   ).toBeVisible();
@@ -510,6 +964,16 @@ test('separates test refinement from the published builder agent package', async
   await expect(fileDialog.locator('pre')).toContainText('SiteForge Codex Builder Contract');
   await page.keyboard.press('Escape');
   await expect(fileDialog).toBeHidden();
+
+  const brandFeature = featureImplementation.locator('article').filter({
+    hasText: 'Brand introduction',
+  });
+  await brandFeature
+    .getByRole('button', { name: /worker\/builder-template\/src\/main\.js/i })
+    .click();
+  const featureDialog = page.getByRole('dialog', { name: 'Motion runtime' });
+  await expect(featureDialog.locator('.is-changed')).not.toHaveCount(0);
+  await page.keyboard.press('Escape');
 
   await page.getByRole('button', { name: 'Refine' }).click();
   await expect(page).toHaveURL(/\/agent-studio\/refine\/business-demo-local-services$/);

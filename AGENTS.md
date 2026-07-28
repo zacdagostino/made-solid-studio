@@ -148,6 +148,12 @@ Every user-facing change must be designed and verified at these viewport sizes:
 
 ## Implementation and verification
 
+## Testing-behaviour change log
+
+- Whenever an implementation changes a feature or behaviour that is shown in Agent Studio's **Testing behaviour** list, update that behaviour's revision identifier and its **Latest edit** summary in the same change.
+- The summary must state the user-visible or functional change plainly; do not leave a stale generic summary after changing the behaviour's source, feature contract, or test-package implementation.
+- If a behaviour moves from hard-coded source to a generated Markdown contract (or the reverse), update its linked implementation files and remove or add its Workshop affordance to match the new source of truth.
+
 - Keep ESLint, Prettier, Playwright, and axe-core installed and configured. Do not remove or bypass their checks to make a change pass.
 - Run Playwright's responsive and accessibility suites before handing off UI work. Update visual snapshots only after reviewing the new mobile, tablet, and desktop rendering.
 - Treat visual snapshots as a change detector, not proof of design quality. Review the screenshots for hierarchy, spacing rhythm, alignment, state clarity, and responsive intent before accepting a snapshot update.

@@ -1,7 +1,10 @@
 import {
   ArrowLeft,
+  ArrowDown,
+  ArrowRight,
   ArrowUpRight,
   Ban,
+  Bot,
   Check,
   CheckCheck,
   ChevronDown,
@@ -10,6 +13,7 @@ import {
   ClipboardCheck,
   Clock3,
   ExternalLink,
+  FileCode2,
   FilePenLine,
   FileImage,
   FileText,
@@ -17,6 +21,7 @@ import {
   FormInput,
   Globe2,
   ListChecks,
+  LoaderCircle,
   PackageCheck,
   Play,
   Plus,
@@ -31,6 +36,7 @@ import {
   Trash2,
   UsersRound,
   WalletCards,
+  Wrench,
   X,
 } from 'lucide-react';
 import {
@@ -48,8 +54,10 @@ import type { Session } from '@supabase/supabase-js';
 import * as Dialog from '@radix-ui/react-dialog';
 import builderContractSource from '../worker/codex-builder-contract.md?raw';
 import builderInstructionsSource from '../worker/builder-template/AGENTS.md?raw';
+import mobileNavigationContractSource from '../worker/builder-template/feature-contracts/mobile-navigation.md?raw';
 import builderPackageSource from '../worker/builder-template/package.json?raw';
 import motionRuntimeSource from '../worker/builder-template/src/main.js?raw';
+import builderWorkerSource from '../worker/builder-worker.mjs?raw';
 import { AppShell, type AppPage } from './components/AppShell';
 import {
   Button,
@@ -67,9 +75,11 @@ import {
   type Business,
   type AuditFinding,
   type AssetAnnotation,
+  type AiUsageRecord,
   type AgentPackage,
   type AgentPackageProposal,
   type BrandKit,
+  type BrandPalette,
   type CapabilityDecision,
   type BriefSourceSelections,
   type BuilderArtifact,
@@ -215,6 +225,372 @@ function formatStorageSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+const imageExtensionByContentType: Record<string, string> = {
+  'image/avif': 'AVIF',
+  'image/gif': 'GIF',
+  'image/jpeg': 'JPG',
+  'image/png': 'PNG',
+  'image/svg+xml': 'SVG',
+  'image/webp': 'WEBP',
+};
+
+function imageFileExtension({
+  contentType,
+  path,
+  sourceUrl,
+}: {
+  contentType?: string;
+  path?: string;
+  sourceUrl?: string;
+}) {
+  const fromContentType = contentType ? imageExtensionByContentType[contentType.toLowerCase()] : '';
+  if (fromContentType) return fromContentType;
+  const candidate = path || sourceUrl || '';
+  const extension = candidate.split(/[?#]/)[0].match(/\.([a-z0-9]+)$/i)?.[1];
+  return extension ? extension.toUpperCase() : 'IMAGE';
+}
+
+function ImageFileType({
+  contentType,
+  path,
+  sourceUrl,
+}: {
+  contentType?: string;
+  path?: string;
+  sourceUrl?: string;
+}) {
+  return (
+    <span className="image-file-type">{imageFileExtension({ contentType, path, sourceUrl })}</span>
+  );
+}
+
+function EditableSvgLogo({
+  asset,
+  src,
+  palette,
+}: {
+  asset: ResearchArtifact;
+  src: string;
+  palette: BrandPalette;
+}) {
+  const [open, setOpen] = useState(false);
+  const [svg, setSvg] = useState('');
+  const [selected, setSelected] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  useEffect(() => {
+    if (!open || !src) return;
+    void fetch(src)
+      .then((response) => response.text())
+      .then((text) => {
+        const doc = new DOMParser().parseFromString(text, 'image/svg+xml');
+        doc
+          .querySelectorAll('script,foreignObject,animate,animateTransform,set')
+          .forEach((node) => node.remove());
+        doc.querySelectorAll('*').forEach((node) => {
+          [...node.attributes].forEach((attribute) => {
+            if (/^on/i.test(attribute.name) || /(?:href|url)\(/i.test(attribute.value))
+              node.removeAttribute(attribute.name);
+          });
+        });
+        doc
+          .querySelectorAll('path,rect,circle,ellipse,polygon,polyline')
+          .forEach((node, index) => node.setAttribute('data-logo-shape', String(index)));
+        setSvg(new XMLSerializer().serializeToString(doc.documentElement));
+      })
+      .catch(() => setMessage('The SVG could not be loaded.'));
+  }, [open, src]);
+  function setColour(colour: string) {
+    const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
+    const node = doc.querySelector(`[data-logo-shape="${selected}"]`);
+    if (!node) return;
+    node.setAttribute('fill', colour);
+    setSvg(new XMLSerializer().serializeToString(doc.documentElement));
+  }
+  async function save() {
+    const client = getSupabaseClient();
+    if (!client) return setMessage('A connected workspace is required to save this SVG.');
+    setSaving(true);
+    const { error } = await client.storage
+      .from(asset.storageBucket)
+      .upload(asset.storagePath, new Blob([svg], { type: 'image/svg+xml' }), {
+        contentType: 'image/svg+xml',
+        upsert: true,
+      });
+    setSaving(false);
+    setMessage(error ? error.message : 'SVG saved.');
+  }
+  return (
+    <Dialog.Root open={open} onOpenChange={setOpen}>
+      <Button type="button" variant="secondary" onClick={() => setOpen(true)}>
+        Edit SVG
+      </Button>
+      <Dialog.Portal>
+        <Dialog.Overlay className="image-lightbox-overlay" />
+        <Dialog.Content className="image-lightbox">
+          <Dialog.Title>Editable SVG logo</Dialog.Title>
+          <div
+            className="svg-editor"
+            onClick={(event) => {
+              const target = event.target as Element;
+              setSelected(target.getAttribute('data-logo-shape') ?? '');
+            }}
+            dangerouslySetInnerHTML={{ __html: svg }}
+          />
+          {selected ? (
+            <input
+              aria-label="Selected shape colour"
+              type="color"
+              onChange={(event) => setColour(event.target.value)}
+            />
+          ) : (
+            <p>Select a shape to edit its colour.</p>
+          )}
+          <div>
+            {[palette.primary, palette.accent].filter(Boolean).map((colour) => (
+              <button
+                key={colour}
+                type="button"
+                style={{ background: colour }}
+                onClick={() => setColour(colour!)}
+              >
+                {colour}
+              </button>
+            ))}
+          </div>
+          <Button disabled={saving} onClick={() => void save()} type="button">
+            {saving ? 'Saving' : 'Save SVG'}
+          </Button>
+          {message ? <p role="status">{message}</p> : null}
+          <Dialog.Close asChild>
+            <Button type="button" variant="quiet">
+              Close
+            </Button>
+          </Dialog.Close>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function EditableLogoConversionProgress({
+  asset,
+  sourceUrl,
+  enhancedAsset,
+  enhancedUrl,
+  alphaMatteAsset,
+  alphaMatteUrl,
+  job,
+  logoVersions,
+  requesting,
+  versionUrls,
+}: {
+  asset: ResearchArtifact;
+  sourceUrl?: string;
+  enhancedAsset?: ResearchArtifact;
+  enhancedUrl?: string;
+  alphaMatteAsset?: ResearchArtifact;
+  alphaMatteUrl?: string;
+  job?: ProspectWorkspace['assetAnalysis'];
+  logoVersions: ResearchArtifact[];
+  requesting: boolean;
+  versionUrls: Record<string, string>;
+}) {
+  const phase = job?.progressPhase ?? '';
+  const enhancementRejected = phase === 'ai_enhancement_rejected';
+  const enhancementUnavailable = phase === 'ai_cleanup_unavailable';
+  const enhancementActive = [
+    'preparing_logo_enhancement',
+    'enhancing_logo',
+    'enhancing_logo_and_alpha_matte',
+    'validating_logo_enhancement',
+    'reusing_ai_enhanced_logo',
+  ].includes(phase);
+  const alphaMatteActive = [
+    'enhancing_logo_and_alpha_matte',
+    'creating_alpha_matte',
+    'retrying_alpha_matte',
+  ].includes(phase);
+  const logoVersionsActive =
+    phase === 'creating_logo_versions' ||
+    phase === 'saving_logo_version' ||
+    phase === 'vectorising_logo' ||
+    phase === 'fitting_logo_geometry' ||
+    phase === 'ai_enhanced_logo_ready' ||
+    phase === 'retaining_source_svg';
+  const enhancementState = enhancedUrl
+    ? 'complete'
+    : enhancementActive || requesting
+      ? 'active'
+      : enhancementRejected || enhancementUnavailable
+        ? 'fallback'
+        : 'pending';
+  const message = requesting
+    ? 'Submitting the conversion request…'
+    : job?.status === 'queued'
+      ? 'Queued — waiting for the protected conversion worker.'
+      : job?.progressDetail ||
+        'Preparing transparent, reusable logo versions from the selected source.';
+
+  return (
+    <section
+      aria-describedby="editable-logo-conversion-status"
+      aria-label="High-fidelity logo version generation in progress"
+      className="brand-kit__conversion"
+    >
+      <div className="brand-kit__conversion-step" data-state="complete">
+        <span className="brand-kit__conversion-label">Selected original</span>
+        {sourceUrl ? (
+          <ExpandableImage
+            alt="Selected original logo"
+            className="brand-kit__conversion-artwork brand-kit__asset-preview"
+            label={asset.label || 'selected original logo'}
+            src={sourceUrl}
+          >
+            <img alt="Selected original logo" src={sourceUrl} />
+          </ExpandableImage>
+        ) : (
+          <div className="brand-kit__conversion-artwork">
+            <span>Loading logo</span>
+          </div>
+        )}
+        <strong>{asset.label || 'Organisation logo'}</strong>
+        <ImageFileType contentType={asset.contentType} path={asset.storagePath} />
+      </div>
+      <ArrowRight aria-hidden="true" className="brand-kit__conversion-arrow" size={24} />
+      <ArrowDown aria-hidden="true" className="brand-kit__conversion-arrow-mobile" size={24} />
+      <div className="brand-kit__conversion-step" data-state={enhancementState}>
+        <span className="brand-kit__conversion-label">AI clean-up</span>
+        {enhancedUrl && enhancedAsset ? (
+          <ExpandableImage
+            alt="AI-cleaned private logo tracing source"
+            className="brand-kit__conversion-artwork brand-kit__asset-preview"
+            label={enhancedAsset.label || 'AI-cleaned logo tracing source'}
+            src={enhancedUrl}
+          >
+            <img alt="AI-cleaned private logo tracing source" src={enhancedUrl} />
+          </ExpandableImage>
+        ) : (
+          <div
+            aria-hidden="true"
+            className="brand-kit__conversion-artwork brand-kit__conversion-artwork--loading"
+          >
+            {enhancementRejected || enhancementUnavailable ? (
+              <Check aria-hidden="true" size={28} />
+            ) : (
+              <Sparkles
+                className={enhancementActive || requesting ? 'spin' : undefined}
+                size={28}
+              />
+            )}
+            <span>{enhancementRejected || enhancementUnavailable ? 'Source kept' : 'AI'}</span>
+          </div>
+        )}
+        <strong>
+          {enhancedUrl
+            ? 'Private clean-up ready'
+            : enhancementRejected
+              ? 'Original shape retained'
+              : enhancementUnavailable
+                ? 'Using original source'
+                : 'Cleaning logo details'}
+        </strong>
+        <span className="image-file-type">{enhancedUrl ? 'PNG' : 'Reviewable'}</span>
+      </div>
+      <ArrowRight aria-hidden="true" className="brand-kit__conversion-arrow" size={24} />
+      <ArrowDown aria-hidden="true" className="brand-kit__conversion-arrow-mobile" size={24} />
+      <div
+        className="brand-kit__conversion-step"
+        data-state={alphaMatteUrl ? 'complete' : alphaMatteActive ? 'active' : 'pending'}
+      >
+        <span className="brand-kit__conversion-label">Alpha matte</span>
+        {alphaMatteUrl && alphaMatteAsset ? (
+          <ExpandableImage
+            alt="AI-assisted black and white alpha matte"
+            className="brand-kit__conversion-artwork brand-kit__asset-preview"
+            label={alphaMatteAsset.label || 'AI-assisted alpha matte'}
+            src={alphaMatteUrl}
+          >
+            <img alt="AI-assisted black and white alpha matte" src={alphaMatteUrl} />
+          </ExpandableImage>
+        ) : (
+          <div
+            aria-hidden="true"
+            className="brand-kit__conversion-artwork brand-kit__conversion-artwork--loading"
+          >
+            <LoaderCircle className={alphaMatteActive ? 'spin' : undefined} size={28} />
+            <span>Mask</span>
+          </div>
+        )}
+        <strong>
+          {alphaMatteUrl
+            ? alphaMatteAsset?.metadata.rawAiOutput
+              ? 'Raw ChatGPT matte saved'
+              : 'Saved alpha matte'
+            : alphaMatteActive
+              ? 'Building soft edges'
+              : 'Awaiting clean-up'}
+        </strong>
+        <span className="image-file-type">PNG</span>
+      </div>
+      <ArrowRight aria-hidden="true" className="brand-kit__conversion-arrow" size={24} />
+      <ArrowDown aria-hidden="true" className="brand-kit__conversion-arrow-mobile" size={24} />
+      <div
+        className="brand-kit__conversion-step brand-kit__conversion-step--pending"
+        data-state={logoVersions.length ? 'complete' : logoVersionsActive ? 'active' : 'pending'}
+      >
+        <span className="brand-kit__conversion-label">Logo versions</span>
+        {logoVersions.length ? (
+          <div className="brand-kit__conversion-version-list" aria-live="polite">
+            {logoVersions.map((logoVersion) =>
+              versionUrls[logoVersion.id] ? (
+                <ExpandableImage
+                  alt={logoVersion.label || 'Transparent logo version'}
+                  className="brand-kit__conversion-version"
+                  key={logoVersion.id}
+                  label={logoVersion.label || 'transparent logo version'}
+                  src={versionUrls[logoVersion.id]}
+                >
+                  <img alt="" src={versionUrls[logoVersion.id]} />
+                </ExpandableImage>
+              ) : (
+                <span
+                  aria-label={`Loading ${logoVersion.label || 'transparent logo version'}`}
+                  className="brand-kit__conversion-version brand-kit__conversion-version--loading"
+                  key={logoVersion.id}
+                >
+                  <LoaderCircle className="spin" size={16} />
+                </span>
+              ),
+            )}
+          </div>
+        ) : (
+          <div
+            aria-hidden="true"
+            className="brand-kit__conversion-artwork brand-kit__conversion-artwork--loading"
+          >
+            <LoaderCircle className="spin" size={28} />
+            <span>PNG</span>
+          </div>
+        )}
+        <strong>
+          {logoVersions.length
+            ? 'Saved versions appear as they finish'
+            : 'Saving transparent versions'}
+        </strong>
+        <span className="image-file-type">PNG</span>
+      </div>
+      <p
+        className="brand-kit__conversion-status"
+        id="editable-logo-conversion-status"
+        role="status"
+      >
+        {message}
+      </p>
+    </section>
+  );
+}
+
 function storedMetadataSize(value: unknown) {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
@@ -246,7 +622,10 @@ function businessInitials(name: string) {
 
 function businessLogo(workspace: ProspectWorkspace) {
   const logos = workspace.artifacts.filter(
-    (artifact) => artifact.kind === 'asset' && artifact.metadata.assetType === 'logo',
+    (artifact) =>
+      artifact.kind === 'asset' &&
+      artifact.metadata.assetType === 'logo' &&
+      artifact.metadata.privateAiSuggestion !== true,
   );
   return logos.find((artifact) => artifact.metadata.preferredOrganisationLogo === true) ?? logos[0];
 }
@@ -1426,6 +1805,7 @@ function ExpandableImage({
           <Dialog.Content aria-describedby={undefined} className="image-lightbox">
             <Dialog.Title className="sr-only">{label}</Dialog.Title>
             <img alt={alt} src={src} />
+            <ImageFileType sourceUrl={src} />
             <Dialog.Close asChild>
               <Button aria-label={`Close ${label}`} size="compact" variant="quiet">
                 <X aria-hidden="true" size={18} />
@@ -1769,6 +2149,12 @@ function PageInventory({ pages, assets }: { pages: CapturedPage[]; assets: Resea
                 <Dialog.Description>
                   {previewAsset ? recordValue(previewAsset.metadata, 'pageUrl') : ''}
                 </Dialog.Description>
+                {previewAsset ? (
+                  <ImageFileType
+                    contentType={previewAsset.contentType}
+                    path={previewAsset.storagePath}
+                  />
+                ) : null}
               </div>
               <Dialog.Close asChild>
                 <Button aria-label="Close image preview" size="compact" variant="quiet">
@@ -1858,7 +2244,10 @@ function PageInventoryItem({
                   type="button"
                 >
                   {urls[asset.id] ? (
-                    <img alt="" src={urls[asset.id]} />
+                    <>
+                      <img alt="" src={urls[asset.id]} />
+                      <ImageFileType contentType={asset.contentType} path={asset.storagePath} />
+                    </>
                   ) : (
                     <span>Loading image</span>
                   )}
@@ -2001,6 +2390,10 @@ function CaptureArtifacts({
                         )}
                       </span>
                       <strong>{artifact.label ?? 'Screenshot'}</strong>
+                      <ImageFileType
+                        contentType={artifact.contentType}
+                        path={artifact.storagePath}
+                      />
                       {viewport ? (
                         <small>
                           {viewport.width} x {viewport.height}
@@ -2123,9 +2516,11 @@ function changedLineNumbers(previous: string, current: string) {
 function SourcePreview({
   content,
   highlightedLines = [],
+  startLine = 1,
 }: {
   content: string;
   highlightedLines?: number[];
+  startLine?: number;
 }) {
   const highlighted = new Set(highlightedLines);
   if (!highlighted.size)
@@ -2134,11 +2529,11 @@ function SourcePreview({
     <pre className="builder-file-preview-dialog__source builder-file-preview-dialog__source--diff">
       {content.split('\n').map((line, index) => (
         <span
-          className={highlighted.has(index + 1) ? 'is-changed' : undefined}
+          className={highlighted.has(index + startLine) ? 'is-changed' : undefined}
           key={`${index}-${line}`}
         >
           <span aria-hidden="true" className="builder-file-preview-dialog__line-number">
-            {index + 1}
+            {index + startLine}
           </span>
           {line}
           {'\n'}
@@ -2146,6 +2541,18 @@ function SourcePreview({
       ))}
     </pre>
   );
+}
+
+function sourceExcerpt(content: string, highlightedLines: number[]) {
+  const lines = content.split('\n');
+  if (!highlightedLines.length) return { content, highlightedLines, startLine: 1 };
+  const startLine = Math.max(1, Math.min(...highlightedLines) - 6);
+  const endLine = Math.min(lines.length, startLine + 27);
+  return {
+    content: lines.slice(startLine - 1, endLine).join('\n'),
+    highlightedLines,
+    startLine,
+  };
 }
 
 function BuilderPreviewFileEntry({
@@ -2225,6 +2632,7 @@ function BuilderPreviewFileEntry({
             <img alt="" src={fileUrl} />
             <span>
               <strong>{file.label}</strong>
+              <ImageFileType contentType={file.contentType} path={file.storagePath} />
               <small>{file.storagePath}</small>
             </span>
           </ExpandableImage>
@@ -2427,14 +2835,18 @@ function VisualAssetCatalog({ assets }: { assets: ResearchArtifact[] }) {
       </summary>
       <div className="asset-catalog__content">
         <p className="muted-copy">
-          Private source material with its originating page. It can inform a concept, but requires
-          human approval before any external use.
+          Private source material and generated brand files. Transparent logo versions are added
+          here automatically as each one finishes, but still require human approval before any
+          external use.
         </p>
         <div className="packet-assets__grid">
           {assets.map((asset) => {
-            const type = asset.metadata.vectorSuggestion
-              ? 'derived vector suggestion'
-              : recordValue(asset.metadata, 'assetType') || 'image';
+            const type =
+              asset.metadata.logoVariant === 'appearance'
+                ? `transparent ${String(asset.metadata.logoAppearance || 'brand')} logo`
+                : asset.metadata.vectorSuggestion
+                  ? 'derived vector suggestion'
+                  : recordValue(asset.metadata, 'assetType') || 'image';
             const pageUrl = recordValue(asset.metadata, 'pageUrl');
             const width = recordValue(asset.metadata, 'width');
             const height = recordValue(asset.metadata, 'height');
@@ -2452,8 +2864,13 @@ function VisualAssetCatalog({ assets }: { assets: ResearchArtifact[] }) {
                   <span>Loading asset...</span>
                 )}
                 <strong>{type}</strong>
+                <ImageFileType contentType={asset.contentType} path={asset.storagePath} />
                 <small>
-                  {pageUrl ? new URL(pageUrl).pathname || '/' : 'Captured website asset'}
+                  {pageUrl
+                    ? new URL(pageUrl).pathname || '/'
+                    : asset.metadata.logoVariant === 'appearance'
+                      ? 'Generated from the selected organisation logo'
+                      : 'Captured website asset'}
                 </small>
                 {width && height ? <small>{`${width} x ${height}`}</small> : null}
               </ExpandableImage>
@@ -2740,6 +3157,9 @@ function AssetAnnotationEditor({
           src={assetUrl}
         >
           <img alt="" src={assetUrl} />
+          {asset ? (
+            <ImageFileType contentType={asset.contentType} path={asset.storagePath} />
+          ) : null}
         </ExpandableImage>
       ) : asset ? (
         <div aria-label="Loading captured visual asset" className="asset-suggestion__image">
@@ -3003,6 +3423,7 @@ function AssetReviewPanel({
             )}
             <span className="brief-source-option__content">
               <strong>{type}</strong>
+              <ImageFileType contentType={asset.contentType} path={asset.storagePath} />
               <small>{pageUrl ? new URL(pageUrl).pathname || '/' : 'Captured asset'}</small>
             </span>
           </label>
@@ -3261,18 +3682,118 @@ function isHexColour(value?: string) {
   return /^#[0-9a-f]{6}$/i.test(value ?? '');
 }
 
+function EditableLogoConversionControls({
+  conversionActive,
+  conversionMessage,
+  conversionRequesting,
+  hasExistingSvg,
+  onConvert,
+  onSimplifyGeometryChange,
+  onVectorizerProviderChange,
+  progressDetail,
+  simplifyGeometry,
+  vectorizerProvider,
+}: {
+  conversionActive: boolean;
+  conversionMessage: string;
+  conversionRequesting: boolean;
+  hasExistingSvg: boolean;
+  onConvert: () => void;
+  onSimplifyGeometryChange: (enabled: boolean) => void;
+  onVectorizerProviderChange: (provider: 'vtracer' | 'vectorizer_ai') => void;
+  progressDetail?: string;
+  simplifyGeometry: boolean;
+  vectorizerProvider: 'vtracer' | 'vectorizer_ai';
+}) {
+  const converting = conversionActive || conversionRequesting;
+  return (
+    <div className="brand-kit__conversion-controls">
+      <label className="brand-kit__conversion-option">
+        <input
+          checked={simplifyGeometry}
+          disabled={converting}
+          onChange={(event) => onSimplifyGeometryChange(event.target.checked)}
+          type="checkbox"
+        />
+        <span>
+          <strong>Fit straight lines, corners and curves</strong>
+          <small>
+            Uses geometry fitting to replace pixel wobble with straight lines and a small number of
+            smooth Bézier curves. Recommended for clean logos and wordmarks such as LECE.
+          </small>
+        </span>
+      </label>
+      <fieldset className="brand-kit__vectorizer-choice" disabled={converting}>
+        <legend>SVG conversion engine</legend>
+        <label>
+          <input
+            checked={vectorizerProvider === 'vtracer'}
+            name="svg-vectorizer-provider"
+            onChange={() => onVectorizerProviderChange('vtracer')}
+            type="radio"
+          />
+          Current tracer
+        </label>
+        <label>
+          <input
+            checked={vectorizerProvider === 'vectorizer_ai'}
+            name="svg-vectorizer-provider"
+            onChange={() => onVectorizerProviderChange('vectorizer_ai')}
+            type="radio"
+          />
+          Vectorizer.AI
+        </label>
+        <small>
+          Vectorizer.AI traces the original captured logo directly, without ChatGPT remastering.
+        </small>
+      </fieldset>
+      <Button disabled={converting} onClick={onConvert} type="button" variant="secondary">
+        <FileCode2 aria-hidden="true" size={16} />
+        {converting
+          ? 'Converting to SVG'
+          : hasExistingSvg
+            ? 'Try another AI-assisted conversion'
+            : 'Convert to SVG'}
+      </Button>
+      {converting ? (
+        <p role="status">
+          {progressDetail || conversionMessage || 'Preparing the editable SVG logo.'}
+        </p>
+      ) : null}
+      {conversionMessage && !converting ? <p role="status">{conversionMessage}</p> : null}
+    </div>
+  );
+}
+
 function BrandKitPanel({
   workspace,
   onSave,
+  onPushLogoVersions,
   onCreateRevision,
+  onConvertLogo,
+  onDeleteLogo,
 }: {
   workspace: ProspectWorkspace;
   onSave: (
-    draft: Pick<BrandKit, 'primaryLogoAssetId' | 'approvedAssetIds' | 'palette' | 'notes'>,
+    draft: Pick<
+      BrandKit,
+      'primaryLogoAssetId' | 'editableLogoAssetId' | 'approvedAssetIds' | 'palette' | 'notes'
+    >,
     approve?: boolean,
     silent?: boolean,
   ) => Promise<void>;
+  onPushLogoVersions: (
+    draft: Pick<
+      BrandKit,
+      'primaryLogoAssetId' | 'editableLogoAssetId' | 'approvedAssetIds' | 'palette' | 'notes'
+    >,
+  ) => Promise<void>;
   onCreateRevision: () => Promise<void>;
+  onConvertLogo: (
+    asset: ResearchArtifact,
+    options: { simplifyGeometry: boolean; vectorizerProvider: 'vtracer' | 'vectorizer_ai' },
+  ) => Promise<void>;
+  onDeleteLogo: (asset: ResearchArtifact, onUndo: () => void) => void;
 }) {
   const existing = workspace.brandKit;
   const assets = workspace.artifacts.filter((artifact) => artifact.kind === 'asset');
@@ -3281,10 +3802,11 @@ function BrandKitPanel({
   );
   const logoAssets = assets.filter(
     (asset) =>
-      asset.metadata.assetType === 'logo' ||
-      ['primary_logo', 'secondary_mark'].includes(
-        annotationsByAsset.get(asset.id)?.suggestedRole ?? '',
-      ),
+      asset.metadata.privateAiSuggestion !== true &&
+      (asset.metadata.assetType === 'logo' ||
+        ['primary_logo', 'secondary_mark'].includes(
+          annotationsByAsset.get(asset.id)?.suggestedRole ?? '',
+        )),
   );
   const supportingAssets = assets.filter(
     (asset) =>
@@ -3293,8 +3815,28 @@ function BrandKitPanel({
         annotationsByAsset.get(asset.id)?.suggestedRole ?? '',
       ),
   );
+  const editableSvgAssets = assets.filter(
+    (asset) => asset.contentType === 'image/svg+xml' && asset.metadata.logoVariant === 'editable',
+  );
+  const aiEnhancedLogoAssets = assets.filter(
+    (asset) => asset.metadata.logoVariant === 'ai_enhanced',
+  );
+  const alphaMatteAssets = assets.filter((asset) => asset.metadata.logoVariant === 'alpha_matte');
+  const logoAppearanceAssets = assets.filter(
+    (asset) =>
+      asset.metadata.logoVariant === 'appearance' && asset.metadata.transparentBackground === true,
+  );
   const visibleAssets = [
-    ...new Map([...logoAssets, ...supportingAssets].map((asset) => [asset.id, asset])).values(),
+    ...new Map(
+      [
+        ...logoAssets,
+        ...supportingAssets,
+        ...editableSvgAssets,
+        ...aiEnhancedLogoAssets,
+        ...alphaMatteAssets,
+        ...logoAppearanceAssets,
+      ].map((asset) => [asset.id, asset]),
+    ).values(),
   ];
   const { urls, loadError } = usePrivateArtifactUrls(
     visibleAssets,
@@ -3306,22 +3848,96 @@ function BrandKitPanel({
   );
   const [draft, setDraft] = useState({
     primaryLogoAssetId: existing?.primaryLogoAssetId ?? '',
+    editableLogoAssetId: existing?.editableLogoAssetId ?? '',
     approvedAssetIds: existing?.approvedAssetIds ?? [],
     palette: existing?.palette ?? {},
     notes: existing?.notes ?? '',
   });
+  // A source logo and its private derivatives are deleted as one group. Keep that relationship
+  // reflected locally during the short undo window, rather than leaving a stale SVG selectable.
+  const [hiddenLogoIds, setHiddenLogoIds] = useState<string[]>([]);
+  const [hiddenLogoVersionIds, setHiddenLogoVersionIds] = useState<string[]>([]);
+  const editableLogoCandidates = editableSvgAssets
+    .filter(
+      (asset) =>
+        !hiddenLogoIds.includes(asset.id) &&
+        asset.contentType === 'image/svg+xml' &&
+        asset.metadata.logoVariant === 'editable' &&
+        (asset.metadata.derivedFromAssetId === draft.primaryLogoAssetId ||
+          asset.metadata.sourceLogoAssetId === draft.primaryLogoAssetId),
+    )
+    .sort(
+      (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+    );
+  const newestEditableLogoId = editableLogoCandidates[0]?.id;
+  const selectedEditableLogo = assets.find((asset) => asset.id === existing?.editableLogoAssetId);
   const [saving, setSaving] = useState(false);
+  const [pushingLogoVersions, setPushingLogoVersions] = useState(false);
+  const [pushError, setPushError] = useState('');
   const [autosaving, setAutosaving] = useState(false);
   const [message, setMessage] = useState('');
+  const [conversionMessage, setConversionMessage] = useState('');
+  const [conversionRequesting, setConversionRequesting] = useState(false);
+  const [simplifyGeometry, setSimplifyGeometry] = useState(false);
+  const [vectorizerProvider, setVectorizerProvider] = useState<'vtracer' | 'vectorizer_ai'>(
+    'vtracer',
+  );
   const draftRef = useRef(draft);
   const autosaveQueueRef = useRef(Promise.resolve());
   const pendingAutosavesRef = useRef(0);
   const locked = existing?.status === 'approved';
+  const conversionActive =
+    workspace.assetAnalysis?.status === 'queued' || workspace.assetAnalysis?.status === 'running';
+  const selectedPrimaryLogo = assets.find((asset) => asset.id === draft.primaryLogoAssetId);
+  const activeRetryToken = workspace.assetAnalysis?.editableLogoRetryToken;
+  const savedAiEnhancedLogo = aiEnhancedLogoAssets
+    .filter((asset) => asset.metadata.derivedFromAssetId === selectedPrimaryLogo?.id)
+    .sort(
+      (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+    )[0];
+  const savedAlphaMatte = alphaMatteAssets
+    .filter((asset) => asset.metadata.derivedFromAssetId === selectedPrimaryLogo?.id)
+    .sort(
+      (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+    )[0];
+  const logoVersions = [
+    ...new Map(
+      logoAppearanceAssets
+        .filter(
+          (asset) =>
+            !hiddenLogoIds.includes(asset.id) &&
+            !hiddenLogoVersionIds.includes(asset.id) &&
+            asset.metadata.derivedFromAssetId === selectedPrimaryLogo?.id,
+        )
+        .sort(
+          (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+        )
+        .map((asset) => [String(asset.metadata.logoAppearance), asset]),
+    ).values(),
+  ].sort((left, right) => {
+    const order = ['original', 'black', 'black-accent', 'white', 'white-accent'];
+    return (
+      order.indexOf(String(left.metadata.logoAppearance)) -
+      order.indexOf(String(right.metadata.logoAppearance))
+    );
+  });
+  const activeAiEnhancedLogo = activeRetryToken
+    ? (aiEnhancedLogoAssets.find(
+        (asset) =>
+          asset.metadata.derivedFromAssetId === selectedPrimaryLogo?.id &&
+          asset.metadata.retryToken === activeRetryToken,
+      ) ?? savedAiEnhancedLogo)
+    : undefined;
+  const conversionInProgress = conversionRequesting || conversionActive;
+  const logoConversionFailure =
+    workspace.assetAnalysis?.status === 'failed' &&
+    workspace.assetAnalysis.editableLogoRetryAssetId === selectedPrimaryLogo?.id;
 
   useEffect(() => {
     if (pendingAutosavesRef.current) return;
     const nextDraft = {
       primaryLogoAssetId: existing?.primaryLogoAssetId ?? '',
+      editableLogoAssetId: existing?.editableLogoAssetId ?? '',
       approvedAssetIds: existing?.approvedAssetIds ?? [],
       palette: existing?.palette ?? {},
       notes: existing?.notes ?? '',
@@ -3348,6 +3964,18 @@ function BrandKitPanel({
     setDraft(nextDraft);
   }, [colourSuggestions.accent?.colour, colourSuggestions.primary?.colour, locked]);
 
+  useEffect(() => {
+    if (workspace.assetAnalysis?.status !== 'failed') return;
+    setConversionMessage(
+      workspace.assetAnalysis.errorSummary ||
+        'SVG conversion failed before an editable file could be saved. Retry the conversion to try again.',
+    );
+  }, [
+    workspace.assetAnalysis?.errorSummary,
+    workspace.assetAnalysis?.id,
+    workspace.assetAnalysis?.status,
+  ]);
+
   function toggleAsset(assetId: string) {
     updateDraft({
       ...draftRef.current,
@@ -3361,7 +3989,11 @@ function BrandKitPanel({
     return {
       ...nextDraft,
       approvedAssetIds: [
-        ...new Set([...nextDraft.approvedAssetIds, nextDraft.primaryLogoAssetId]),
+        ...new Set([
+          ...nextDraft.approvedAssetIds,
+          nextDraft.primaryLogoAssetId,
+          nextDraft.editableLogoAssetId,
+        ]),
       ].filter(Boolean),
     };
   }
@@ -3449,6 +4081,7 @@ function BrandKitPanel({
       await onSave(
         {
           primaryLogoAssetId: existing.primaryLogoAssetId,
+          editableLogoAssetId: existing.editableLogoAssetId,
           approvedAssetIds: [
             ...new Set([...existing.approvedAssetIds, ...selectedAssetIds, ...suggestedAssetIds]),
           ],
@@ -3467,6 +4100,113 @@ function BrandKitPanel({
     } finally {
       setSaving(false);
     }
+  }
+
+  async function convertSelectedLogo() {
+    const logo = assets.find((asset) => asset.id === draftRef.current.primaryLogoAssetId);
+    if (!logo) {
+      setConversionMessage(
+        'Choose the organisation logo before creating its high-fidelity versions.',
+      );
+      return;
+    }
+    const previousVersionIds = logoAppearanceAssets
+      .filter((asset) => asset.metadata.derivedFromAssetId === logo.id)
+      .map((asset) => asset.id);
+    const previousMatteIds = alphaMatteAssets
+      .filter((asset) => asset.metadata.derivedFromAssetId === logo.id)
+      .map((asset) => asset.id);
+    const hiddenIds = [...previousVersionIds, ...previousMatteIds];
+    setHiddenLogoVersionIds((current) => [...new Set([...current, ...hiddenIds])]);
+    setConversionRequesting(true);
+    setConversionMessage('Queueing high-fidelity logo versions…');
+    try {
+      await onConvertLogo(logo, { simplifyGeometry, vectorizerProvider });
+      setConversionMessage(
+        'Logo versions queued. This section updates when the worker saves them.',
+      );
+    } catch (error) {
+      setHiddenLogoVersionIds((current) =>
+        current.filter((assetId) => !hiddenIds.includes(assetId)),
+      );
+      setConversionMessage(
+        error instanceof Error
+          ? error.message
+          : 'The high-fidelity logo versions could not be queued.',
+      );
+    } finally {
+      setConversionRequesting(false);
+    }
+  }
+
+  async function pushLogoVersions() {
+    if (!logoVersions.length) return;
+    setPushingLogoVersions(true);
+    setPushError('');
+    try {
+      await autosaveQueueRef.current;
+      const alphaMatteIds = new Set(alphaMatteAssets.map((asset) => asset.id));
+      const nextDraft = normalisedDraft({
+        ...draftRef.current,
+        approvedAssetIds: [
+          ...new Set([
+            ...draftRef.current.approvedAssetIds.filter((assetId) => !alphaMatteIds.has(assetId)),
+            ...logoVersions.map((asset) => asset.id),
+          ]),
+        ],
+      });
+      draftRef.current = nextDraft;
+      setDraft(nextDraft);
+      await onPushLogoVersions(nextDraft);
+    } catch (error) {
+      setPushError(
+        error instanceof Error
+          ? error.message
+          : 'The generated logo versions could not be pushed into the builder handoff.',
+      );
+    } finally {
+      setPushingLogoVersions(false);
+    }
+  }
+
+  function deleteLogo(asset: ResearchArtifact) {
+    const deletionIds = new Set(
+      assets
+        .filter(
+          (candidate) =>
+            candidate.id === asset.id ||
+            candidate.metadata.derivedFromAssetId === asset.id ||
+            candidate.metadata.sourceLogoAssetId === asset.id,
+        )
+        .map((candidate) => candidate.id),
+    );
+    const previousDraft = draftRef.current;
+    const nextDraft = {
+      ...previousDraft,
+      primaryLogoAssetId: deletionIds.has(previousDraft.primaryLogoAssetId)
+        ? ''
+        : previousDraft.primaryLogoAssetId,
+      editableLogoAssetId: deletionIds.has(previousDraft.editableLogoAssetId)
+        ? ''
+        : previousDraft.editableLogoAssetId,
+      approvedAssetIds: previousDraft.approvedAssetIds.filter((id) => !deletionIds.has(id)),
+    };
+    const affectsDraft =
+      deletionIds.has(previousDraft.primaryLogoAssetId) ||
+      deletionIds.has(previousDraft.editableLogoAssetId) ||
+      nextDraft.approvedAssetIds.length !== previousDraft.approvedAssetIds.length;
+    setHiddenLogoIds((current) => [...new Set([...current, ...deletionIds])]);
+    if (affectsDraft) {
+      draftRef.current = nextDraft;
+      setDraft(nextDraft);
+    }
+    onDeleteLogo(asset, () => {
+      setHiddenLogoIds((current) => current.filter((id) => !deletionIds.has(id)));
+      if (affectsDraft && draftRef.current === nextDraft) {
+        draftRef.current = previousDraft;
+        setDraft(previousDraft);
+      }
+    });
   }
 
   return (
@@ -3490,6 +4230,44 @@ function BrandKitPanel({
             This kit locks the visual identity used by future build revisions. The existing preview
             remains unchanged as a historical record.
           </p>
+          <section
+            className="brand-kit__editable-logo"
+            aria-labelledby="approved-editable-logo-title"
+          >
+            <div>
+              <Eyebrow>Editable vector variant</Eyebrow>
+              <h3 id="approved-editable-logo-title">Editable SVG logo</h3>
+            </div>
+            {selectedEditableLogo ? (
+              <div className="brand-kit__asset brand-kit__asset--approved">
+                {urls[selectedEditableLogo.id] ? (
+                  <ExpandableImage
+                    alt={selectedEditableLogo.label || 'Editable SVG logo'}
+                    className="brand-kit__asset-preview"
+                    label={selectedEditableLogo.label || 'editable SVG logo'}
+                    src={urls[selectedEditableLogo.id]}
+                  >
+                    <img alt="" src={urls[selectedEditableLogo.id]} />
+                  </ExpandableImage>
+                ) : (
+                  <span>Loading SVG</span>
+                )}
+                <span>
+                  {selectedEditableLogo.label || 'Editable SVG logo'}
+                  <ImageFileType
+                    contentType={selectedEditableLogo.contentType}
+                    path={selectedEditableLogo.storagePath}
+                  />
+                  <small>Approved SVG with editable fill and stroke tokens</small>
+                </span>
+              </div>
+            ) : (
+              <p className="brand-kit__editable-logo-empty">
+                No editable SVG is included in this approved Brand Kit. Create an editable revision
+                to add one.
+              </p>
+            )}
+          </section>
           {colourSuggestions.primary ? (
             <section className="brand-kit__evidence" aria-labelledby="brand-evidence-current-title">
               <div>
@@ -3539,41 +4317,376 @@ function BrandKitPanel({
         </div>
       ) : (
         <>
-          {!logoAssets.length ? (
+          {!logoAssets.filter((asset) => !hiddenLogoIds.includes(asset.id)).length ? (
             <EmptyState
               detail="No logo candidates are available yet. Run asset analysis, then classify the organisation logo before approving a Brand Kit."
               icon={ShieldAlert}
               title="Logo evidence required"
             />
+          ) : conversionInProgress && selectedPrimaryLogo ? (
+            <EditableLogoConversionProgress
+              asset={selectedPrimaryLogo}
+              alphaMatteAsset={savedAlphaMatte}
+              alphaMatteUrl={savedAlphaMatte ? urls[savedAlphaMatte.id] : undefined}
+              enhancedAsset={activeAiEnhancedLogo}
+              enhancedUrl={activeAiEnhancedLogo ? urls[activeAiEnhancedLogo.id] : undefined}
+              job={workspace.assetAnalysis}
+              logoVersions={logoVersions}
+              requesting={conversionRequesting}
+              sourceUrl={urls[selectedPrimaryLogo.id]}
+              versionUrls={urls}
+            />
           ) : (
-            <fieldset className="brand-kit__logos" disabled={saving}>
-              <legend>Organisation logo</legend>
-              {logoAssets.map((asset) => (
-                <label className="brand-kit__asset" key={asset.id}>
-                  <input
-                    checked={draft.primaryLogoAssetId === asset.id}
-                    name="primary-logo"
-                    onChange={() =>
-                      updateDraft({
-                        ...draftRef.current,
-                        primaryLogoAssetId: asset.id,
-                        approvedAssetIds: [
-                          ...new Set([...draftRef.current.approvedAssetIds, asset.id]),
-                        ],
-                      })
-                    }
-                    type="radio"
-                  />
-                  {urls[asset.id] ? <img alt="" src={urls[asset.id]} /> : <span>Loading logo</span>}
-                  <span>
-                    {asset.label || 'Logo candidate'}
-                    {asset.metadata.vectorSuggestion ? (
-                      <small>Derived vector suggestion — review before selecting</small>
+            <>
+              <fieldset className="brand-kit__logos" disabled={saving}>
+                <legend>Organisation logo</legend>
+                {logoAssets
+                  .filter((asset) => !hiddenLogoIds.includes(asset.id))
+                  .map((asset) => (
+                    <div className="brand-kit__asset" key={asset.id}>
+                      <input
+                        checked={draft.primaryLogoAssetId === asset.id}
+                        name="primary-logo"
+                        onChange={() =>
+                          updateDraft({
+                            ...draftRef.current,
+                            primaryLogoAssetId: asset.id,
+                            editableLogoAssetId: '',
+                            approvedAssetIds: [
+                              ...new Set(
+                                draftRef.current.approvedAssetIds.filter(
+                                  (candidate) => candidate !== draftRef.current.editableLogoAssetId,
+                                ),
+                              ),
+                              asset.id,
+                            ],
+                          })
+                        }
+                        type="radio"
+                      />
+                      {urls[asset.id] ? (
+                        <ExpandableImage
+                          alt={asset.label || 'Logo candidate'}
+                          className="brand-kit__asset-preview"
+                          label={asset.label || 'logo candidate'}
+                          src={urls[asset.id]}
+                        >
+                          <img alt="" src={urls[asset.id]} />
+                        </ExpandableImage>
+                      ) : (
+                        <span>Loading logo</span>
+                      )}
+                      <span className="brand-kit__asset-details">
+                        {asset.label || 'Logo candidate'}
+                        <ImageFileType contentType={asset.contentType} path={asset.storagePath} />
+                        {asset.metadata.vectorSuggestion ? (
+                          <small>Derived vector suggestion — review before selecting</small>
+                        ) : null}
+                      </span>
+                      <Button
+                        aria-label={`Permanently delete ${asset.label || 'logo candidate'}`}
+                        className="brand-kit__logo-delete"
+                        onClick={() => deleteLogo(asset)}
+                        size="compact"
+                        title="Delete logo permanently"
+                        type="button"
+                        variant="danger"
+                      >
+                        <Trash2 aria-hidden="true" size={16} />
+                      </Button>
+                    </div>
+                  ))}
+              </fieldset>
+              {draft.primaryLogoAssetId ? (
+                <>
+                  <section
+                    className="brand-kit__logo-versions"
+                    aria-labelledby="logo-versions-title"
+                  >
+                    <div>
+                      <Eyebrow>Normal logo workflow</Eyebrow>
+                      <h3 id="logo-versions-title">High-fidelity logo versions</h3>
+                      <p className="muted-copy">
+                        ChatGPT creates the high-resolution black-and-white alpha matte. That exact
+                        matte is saved for review and used for every transparent version.
+                      </p>
+                    </div>
+                    {logoConversionFailure ? (
+                      <div className="brand-kit__conversion-failure" role="alert">
+                        <div>
+                          <strong>Logo conversion stopped</strong>
+                          <p>
+                            {workspace.assetAnalysis?.errorSummary ||
+                              'The conversion stopped before every logo version could be saved. Your original logo and any earlier saved versions are safe.'}
+                          </p>
+                        </div>
+                        <Button
+                          disabled={conversionInProgress || saving}
+                          onClick={() => void convertSelectedLogo()}
+                          type="button"
+                          variant="secondary"
+                        >
+                          <RotateCcw aria-hidden="true" size={16} />
+                          Retry logo conversion
+                        </Button>
+                      </div>
                     ) : null}
-                  </span>
-                </label>
-              ))}
-            </fieldset>
+                    {savedAlphaMatte && !hiddenLogoVersionIds.includes(savedAlphaMatte.id) ? (
+                      <div className="brand-kit__alpha-matte">
+                        {urls[savedAlphaMatte.id] ? (
+                          <ExpandableImage
+                            alt="Saved black and white alpha matte"
+                            className="brand-kit__logo-version-preview"
+                            label={savedAlphaMatte.label || 'saved alpha matte'}
+                            src={urls[savedAlphaMatte.id]}
+                          >
+                            <img
+                              alt="Saved black and white alpha matte"
+                              src={urls[savedAlphaMatte.id]}
+                            />
+                          </ExpandableImage>
+                        ) : (
+                          <div className="brand-kit__logo-version-preview">Loading</div>
+                        )}
+                        <span>
+                          <strong>Saved alpha matte</strong>
+                          <small>
+                            {savedAlphaMatte.metadata.rawAiOutput
+                              ? 'Raw ChatGPT PNG with no resizing or reconstructed mask. Click to inspect.'
+                              : 'Black is logo coverage; white is removed background. Click to inspect.'}
+                          </small>
+                        </span>
+                      </div>
+                    ) : null}
+                    {logoVersions.length ? (
+                      <>
+                        {logoConversionFailure ? (
+                          <p className="brand-kit__logo-history-label">
+                            Previously saved versions — these are from the failed attempt, not the
+                            current conversion.
+                          </p>
+                        ) : null}
+                        <div className="brand-kit__logo-version-grid">
+                          {logoVersions.map((asset) => (
+                            <article className="brand-kit__logo-version" key={asset.id}>
+                              {urls[asset.id] ? (
+                                <ExpandableImage
+                                  alt={asset.label || 'Transparent logo version'}
+                                  className="brand-kit__logo-version-preview"
+                                  label={asset.label || 'transparent logo version'}
+                                  src={urls[asset.id]}
+                                >
+                                  <img alt="" src={urls[asset.id]} />
+                                </ExpandableImage>
+                              ) : (
+                                <div className="brand-kit__logo-version-preview">Loading</div>
+                              )}
+                              <strong>
+                                {asset.label?.replace(/ transparent logo.*$/i, '') || 'Logo'}
+                              </strong>
+                              <span>
+                                Transparent PNG
+                                <ImageFileType
+                                  contentType={asset.contentType}
+                                  path={asset.storagePath}
+                                />
+                              </span>
+                            </article>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="brand-kit__logo-versions-empty">
+                        <p>
+                          Create an original-colour, black, white, and—when the source has a second
+                          brand colour—accent version with transparent backgrounds.
+                        </p>
+                        <Button
+                          disabled={conversionInProgress || saving}
+                          onClick={() => void convertSelectedLogo()}
+                          type="button"
+                        >
+                          <Sparkles aria-hidden="true" size={16} />
+                          {conversionInProgress
+                            ? 'Preparing logo versions'
+                            : 'Create high-fidelity logo versions'}
+                        </Button>
+                        {conversionMessage && !conversionInProgress ? (
+                          <p role="status">{conversionMessage}</p>
+                        ) : null}
+                      </div>
+                    )}
+                    {logoVersions.length ? (
+                      <div className="brand-kit__logo-version-actions">
+                        <div>
+                          <Button
+                            disabled={conversionInProgress || saving || pushingLogoVersions}
+                            onClick={() => void pushLogoVersions()}
+                            type="button"
+                          >
+                            {pushingLogoVersions ? (
+                              <LoaderCircle aria-hidden="true" className="spin" size={16} />
+                            ) : (
+                              <PackageCheck aria-hidden="true" size={16} />
+                            )}
+                            {pushingLogoVersions
+                              ? 'Updating builder handoff'
+                              : 'Push & update build assets'}
+                          </Button>
+                          <p className="muted-copy">
+                            Approves these transparent logo versions and refreshes the Brand Kit,
+                            Brief, and Build Manifest in one step. The alpha matte is never
+                            included.
+                          </p>
+                          {pushError ? (
+                            <p className="form-message form-message--error" role="alert">
+                              {pushError}
+                            </p>
+                          ) : null}
+                        </div>
+                        <Button
+                          disabled={conversionInProgress || saving || pushingLogoVersions}
+                          onClick={() => void convertSelectedLogo()}
+                          type="button"
+                          variant="secondary"
+                        >
+                          <RotateCcw aria-hidden="true" size={16} />
+                          Refresh logo versions
+                        </Button>
+                      </div>
+                    ) : null}
+                  </section>
+                  <details className="brand-kit__svg-beta">
+                    <summary>
+                      <span>Experimental SVG converter</span>
+                      <span className="brand-kit__beta-tag">Beta</span>
+                    </summary>
+                    <fieldset className="brand-kit__editable-logo" disabled={saving}>
+                      <legend>Editable SVG logo</legend>
+                      <p className="muted-copy">
+                        This optional derived version remains separate from the captured logo. Its
+                        SVG preserves the traced logo colours as editable fill and stroke tokens.
+                      </p>
+                      {savedAiEnhancedLogo ? (
+                        <div className="brand-kit__asset brand-kit__asset--approved brand-kit__saved-ai">
+                          {urls[savedAiEnhancedLogo.id] ? (
+                            <ExpandableImage
+                              alt={savedAiEnhancedLogo.label || 'Saved AI-cleaned logo output'}
+                              className="brand-kit__asset-preview"
+                              label={savedAiEnhancedLogo.label || 'saved AI-cleaned logo output'}
+                              src={urls[savedAiEnhancedLogo.id]}
+                            >
+                              <img alt="" src={urls[savedAiEnhancedLogo.id]} />
+                            </ExpandableImage>
+                          ) : (
+                            <span>Loading AI output</span>
+                          )}
+                          <span>
+                            Saved AI clean-up output
+                            <ImageFileType
+                              contentType={savedAiEnhancedLogo.contentType}
+                              path={savedAiEnhancedLogo.storagePath}
+                            />
+                            <small>
+                              Saved privately for comparison. The approved captured logo remains the
+                              source of truth.
+                            </small>
+                          </span>
+                        </div>
+                      ) : null}
+                      {editableLogoCandidates.length ? (
+                        <>
+                          {editableLogoCandidates.map((asset) => (
+                            <div className="brand-kit__asset" key={asset.id}>
+                              <input
+                                checked={draft.editableLogoAssetId === asset.id}
+                                name="editable-logo"
+                                onChange={() =>
+                                  updateDraft({
+                                    ...draftRef.current,
+                                    editableLogoAssetId: asset.id,
+                                  })
+                                }
+                                type="radio"
+                              />
+                              {urls[asset.id] ? (
+                                <ExpandableImage
+                                  alt={asset.label || 'Editable SVG logo'}
+                                  className="brand-kit__asset-preview"
+                                  label={asset.label || 'editable SVG logo'}
+                                  src={urls[asset.id]}
+                                >
+                                  <img alt="" src={urls[asset.id]} />
+                                </ExpandableImage>
+                              ) : (
+                                <span>Loading SVG</span>
+                              )}
+                              <span>
+                                {asset.label || 'Editable SVG logo'}
+                                <ImageFileType
+                                  contentType={asset.contentType}
+                                  path={asset.storagePath}
+                                />
+                                {asset.id === newestEditableLogoId ? (
+                                  <span className="brand-kit__new-svg-tag">New SVG</span>
+                                ) : null}
+                                <small>Fill and stroke colours remain editable</small>
+                                <small>
+                                  {asset.metadata.aiEnhancement
+                                    ? 'AI clean-up passed a source-shape check; source colours are locked'
+                                    : asset.metadata.vectorizer === 'vtracer'
+                                      ? 'Current source-colour trace'
+                                      : 'Legacy trace — compare carefully before selecting'}
+                                </small>
+                                <EditableSvgLogo
+                                  asset={asset}
+                                  palette={draft.palette}
+                                  src={urls[asset.id] ?? ''}
+                                />
+                              </span>
+                            </div>
+                          ))}
+                          <div className="brand-kit__editable-logo-empty">
+                            <p>
+                              Your editable SVG is ready. You can optionally run another AI-assisted
+                              conversion if you want a separate version to compare.
+                            </p>
+                            <EditableLogoConversionControls
+                              conversionActive={conversionActive}
+                              conversionMessage={conversionMessage}
+                              conversionRequesting={conversionRequesting}
+                              hasExistingSvg
+                              onConvert={() => void convertSelectedLogo()}
+                              onSimplifyGeometryChange={setSimplifyGeometry}
+                              onVectorizerProviderChange={setVectorizerProvider}
+                              progressDetail={workspace.assetAnalysis?.progressDetail}
+                              simplifyGeometry={simplifyGeometry}
+                              vectorizerProvider={vectorizerProvider}
+                            />
+                          </div>
+                        </>
+                      ) : (
+                        <div className="brand-kit__editable-logo-empty">
+                          <p>No editable SVG is ready yet.</p>
+                          <EditableLogoConversionControls
+                            conversionActive={conversionActive}
+                            conversionMessage={conversionMessage}
+                            conversionRequesting={conversionRequesting}
+                            hasExistingSvg={false}
+                            onConvert={() => void convertSelectedLogo()}
+                            onSimplifyGeometryChange={setSimplifyGeometry}
+                            onVectorizerProviderChange={setVectorizerProvider}
+                            progressDetail={workspace.assetAnalysis?.progressDetail}
+                            simplifyGeometry={simplifyGeometry}
+                            vectorizerProvider={vectorizerProvider}
+                          />
+                        </div>
+                      )}
+                    </fieldset>
+                  </details>
+                </>
+              ) : null}
+            </>
           )}
           {supportingAssets.length ? (
             <details className="brand-kit__asset-disclosure">
@@ -3592,7 +4705,10 @@ function BrandKitPanel({
                     ) : (
                       <span>Loading image</span>
                     )}
-                    <span>{asset.label || 'Captured image'}</span>
+                    <span>
+                      {asset.label || 'Captured image'}
+                      <ImageFileType contentType={asset.contentType} path={asset.storagePath} />
+                    </span>
                   </label>
                 ))}
               </fieldset>
@@ -3759,6 +4875,7 @@ function BriefAssetChoices({
                 <strong>
                   {asset.metadata.assetType ? String(asset.metadata.assetType) : 'Image'}
                 </strong>
+                <ImageFileType contentType={asset.contentType} path={asset.storagePath} />
                 <small>{asset.label || 'Captured visual asset'}</small>
               </span>
             </label>
@@ -4114,6 +5231,9 @@ function BriefPanel({
                     <span className="brief-asset-guidance__content">
                       <strong>{guidance.role.replaceAll('_', ' ')}</strong>
                       <b>{asset?.label || 'Approved captured image'}</b>
+                      {asset ? (
+                        <ImageFileType contentType={asset.contentType} path={asset.storagePath} />
+                      ) : null}
                       {pageUrl ? (
                         <small>Captured from {sourceUrlLabel(pageUrl, 'source page')}</small>
                       ) : null}
@@ -4377,6 +5497,20 @@ function builderRunModeLabel(mode: BuilderRunMode) {
   return 'Complete prospect build';
 }
 
+function builderProgressPhaseLabel(phase: string) {
+  const labels: Record<string, string> = {
+    queued: 'Waiting for a builder worker',
+    preparing_workspace: 'Preparing the private workspace',
+    building_website: 'Codex is building the website',
+    building_output: 'Compiling the private preview',
+    quality_checks: 'Running browser quality checks',
+    capturing_preview: 'Capturing responsive previews',
+    saving_outputs: 'Saving private build outputs',
+    retry_wait: 'Waiting to retry',
+  };
+  return labels[phase] ?? phase.replaceAll('_', ' ');
+}
+
 function testBuildChangeSummary(run: BuilderRun, previousRun?: BuilderRun) {
   if (!previousRun)
     return 'Baseline test. This is the first completed agent contract in this series.';
@@ -4460,39 +5594,274 @@ function diagnosticTone(event: BuilderEvent) {
   return 'neutral' as const;
 }
 
+function BuilderActivityWaiting({ detail, label }: { detail: string; label: string }) {
+  return (
+    <div className="builder-activity-waiting" role="status">
+      <Bot aria-hidden="true" className="builder-activity-waiting__icon" size={20} />
+      <span>
+        <strong>{label}</strong>
+        <small>{detail}</small>
+      </span>
+      <span aria-hidden="true" className="builder-activity-waiting__dots">
+        <i />
+        <i />
+        <i />
+      </span>
+    </div>
+  );
+}
+
+function formatBuildElapsedTime(milliseconds: number) {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1_000));
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function builderRunElapsedTime(run: BuilderRun, now: number) {
+  const startedAt = Date.parse(run.startedAt ?? '');
+  if (!Number.isFinite(startedAt)) return undefined;
+  const active = run.status === 'queued' || run.status === 'running';
+  const completedAt = Date.parse(run.completedAt ?? run.updatedAt);
+  const finishedAt = Number.isFinite(completedAt) ? completedAt : startedAt;
+  return Math.max(0, (active ? now : (finishedAt ?? startedAt)) - startedAt);
+}
+
+function useBuildElapsedNow(active: boolean) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    setNow(Date.now());
+    if (!active) return;
+    const interval = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(interval);
+  }, [active]);
+
+  return now;
+}
+
+function buildUsageSummary(records: AiUsageRecord[], builderRunId: string) {
+  const buildRecords = records.filter(
+    (record) => record.builderRunId === builderRunId && record.source === 'codex_build',
+  );
+  const pricedRecords = buildRecords.filter((record) => typeof record.costUsd === 'number');
+
+  return {
+    operationCount: buildRecords.length,
+    totalTokens: buildRecords.reduce((total, record) => total + record.totalTokens, 0),
+    recordedCost: pricedRecords.reduce((total, record) => total + (record.costUsd ?? 0), 0),
+    unpricedCount: buildRecords.length - pricedRecords.length,
+  };
+}
+
+function useAnimatedBuildUsageValue(value: number, active: boolean) {
+  const initialValue = active ? 0 : value;
+  const [displayedValue, setDisplayedValue] = useState(initialValue);
+  const [isAnimating, setIsAnimating] = useState(false);
+  const displayedValueRef = useRef(initialValue);
+
+  useEffect(() => {
+    const startValue = displayedValueRef.current;
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!active || reducedMotion || startValue === value) {
+      displayedValueRef.current = value;
+      setDisplayedValue(value);
+      setIsAnimating(false);
+      return;
+    }
+
+    const startedAt = performance.now();
+    const duration = Math.min(900, Math.max(360, Math.abs(value - startValue) / 25));
+    let frame = 0;
+    setIsAnimating(true);
+    const animate = (now: number) => {
+      const progress = Math.min((now - startedAt) / duration, 1);
+      const eased = 1 - (1 - progress) ** 3;
+      const nextValue = startValue + (value - startValue) * eased;
+      displayedValueRef.current = nextValue;
+      setDisplayedValue(nextValue);
+      if (progress < 1) {
+        frame = window.requestAnimationFrame(animate);
+      } else {
+        displayedValueRef.current = value;
+        setDisplayedValue(value);
+        setIsAnimating(false);
+      }
+    };
+    frame = window.requestAnimationFrame(animate);
+    return () => window.cancelAnimationFrame(frame);
+  }, [active, value]);
+
+  return { displayedValue, isAnimating };
+}
+
+function AnimatedBuildUsageValue({
+  active,
+  format,
+  value,
+}: {
+  active: boolean;
+  format: (value: number) => string;
+  value: number;
+}) {
+  const { displayedValue, isAnimating } = useAnimatedBuildUsageValue(value, active);
+  return (
+    <span className={`builder-run-usage__counter${isAnimating ? ' is-counting' : ''}`}>
+      {format(displayedValue)}
+    </span>
+  );
+}
+
+function BuilderRunUsage({ records, run }: { records: AiUsageRecord[]; run: BuilderRun }) {
+  const active = run.status === 'queued' || run.status === 'running';
+  const elapsedNow = useBuildElapsedNow(active);
+  const elapsed = builderRunElapsedTime(run, elapsedNow);
+  const usage = buildUsageSummary(records, run.id);
+
+  return (
+    <dl className="builder-run-usage" aria-label="Build usage and time for this test">
+      <div>
+        <dt>{active ? 'Working time' : 'Recorded build time'}</dt>
+        <dd>
+          {elapsed === undefined
+            ? active
+              ? 'Waiting to start'
+              : 'Not recorded'
+            : formatBuildElapsedTime(elapsed)}
+        </dd>
+      </div>
+      <div>
+        <dt>Tokens used</dt>
+        <dd>
+          {usage.operationCount ? (
+            <AnimatedBuildUsageValue
+              active={active}
+              format={(value) => formatTokens(Math.round(value))}
+              value={usage.totalTokens}
+            />
+          ) : (
+            'Pending'
+          )}
+        </dd>
+      </div>
+      <div>
+        <dt>Recorded cost</dt>
+        <dd>
+          {usage.operationCount ? (
+            usage.unpricedCount ? (
+              usage.recordedCost > 0 ? (
+                <>
+                  <AnimatedBuildUsageValue
+                    active={active}
+                    format={formatUsd}
+                    value={usage.recordedCost}
+                  />{' '}
+                  + {usage.unpricedCount} unpriced
+                </>
+              ) : (
+                'Unpriced'
+              )
+            ) : (
+              <AnimatedBuildUsageValue
+                active={active}
+                format={formatUsd}
+                value={usage.recordedCost}
+              />
+            )
+          ) : (
+            'Pending'
+          )}
+        </dd>
+      </div>
+    </dl>
+  );
+}
+
 function BuilderTimelineItem({ event }: { event: BuilderEvent }) {
   const expandable = event.kind !== 'activity';
   const tone = event.kind === 'error' ? 'danger' : event.kind === 'quality' ? 'success' : 'neutral';
 
   if (!expandable) {
     return (
-      <li className="builder-timeline__activity">
+      <div className="builder-timeline__activity">
         <StatusBadge tone="neutral">live update</StatusBadge>
         <span>{event.message}</span>
         <time dateTime={event.createdAt}>{formatDate(event.createdAt)}</time>
-      </li>
+      </div>
     );
   }
 
   return (
-    <li>
-      <details className="builder-timeline__step">
-        <summary>
-          <StatusBadge tone={tone}>{event.kind}</StatusBadge>
-          <span className="builder-timeline__step-copy">
-            <strong>{event.message}</strong>
-            <small>Completed {formatDate(event.createdAt)}</small>
-          </span>
-        </summary>
-        <div className="builder-timeline__context">
-          <p>Step context</p>
-          <ul>
-            {builderEventContext(event).map((detail) => (
-              <li key={detail}>{detail}</li>
-            ))}
-          </ul>
-        </div>
-      </details>
+    <details className="builder-timeline__step">
+      <summary>
+        <StatusBadge tone={tone}>{event.kind}</StatusBadge>
+        <span className="builder-timeline__step-copy">
+          <strong>{event.message}</strong>
+          <small>Completed {formatDate(event.createdAt)}</small>
+        </span>
+      </summary>
+      <div className="builder-timeline__context">
+        <p>Step context</p>
+        <ul>
+          {builderEventContext(event).map((detail) => (
+            <li key={detail}>{detail}</li>
+          ))}
+        </ul>
+      </div>
+    </details>
+  );
+}
+
+function useNewBuilderActivityIds(events: BuilderEvent[], runId?: string) {
+  const knownRunId = useRef<string>();
+  const knownEventIds = useRef(new Set<string>());
+  const [newEventIds, setNewEventIds] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    if (knownRunId.current !== runId) {
+      knownRunId.current = runId;
+      knownEventIds.current = new Set(events.map((event) => event.id));
+      setNewEventIds(new Set());
+      return;
+    }
+
+    const additions = events.filter((event) => !knownEventIds.current.has(event.id));
+    if (!additions.length) return;
+    additions.forEach((event) => knownEventIds.current.add(event.id));
+    setNewEventIds((current) => new Set([...current, ...additions.map((event) => event.id)]));
+  }, [events, runId]);
+
+  return newEventIds;
+}
+
+function BuilderNewActivityItem({ children, isNew }: { children: ReactNode; isNew: boolean }) {
+  const itemRef = useRef<HTMLLIElement>(null);
+  const [hasEnteredViewport, setHasEnteredViewport] = useState(false);
+
+  useEffect(() => {
+    const item = itemRef.current;
+    if (!isNew || !item || !('IntersectionObserver' in window)) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        setHasEnteredViewport(true);
+        observer.disconnect();
+      },
+      { threshold: 0.25 },
+    );
+    observer.observe(item);
+    return () => observer.disconnect();
+  }, [isNew]);
+
+  return (
+    <li
+      className={`builder-new-activity${isNew ? ' is-new' : ''}${hasEnteredViewport ? ' is-shining' : ''}`}
+      ref={itemRef}
+    >
+      {children}
     </li>
   );
 }
@@ -4587,6 +5956,10 @@ function BuilderHistoryEntry({
                   >
                     <img alt="" src={urls[screenshot.id]} />
                     <span>{screenshot.label}</span>
+                    <ImageFileType
+                      contentType={screenshot.contentType}
+                      path={screenshot.storagePath}
+                    />
                   </ExpandableImage>
                 ) : null,
               )}
@@ -4604,10 +5977,13 @@ function BuilderRunPanel({
   buildKind,
   agentPackages = [],
   onRequestBuild,
+  onResumeBuild,
   onCancelBuild,
   onDeleteBuild,
   onOpenPreview,
   onLoadBuildEvidence,
+  onStageBehaviours,
+  onRequestProposal,
 }: {
   workspace: ProspectWorkspace;
   buildKind: 'test' | 'prospect';
@@ -4617,11 +5993,15 @@ function BuilderRunPanel({
     targetSourceUrl?: string,
     buildInstruction?: string,
     agentPackageId?: string,
+    sourceBuilderRunId?: string,
   ) => Promise<void>;
+  onResumeBuild?: (builderRunId: string) => Promise<void>;
   onCancelBuild: () => Promise<void>;
   onDeleteBuild: (businessId: string) => Promise<void>;
   onOpenPreview: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
   onLoadBuildEvidence: (builderRunId: string) => Promise<BuilderRunEvidence>;
+  onStageBehaviours?: (packageId: string, behaviourIds: string[]) => Promise<void>;
+  onRequestProposal?: (basePackageId: string, direction: string) => Promise<void>;
 }) {
   const isTestBuild = buildKind === 'test';
   const runs = workspace.builderRuns.filter((candidate) =>
@@ -4630,12 +6010,25 @@ function BuilderRunPanel({
   const run = runs[0];
   const runIsLatest = run?.id === workspace.latestBuilderRun?.id;
   const [isRequesting, setIsRequesting] = useState(false);
+  const [isResuming, setIsResuming] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isOpeningPreview, setIsOpeningPreview] = useState(false);
   const [message, setMessage] = useState('');
   const [targetSourceUrl, setTargetSourceUrl] = useState('');
+  const [testPageAction, setTestPageAction] = useState<'create' | 'revise'>('create');
+  const [sourceBuilderRunId, setSourceBuilderRunId] = useState('');
+  const [retainedTestContextId, setRetainedTestContextId] = useState<string>();
   const [buildDirections, setBuildDirections] = useState<string[]>([]);
+  const [selectedBehaviourIds, setSelectedBehaviourIds] = useState<string[]>([]);
+  const [isStagingBehaviours, setIsStagingBehaviours] = useState(false);
+  const [leavingBehaviourIds, setLeavingBehaviourIds] = useState<string[]>([]);
+  const [optimisticallyStagedBehaviourIds, setOptimisticallyStagedBehaviourIds] = useState<
+    string[]
+  >([]);
+  const [workshopFeature, setWorkshopFeature] = useState<AgentFeature>();
+  const [workshopDirection, setWorkshopDirection] = useState('');
+  const [isSendingWorkshop, setIsSendingWorkshop] = useState(false);
   const testPackages = agentPackages.filter(
     (agentPackage) => agentPackage.status === 'published' || agentPackage.status === 'test_ready',
   );
@@ -4654,10 +6047,102 @@ function BuilderRunPanel({
     : `Package v${selectedAgentPackage?.version ?? publishedPackage?.version ?? 4} baseline`;
   const includesBrandIntroduction = Boolean(
     selectedAgentPackage &&
-    (selectedAgentPackage.version >= 5 ||
-      /brand[-\s]introduction/i.test(selectedAgentPackage.capabilityProposal ?? '')),
+    /brand[-\s]introduction/i.test(
+      `${selectedAgentPackage.summary}\n${selectedAgentPackage.capabilityProposal ?? ''}`,
+    ),
   );
-  const [sessionBuildRunId, setSessionBuildRunId] = useState<string>();
+  const includesResponsiveSidebar = Boolean(
+    selectedAgentPackage &&
+    /sidebar|drawer|responsive navigation|scroll.*header/i.test(
+      `${selectedAgentPackage.summary}\n${selectedAgentPackage.capabilityProposal ?? ''}`,
+    ),
+  );
+  const testingBehaviours =
+    selectedAgentPackage?.status === 'test_ready'
+      ? [
+          {
+            id: includesBrandIntroduction
+              ? 'brand-introduction'
+              : includesResponsiveSidebar
+                ? 'responsive-sidebar'
+                : 'package-behaviour',
+            title: `Package v${selectedAgentPackage.version} testing behaviour`,
+            detail: selectedAgentPackage.capabilityProposal || selectedAgentPackage.summary,
+            revision: `v${selectedAgentPackage.version}.0`,
+            change:
+              'Latest edit: this package-specific behaviour is isolated from the remaining test behaviours so it can be staged independently.',
+          },
+          {
+            id: 'hero-handoff',
+            title: 'Visible hero entrance after the logo handoff',
+            detail:
+              'After the logo has reached the real navigation mark, the hero heading, supporting copy, and visual media reveal separately. The entrance no longer plays behind the loading overlay, so visitors can see it happen.',
+            revision: `v${selectedAgentPackage.version}.1`,
+            change:
+              'Latest edit: hero copy and media wait for the logo handoff, then reveal as distinct visible steps.',
+          },
+          {
+            id: 'responsive-sidebar',
+            title: 'Mobile & tablet sidebar navigation',
+            detail:
+              'Below desktop width, the header links become a leading-edge sidebar that reuses the real logo and header palette and opens from the trigger side. On motion-enabled visits, the header slides away after a downward scroll and returns on any upward scroll. It supports close, backdrop, Escape, keyboard focus, route selection, and reduced-motion users; desktop navigation stays visible.',
+            revision: `v${selectedAgentPackage.version}.3`,
+            change:
+              'Latest edit: navigation is now generated from its Markdown feature contract, with a required animated icon, staggered links, and coherent accessible colour treatment.',
+          },
+        ]
+      : [];
+  const stagedBehaviourIds = [
+    ...(selectedAgentPackage?.stagedBehaviourIds ?? []),
+    ...optimisticallyStagedBehaviourIds,
+  ].filter((id, index, ids) => ids.indexOf(id) === index);
+  const visibleStagedBehaviourIds = stagedBehaviourIds.filter(
+    (id) => !leavingBehaviourIds.includes(id),
+  );
+  const pendingTestingBehaviours = testingBehaviours.filter(
+    (behaviour) => !visibleStagedBehaviourIds.includes(behaviour.id),
+  );
+  const testOnlyFeatures = [
+    agentPackageFeatures.find((feature) => feature.id === 'motion-runtime'),
+    agentPackageFeatures.find((feature) => feature.id === 'responsive-sidebar'),
+    ...(includesBrandIntroduction
+      ? [agentPackageFeatures.find((feature) => feature.id === 'brand-introduction')]
+      : []),
+  ].filter((feature): feature is AgentFeature => Boolean(feature));
+  const workshopFeatureForBehaviour = (behaviourId: string) =>
+    testOnlyFeatures.find((feature) =>
+      behaviourId === 'hero-handoff' ? feature.id === 'motion-runtime' : feature.id === behaviourId,
+    );
+  const featureHasWorkshopSource = (feature?: AgentFeature) =>
+    Boolean(
+      feature?.files.some((featureFile) => {
+        const file = currentAgentPackageFiles.find(
+          (candidate) => candidate.label === featureFile.label,
+        );
+        return file?.path.endsWith('.js') || file?.path.endsWith('.mjs');
+      }),
+    );
+
+  async function sendWorkshopToTesting() {
+    if (!publishedPackage || !workshopFeature || !workshopDirection.trim() || !onRequestProposal)
+      return;
+    setIsSendingWorkshop(true);
+    setMessage('');
+    try {
+      await onRequestProposal(
+        publishedPackage.id,
+        `Foundation workshop · ${workshopFeature.title}\n\n${workshopDirection.trim()}`,
+      );
+      setWorkshopDirection('');
+      setWorkshopFeature(undefined);
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : 'The workshop handoff could not be created.',
+      );
+    } finally {
+      setIsSendingWorkshop(false);
+    }
+  }
   const [pendingBuild, setPendingBuild] = useState<{ previousRunId?: string }>();
   const [inspector, setInspector] = useState<'steps' | 'files'>();
   const [historyEvidence, setHistoryEvidence] = useState<
@@ -4680,6 +6165,11 @@ function BuilderRunPanel({
         testPackages[0]?.id,
     );
   }, [publishedPackage?.id, selectedAgentPackageId, testPackages]);
+  useEffect(() => {
+    setSelectedBehaviourIds(stagedBehaviourIds);
+    setOptimisticallyStagedBehaviourIds([]);
+    setLeavingBehaviourIds([]);
+  }, [selectedAgentPackage?.id]);
   const homepageTestReady = workspace.builderRuns.some(
     (candidate) =>
       candidate.buildManifestId === workspace.buildManifest?.id &&
@@ -4703,20 +6193,25 @@ function BuilderRunPanel({
   const active = run?.status === 'queued' || run?.status === 'running' || run?.status === 'paused';
   const runId = run?.id;
   useEffect(() => {
-    if (active && runId && !pendingBuild) setSessionBuildRunId(runId);
-  }, [active, pendingBuild, runId]);
-
-  useEffect(() => {
     if (!pendingBuild || !runId || runId === pendingBuild.previousRunId) return;
-    setSessionBuildRunId(runId);
     setPendingBuild(undefined);
   }, [pendingBuild, runId]);
 
-  const showCurrentRunLogs = Boolean(
-    !pendingBuild && run && (active || sessionBuildRunId === run.id),
-  );
+  const showCurrentRunLogs = Boolean(!pendingBuild && run && runIsLatest);
   const frozenDraft =
     run?.status === 'paused' || run?.status === 'failed' || run?.status === 'cancelled';
+  const retainedTestContext = isTestBuild && frozenDraft && Boolean(run);
+  useEffect(() => {
+    if (!isTestBuild || !run || (!active && !frozenDraft) || retainedTestContextId === run.id)
+      return;
+    if (run.agentPackageId && testPackages.some((item) => item.id === run.agentPackageId)) {
+      setSelectedAgentPackageId(run.agentPackageId);
+    }
+    setTestPageAction(run.parentBuilderRunId ? 'revise' : 'create');
+    setSourceBuilderRunId(run.parentBuilderRunId ?? '');
+    setTargetSourceUrl(run.targetSourceUrl ?? '');
+    setRetainedTestContextId(run.id);
+  }, [active, frozenDraft, isTestBuild, retainedTestContextId, run, testPackages]);
   const draftAvailable = currentArtifacts.some(
     (artifact) => artifact.kind === 'draft_file' && artifact.label === 'index.html',
   );
@@ -4728,11 +6223,24 @@ function BuilderRunPanel({
     checkpointAvailable || currentArtifacts.some((artifact) => artifact.kind === 'draft_file');
   const homepageSelected = !targetSourceUrl;
   const selectedPageCanBuild = homepageSelected || homepageTestReady;
+  const previousTestPages = workspace.builderRuns
+    .filter(
+      (candidate) =>
+        candidate.buildManifestId === workspace.buildManifest?.id &&
+        candidate.buildMode !== 'full_site' &&
+        (candidate.status === 'ready' || candidate.status === 'review_required'),
+    )
+    .sort((first, second) => first.createdAt.localeCompare(second.createdAt));
+  const selectedSourceRun = previousTestPages.find(
+    (candidate) => candidate.id === sourceBuilderRunId,
+  );
   const codexStreamEvents = currentEvents.filter(isCodexStreamEvent);
   const diagnosticEvents = currentEvents.filter((event) => event.kind === 'diagnostic');
   const timelineEvents = currentEvents.filter(
     (event) => !isCodexStreamEvent(event) && event.kind !== 'diagnostic',
   );
+  const newActivityIds = useNewBuilderActivityIds(currentEvents, runId);
+  const latestSavedWorkerEvent = currentEvents[currentEvents.length - 1];
   const failedOutputPath =
     typeof run?.failureContext.path === 'string' ? run.failureContext.path : undefined;
   const failedStorageOperation =
@@ -4778,10 +6286,13 @@ function BuilderRunPanel({
     }
   }
 
-  async function requestBuild(mode: BuilderRunMode, targetSourceUrl?: string) {
+  async function requestBuild(
+    mode: BuilderRunMode,
+    targetSourceUrl?: string,
+    sourceBuilderRunId?: string,
+  ) {
     setIsRequesting(true);
     setMessage('');
-    setSessionBuildRunId(undefined);
     setPendingBuild({ previousRunId: run?.id });
     try {
       await onRequestBuild(
@@ -4792,6 +6303,7 @@ function BuilderRunPanel({
           .filter(Boolean)
           .join('\n\n'),
         isTestBuild ? selectedAgentPackageId : undefined,
+        sourceBuilderRunId,
       );
     } catch (error) {
       setPendingBuild(undefined);
@@ -4800,6 +6312,30 @@ function BuilderRunPanel({
       );
     } finally {
       setIsRequesting(false);
+    }
+  }
+
+  async function stageSelectedBehaviours() {
+    if (!onStageBehaviours || !selectedAgentPackage || !selectedBehaviourIds.length) return;
+    const newlyStagedIds = selectedBehaviourIds.filter((id) => !stagedBehaviourIds.includes(id));
+    if (!newlyStagedIds.length) return;
+    setIsStagingBehaviours(true);
+    setMessage('');
+    try {
+      await onStageBehaviours(selectedAgentPackage.id, selectedBehaviourIds);
+      setLeavingBehaviourIds(newlyStagedIds);
+      window.setTimeout(() => {
+        setOptimisticallyStagedBehaviourIds((current) => [
+          ...new Set([...current, ...newlyStagedIds]),
+        ]);
+        setLeavingBehaviourIds((current) => current.filter((id) => !newlyStagedIds.includes(id)));
+      }, 260);
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : 'The selected behaviours could not be staged.',
+      );
+    } finally {
+      setIsStagingBehaviours(false);
     }
   }
 
@@ -4814,6 +6350,21 @@ function BuilderRunPanel({
       );
     } finally {
       setIsCancelling(false);
+    }
+  }
+
+  async function resumeBuild(builderRunId: string) {
+    if (!onResumeBuild) return;
+    setIsResuming(true);
+    setMessage('');
+    try {
+      await onResumeBuild(builderRunId);
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : 'This private test could not be continued.',
+      );
+    } finally {
+      setIsResuming(false);
     }
   }
 
@@ -4884,7 +6435,72 @@ function BuilderRunPanel({
       </div>
 
       <div className="builder-run__actions">
-        {isTestBuild && !active ? (
+        {isTestBuild && (active || retainedTestContext) ? (
+          <section className="builder-active-test" aria-labelledby="builder-active-test-title">
+            <div className="builder-active-test__header">
+              <div>
+                <Eyebrow>Current private test</Eyebrow>
+                <h4 id="builder-active-test-title">
+                  {active
+                    ? `Test ${completedTestRuns.length + 1} is building`
+                    : `Test ${completedTestRuns.length + 1} needs attention`}
+                </h4>
+              </div>
+              <StatusBadge tone={active ? 'warning' : 'danger'}>
+                {active ? 'Live' : 'Paused on this test'}
+              </StatusBadge>
+            </div>
+            <dl className="builder-active-test__context">
+              <div>
+                <dt>Test package</dt>
+                <dd>v{run?.agentPackageVersion ?? '?'}</dd>
+              </div>
+              <div>
+                <dt>Test approach</dt>
+                <dd>
+                  {run?.parentBuilderRunId
+                    ? 'Revise previous page (scoped)'
+                    : 'Create page from scratch'}
+                </dd>
+              </div>
+            </dl>
+            {run ? <BuilderRunUsage records={workspace.aiUsageRecords} run={run} /> : null}
+            {active ? (
+              <>
+                <BuilderActivityWaiting
+                  detail={
+                    run?.progressDetail ||
+                    'Waiting for the worker to save the first activity update.'
+                  }
+                  label={builderProgressPhaseLabel(run?.progressPhase || 'queued')}
+                />
+                <div aria-hidden="true" className="builder-active-test__skeleton">
+                  <span className="evidence-skeleton evidence-skeleton--value" />
+                  <span className="evidence-skeleton evidence-skeleton--detail" />
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="muted-copy">
+                  This failed test remains selected with its original package and test approach.
+                  Continue it from the saved private source, or review its diagnostics below.
+                </p>
+                {onResumeBuild && savedSourceAvailable ? (
+                  <Button
+                    disabled={isResuming}
+                    onClick={() => run && void resumeBuild(run.id)}
+                    type="button"
+                    variant="secondary"
+                  >
+                    <RotateCcw aria-hidden="true" size={16} />
+                    {isResuming ? 'Continuing test' : 'Continue this test'}
+                  </Button>
+                ) : null}
+              </>
+            )}
+          </section>
+        ) : null}
+        {isTestBuild && !active && !retainedTestContext ? (
           <div className="builder-run__tests">
             <label className="builder-run__package-picker">
               <span>Test package</span>
@@ -4909,48 +6525,149 @@ function BuilderRunPanel({
             </label>
             <p className="builder-run__action-label">Test a page</p>
             <div className="builder-page-test">
-              <label>
-                <span>Approved page</span>
-                <select
-                  aria-label="Page to test"
-                  disabled={isRequesting}
-                  onChange={(event) => setTargetSourceUrl(event.target.value)}
-                  value={targetSourceUrl}
-                >
-                  <option value="">Homepage</option>
-                  {pageTestOptions.map((page) => (
-                    <option key={page.url} value={page.url}>
-                      {page.title || new URL(page.url).pathname}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <fieldset className="builder-page-test__actions">
+                <legend>Test approach</legend>
+                <label>
+                  <input
+                    checked={testPageAction === 'create'}
+                    disabled={isRequesting}
+                    name="test-page-action"
+                    onChange={() => setTestPageAction('create')}
+                    type="radio"
+                  />
+                  <span>Create page from scratch</span>
+                </label>
+                <label>
+                  <input
+                    checked={testPageAction === 'revise'}
+                    disabled={isRequesting}
+                    name="test-page-action"
+                    onChange={() => setTestPageAction('revise')}
+                    type="radio"
+                  />
+                  <span>Revise previous page</span>
+                </label>
+              </fieldset>
+              {testPageAction === 'create' ? (
+                <label>
+                  <span>Approved page</span>
+                  <select
+                    aria-label="Page to test"
+                    disabled={isRequesting}
+                    onChange={(event) => setTargetSourceUrl(event.target.value)}
+                    value={targetSourceUrl}
+                  >
+                    <option value="">Homepage</option>
+                    {pageTestOptions.map((page) => (
+                      <option key={page.url} value={page.url}>
+                        {page.title || new URL(page.url).pathname}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <>
+                  <label>
+                    <span>Previous private page</span>
+                    <select
+                      aria-describedby="builder-revision-help"
+                      aria-label="Previous built page"
+                      disabled={isRequesting || !previousTestPages.length}
+                      onChange={(event) => setSourceBuilderRunId(event.target.value)}
+                      value={sourceBuilderRunId}
+                    >
+                      <option value="">
+                        {previousTestPages.length
+                          ? 'Choose a private test page'
+                          : 'No private test page is available'}
+                      </option>
+                      {previousTestPages.map((candidate, index) => {
+                        const sourcePage = pageTestOptions.find(
+                          (page) => page.url === candidate.targetSourceUrl,
+                        );
+                        return (
+                          <option key={candidate.id} value={candidate.id}>
+                            Test {index + 1} —{' '}
+                            {sourcePage?.title ??
+                              (candidate.targetSourceUrl ? 'Selected page' : 'Homepage')}{' '}
+                            · package v{candidate.agentPackageVersion ?? 4}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </label>
+                  {!previousTestPages.length ? (
+                    <p
+                      className="form-message form-message--error"
+                      id="builder-revision-help"
+                      role="alert"
+                    >
+                      There are no completed private tests to revise yet. Create a test page from
+                      scratch first, then return here to select it.
+                    </p>
+                  ) : !selectedSourceRun ? (
+                    <p
+                      className="form-message form-message--error"
+                      id="builder-revision-help"
+                      role="alert"
+                    >
+                      Select a test version before starting a revision.
+                    </p>
+                  ) : null}
+                </>
+              )}
               <Button
-                disabled={isRequesting || !selectedPageCanBuild || !selectedAgentPackageId}
+                disabled={
+                  isRequesting ||
+                  !selectedAgentPackageId ||
+                  (testPageAction === 'create' ? !selectedPageCanBuild : !selectedSourceRun)
+                }
                 onClick={() =>
                   void requestBuild(
-                    homepageSelected ? 'homepage_test' : 'page_test',
-                    targetSourceUrl || undefined,
+                    testPageAction === 'revise'
+                      ? selectedSourceRun?.targetSourceUrl
+                        ? 'page_test'
+                        : 'homepage_test'
+                      : homepageSelected
+                        ? 'homepage_test'
+                        : 'page_test',
+                    testPageAction === 'revise'
+                      ? selectedSourceRun?.targetSourceUrl
+                      : targetSourceUrl || undefined,
+                    testPageAction === 'revise' ? selectedSourceRun?.id : undefined,
                   )
                 }
                 type="button"
                 variant="secondary"
               >
                 <Play aria-hidden="true" size={16} />
-                {isRequesting ? 'Queueing builder' : 'Build test page'}
+                {isRequesting
+                  ? 'Queueing builder'
+                  : testPageAction === 'revise'
+                    ? 'Revise private page'
+                    : 'Build test page'}
               </Button>
               <small>
-                {homepageSelected
-                  ? 'Creates a private homepage test. If a saved private homepage checkpoint is available, it continues that draft; it never changes the prospect’s public website.'
-                  : homepageTestReady
-                    ? 'Creates a private test from the approved homepage direction. It never changes the prospect’s public website.'
-                    : 'Complete and review the homepage test before testing another selected page.'}
+                {testPageAction === 'revise'
+                  ? previousTestPages.length
+                    ? 'Test numbers match the private previews in Test versions. The selected test becomes this revision’s private source; it never reads or changes the prospect’s public website.'
+                    : 'Complete a private homepage or page test first. Only completed private previews can be revised.'
+                  : homepageSelected
+                    ? 'Creates a new private homepage test from the approved manifest. It does not read, continue, or change an earlier private draft or the prospect’s public website.'
+                    : homepageTestReady
+                      ? 'Creates a private test from the approved homepage direction. It never changes the prospect’s public website.'
+                      : 'Complete and review the homepage test before testing another selected page.'}
               </small>
+              {message ? (
+                <p className="form-message form-message--error" role="alert">
+                  {message}
+                </p>
+              ) : null}
             </div>
           </div>
         ) : null}
 
-        {isTestBuild && !active ? (
+        {isTestBuild && !active && !retainedTestContext ? (
           <section className="builder-workflow" aria-labelledby="builder-workflow-title">
             <div className="builder-workflow__header">
               <Eyebrow>Test-only refinement</Eyebrow>
@@ -4967,8 +6684,7 @@ function BuilderRunPanel({
                 <span>
                   <strong>Inherited package behaviour</strong>
                   <small>
-                    {inheritedPackageLabel} · {includesBrandIntroduction ? '2' : '1'} built-in
-                    capabilit{includesBrandIntroduction ? 'ies' : 'y'} already in this package
+                    {inheritedPackageLabel} · 1 built-in capability already in this package
                   </small>
                 </span>
                 <ChevronDown aria-hidden="true" size={18} />
@@ -4982,81 +6698,243 @@ function BuilderRunPanel({
                   different use of it, but cannot alter or create a shared capability.
                 </p>
               </div>
-              {includesBrandIntroduction ? (
-                <div className="builder-workflow__capability">
-                  <strong>Built-in capability · brand introduction</strong>
-                  <p>
-                    On a first visit, the approved logo may appear as a short brand intro before
-                    moving into the real navigation logo. The builder chooses a restrained treatment
-                    for the brand; it skips the transition for reduced-motion users, never fakes
-                    loading progress, and never replaces the approved logo with a generic mark.
-                  </p>
-                </div>
-              ) : null}
             </details>
-            <div className="builder-workflow__directions">
-              <div className="builder-workflow__directions-header">
-                <div>
-                  <h5 id="builder-directions-title">Test directions</h5>
-                  <p>
-                    Optional guidance stored on this one build run and sent to Codex. It can refine
-                    hierarchy, visuals, or interactions, and can identify a capability worth
-                    proposing, but it never overrides approved facts, scope, assets, or the locked
-                    builder rules.
-                  </p>
-                </div>
-                <Button
-                  disabled={isRequesting}
-                  onClick={() => setBuildDirections((current) => [...current, ''])}
-                  type="button"
-                  variant="secondary"
-                >
-                  <Plus aria-hidden="true" size={16} />
-                  {buildDirections.length ? 'Add another' : 'Add direction'}
-                </Button>
-              </div>
-              {buildDirections.length ? (
-                <div className="builder-workflow__direction-list">
-                  {buildDirections.map((direction, index) => (
-                    <div className="builder-workflow__direction" key={index}>
-                      <label htmlFor={`builder-direction-${index}`}>Direction {index + 1}</label>
-                      <span className="builder-workflow__direction-input">
-                        <textarea
-                          aria-label={`Build direction ${index + 1}`}
-                          disabled={isRequesting}
-                          id={`builder-direction-${index}`}
-                          maxLength={4000}
+            {testingBehaviours.length ? (
+              <section
+                className="builder-workflow__testing-behaviour"
+                aria-labelledby="builder-testing-behaviour-title"
+              >
+                <Eyebrow>Testing behaviour</Eyebrow>
+                <h5 id="builder-testing-behaviour-title">
+                  Select behaviours to stage for the next production draft
+                </h5>
+                <p>
+                  Staged behaviours stay recorded with this package but are removed from the next
+                  private test’s behaviour list. Only the behaviours left below remain under test.
+                </p>
+                <div className="builder-workflow__testing-behaviour-list">
+                  {pendingTestingBehaviours.map((behaviour) => (
+                    <article
+                      className={
+                        leavingBehaviourIds.includes(behaviour.id) ? 'is-staging-out' : undefined
+                      }
+                      key={behaviour.id}
+                    >
+                      <label>
+                        <input
+                          checked={selectedBehaviourIds.includes(behaviour.id)}
+                          disabled={
+                            isStagingBehaviours || leavingBehaviourIds.includes(behaviour.id)
+                          }
                           onChange={(event) =>
-                            setBuildDirections((current) =>
-                              current.map((item, itemIndex) =>
-                                itemIndex === index ? event.target.value : item,
-                              ),
+                            setSelectedBehaviourIds((current) =>
+                              event.target.checked
+                                ? [...new Set([...current, behaviour.id])]
+                                : current.filter((id) => id !== behaviour.id),
                             )
                           }
-                          placeholder="For example: make the hero calmer and foreground the booking flow."
-                          rows={2}
-                          value={direction}
+                          type="checkbox"
                         />
+                        <strong>{behaviour.title}</strong>
+                      </label>
+                      <span className="builder-workflow__behaviour-revision">
+                        Behaviour revision · {behaviour.revision}
+                      </span>
+                      <p className="builder-workflow__behaviour-change">{behaviour.change}</p>
+                      <p>{behaviour.detail}</p>
+                      {onRequestProposal &&
+                      featureHasWorkshopSource(workshopFeatureForBehaviour(behaviour.id)) ? (
                         <Button
-                          aria-label={`Remove direction ${index + 1}`}
-                          disabled={isRequesting}
+                          className="builder-workflow__workshop"
                           onClick={() =>
-                            setBuildDirections((current) =>
-                              current.filter((_, itemIndex) => itemIndex !== index),
-                            )
+                            setWorkshopFeature(workshopFeatureForBehaviour(behaviour.id))
                           }
                           size="compact"
                           type="button"
-                          variant="quiet"
+                          variant="secondary"
                         >
-                          <X aria-hidden="true" size={16} />
+                          <Wrench aria-hidden="true" size={15} />
+                          Workshop behaviour
                         </Button>
-                      </span>
-                    </div>
+                      ) : null}
+                    </article>
                   ))}
                 </div>
-              ) : null}
-            </div>
+                {stagedBehaviourIds.length ? (
+                  <p className="builder-workflow__staged-behaviours">
+                    <strong>Already staged:</strong>{' '}
+                    {testingBehaviours
+                      .filter((behaviour) => visibleStagedBehaviourIds.includes(behaviour.id))
+                      .map((behaviour) => behaviour.title)
+                      .join(', ')}
+                  </p>
+                ) : null}
+                {pendingTestingBehaviours.length ? (
+                  <Button
+                    disabled={
+                      !onStageBehaviours ||
+                      isStagingBehaviours ||
+                      !selectedBehaviourIds.some((id) => !stagedBehaviourIds.includes(id))
+                    }
+                    onClick={() => void stageSelectedBehaviours()}
+                    type="button"
+                    variant="secondary"
+                  >
+                    <CheckCheck aria-hidden="true" size={16} />
+                    {isStagingBehaviours
+                      ? 'Staging behaviours'
+                      : 'Stage selected for production draft'}
+                  </Button>
+                ) : (
+                  <p className="muted-copy">
+                    Every behaviour in this package is staged for production.
+                  </p>
+                )}
+                {leavingBehaviourIds.length ? (
+                  <p aria-live="polite" className="builder-workflow__staging-status" role="status">
+                    Moving selected behaviours into the production draft…
+                  </p>
+                ) : null}
+              </section>
+            ) : null}
+            <FeatureImplementationFiles
+              collapsible
+              compact
+              detail="Open a file to see the exact lines that enable each behaviour for this private test."
+              features={testOnlyFeatures}
+              heading="Files behind this test"
+              onOpenWorkshop={onRequestProposal ? setWorkshopFeature : undefined}
+            />
+            <Dialog.Root
+              onOpenChange={(open) => {
+                if (!open) {
+                  setWorkshopFeature(undefined);
+                  setWorkshopDirection('');
+                }
+              }}
+              open={Boolean(workshopFeature)}
+            >
+              <Dialog.Portal>
+                <Dialog.Overlay className="builder-file-preview-overlay" />
+                <Dialog.Content className="foundation-workshop-dialog">
+                  <div className="foundation-workshop-dialog__header">
+                    <div>
+                      <Eyebrow>Foundation workshop</Eyebrow>
+                      <Dialog.Title>{workshopFeature?.title}</Dialog.Title>
+                      <p>
+                        Workshop revision v
+                        {selectedAgentPackage?.version ?? publishedPackage?.version ?? 4}.2
+                      </p>
+                    </div>
+                    <StatusBadge tone="success">
+                      <Wrench aria-hidden="true" size={14} /> Workshoped
+                    </StatusBadge>
+                    <Dialog.Close asChild>
+                      <Button aria-label="Close foundation workshop" size="compact" variant="quiet">
+                        <X aria-hidden="true" size={18} />
+                      </Button>
+                    </Dialog.Close>
+                  </div>
+                  <p className="muted-copy">
+                    Refine this hard-coded JavaScript feature with Codex, then send only the agreed
+                    behaviour to a private test package. The page-building agent does not recreate
+                    it.
+                  </p>
+                  <label className="foundation-workshop-dialog__direction">
+                    <span>Workshop change for the next test behaviour</span>
+                    <textarea
+                      maxLength={4000}
+                      onChange={(event) => setWorkshopDirection(event.target.value)}
+                      placeholder="Describe the agreed change for this feature."
+                      rows={5}
+                      value={workshopDirection}
+                    />
+                  </label>
+                  <div className="foundation-workshop-dialog__actions">
+                    <Button
+                      disabled={!workshopDirection.trim() || isSendingWorkshop}
+                      onClick={() => void sendWorkshopToTesting()}
+                      type="button"
+                    >
+                      <CheckCheck aria-hidden="true" size={16} />
+                      {isSendingWorkshop ? 'Sending to test' : 'Approve & send to test feature'}
+                    </Button>
+                  </div>
+                </Dialog.Content>
+              </Dialog.Portal>
+            </Dialog.Root>
+            <details className="builder-workflow__directions">
+              <summary>
+                <span>
+                  <strong>Advanced · saved test directions</strong>
+                  <small>Prefer a conversation with Codex for agent refinements.</small>
+                </span>
+                <ChevronDown aria-hidden="true" size={18} />
+              </summary>
+              <div className="builder-workflow__directions-content">
+                <div className="builder-workflow__directions-header">
+                  <div>
+                    <h5 id="builder-directions-title">Add a direction to this test run</h5>
+                    <p>
+                      Optional guidance stored on this one build run and sent to Codex. It can
+                      refine hierarchy, visuals, or interactions, and can identify a capability
+                      worth proposing, but it never overrides approved facts, scope, assets, or the
+                      locked builder rules.
+                    </p>
+                  </div>
+                  <Button
+                    disabled={isRequesting}
+                    onClick={() => setBuildDirections((current) => [...current, ''])}
+                    type="button"
+                    variant="secondary"
+                  >
+                    <Plus aria-hidden="true" size={16} />
+                    {buildDirections.length ? 'Add another' : 'Add direction'}
+                  </Button>
+                </div>
+                {buildDirections.length ? (
+                  <div className="builder-workflow__direction-list">
+                    {buildDirections.map((direction, index) => (
+                      <div className="builder-workflow__direction" key={index}>
+                        <label htmlFor={`builder-direction-${index}`}>Direction {index + 1}</label>
+                        <span className="builder-workflow__direction-input">
+                          <textarea
+                            aria-label={`Build direction ${index + 1}`}
+                            disabled={isRequesting}
+                            id={`builder-direction-${index}`}
+                            maxLength={4000}
+                            onChange={(event) =>
+                              setBuildDirections((current) =>
+                                current.map((item, itemIndex) =>
+                                  itemIndex === index ? event.target.value : item,
+                                ),
+                              )
+                            }
+                            placeholder="For example: make the hero calmer and foreground the booking flow."
+                            rows={2}
+                            value={direction}
+                          />
+                          <Button
+                            aria-label={`Remove direction ${index + 1}`}
+                            disabled={isRequesting}
+                            onClick={() =>
+                              setBuildDirections((current) =>
+                                current.filter((_, itemIndex) => itemIndex !== index),
+                              )
+                            }
+                            size="compact"
+                            type="button"
+                            variant="quiet"
+                          >
+                            <X aria-hidden="true" size={16} />
+                          </Button>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </details>
           </section>
         ) : null}
 
@@ -5142,104 +7020,150 @@ function BuilderRunPanel({
       </div>
 
       {isTestBuild && completedTestRuns.length ? (
-        <section className="test-build-versions" aria-labelledby="test-build-versions-title">
-          <div className="test-build-versions__header">
-            <div>
-              <Eyebrow>Private previews</Eyebrow>
-              <h4 id="test-build-versions-title">Test versions</h4>
-              <p className="muted-copy">
-                Each completed test is a private preview of the agent contract used for that run.
-              </p>
+        active || retainedTestContext ? (
+          <section className="test-build-versions test-build-versions--collapsed">
+            <Eyebrow>Earlier private tests</Eyebrow>
+            <h4>Test versions are collapsed while this test is active</h4>
+            <p className="muted-copy">
+              {completedTestRuns.length} completed test
+              {completedTestRuns.length === 1 ? '' : 's'} remain available after this test is
+              continued or finished.
+            </p>
+          </section>
+        ) : (
+          <section className="test-build-versions" aria-labelledby="test-build-versions-title">
+            <div className="test-build-versions__header">
+              <div>
+                <Eyebrow>Private previews</Eyebrow>
+                <h4 id="test-build-versions-title">Test versions</h4>
+                <p className="muted-copy">
+                  Each completed test is a private preview of the agent contract used for that run.
+                </p>
+              </div>
             </div>
-          </div>
-          <ol>
-            {completedTestRuns.map((testRun, index) => (
-              <li key={testRun.id}>
-                <div className="test-build-versions__summary">
-                  <div>
-                    <div className="test-build-versions__labels">
-                      <strong>Test {completedTestRuns.length - index}</strong>
-                      {index === 0 ? <StatusBadge tone="success">Newest build</StatusBadge> : null}
+            <ol>
+              {completedTestRuns.map((testRun, index) => (
+                <li key={testRun.id}>
+                  <div className="test-build-versions__summary">
+                    <div>
+                      <div className="test-build-versions__labels">
+                        <strong>Test {completedTestRuns.length - index}</strong>
+                        {index === 0 ? (
+                          <StatusBadge tone="success">Newest build</StatusBadge>
+                        ) : null}
+                      </div>
+                      <small>
+                        {builderRunModeLabel(testRun.buildMode)} ·{' '}
+                        {formatDateTime(testRun.createdAt)}
+                      </small>
+                      <p>{testBuildChangeSummary(testRun, completedTestRuns[index + 1])}</p>
+                      <BuilderRunUsage records={workspace.aiUsageRecords} run={testRun} />
                     </div>
-                    <small>
-                      {builderRunModeLabel(testRun.buildMode)} · {formatDateTime(testRun.createdAt)}
-                    </small>
-                    <p>{testBuildChangeSummary(testRun, completedTestRuns[index + 1])}</p>
+                    <Button
+                      disabled={isOpeningPreview}
+                      onClick={() => void openPreview(testRun.id, 'ready')}
+                      type="button"
+                      variant="secondary"
+                    >
+                      <ArrowUpRight aria-hidden="true" size={16} />
+                      {isOpeningPreview ? 'Opening preview' : 'Open preview'}
+                    </Button>
                   </div>
-                  <Button
-                    disabled={isOpeningPreview}
-                    onClick={() => void openPreview(testRun.id, 'ready')}
-                    type="button"
-                    variant="secondary"
-                  >
-                    <ArrowUpRight aria-hidden="true" size={16} />
-                    {isOpeningPreview ? 'Opening preview' : 'Open preview'}
-                  </Button>
-                </div>
-              </li>
-            ))}
-          </ol>
-        </section>
+                </li>
+              ))}
+            </ol>
+          </section>
+        )
       ) : null}
 
       {run ? (
         <>
           {run.status === 'failed' ? (
-            <dl className="builder-failure-summary" aria-label="Build failure summary">
-              <div>
-                <dt>Stopped during</dt>
-                <dd>{run.progressPhase.replaceAll('_', ' ')}</dd>
-              </div>
-              <div>
-                <dt>Progress saved</dt>
-                <dd>
-                  {run.totalItems > 0 ? `${run.completedItems} of ${run.totalItems} steps` : '—'}
-                </dd>
-              </div>
-            </dl>
-          ) : (
-            <section className="builder-run-overview" aria-labelledby="builder-run-overview-title">
-              <div className="builder-run-overview__header">
-                <Eyebrow>Current run</Eyebrow>
-                <h4 id="builder-run-overview-title">Build status</h4>
-              </div>
-              <dl className="builder-run-summary" aria-label="Private preview build progress">
+            <>
+              <dl className="builder-failure-summary" aria-label="Build failure summary">
                 <div>
-                  <dt>Build stage</dt>
+                  <dt>Stopped during</dt>
                   <dd>{run.progressPhase.replaceAll('_', ' ')}</dd>
                 </div>
                 <div>
-                  <dt>Completed milestones</dt>
+                  <dt>Progress saved</dt>
                   <dd>
-                    <button
-                      aria-label="Open build milestones"
-                      className="builder-run-summary__action"
-                      onClick={() => setInspector('steps')}
-                      type="button"
-                    >
-                      {run.totalItems > 0 ? `${run.completedItems}/${run.totalItems}` : '—'}
-                    </button>
-                  </dd>
-                </div>
-                <div>
-                  <dt>Quality status</dt>
-                  <dd>{run.qualitySummary.status.replaceAll('_', ' ')}</dd>
-                </div>
-                <div>
-                  <dt>Preview files</dt>
-                  <dd>
-                    <button
-                      aria-label="Open preview files"
-                      className="builder-run-summary__action"
-                      onClick={() => setInspector('files')}
-                      type="button"
-                    >
-                      {previewFiles.length}
-                    </button>
+                    {run.totalItems > 0 ? `${run.completedItems} of ${run.totalItems} steps` : '—'}
                   </dd>
                 </div>
               </dl>
-            </section>
+            </>
+          ) : (
+            <>
+              {active ? (
+                <section
+                  aria-live="polite"
+                  aria-labelledby="builder-current-step-title"
+                  className="builder-current-step"
+                >
+                  <div>
+                    <Eyebrow>Live worker status</Eyebrow>
+                    <h4 id="builder-current-step-title">Current step</h4>
+                  </div>
+                  <StatusBadge tone="warning">Live updates</StatusBadge>
+                  <strong>{builderProgressPhaseLabel(run.progressPhase)}</strong>
+                  <p>
+                    {run.progressDetail || 'Waiting for the builder worker to save its first step.'}
+                  </p>
+                  <small>
+                    {latestSavedWorkerEvent
+                      ? `Last saved worker update: ${latestSavedWorkerEvent.message}`
+                      : 'Listening for the first saved worker update.'}
+                  </small>
+                  <small>Live stream checks for new saved worker activity every second.</small>
+                </section>
+              ) : null}
+              <section
+                className="builder-run-overview"
+                aria-labelledby="builder-run-overview-title"
+              >
+                <div className="builder-run-overview__header">
+                  <Eyebrow>Current run</Eyebrow>
+                  <h4 id="builder-run-overview-title">Build status</h4>
+                </div>
+                <dl className="builder-run-summary" aria-label="Private preview build progress">
+                  <div>
+                    <dt>Build stage</dt>
+                    <dd>{builderProgressPhaseLabel(run.progressPhase)}</dd>
+                  </div>
+                  <div>
+                    <dt>Completed milestones</dt>
+                    <dd>
+                      <button
+                        aria-label="Open build milestones"
+                        className="builder-run-summary__action"
+                        onClick={() => setInspector('steps')}
+                        type="button"
+                      >
+                        {run.totalItems > 0 ? `${run.completedItems}/${run.totalItems}` : '—'}
+                      </button>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Quality status</dt>
+                    <dd>{run.qualitySummary.status.replaceAll('_', ' ')}</dd>
+                  </div>
+                  <div>
+                    <dt>Preview files</dt>
+                    <dd>
+                      <button
+                        aria-label="Open preview files"
+                        className="builder-run-summary__action"
+                        onClick={() => setInspector('files')}
+                        type="button"
+                      >
+                        {previewFiles.length}
+                      </button>
+                    </dd>
+                  </div>
+                </dl>
+              </section>
+            </>
           )}
           <p className="builder-run__detail" role={active ? 'status' : undefined}>
             {run.progressDetail || 'Waiting for the builder worker.'}
@@ -5261,8 +7185,16 @@ function BuilderRunPanel({
               <Eyebrow>Current run</Eyebrow>
               <h3>Build activity</h3>
               <p className="muted-copy">
-                Live Codex updates, diagnostics, and completed build stages for this run only.
+                Saved Codex updates, diagnostics, and completed build stages for this run only.
+                While a build is active, this refreshes automatically as the worker saves each
+                update.
               </p>
+              {active && !currentEvents.length ? (
+                <BuilderActivityWaiting
+                  detail="The build is queued or preparing. This panel will populate as the worker saves activity."
+                  label="Waiting for the builder to report activity"
+                />
+              ) : null}
             </div>
           ) : null}
           {showCurrentRunLogs ? (
@@ -5282,19 +7214,20 @@ function BuilderRunPanel({
                     .slice(0, 24)
                     .reverse()
                     .map((event) => (
-                      <li key={event.id}>
+                      <BuilderNewActivityItem isNew={newActivityIds.has(event.id)} key={event.id}>
                         <strong>Codex</strong>
                         <span>{event.message}</span>
                         <time dateTime={event.createdAt}>{formatDate(event.createdAt)}</time>
-                      </li>
+                      </BuilderNewActivityItem>
                     ))}
                 </ol>
+              ) : active ? (
+                <BuilderActivityWaiting
+                  detail="The working preview appears after Codex saves its first private draft."
+                  label="Codex is preparing its first update"
+                />
               ) : (
-                <p className="muted-copy">
-                  {active
-                    ? "Waiting for Codex's first visible build update. The working preview will appear once it saves a homepage draft."
-                    : 'No visible Codex activity was recorded for this build.'}
-                </p>
+                <p className="muted-copy">No visible Codex activity was recorded for this build.</p>
               )}
             </section>
           ) : null}
@@ -5320,7 +7253,7 @@ function BuilderRunPanel({
                       const stderr = diagnosticMetadata(event, 'stderr');
                       const duration = diagnosticMetadata(event, 'durationMs');
                       return (
-                        <li key={event.id}>
+                        <BuilderNewActivityItem isNew={newActivityIds.has(event.id)} key={event.id}>
                           <details>
                             <summary>
                               <StatusBadge tone={diagnosticTone(event)}>
@@ -5355,7 +7288,7 @@ function BuilderRunPanel({
                               </div>
                             ) : null}
                           </details>
-                        </li>
+                        </BuilderNewActivityItem>
                       );
                     })}
                 </ol>
@@ -5377,7 +7310,9 @@ function BuilderRunPanel({
                   .slice(-16)
                   .reverse()
                   .map((event) => (
-                    <BuilderTimelineItem event={event} key={event.id} />
+                    <BuilderNewActivityItem isNew={newActivityIds.has(event.id)} key={event.id}>
+                      <BuilderTimelineItem event={event} />
+                    </BuilderNewActivityItem>
                   ))}
               </ol>
             </section>
@@ -5511,6 +7446,10 @@ function BuilderRunPanel({
                         src={screenshotUrls[screenshot.id]}
                       />
                       <span>{screenshot.label}</span>
+                      <ImageFileType
+                        contentType={screenshot.contentType}
+                        path={screenshot.storagePath}
+                      />
                     </ExpandableImage>
                   ) : null,
                 )}
@@ -5618,7 +7557,7 @@ function BuilderRunPanel({
         </section>
       ) : null}
 
-      {message ? (
+      {message && !(isTestBuild && !active && !retainedTestContext) ? (
         <p className="form-message form-message--error" role="alert">
           {message}
         </p>
@@ -6163,6 +8102,27 @@ function UsageMetric({ label, value, detail }: { label: string; value: string; d
   );
 }
 
+function usageSourceLabel(source: AiUsageRecord['source']) {
+  if (source === 'codex_build') return 'Codex build';
+  if (source === 'asset_analysis') return 'Asset analysis';
+  return 'Capability analysis';
+}
+
+function usageBuildLabel(
+  record: Pick<AiUsageRecord, 'builderRunId'>,
+  workspace: ProspectWorkspace,
+) {
+  if (!record.builderRunId) return 'Not a build run';
+  const run = workspace.builderRuns.find((candidate) => candidate.id === record.builderRunId);
+  if (!run) return 'Archived build';
+  if (run.buildMode === 'full_site') return 'Complete prospect build';
+  const testRuns = workspace.builderRuns
+    .filter((candidate) => candidate.buildMode !== 'full_site')
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  const testNumber = testRuns.findIndex((candidate) => candidate.id === run.id) + 1;
+  return `${testNumber ? `Test ${testNumber} · ` : ''}${builderRunModeLabel(run.buildMode)}`;
+}
+
 function UsagePage({
   workspaces,
   onOpenWorkspace,
@@ -6170,6 +8130,9 @@ function UsagePage({
   workspaces: ProspectWorkspace[];
   onOpenWorkspace: (businessId: string) => void;
 }) {
+  const [usageView, setUsageView] = useState<'overview' | 'prospect' | 'build'>('overview');
+  const [selectedProspectId, setSelectedProspectId] = useState('all');
+  const [selectedBuildId, setSelectedBuildId] = useState('all');
   const records = useMemo(
     () =>
       workspaces.flatMap((workspace) =>
@@ -6177,13 +8140,46 @@ function UsagePage({
       ),
     [workspaces],
   );
-  const pricedRecords = records.filter(({ record }) => typeof record.costUsd === 'number');
+  const prospectOptions = workspaces
+    .filter((workspace) => workspace.aiUsageRecords.length)
+    .sort((left, right) => left.business.name.localeCompare(right.business.name));
+  const buildOptions = records
+    .filter(
+      ({ record, workspace }) =>
+        record.builderRunId &&
+        (selectedProspectId === 'all' || workspace.business.id === selectedProspectId),
+    )
+    .reduce<Array<{ id: string; label: string; workspace: ProspectWorkspace }>>(
+      (options, { record, workspace }) => {
+        if (!record.builderRunId || options.some((option) => option.id === record.builderRunId)) {
+          return options;
+        }
+        options.push({
+          id: record.builderRunId,
+          label: `${workspace.business.name} · ${usageBuildLabel(record, workspace)}`,
+          workspace,
+        });
+        return options;
+      },
+      [],
+    )
+    .sort((left, right) => left.label.localeCompare(right.label));
+  const scopedRecords = records.filter(({ record, workspace }) => {
+    if (usageView === 'overview') return true;
+    if (usageView === 'prospect') return workspace.business.id === selectedProspectId;
+    return record.builderRunId === selectedBuildId;
+  });
+  const pricedRecords = scopedRecords.filter(({ record }) => typeof record.costUsd === 'number');
   const totalCost = pricedRecords.reduce((total, { record }) => total + (record.costUsd ?? 0), 0);
-  const totalTokens = records.reduce((total, { record }) => total + record.totalTokens, 0);
-  const unpricedCount = records.filter(({ record }) => record.costSource === 'unavailable').length;
+  const totalTokens = scopedRecords.reduce((total, { record }) => total + record.totalTokens, 0);
+  const unpricedCount = scopedRecords.filter(
+    ({ record }) => record.costSource === 'unavailable',
+  ).length;
   const prospectRows = workspaces
     .map((workspace) => {
-      const usage = workspace.aiUsageRecords;
+      const usage = scopedRecords
+        .filter((entry) => entry.workspace.business.id === workspace.business.id)
+        .map((entry) => entry.record);
       return {
         workspace,
         totalTokens: usage.reduce((total, record) => total + record.totalTokens, 0),
@@ -6195,14 +8191,87 @@ function UsagePage({
     })
     .filter((row) => row.operations)
     .sort((left, right) => right.cost - left.cost || right.totalTokens - left.totalTokens);
-  const buildRows = records
-    .filter(({ record }) => record.builderRunId)
-    .map(({ record, workspace }) => ({
-      record,
-      workspace,
-      run: workspace.builderRuns.find((run) => run.id === record.builderRunId),
-    }))
-    .sort((left, right) => right.record.createdAt.localeCompare(left.record.createdAt));
+  const buildRows = [...scopedRecords]
+    .filter(({ record }) => record.builderRunId && record.source === 'codex_build')
+    .reduce<
+      Array<{
+        builderRunId: string;
+        workspace: ProspectWorkspace;
+        run?: BuilderRun;
+        models: string[];
+        totalTokens: number;
+        recordedCost: number;
+        unpricedCount: number;
+        recordedAt: string;
+      }>
+    >((rows, { record, workspace }) => {
+      const builderRunId = record.builderRunId;
+      if (!builderRunId) return rows;
+      const row = rows.find((candidate) => candidate.builderRunId === builderRunId);
+      if (row) {
+        row.totalTokens += record.totalTokens;
+        row.recordedCost += record.costUsd ?? 0;
+        row.unpricedCount += typeof record.costUsd === 'number' ? 0 : 1;
+        if (!row.models.includes(record.model)) row.models.push(record.model);
+        if (record.createdAt > row.recordedAt) row.recordedAt = record.createdAt;
+        return rows;
+      }
+      rows.push({
+        builderRunId,
+        workspace,
+        run: workspace.builderRuns.find((run) => run.id === builderRunId),
+        models: [record.model],
+        totalTokens: record.totalTokens,
+        recordedCost: record.costUsd ?? 0,
+        unpricedCount: typeof record.costUsd === 'number' ? 0 : 1,
+        recordedAt: record.createdAt,
+      });
+      return rows;
+    }, [])
+    .sort((left, right) => right.recordedAt.localeCompare(left.recordedAt));
+  const usageTimeline = [...scopedRecords]
+    .sort((left, right) => left.record.createdAt.localeCompare(right.record.createdAt))
+    .reduce<
+      Array<{
+        date: string;
+        tokens: number;
+        recordedCost: number;
+        unpricedCount: number;
+        operations: number;
+      }>
+    >((days, { record }) => {
+      const date = record.createdAt.slice(0, 10);
+      const current = days.at(-1);
+      if (!current || current.date !== date) {
+        days.push({
+          date,
+          tokens: record.totalTokens,
+          recordedCost: record.costUsd ?? 0,
+          unpricedCount: typeof record.costUsd === 'number' ? 0 : 1,
+          operations: 1,
+        });
+        return days;
+      }
+      current.tokens += record.totalTokens;
+      current.recordedCost += record.costUsd ?? 0;
+      current.unpricedCount += typeof record.costUsd === 'number' ? 0 : 1;
+      current.operations += 1;
+      return days;
+    }, [])
+    .slice(-30);
+  const maxTimelineValue = Math.max(
+    ...usageTimeline.map((day) => (day.recordedCost > 0 ? day.recordedCost : day.tokens)),
+    1,
+  );
+  const recordChart = [...scopedRecords].sort((left, right) =>
+    left.record.createdAt.localeCompare(right.record.createdAt),
+  );
+  const maxRecordChartValue = Math.max(
+    ...recordChart.map(({ record }) =>
+      record.costUsd && record.costUsd > 0 ? record.costUsd : record.totalTokens,
+    ),
+    1,
+  );
 
   return (
     <section className="usage-page" aria-labelledby="usage-page-title">
@@ -6211,6 +8280,83 @@ function UsagePage({
         title="AI usage & spend"
         detail="Live provider usage grouped by prospect and build. Dollar totals include only calls with a recorded cost; unpriced usage remains visible instead of being estimated silently."
       />
+
+      <section aria-labelledby="usage-filter-title" className="usage-filters">
+        <div>
+          <Eyebrow>Explore the ledger</Eyebrow>
+          <h2 id="usage-filter-title">Usage scope</h2>
+        </div>
+        <div className="usage-filters__controls">
+          <label>
+            View
+            <select
+              onChange={(event) => {
+                const nextView = event.target.value as 'overview' | 'prospect' | 'build';
+                setUsageView(nextView);
+                if (nextView === 'overview') {
+                  setSelectedProspectId('all');
+                  setSelectedBuildId('all');
+                }
+                if (nextView === 'prospect') setSelectedBuildId('all');
+              }}
+              value={usageView}
+            >
+              <option value="overview">Overview</option>
+              <option value="prospect">One prospect</option>
+              <option value="build">One build</option>
+            </select>
+          </label>
+          <label>
+            Prospect
+            <select
+              onChange={(event) => {
+                const nextProspectId = event.target.value;
+                setSelectedProspectId(nextProspectId);
+                setSelectedBuildId('all');
+                setUsageView(nextProspectId === 'all' ? 'overview' : 'prospect');
+              }}
+              value={selectedProspectId}
+            >
+              <option value="all">All prospects</option>
+              {prospectOptions.map((workspace) => (
+                <option key={workspace.business.id} value={workspace.business.id}>
+                  {workspace.business.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Build
+            <select
+              disabled={!buildOptions.length}
+              onChange={(event) => {
+                const nextBuildId = event.target.value;
+                setSelectedBuildId(nextBuildId);
+                if (nextBuildId !== 'all') {
+                  const build = buildOptions.find((option) => option.id === nextBuildId);
+                  if (build) setSelectedProspectId(build.workspace.business.id);
+                  setUsageView('build');
+                }
+              }}
+              value={selectedBuildId}
+            >
+              <option value="all">All builds</option>
+              {buildOptions.map((build) => (
+                <option key={build.id} value={build.id}>
+                  {build.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <p className="muted-copy">
+          {usageView === 'overview'
+            ? 'See every recorded operation across the workspace.'
+            : scopedRecords.length
+              ? `${scopedRecords.length} matching ${scopedRecords.length === 1 ? 'operation' : 'operations'} in this view.`
+              : 'Choose a saved prospect or build to inspect its recorded operations.'}
+        </p>
+      </section>
 
       <section aria-label="AI usage totals" className="usage-metric-grid">
         <UsageMetric
@@ -6221,7 +8367,7 @@ function UsagePage({
           value={formatUsd(totalCost)}
         />
         <UsageMetric
-          detail={`${records.length} tracked AI ${records.length === 1 ? 'operation' : 'operations'}`}
+          detail={`${scopedRecords.length} tracked AI ${scopedRecords.length === 1 ? 'operation' : 'operations'}`}
           label="Tokens used"
           value={formatTokens(totalTokens)}
         />
@@ -6287,6 +8433,57 @@ function UsagePage({
         )}
       </section>
 
+      <section className="usage-panel" aria-labelledby="usage-timeline-title">
+        <div className="section-heading">
+          <div>
+            <Eyebrow>Ledger timeline</Eyebrow>
+            <h2 id="usage-timeline-title">Daily AI use</h2>
+          </div>
+          <Clock3 aria-hidden="true" size={19} />
+        </div>
+        {usageTimeline.length ? (
+          <>
+            <p className="muted-copy">
+              Recorded spend by day. When a day has no priced operation, token volume keeps the
+              activity visible without inventing a dollar amount.
+            </p>
+            <div className="usage-timeline-wrap">
+              <ol className="usage-timeline" aria-label="Daily AI spend timeline">
+                {usageTimeline.map((day) => {
+                  const barValue = day.recordedCost > 0 ? day.recordedCost : day.tokens;
+                  const height = Math.max(8, (barValue / maxTimelineValue) * 100);
+                  const costLabel = day.unpricedCount
+                    ? day.recordedCost > 0
+                      ? `${formatUsd(day.recordedCost)} plus ${day.unpricedCount} unpriced`
+                      : `${day.unpricedCount} unpriced`
+                    : formatUsd(day.recordedCost);
+                  return (
+                    <li key={day.date}>
+                      <div
+                        aria-hidden="true"
+                        className="usage-timeline__track"
+                        title={`${formatDate(day.date)}: ${costLabel}, ${formatTokens(day.tokens)} tokens, ${day.operations} operations`}
+                      >
+                        <span style={{ height: `${height}%` }} />
+                      </div>
+                      <strong>{costLabel}</strong>
+                      <small>{formatDate(day.date)}</small>
+                      <span className="usage-timeline__cost">
+                        {formatTokens(day.tokens)} tokens · {day.operations} ops
+                      </span>
+                    </li>
+                  );
+                })}
+              </ol>
+            </div>
+          </>
+        ) : (
+          <p className="muted-copy">
+            The timeline will appear when the first AI operation is recorded.
+          </p>
+        )}
+      </section>
+
       <section className="usage-panel" aria-labelledby="usage-by-build-title">
         <div className="section-heading">
           <div>
@@ -6308,21 +8505,30 @@ function UsagePage({
                 </tr>
               </thead>
               <tbody>
-                {buildRows.map(({ record, workspace, run }) => (
-                  <tr key={record.id}>
+                {buildRows.map((row) => (
+                  <tr key={row.builderRunId}>
                     <th scope="row">
-                      <button onClick={() => onOpenWorkspace(workspace.business.id)} type="button">
-                        {workspace.business.name} ·{' '}
-                        {run?.buildMode.replace('_', ' ') ?? 'Codex build'}
+                      <button
+                        onClick={() => onOpenWorkspace(row.workspace.business.id)}
+                        type="button"
+                      >
+                        {row.workspace.business.name} ·{' '}
+                        {row.run
+                          ? usageBuildLabel({ builderRunId: row.run.id }, row.workspace)
+                          : 'Archived build'}
                         <ArrowUpRight aria-hidden="true" size={14} />
                       </button>
                     </th>
-                    <td>{record.model}</td>
-                    <td>{formatTokens(record.totalTokens)}</td>
+                    <td>{row.models.join(', ')}</td>
+                    <td>{formatTokens(row.totalTokens)}</td>
                     <td>
-                      {typeof record.costUsd === 'number' ? formatUsd(record.costUsd) : 'Unpriced'}
+                      {row.unpricedCount
+                        ? row.recordedCost > 0
+                          ? `${formatUsd(row.recordedCost)} + ${row.unpricedCount} unpriced`
+                          : 'Unpriced'
+                        : formatUsd(row.recordedCost)}
                     </td>
-                    <td>{formatDateTime(record.createdAt)}</td>
+                    <td>{formatDateTime(row.recordedAt)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -6330,6 +8536,115 @@ function UsagePage({
           </div>
         ) : (
           <p className="muted-copy">No completed or stopped Codex build has reported usage yet.</p>
+        )}
+      </section>
+
+      <section className="usage-panel" aria-labelledby="usage-record-chart-title">
+        <div className="section-heading">
+          <div>
+            <Eyebrow>Per operation</Eyebrow>
+            <h2 id="usage-record-chart-title">AI cost by recorded operation</h2>
+          </div>
+          <Sparkles aria-hidden="true" size={19} />
+        </div>
+        {recordChart.length ? (
+          <div className="usage-record-chart-wrap">
+            <ol className="usage-record-chart" aria-label="AI cost for every recorded operation">
+              {recordChart.map(({ record, workspace }) => {
+                const chartValue =
+                  record.costUsd && record.costUsd > 0 ? record.costUsd : record.totalTokens;
+                const costLabel =
+                  typeof record.costUsd === 'number' ? formatUsd(record.costUsd) : 'Unpriced';
+                return (
+                  <li key={record.id}>
+                    <div
+                      aria-hidden="true"
+                      className="usage-record-chart__track"
+                      title={`${formatDateTime(record.createdAt)}: ${usageSourceLabel(record.source)}, ${costLabel}, ${formatTokens(record.totalTokens)} tokens`}
+                    >
+                      <span
+                        style={{
+                          height: `${Math.max(8, (chartValue / maxRecordChartValue) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                    <strong>{costLabel}</strong>
+                    <small>{usageSourceLabel(record.source)}</small>
+                    <span>{usageBuildLabel(record, workspace)}</span>
+                    <time dateTime={record.createdAt}>{formatDateTime(record.createdAt)}</time>
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+        ) : (
+          <p className="muted-copy">No recorded operations match this view.</p>
+        )}
+      </section>
+
+      <section className="usage-panel" aria-labelledby="usage-operations-title">
+        <div className="section-heading">
+          <div>
+            <Eyebrow>Operation ledger</Eyebrow>
+            <h2 id="usage-operations-title">Every recorded AI operation</h2>
+          </div>
+          <ListChecks aria-hidden="true" size={19} />
+        </div>
+        {scopedRecords.length ? (
+          <div className="usage-table-wrap">
+            <table className="usage-table usage-table--operations">
+              <thead>
+                <tr>
+                  <th scope="col">Recorded</th>
+                  <th scope="col">Prospect</th>
+                  <th scope="col">Operation</th>
+                  <th scope="col">Build</th>
+                  <th scope="col">Model</th>
+                  <th scope="col">Input / output</th>
+                  <th scope="col">Tokens</th>
+                  <th scope="col">Cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...scopedRecords]
+                  .sort((left, right) =>
+                    right.record.createdAt.localeCompare(left.record.createdAt),
+                  )
+                  .map(({ record, workspace }) => (
+                    <tr key={record.id}>
+                      <td>{formatDateTime(record.createdAt)}</td>
+                      <th scope="row">
+                        <button
+                          onClick={() => onOpenWorkspace(workspace.business.id)}
+                          type="button"
+                        >
+                          {workspace.business.name} <ArrowUpRight aria-hidden="true" size={14} />
+                        </button>
+                      </th>
+                      <td>{usageSourceLabel(record.source)}</td>
+                      <td>{usageBuildLabel(record, workspace)}</td>
+                      <td>{record.model}</td>
+                      <td>
+                        {formatTokens(record.inputTokens)} / {formatTokens(record.outputTokens)}
+                        {record.cachedInputTokens
+                          ? ` (${formatTokens(record.cachedInputTokens)} cached)`
+                          : ''}
+                      </td>
+                      <td>{formatTokens(record.totalTokens)}</td>
+                      <td>
+                        {typeof record.costUsd === 'number'
+                          ? formatUsd(record.costUsd)
+                          : 'Unpriced'}
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="muted-copy">
+            No recorded operations match this view. Choose Overview to see the complete ledger.
+          </p>
         )}
       </section>
 
@@ -6378,10 +8693,17 @@ const currentAgentPackageFiles = [
     content: builderInstructionsSource,
   },
   {
+    group: 'Feature contract',
+    path: 'worker/builder-template/feature-contracts/mobile-navigation.md',
+    label: 'Mobile navigation contract',
+    detail: 'Markdown requirements and creative freedom for generated mobile navigation.',
+    content: mobileNavigationContractSource,
+  },
+  {
     group: 'Builder foundation',
     path: 'worker/builder-template/src/main.js',
     label: 'Motion runtime',
-    detail: 'Local viewport-reveal and factual-counter behaviour.',
+    detail: 'Local motion and brand-handoff behaviour.',
     content: motionRuntimeSource,
   },
   {
@@ -6391,7 +8713,357 @@ const currentAgentPackageFiles = [
     detail: 'Locked static-preview build command and package boundary.',
     content: builderPackageSource,
   },
+  {
+    group: 'Protected delivery',
+    path: 'worker/builder-worker.mjs',
+    label: 'Builder worker',
+    detail: 'Stages private inputs, scopes revisions, runs Codex, and saves live build events.',
+    content: builderWorkerSource,
+  },
 ] as const;
+
+type AgentPackageFile = (typeof currentAgentPackageFiles)[number];
+
+type AgentFeature = {
+  id: string;
+  title: string;
+  detail: string;
+  files: Array<{
+    label: AgentPackageFile['label'];
+    detail: string;
+    terms: string[];
+  }>;
+};
+
+function agentPackageFilePresentation(file: AgentPackageFile) {
+  if (file.label === 'Builder contract') {
+    return { Icon: ShieldAlert, label: 'Contract policy', tone: 'contract' } as const;
+  }
+  if (file.label === 'Template instructions') {
+    return { Icon: FilePenLine, label: 'Template guide', tone: 'instructions' } as const;
+  }
+  if (file.path.endsWith('.md')) {
+    return { Icon: FileText, label: 'Markdown policy', tone: 'markdown' } as const;
+  }
+  if (file.path.endsWith('.json')) {
+    return { Icon: FileCode2, label: 'JSON config', tone: 'config' } as const;
+  }
+  return { Icon: FileCode2, label: 'JavaScript runtime', tone: 'javascript' } as const;
+}
+
+const agentPackageFeatures: AgentFeature[] = [
+  {
+    id: 'motion-runtime',
+    title: 'Entrance motion & factual counters',
+    detail:
+      'Reveals content as it enters view, starts hero copy and media after the logo handoff, and animates only explicitly marked factual metrics.',
+    files: [
+      {
+        label: 'Motion runtime',
+        detail: 'The browser-side reveal and counter implementation.',
+        terms: [
+          'data-sf-reveal',
+          'data-sf-hero-media',
+          'siteforge:brand-intro-complete',
+          'function animateCounter',
+          'function counterDetails',
+        ],
+      },
+      {
+        label: 'Builder contract',
+        detail: 'The rule that limits this behaviour to hierarchy and real metrics.',
+        terms: ['Motion is a built-in enhancement', 'Never invent a statistic'],
+      },
+    ],
+  },
+  {
+    id: 'brand-introduction',
+    title: 'Brand introduction',
+    detail:
+      'The approved logo fades in at centre, rises and scales, then moves into the navigation.',
+    files: [
+      {
+        label: 'Motion runtime',
+        detail:
+          'Creates the centre logo, status message, navigation transfer, then starts the visible hero entrance.',
+        terms: [
+          'sf-brand-intro',
+          'function runBrandIntro',
+          'siteforge:brand-intro-complete',
+          'Preparing your site',
+          'is-showcasing',
+        ],
+      },
+      {
+        label: 'Builder contract',
+        detail: 'Keeps the intro short, factual, accessible, and reduced-motion safe.',
+        terms: ['Brand introduction is another built-in capability', 'status copy only'],
+      },
+      {
+        label: 'Template instructions',
+        detail: 'Requires generated pages to mark their actual navigation logo.',
+        terms: ['data-siteforge-brand-logo', 'preparation message'],
+      },
+    ],
+  },
+  {
+    id: 'responsive-sidebar',
+    title: 'Mobile & tablet sidebar navigation',
+    detail:
+      'Keeps the logo and menu control together in the header, then turns the links into a branded, trigger-side sidebar below desktop width. The header also returns as soon as visitors scroll upward.',
+    files: [
+      {
+        label: 'Mobile navigation contract',
+        detail:
+          'Defines the required accessible behaviour while leaving the generated visual and motion design to Codex.',
+        terms: [
+          'Creative ownership',
+          'Required behaviour',
+          'icon choreography',
+          'scroll behaviour',
+        ],
+      },
+      {
+        label: 'Builder contract',
+        detail: 'Requires Codex to create this page-specific feature from the Markdown contract.',
+        terms: ['Navigation is a required generated feature', 'creative ownership'],
+      },
+      {
+        label: 'Template instructions',
+        detail: 'Makes the feature contract a required step in every generated page.',
+        terms: ['feature-contracts/mobile-navigation.md', 'creative, page-specific feature'],
+      },
+    ],
+  },
+  {
+    id: 'scoped-revision',
+    title: 'Scoped page refinement',
+    detail:
+      'A revision restores the selected private page and prevents unrelated source files from changing.',
+    files: [
+      {
+        label: 'Builder worker',
+        detail: 'Creates the compact revision input and enforces the selected-file boundary.',
+        terms: ['stageRevisionScope', 'assertScopedRevisionFiles', 'scoped refinement'],
+      },
+      {
+        label: 'Template instructions',
+        detail: 'Tells Codex to use the revision scope instead of rebuilding unrelated pages.',
+        terms: ['revision-scope.json', 'allowedSourcePaths'],
+      },
+    ],
+  },
+];
+
+function highlightedFeatureLines(content: string, terms: string[]) {
+  const normalizedTerms = terms.map((term) => term.toLowerCase());
+  const matches = content
+    .split('\n')
+    .flatMap((line, index) =>
+      normalizedTerms.some((term) => line.toLowerCase().includes(term)) ? [index + 1] : [],
+    );
+  return [
+    ...new Set(matches.flatMap((line) => [line - 1, line, line + 1]).filter((line) => line > 0)),
+  ];
+}
+
+function FeatureImplementationFiles({
+  features,
+  heading = 'Feature implementation files',
+  detail,
+  compact = false,
+  collapsible = false,
+  onOpenWorkshop,
+}: {
+  features: AgentFeature[];
+  heading?: string;
+  detail: string;
+  compact?: boolean;
+  collapsible?: boolean;
+  onOpenWorkshop?: (feature: AgentFeature) => void;
+}) {
+  const [selection, setSelection] = useState<{
+    feature: AgentFeature;
+    file: AgentPackageFile;
+    terms: string[];
+  }>();
+  const [showFullFile, setShowFullFile] = useState(false);
+
+  if (!features.length) return null;
+
+  const className = `feature-implementation-files${compact ? ' feature-implementation-files--compact' : ''}${collapsible ? ' feature-implementation-files--collapsible' : ''}`;
+  const sourceIntro = (
+    <div>
+      <Eyebrow>Feature source</Eyebrow>
+      <h4>{heading}</h4>
+      <p>{detail}</p>
+    </div>
+  );
+  const sourceList = (
+    <div className="feature-implementation-files__list">
+      {features.map((feature) => (
+        <article key={feature.id}>
+          <div>
+            <strong>{feature.title}</strong>
+            <p>{feature.detail}</p>
+          </div>
+          {onOpenWorkshop &&
+          feature.files.some((featureFile) => {
+            const file = currentAgentPackageFiles.find(
+              (candidate) => candidate.label === featureFile.label,
+            );
+            return file?.path.endsWith('.js') || file?.path.endsWith('.mjs');
+          }) ? (
+            <Button
+              className="feature-implementation-files__workshop"
+              onClick={() => onOpenWorkshop(feature)}
+              size="compact"
+              type="button"
+              variant="secondary"
+            >
+              <Wrench aria-hidden="true" size={15} />
+              Workshop feature
+            </Button>
+          ) : null}
+          <ul>
+            {feature.files.map((featureFile) => {
+              const file = currentAgentPackageFiles.find(
+                (candidate) => candidate.label === featureFile.label,
+              );
+              if (!file) return null;
+              const presentation = agentPackageFilePresentation(file);
+              return (
+                <li key={`${feature.id}-${file.path}`}>
+                  <button
+                    onClick={() => {
+                      setShowFullFile(false);
+                      setSelection({ feature, file, terms: featureFile.terms });
+                    }}
+                    type="button"
+                  >
+                    <presentation.Icon
+                      aria-hidden="true"
+                      className={`agent-package-file-icon agent-package-file-icon--${presentation.tone}`}
+                      size={15}
+                    />
+                    <span>
+                      <strong>{file.label}</strong>
+                      <code>{file.path}</code>
+                      <small
+                        className={`agent-package-file-type agent-package-file-type--${presentation.tone}`}
+                      >
+                        {presentation.label}
+                      </small>
+                      <small>{featureFile.detail}</small>
+                    </span>
+                    <ArrowUpRight aria-hidden="true" size={15} />
+                  </button>
+                  {onOpenWorkshop && (file.path.endsWith('.js') || file.path.endsWith('.mjs')) ? (
+                    <Button
+                      aria-label={`Workshop JavaScript: ${file.label}`}
+                      className="feature-implementation-files__file-workshop"
+                      onClick={() => onOpenWorkshop(feature)}
+                      size="compact"
+                      type="button"
+                      variant="quiet"
+                    >
+                      <Wrench aria-hidden="true" size={14} />
+                      Workshop JS
+                    </Button>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        </article>
+      ))}
+    </div>
+  );
+
+  return (
+    <>
+      {collapsible ? (
+        <details className={className} aria-label={heading}>
+          <summary>
+            <span>
+              <Eyebrow>Feature source</Eyebrow>
+              <strong>{heading}</strong>
+              <small>Open implementation files and highlighted source.</small>
+            </span>
+            <ChevronDown aria-hidden="true" size={18} />
+          </summary>
+          <div className="feature-implementation-files__content">
+            {sourceIntro}
+            {sourceList}
+          </div>
+        </details>
+      ) : (
+        <section className={className} aria-label={heading}>
+          {sourceIntro}
+          {sourceList}
+        </section>
+      )}
+      <Dialog.Root
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelection(undefined);
+            setShowFullFile(false);
+          }
+        }}
+        open={Boolean(selection)}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="builder-file-preview-overlay" />
+          <Dialog.Content className="builder-file-preview-dialog">
+            <div className="builder-file-preview-dialog__header">
+              <div>
+                <Dialog.Title>{selection?.file.label}</Dialog.Title>
+              </div>
+              {selection ? (
+                <Button
+                  aria-pressed={showFullFile}
+                  className="builder-file-preview-dialog__source-toggle"
+                  onClick={() => setShowFullFile((current) => !current)}
+                  size="compact"
+                  title={
+                    showFullFile
+                      ? 'Show the focused implementation excerpt'
+                      : 'Show the complete file'
+                  }
+                  type="button"
+                  variant="secondary"
+                >
+                  {showFullFile ? 'Excerpt' : 'Full file'}
+                </Button>
+              ) : null}
+              <Dialog.Close asChild>
+                <Button aria-label="Close feature file" size="compact" variant="quiet">
+                  <X aria-hidden="true" size={18} />
+                </Button>
+              </Dialog.Close>
+            </div>
+            {selection
+              ? (() => {
+                  const highlightedLines = highlightedFeatureLines(
+                    selection.file.content,
+                    selection.terms,
+                  );
+                  const excerpt = sourceExcerpt(selection.file.content, highlightedLines);
+                  return (
+                    <SourcePreview
+                      content={showFullFile ? selection.file.content : excerpt.content}
+                      highlightedLines={highlightedLines}
+                      startLine={showFullFile ? 1 : excerpt.startLine}
+                    />
+                  );
+                })()
+              : null}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </>
+  );
+}
 
 const agentPackageBaseline = [
   {
@@ -6429,7 +9101,7 @@ const agentArchitectureLayers = [
     name: 'Built-in capabilities',
     purpose: 'Reusable behaviours the foundation can safely provide to every appropriate build.',
     behaviour:
-      'Motion runtime is the current capability: viewport reveals for headings and containers, plus counters only for genuine metrics. It respects reduced motion.',
+      'The current foundation features are entrance motion and counters for genuine metrics plus the approved-logo introduction. Mobile navigation is a generated, creative feature governed by its Markdown contract.',
     files: ['Motion runtime'],
   },
   {
@@ -6446,6 +9118,14 @@ const agentArchitectureLayers = [
     behaviour:
       'It can refine a single result or propose a future capability, but it cannot rewrite the published package, foundation, approved facts, or other builds.',
     files: [],
+  },
+  {
+    name: 'Protected delivery',
+    purpose:
+      'The worker that creates the isolated workspace, applies a selected revision, and saves observable build events.',
+    behaviour:
+      'It keeps page revisions scoped to their selected private source and persists the worker timeline that the Studio streams live.',
+    files: ['Builder worker'],
   },
 ] as const;
 
@@ -6488,6 +9168,7 @@ function AgentPackageConfiguration({
   testedPackageIds,
   onRequestProposal,
   onApproveForTesting,
+  onApproveForProduction,
   onPromote,
 }: {
   packages: AgentPackage[];
@@ -6495,6 +9176,7 @@ function AgentPackageConfiguration({
   testedPackageIds: Set<string>;
   onRequestProposal: (basePackageId: string, direction: string) => Promise<void>;
   onApproveForTesting: (packageId: string) => Promise<void>;
+  onApproveForProduction: (packageId: string) => Promise<void>;
   onPromote: (packageId: string) => Promise<void>;
 }) {
   const [selectedFile, setSelectedFile] = useState<(typeof currentAgentPackageFiles)[number]>();
@@ -6502,9 +9184,12 @@ function AgentPackageConfiguration({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [actionPackageId, setActionPackageId] = useState<string>();
   const [message, setMessage] = useState('');
+  const [workshopFeature, setWorkshopFeature] = useState<AgentFeature>();
+  const [workshopDirection, setWorkshopDirection] = useState('');
+  const [isSendingWorkshop, setIsSendingWorkshop] = useState(false);
   const publishedPackage = packages.find((item) => item.status === 'published');
-  const draftPackages = packages.filter(
-    (item) => item.status === 'draft' || item.status === 'test_ready',
+  const draftPackages = packages.filter((item) =>
+    ['draft', 'test_ready', 'production_ready'].includes(item.status),
   );
 
   async function submitProposal(event: FormEvent<HTMLFormElement>) {
@@ -6524,11 +9209,12 @@ function AgentPackageConfiguration({
     }
   }
 
-  async function runPackageAction(packageId: string, action: 'approve' | 'promote') {
+  async function runPackageAction(packageId: string, action: 'approve' | 'ready' | 'promote') {
     setActionPackageId(packageId);
     setMessage('');
     try {
       if (action === 'approve') await onApproveForTesting(packageId);
+      else if (action === 'ready') await onApproveForProduction(packageId);
       else await onPromote(packageId);
     } catch (error) {
       setMessage(
@@ -6536,6 +9222,26 @@ function AgentPackageConfiguration({
       );
     } finally {
       setActionPackageId(undefined);
+    }
+  }
+
+  async function sendWorkshopToTesting() {
+    if (!publishedPackage || !workshopFeature || !workshopDirection.trim()) return;
+    setIsSendingWorkshop(true);
+    setMessage('');
+    try {
+      await onRequestProposal(
+        publishedPackage.id,
+        `Foundation workshop · ${workshopFeature.title}\n\n${workshopDirection.trim()}`,
+      );
+      setWorkshopDirection('');
+      setWorkshopFeature(undefined);
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : 'The workshop handoff could not be created.',
+      );
+    } finally {
+      setIsSendingWorkshop(false);
     }
   }
 
@@ -6571,7 +9277,7 @@ function AgentPackageConfiguration({
           <dt>Studio state</dt>
           <dd>
             {draftPackages.length
-              ? `${draftPackages.length} draft test package${draftPackages.length === 1 ? '' : 's'} derived from this production package.`
+              ? `${draftPackages.length} unpublished package${draftPackages.length === 1 ? '' : 's'} derived from this production package.`
               : 'No unpublished package exists yet. Test directions are per-run input until you create a package proposal.'}
           </dd>
         </div>
@@ -6619,6 +9325,73 @@ function AgentPackageConfiguration({
           ))}
         </ol>
       </section>
+
+      <FeatureImplementationFiles
+        detail="Every listed feature maps to the source files that implement it. Open a file to see the enabling lines highlighted."
+        features={agentPackageFeatures}
+        heading="Built-in feature implementation"
+        onOpenWorkshop={setWorkshopFeature}
+      />
+
+      <Dialog.Root
+        onOpenChange={(open) => {
+          if (!open) {
+            setWorkshopFeature(undefined);
+            setWorkshopDirection('');
+          }
+        }}
+        open={Boolean(workshopFeature)}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="builder-file-preview-overlay" />
+          <Dialog.Content className="foundation-workshop-dialog">
+            <div className="foundation-workshop-dialog__header">
+              <div>
+                <Eyebrow>Foundation workshop</Eyebrow>
+                <Dialog.Title>{workshopFeature?.title}</Dialog.Title>
+                <p>Workshop revision v{publishedPackage?.version ?? 4}.2</p>
+              </div>
+              <StatusBadge tone="success">
+                <Wrench aria-hidden="true" size={14} /> Workshoped
+              </StatusBadge>
+              <Dialog.Close asChild>
+                <Button aria-label="Close foundation workshop" size="compact" variant="quiet">
+                  <X aria-hidden="true" size={18} />
+                </Button>
+              </Dialog.Close>
+            </div>
+            <p className="muted-copy">
+              This is the protected source-feature workspace: refine the JavaScript implementation
+              here with Codex, then send the agreed behaviour to a private test package. It does not
+              make the page-building agent recreate the hard-coded feature.
+            </p>
+            <label className="foundation-workshop-dialog__direction">
+              <span>Workshop change for the next test behaviour</span>
+              <textarea
+                maxLength={4000}
+                onChange={(event) => setWorkshopDirection(event.target.value)}
+                placeholder="For example: make the mobile menu icon morph more slowly and stagger each navigation link by 80ms."
+                rows={5}
+                value={workshopDirection}
+              />
+            </label>
+            <div className="foundation-workshop-dialog__actions">
+              <Button
+                disabled={!workshopDirection.trim() || isSendingWorkshop}
+                onClick={() => void sendWorkshopToTesting()}
+                type="button"
+              >
+                <CheckCheck aria-hidden="true" size={16} />
+                {isSendingWorkshop ? 'Sending to test' : 'Approve & send to test feature'}
+              </Button>
+              <small>
+                Sending creates a versioned test-package proposal. The current production package
+                remains unchanged.
+              </small>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
 
       <section className="agent-package-config__delivery" aria-labelledby="agent-delivery-title">
         <div>
@@ -6723,8 +9496,9 @@ function AgentPackageConfiguration({
             <Eyebrow>Derived test versions</Eyebrow>
             <h3 id="agent-package-drafts-title">Review, test, then promote</h3>
             <p>
-              Test versions are pinned to their derived package. Promotion is deliberate: it never
-              rewrites an earlier test or prospect build.
+              Test versions are pinned to their derived package. Once a tested behaviour is approved
+              as a production draft, it is removed from future test choices until a later explicit
+              publish action. Neither action rewrites an earlier build.
             </p>
           </div>
           <div className="agent-package-config__draft-list">
@@ -6799,17 +9573,35 @@ function AgentPackageConfiguration({
                     <>
                       <Button
                         disabled={actionPackageId === draft.id || !testedPackageIds.has(draft.id)}
+                        onClick={() => void runPackageAction(draft.id, 'ready')}
+                        type="button"
+                      >
+                        <CheckCheck aria-hidden="true" size={16} />
+                        {actionPackageId === draft.id
+                          ? 'Saving production draft'
+                          : `Approve v${draft.version} as production draft`}
+                      </Button>
+                      {!testedPackageIds.has(draft.id) ? (
+                        <p>Complete a private homepage test before saving this production draft.</p>
+                      ) : null}
+                    </>
+                  ) : null}
+                  {draft?.status === 'production_ready' ? (
+                    <>
+                      <p className="agent-package-config__foundation-note">
+                        <strong>Production draft saved.</strong> This behaviour is preserved for a
+                        future release and is no longer selectable for new test builds.
+                      </p>
+                      <Button
+                        disabled={actionPackageId === draft.id}
                         onClick={() => void runPackageAction(draft.id, 'promote')}
                         type="button"
                       >
                         <CheckCheck aria-hidden="true" size={16} />
                         {actionPackageId === draft.id
-                          ? 'Promoting package'
-                          : `Promote v${draft.version} to production`}
+                          ? 'Publishing package'
+                          : `Publish v${draft.version} to production`}
                       </Button>
-                      {!testedPackageIds.has(draft.id) ? (
-                        <p>Complete a private homepage test using this package before promotion.</p>
-                      ) : null}
                     </>
                   ) : null}
                 </article>
@@ -6919,12 +9711,15 @@ function AgentStudioPage({
   onSelectWorkspace,
   onOpenProspect,
   onRequestBuild,
+  onResumeBuild,
   onCancelBuild,
   onDeleteBuild,
   onOpenPreview,
   onLoadBuildEvidence,
   onRequestAgentPackageProposal,
   onApproveAgentPackageForTesting,
+  onStageAgentPackageBehaviours,
+  onApproveAgentPackageForProduction,
   onPromoteAgentPackage,
 }: {
   workspaces: ProspectWorkspace[];
@@ -6941,13 +9736,17 @@ function AgentStudioPage({
     targetSourceUrl?: string,
     buildInstruction?: string,
     agentPackageId?: string,
+    sourceBuilderRunId?: string,
   ) => Promise<void>;
+  onResumeBuild: (builderRunId: string) => Promise<void>;
   onCancelBuild: (businessId: string) => Promise<void>;
   onDeleteBuild: (businessId: string) => Promise<void>;
   onOpenPreview: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
   onLoadBuildEvidence: (builderRunId: string) => Promise<BuilderRunEvidence>;
   onRequestAgentPackageProposal: (basePackageId: string, direction: string) => Promise<void>;
   onApproveAgentPackageForTesting: (packageId: string) => Promise<void>;
+  onStageAgentPackageBehaviours: (packageId: string, behaviourIds: string[]) => Promise<void>;
+  onApproveAgentPackageForProduction: (packageId: string) => Promise<void>;
   onPromoteAgentPackage: (packageId: string) => Promise<void>;
 }) {
   const testWorkspaces = workspaces.filter(
@@ -7017,6 +9816,7 @@ function AgentStudioPage({
       {isArchitecturePage ? (
         <AgentPackageConfiguration
           onApproveForTesting={onApproveAgentPackageForTesting}
+          onApproveForProduction={onApproveAgentPackageForProduction}
           onPromote={onPromoteAgentPackage}
           onRequestProposal={onRequestAgentPackageProposal}
           packages={agentPackages}
@@ -7140,13 +9940,23 @@ function AgentStudioPage({
               onDeleteBuild={onDeleteBuild}
               onLoadBuildEvidence={onLoadBuildEvidence}
               onOpenPreview={onOpenPreview}
-              onRequestBuild={(mode, targetSourceUrl, buildInstruction, agentPackageId) =>
+              onRequestProposal={onRequestAgentPackageProposal}
+              onResumeBuild={onResumeBuild}
+              onStageBehaviours={onStageAgentPackageBehaviours}
+              onRequestBuild={(
+                mode,
+                targetSourceUrl,
+                buildInstruction,
+                agentPackageId,
+                sourceBuilderRunId,
+              ) =>
                 onRequestBuild(
                   selectedWorkspace.business.id,
                   mode,
                   targetSourceUrl,
                   buildInstruction,
                   agentPackageId,
+                  sourceBuilderRunId,
                 )
               }
               workspace={selectedWorkspace}
@@ -7846,10 +10656,13 @@ function WorkspaceContent({
   requestWebsiteAudit,
   cancelWebsiteAudit,
   requestAssetAnalysis,
+  requestEditableLogoRetry,
+  deleteLogoAsset,
   cancelAssetAnalysis,
   setAssetAnalysisSelected,
   updateAssetAnnotation,
   saveBrandKit,
+  pushLogoVersionsToBuilder,
   createBrandAwareBriefRevision,
   createRedesignBrief,
   refreshRedesignBriefArchitecture,
@@ -7875,6 +10688,11 @@ function WorkspaceContent({
   requestWebsiteAudit: () => Promise<void>;
   cancelWebsiteAudit: () => Promise<void>;
   requestAssetAnalysis: () => Promise<void>;
+  requestEditableLogoRetry: (
+    asset: ResearchArtifact,
+    options: { simplifyGeometry: boolean; vectorizerProvider: 'vtracer' | 'vectorizer_ai' },
+  ) => Promise<void>;
+  deleteLogoAsset: (asset: ResearchArtifact, onUndo: () => void) => void;
   cancelAssetAnalysis: () => Promise<void>;
   setAssetAnalysisSelected: (asset: ResearchArtifact, selected: boolean) => Promise<void>;
   updateAssetAnnotation: (
@@ -7885,9 +10703,18 @@ function WorkspaceContent({
     >,
   ) => Promise<void>;
   saveBrandKit: (
-    draft: Pick<BrandKit, 'primaryLogoAssetId' | 'approvedAssetIds' | 'palette' | 'notes'>,
+    draft: Pick<
+      BrandKit,
+      'primaryLogoAssetId' | 'editableLogoAssetId' | 'approvedAssetIds' | 'palette' | 'notes'
+    >,
     approve?: boolean,
     silent?: boolean,
+  ) => Promise<void>;
+  pushLogoVersionsToBuilder: (
+    draft: Pick<
+      BrandKit,
+      'primaryLogoAssetId' | 'editableLogoAssetId' | 'approvedAssetIds' | 'palette' | 'notes'
+    >,
   ) => Promise<void>;
   createBrandAwareBriefRevision: () => Promise<void>;
   createRedesignBrief: () => Promise<void>;
@@ -8039,7 +10866,10 @@ function WorkspaceContent({
           workspace={workspace}
         />
         <BrandKitPanel
+          onConvertLogo={requestEditableLogoRetry}
           onCreateRevision={createBrandAwareBriefRevision}
+          onDeleteLogo={deleteLogoAsset}
+          onPushLogoVersions={pushLogoVersionsToBuilder}
           onSave={saveBrandKit}
           workspace={workspace}
         />
@@ -8152,10 +10982,13 @@ function WorkspacePage({
   onRequestWebsiteAudit,
   onCancelWebsiteAudit,
   onRequestAssetAnalysis,
+  onRequestEditableLogoRetry,
+  onDeleteLogoAsset,
   onCancelAssetAnalysis,
   onSetAssetAnalysisSelected,
   onUpdateAssetAnnotation,
   onSaveBrandKit,
+  onPushLogoVersionsToBuilder,
   onCreateBrandAwareBriefRevision,
   onCreateRedesignBrief,
   onRefreshRedesignBriefArchitecture,
@@ -8186,6 +11019,11 @@ function WorkspacePage({
   onRequestWebsiteAudit: () => Promise<void>;
   onCancelWebsiteAudit: () => Promise<void>;
   onRequestAssetAnalysis: () => Promise<void>;
+  onRequestEditableLogoRetry: (
+    asset: ResearchArtifact,
+    options: { simplifyGeometry: boolean; vectorizerProvider: 'vtracer' | 'vectorizer_ai' },
+  ) => Promise<void>;
+  onDeleteLogoAsset: (asset: ResearchArtifact, onUndo: () => void) => void;
   onCancelAssetAnalysis: () => Promise<void>;
   onSetAssetAnalysisSelected: (asset: ResearchArtifact, selected: boolean) => Promise<void>;
   onUpdateAssetAnnotation: (
@@ -8196,9 +11034,18 @@ function WorkspacePage({
     >,
   ) => Promise<void>;
   onSaveBrandKit: (
-    draft: Pick<BrandKit, 'primaryLogoAssetId' | 'approvedAssetIds' | 'palette' | 'notes'>,
+    draft: Pick<
+      BrandKit,
+      'primaryLogoAssetId' | 'editableLogoAssetId' | 'approvedAssetIds' | 'palette' | 'notes'
+    >,
     approve?: boolean,
     silent?: boolean,
+  ) => Promise<void>;
+  onPushLogoVersionsToBuilder: (
+    draft: Pick<
+      BrandKit,
+      'primaryLogoAssetId' | 'editableLogoAssetId' | 'approvedAssetIds' | 'palette' | 'notes'
+    >,
   ) => Promise<void>;
   onCreateBrandAwareBriefRevision: () => Promise<void>;
   onCreateRedesignBrief: () => Promise<void>;
@@ -8286,6 +11133,8 @@ function WorkspacePage({
           openBuilderPreview={onOpenBuilderPreview}
           loadBuilderRunEvidence={onLoadBuilderRunEvidence}
           requestAssetAnalysis={onRequestAssetAnalysis}
+          requestEditableLogoRetry={onRequestEditableLogoRetry}
+          deleteLogoAsset={onDeleteLogoAsset}
           cancelAssetAnalysis={onCancelAssetAnalysis}
           setAssetAnalysisSelected={onSetAssetAnalysisSelected}
           cancelResearchCapture={onCancelResearchCapture}
@@ -8299,6 +11148,7 @@ function WorkspacePage({
           updateAuditFinding={onUpdateAuditFinding}
           updateAssetAnnotation={onUpdateAssetAnnotation}
           saveBrandKit={onSaveBrandKit}
+          pushLogoVersionsToBuilder={onPushLogoVersionsToBuilder}
           createBrandAwareBriefRevision={onCreateBrandAwareBriefRevision}
           updateRedesignBrief={onUpdateRedesignBrief}
           workspace={workspace}
@@ -8334,6 +11184,20 @@ function WorkspaceApp({
   const [notice, setNotice] = useState<ToastNotice>();
   const dataFingerprintRef = useRef('');
   const lastBackgroundRefreshAtRef = useRef(0);
+  const refreshInFlightRef = useRef(false);
+  const assetAnalysisStatusRef = useRef(new Map<string, string>());
+  const pendingLogoDeletionsRef = useRef(
+    new Map<string, { onUndo: () => void; timeout: ReturnType<typeof setTimeout> }>(),
+  );
+
+  useEffect(
+    () => () => {
+      for (const pending of pendingLogoDeletionsRef.current.values()) {
+        window.clearTimeout(pending.timeout);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!notice) return;
@@ -8341,75 +11205,102 @@ function WorkspaceApp({
     return () => window.clearTimeout(timeout);
   }, [notice]);
 
-  const refreshData = useCallback(
-    async ({ announce = false }: { announce?: boolean } = {}) => {
-      const [nextBusinesses, nextWorkspaces, nextAgentPackages, nextAgentPackageProposals] =
-        await Promise.all([
-          repository.listBusinesses(),
-          repository.listWorkspaces(),
-          repository.listAgentPackages(),
-          repository.listAgentPackageProposals(),
-        ]);
-      const nextFingerprint = JSON.stringify({
-        businesses: nextBusinesses.map((business) => [business.id, business.updatedAt]),
-        agentPackages: nextAgentPackages.map((agentPackage) => [
-          agentPackage.id,
-          agentPackage.version,
-          agentPackage.status,
-          agentPackage.updatedAt,
-        ]),
-        agentPackageProposals: nextAgentPackageProposals.map((proposal) => [
-          proposal.id,
-          proposal.status,
-          proposal.updatedAt,
-          proposal.draftPackageId,
-        ]),
-        captures: nextWorkspaces.map((workspace) => [
-          workspace.business.id,
-          workspace.latestCapture?.id,
-          workspace.latestCapture?.status,
-          workspace.latestCapture?.completedAt,
-          workspace.latestCapture?.progressPhase,
-          workspace.latestCapture?.progressDetail,
-          workspace.latestCapture?.currentUrl,
-          workspace.latestCapture?.cancelRequestedAt,
-          workspace.artifacts.length,
-          workspace.facts.length,
-          workspace.audit?.id,
-          workspace.audit?.status,
-          workspace.audit?.updatedAt,
-          workspace.audit?.findings.length,
-          workspace.audit?.progressPhase,
-          workspace.audit?.progressDetail,
-          workspace.audit?.completedItems,
-          workspace.audit?.cancelRequestedAt,
-          workspace.latestBuilderRun?.id,
-          workspace.latestBuilderRun?.status,
-          workspace.latestBuilderRun?.updatedAt,
-          workspace.latestBuilderRun?.progressPhase,
-          workspace.latestBuilderRun?.progressDetail,
-          workspace.latestBuilderRun?.completedItems,
-          workspace.builderArtifacts.length,
-          workspace.builderEvents.length,
-        ]),
-      });
-      const changed = Boolean(
-        dataFingerprintRef.current && dataFingerprintRef.current !== nextFingerprint,
-      );
-      dataFingerprintRef.current = nextFingerprint;
-      setBusinesses(nextBusinesses);
-      setWorkspaces(nextWorkspaces);
-      setAgentPackages(nextAgentPackages);
-      setAgentPackageProposals(nextAgentPackageProposals);
-      if (announce && changed) {
+  useEffect(() => {
+    const nextStatuses = new Map<string, string>();
+    for (const candidate of workspaces) {
+      const job = candidate.assetAnalysis;
+      if (!job) continue;
+      const previousStatus = assetAnalysisStatusRef.current.get(candidate.business.id);
+      nextStatuses.set(candidate.business.id, job.status);
+      if (previousStatus && previousStatus !== 'failed' && job.status === 'failed') {
         setNotice({
           id: crypto.randomUUID(),
-          title: 'Workspace updated',
-          detail: 'New saved data is now visible in your current view.',
-          tone: 'info',
+          title: 'SVG conversion or asset analysis failed',
+          detail:
+            job.errorSummary ||
+            'The worker stopped before it could save the requested result. Open Assets to review and retry.',
+          tone: 'danger',
         });
       }
-      return changed;
+    }
+    assetAnalysisStatusRef.current = nextStatuses;
+  }, [workspaces]);
+
+  const refreshData = useCallback(
+    async ({ announce = false }: { announce?: boolean } = {}) => {
+      if (refreshInFlightRef.current) return false;
+      refreshInFlightRef.current = true;
+      try {
+        const [nextBusinesses, nextWorkspaces, nextAgentPackages, nextAgentPackageProposals] =
+          await Promise.all([
+            repository.listBusinesses(),
+            repository.listWorkspaces(),
+            repository.listAgentPackages(),
+            repository.listAgentPackageProposals(),
+          ]);
+        const nextFingerprint = JSON.stringify({
+          businesses: nextBusinesses.map((business) => [business.id, business.updatedAt]),
+          agentPackages: nextAgentPackages.map((agentPackage) => [
+            agentPackage.id,
+            agentPackage.version,
+            agentPackage.status,
+            agentPackage.updatedAt,
+          ]),
+          agentPackageProposals: nextAgentPackageProposals.map((proposal) => [
+            proposal.id,
+            proposal.status,
+            proposal.updatedAt,
+            proposal.draftPackageId,
+          ]),
+          captures: nextWorkspaces.map((workspace) => [
+            workspace.business.id,
+            workspace.latestCapture?.id,
+            workspace.latestCapture?.status,
+            workspace.latestCapture?.completedAt,
+            workspace.latestCapture?.progressPhase,
+            workspace.latestCapture?.progressDetail,
+            workspace.latestCapture?.currentUrl,
+            workspace.latestCapture?.cancelRequestedAt,
+            workspace.artifacts.length,
+            workspace.facts.length,
+            workspace.audit?.id,
+            workspace.audit?.status,
+            workspace.audit?.updatedAt,
+            workspace.audit?.findings.length,
+            workspace.audit?.progressPhase,
+            workspace.audit?.progressDetail,
+            workspace.audit?.completedItems,
+            workspace.audit?.cancelRequestedAt,
+            workspace.latestBuilderRun?.id,
+            workspace.latestBuilderRun?.status,
+            workspace.latestBuilderRun?.updatedAt,
+            workspace.latestBuilderRun?.progressPhase,
+            workspace.latestBuilderRun?.progressDetail,
+            workspace.latestBuilderRun?.completedItems,
+            workspace.builderArtifacts.length,
+            workspace.builderEvents.length,
+          ]),
+        });
+        const changed = Boolean(
+          dataFingerprintRef.current && dataFingerprintRef.current !== nextFingerprint,
+        );
+        dataFingerprintRef.current = nextFingerprint;
+        setBusinesses(nextBusinesses);
+        setWorkspaces(nextWorkspaces);
+        setAgentPackages(nextAgentPackages);
+        setAgentPackageProposals(nextAgentPackageProposals);
+        if (announce && changed) {
+          setNotice({
+            id: crypto.randomUUID(),
+            title: 'Workspace updated',
+            detail: 'New saved data is now visible in your current view.',
+            tone: 'info',
+          });
+        }
+        return changed;
+      } finally {
+        refreshInFlightRef.current = false;
+      }
     },
     [repository],
   );
@@ -8536,6 +11427,11 @@ function WorkspaceApp({
   const hasActiveAgentPackageProposal = agentPackageProposals.some(
     (proposal) => proposal.status === 'queued' || proposal.status === 'running',
   );
+  const hasActiveAgentStudioBuild = workspaces.some((candidate) =>
+    candidate.builderRuns.some(
+      (run) => run.status === 'queued' || run.status === 'running' || run.status === 'paused',
+    ),
+  );
 
   useEffect(() => {
     if (route.page !== 'usage' || !hasActiveAiUsage) return;
@@ -8548,6 +11444,12 @@ function WorkspaceApp({
     const interval = window.setInterval(() => void refreshData(), 3_000);
     return () => window.clearInterval(interval);
   }, [hasActiveAgentPackageProposal, refreshData, route.page]);
+
+  useEffect(() => {
+    if (route.page !== 'agent-studio' || !hasActiveAgentStudioBuild) return;
+    const interval = window.setInterval(() => void refreshData(), 1_000);
+    return () => window.clearInterval(interval);
+  }, [hasActiveAgentStudioBuild, refreshData, route.page]);
 
   const baseWorkspace =
     route.page === 'prospects' && route.businessId
@@ -8606,7 +11508,7 @@ function WorkspaceApp({
       return;
     const interval = window.setInterval(() => {
       void refreshData();
-    }, 3_000);
+    }, 2_000);
     return () => window.clearInterval(interval);
   }, [
     activeAssetAnalysis,
@@ -8752,6 +11654,70 @@ function WorkspaceApp({
     });
   }
 
+  async function requestEditableLogoRetry(
+    asset: ResearchArtifact,
+    options: { simplifyGeometry: boolean; vectorizerProvider: 'vtracer' | 'vectorizer_ai' },
+  ) {
+    if (!workspace) return;
+    const job = await repository.requestEditableLogoRetry(asset, options);
+    if (!job) throw new Error('The SVG conversion retry could not be queued.');
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'SVG conversion retry queued',
+      detail:
+        options.vectorizerProvider === 'vectorizer_ai'
+          ? 'The private worker will send the original captured logo directly to Vectorizer.AI for an editable SVG comparison.'
+          : options.simplifyGeometry
+            ? 'The private worker will reuse or clean up the logo, verify it against the source, then fit straight lines, corners and smooth curves into another editable SVG variant.'
+            : 'The private worker will reuse or clean up the logo, verify it against the source, then trace another editable SVG variant without geometry fitting.',
+      tone: 'warning',
+    });
+  }
+
+  function deleteLogoAsset(asset: ResearchArtifact, onUndo: () => void) {
+    const deleteAfterUndoWindow = async () => {
+      pendingLogoDeletionsRef.current.delete(asset.id);
+      try {
+        await repository.deleteLogoAsset(asset);
+        await refreshData();
+      } catch (error) {
+        onUndo();
+        setNotice({
+          id: crypto.randomUUID(),
+          title: 'Logo could not be deleted',
+          detail: error instanceof Error ? error.message : 'Try deleting the logo again.',
+          tone: 'danger',
+        });
+        return;
+      }
+      setNotice({
+        id: crypto.randomUUID(),
+        title: 'Logo permanently deleted',
+        detail: 'The selected logo and its derived SVG variants were removed from this prospect.',
+        tone: 'success',
+      });
+    };
+    const timeout = window.setTimeout(() => void deleteAfterUndoWindow(), 5000);
+    pendingLogoDeletionsRef.current.set(asset.id, { onUndo, timeout });
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Logo deleted',
+      detail: 'This logo will be permanently deleted in 5 seconds.',
+      tone: 'warning',
+      action: {
+        label: 'Undo',
+        onClick: () => {
+          const pending = pendingLogoDeletionsRef.current.get(asset.id);
+          if (!pending) return;
+          window.clearTimeout(pending.timeout);
+          pendingLogoDeletionsRef.current.delete(asset.id);
+          pending.onUndo();
+        },
+      },
+    });
+  }
+
   async function cancelAssetAnalysis() {
     if (!workspace) return;
     await repository.cancelAssetAnalysis(workspace.business.id);
@@ -8781,7 +11747,10 @@ function WorkspaceApp({
   }
 
   async function saveBrandKit(
-    draft: Pick<BrandKit, 'primaryLogoAssetId' | 'approvedAssetIds' | 'palette' | 'notes'>,
+    draft: Pick<
+      BrandKit,
+      'primaryLogoAssetId' | 'editableLogoAssetId' | 'approvedAssetIds' | 'palette' | 'notes'
+    >,
     approve = false,
     silent = false,
   ) {
@@ -8803,6 +11772,30 @@ function WorkspaceApp({
       detail: approve
         ? 'Future redesign revisions will use this reviewed logo, visual assets, and colour system.'
         : 'The private Brand Kit remains editable until approval.',
+      tone: 'success',
+    });
+  }
+
+  async function pushLogoVersionsToBuilder(
+    draft: Pick<
+      BrandKit,
+      'primaryLogoAssetId' | 'editableLogoAssetId' | 'approvedAssetIds' | 'palette' | 'notes'
+    >,
+  ) {
+    if (!workspace) return;
+    const brandKit = await repository.saveBrandKit(workspace.business.id, draft, true, true);
+    if (!brandKit) throw new Error('The generated logos could not be approved in the Brand Kit.');
+    const brief = await repository.createBrandAwareBriefRevision(workspace.business.id);
+    if (!brief) throw new Error('The updated brand-aware Brief could not be created.');
+    await repository.approveRedesignBrief(brief);
+    const manifest = await repository.createBuildManifest(workspace.business.id);
+    if (!manifest) throw new Error('The updated Build Manifest could not be prepared.');
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Logo versions pushed to builds',
+      detail:
+        'The transparent logo versions are approved and staged in a new Brief and Build Manifest. The alpha matte remains private review material.',
       tone: 'success',
     });
   }
@@ -8913,6 +11906,32 @@ function WorkspaceApp({
     });
   }
 
+  async function stageAgentPackageBehaviours(packageId: string, behaviourIds: string[]) {
+    const agentPackage = await repository.stageAgentPackageBehaviours(packageId, behaviourIds);
+    if (!agentPackage) throw new Error('The selected behaviours could not be staged.');
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Behaviours staged for a production draft',
+      detail:
+        'They will no longer be shown as behaviours to test. The remaining unchecked behaviours stay available for the next private test.',
+      tone: 'success',
+    });
+  }
+
+  async function approveAgentPackageForProduction(packageId: string) {
+    const agentPackage = await repository.approveAgentPackageForProduction(packageId);
+    if (!agentPackage) throw new Error('The production draft could not be saved.');
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: `Package v${agentPackage.version} saved as a production draft`,
+      detail:
+        'This tested behaviour is no longer offered to new test builds. The published production package is unchanged until you explicitly publish this draft.',
+      tone: 'success',
+    });
+  }
+
   async function promoteAgentPackage(packageId: string) {
     const agentPackage = await repository.promoteAgentPackage(packageId);
     if (!agentPackage) throw new Error('The agent package could not be promoted.');
@@ -8932,11 +11951,13 @@ function WorkspaceApp({
     targetSourceUrl?: string,
     buildInstruction?: string,
     agentPackageId?: string,
+    sourceBuilderRunId?: string,
   ) {
     const targetWorkspace = workspaces.find((candidate) => candidate.business.id === businessId);
     if (!targetWorkspace) throw new Error('The selected test prospect is no longer available.');
     const requestedInstruction = buildInstruction?.trim() || undefined;
     const resumeRun =
+      !sourceBuilderRunId &&
       (targetWorkspace.latestBuilderRun?.status === 'failed' ||
         targetWorkspace.latestBuilderRun?.status === 'cancelled') &&
       targetWorkspace.latestBuilderRun?.buildMode === mode &&
@@ -8959,6 +11980,7 @@ function WorkspaceApp({
           targetSourceUrl,
           requestedInstruction,
           agentPackageId,
+          sourceBuilderRunId,
         );
     if (!run) throw new Error('The private preview could not be queued.');
     await refreshData();
@@ -8990,6 +12012,19 @@ function WorkspaceApp({
       title: 'Preview cancellation requested',
       detail: 'The builder will stop at its next safe step. Any saved output remains private.',
       tone: 'warning',
+    });
+  }
+
+  async function resumeWebsiteBuildForBusiness(builderRunId: string) {
+    const resumedRun = await repository.resumeWebsiteBuild(builderRunId);
+    if (!resumedRun) throw new Error('This private test could not be continued.');
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Private test continuing',
+      detail:
+        'Codex will continue this exact test from its saved private source. The prospect’s public website is unchanged.',
+      tone: 'success',
     });
   }
 
@@ -9134,6 +12169,8 @@ function WorkspaceApp({
             agentPackageProposals={agentPackageProposals}
             agentPackages={agentPackages}
             onApproveAgentPackageForTesting={approveAgentPackageForTesting}
+            onApproveAgentPackageForProduction={approveAgentPackageForProduction}
+            onStageAgentPackageBehaviours={stageAgentPackageBehaviours}
             onCancelBuild={cancelWebsiteBuildForBusiness}
             onDeleteBuild={deleteWebsiteBuild}
             onLoadBuildEvidence={(builderRunId) => repository.getBuilderRunEvidence(builderRunId)}
@@ -9142,6 +12179,7 @@ function WorkspaceApp({
               navigate({ page: 'prospects', businessId, tab: 'redesign' })
             }
             onRequestBuild={requestWebsiteBuildForBusiness}
+            onResumeBuild={resumeWebsiteBuildForBusiness}
             onRequestAgentPackageProposal={requestAgentPackageProposal}
             onPromoteAgentPackage={promoteAgentPackage}
             onSelectSection={(section) =>
@@ -9194,6 +12232,8 @@ function WorkspaceApp({
             onCreateRedesignBrief={createRedesignBrief}
             onRefreshRedesignBriefArchitecture={refreshRedesignBriefArchitecture}
             onRequestAssetAnalysis={requestAssetAnalysis}
+            onRequestEditableLogoRetry={requestEditableLogoRetry}
+            onDeleteLogoAsset={deleteLogoAsset}
             onCancelAssetAnalysis={cancelAssetAnalysis}
             onSetAssetAnalysisSelected={setAssetAnalysisSelected}
             onCancelResearchCapture={cancelResearchCapture}
@@ -9223,6 +12263,7 @@ function WorkspaceApp({
             onUpdateAuditFinding={updateAuditFinding}
             onUpdateAssetAnnotation={updateAssetAnnotation}
             onSaveBrandKit={saveBrandKit}
+            onPushLogoVersionsToBuilder={pushLogoVersionsToBuilder}
             onCreateBrandAwareBriefRevision={createBrandAwareBriefRevision}
             onUpdateRedesignBrief={updateRedesignBrief}
             workspace={workspace}
