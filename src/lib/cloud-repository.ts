@@ -244,6 +244,12 @@ function assetAnalysisFromRow(row: DatabaseRow): AssetAnalysisJob {
     errorSummary: readOptionalString(row, 'error_summary'),
     progressPhase: readOptionalString(row, 'progress_phase'),
     progressDetail: readOptionalString(row, 'progress_detail'),
+    currentAssetId: readOptionalString(row, 'current_asset_id'),
+    editableLogoRetryAssetId: readOptionalString(row, 'editable_logo_retry_asset_id'),
+    editableLogoRetryToken: readOptionalString(row, 'editable_logo_retry_token'),
+    editableLogoSimplificationEnabled: row.editable_logo_simplification_enabled === true,
+    editableLogoVectorizerProvider:
+      row.editable_logo_vectorizer_provider === 'vectorizer_ai' ? 'vectorizer_ai' : 'vtracer',
     totalItems: readNumber(row, 'total_items'),
     completedItems: readNumber(row, 'completed_items'),
     cancelRequestedAt,
@@ -316,6 +322,7 @@ function brandKitFromRow(row: DatabaseRow): BrandKit {
     version: readNumber(row, 'version'),
     status: readString(row, 'status') as BrandKit['status'],
     primaryLogoAssetId: readOptionalString(row, 'primary_logo_artifact_id'),
+    editableLogoAssetId: readOptionalString(row, 'editable_logo_artifact_id'),
     approvedAssetIds: Array.isArray(row.approved_asset_ids)
       ? row.approved_asset_ids.filter((value): value is string => typeof value === 'string')
       : [],
@@ -374,6 +381,7 @@ function briefFromRow(row: DatabaseRow): RedesignBrief {
               id: readString(brandKit, 'id'),
               version: readNumber(brandKit, 'version'),
               primaryLogoAssetId,
+              editableLogoAssetId: readOptionalString(brandKit, 'editableLogoAssetId'),
               approvedAssetIds: Array.isArray(brandKit.approvedAssetIds)
                 ? brandKit.approvedAssetIds.filter(
                     (value): value is string => typeof value === 'string',
@@ -451,6 +459,7 @@ function agentPackageFromRow(row: DatabaseRow): AgentPackage {
     status:
       status === 'draft' ||
       status === 'test_ready' ||
+      status === 'production_ready' ||
       status === 'published' ||
       status === 'superseded'
         ? status
@@ -467,6 +476,9 @@ function agentPackageFromRow(row: DatabaseRow): AgentPackage {
         ? 'foundation_change_required'
         : 'policy_only',
     capabilityProposal: readOptionalString(row, 'capability_proposal'),
+    stagedBehaviourIds: Array.isArray(row.staged_behaviour_ids)
+      ? row.staged_behaviour_ids.filter((value): value is string => typeof value === 'string')
+      : [],
     createdAt: readString(row, 'created_at'),
     updatedAt: readString(row, 'updated_at'),
     approvedAt: readOptionalString(row, 'approved_at'),
@@ -511,6 +523,7 @@ function builderRunFromRow(row: DatabaseRow): BuilderRun {
     id: readString(row, 'id'),
     businessId: readString(row, 'business_id'),
     buildManifestId: readString(row, 'build_manifest_id'),
+    parentBuilderRunId: readOptionalString(row, 'parent_builder_run_id'),
     buildMode:
       readString(row, 'build_mode') === 'full_site'
         ? 'full_site'
@@ -776,6 +789,23 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     return agentPackageFromRow(data as DatabaseRow);
   }
 
+  async approveAgentPackageForProduction(packageId: string) {
+    const { data, error } = await this.client.rpc('approve_agent_package_for_production', {
+      target_package_id: packageId,
+    });
+    throwIfError(error);
+    return agentPackageFromRow(data as DatabaseRow);
+  }
+
+  async stageAgentPackageBehaviours(packageId: string, behaviourIds: string[]) {
+    const { data, error } = await this.client.rpc('stage_agent_package_behaviours', {
+      target_package_id: packageId,
+      requested_staged_behaviour_ids: behaviourIds,
+    });
+    throwIfError(error);
+    return agentPackageFromRow(data as DatabaseRow);
+  }
+
   async promoteAgentPackage(packageId: string) {
     const { data, error } = await this.client.rpc('promote_agent_package', {
       target_package_id: packageId,
@@ -984,6 +1014,22 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       .contains('metadata', { preferredOrganisationLogo: true })
       .order('created_at', { ascending: false });
     throwIfError(logoArtifactsResult.error);
+    const editableLogoArtifactsResult = await this.client
+      .from('artifacts')
+      .select('*')
+      .eq('business_id', businessId)
+      .eq('kind', 'asset')
+      .contains('metadata', { logoVariant: 'editable' })
+      .order('created_at', { ascending: false });
+    throwIfError(editableLogoArtifactsResult.error);
+    const aiEnhancedLogoArtifactsResult = await this.client
+      .from('artifacts')
+      .select('*')
+      .eq('business_id', businessId)
+      .eq('kind', 'asset')
+      .contains('metadata', { logoVariant: 'ai_enhanced' })
+      .order('created_at', { ascending: false });
+    throwIfError(aiEnhancedLogoArtifactsResult.error);
 
     const latestAudit = (audits.data ?? [])[0] as DatabaseRow | undefined;
     const latestBuilderRun = (builderRuns.data ?? [])[0] as DatabaseRow | undefined;
@@ -1030,6 +1076,8 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         .map(artifactFromRow)
         .filter((artifact) => artifact.crawlRunId === latestCapture?.id),
       ...((logoArtifactsResult.data ?? []) as DatabaseRow[]).map(artifactFromRow),
+      ...((editableLogoArtifactsResult.data ?? []) as DatabaseRow[]).map(artifactFromRow),
+      ...((aiEnhancedLogoArtifactsResult.data ?? []) as DatabaseRow[]).map(artifactFromRow),
       ...((referencedAssetsResult.data ?? []) as DatabaseRow[]).map(artifactFromRow),
     ];
 
@@ -1265,6 +1313,46 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     return workspace?.assetAnalysis;
   }
 
+  async requestEditableLogoRetry(
+    asset: ResearchArtifact,
+    options: { simplifyGeometry?: boolean; vectorizerProvider?: 'vtracer' | 'vectorizer_ai' } = {},
+  ) {
+    const { data: deletionPaths, error: pathsError } = await this.client.rpc(
+      'prospect_generated_logo_deletion_paths',
+      { p_asset_id: asset.id },
+    );
+    throwIfError(pathsError);
+    const pathsByBucket = new Map<string, string[]>();
+    for (const row of (deletionPaths ?? []) as DatabaseRow[]) {
+      const bucket = readString(row, 'storage_bucket');
+      const path = readString(row, 'storage_path');
+      if (!bucket || !path) continue;
+      pathsByBucket.set(bucket, [...(pathsByBucket.get(bucket) ?? []), path]);
+    }
+    for (const [bucket, paths] of pathsByBucket) {
+      const { error: storageError } = await this.client.storage.from(bucket).remove(paths);
+      throwIfError(storageError);
+    }
+    const { data, error } = await this.client.rpc('request_editable_logo_retry', {
+      target_asset_id: asset.id,
+      simplify_geometry: options.simplifyGeometry === true,
+      vectorizer_provider:
+        options.vectorizerProvider === 'vectorizer_ai' ? 'vectorizer_ai' : 'vtracer',
+    });
+    if (
+      error?.message.includes('request_editable_logo_retry') &&
+      error.message.includes('schema cache')
+    ) {
+      throw new Error(
+        'SVG conversion options are not available yet because the editable-logo database migration has not been applied.',
+      );
+    }
+    throwIfError(error);
+    if (typeof data !== 'string') throw new Error('The SVG conversion retry could not be queued.');
+    const workspace = await this.getWorkspace(asset.businessId);
+    return workspace?.assetAnalysis;
+  }
+
   async cancelAssetAnalysis(businessId: string) {
     const { error } = await this.client.rpc('cancel_asset_analysis', {
       target_business_id: businessId,
@@ -1360,9 +1448,75 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     throwIfError(briefError);
   }
 
+  async saveDerivedSvgLogo(asset: ResearchArtifact, svg: string) {
+    if (asset.contentType !== 'image/svg+xml' || asset.metadata.logoVariant !== 'editable') {
+      throw new Error('Only derived editable SVG logos can be changed.');
+    }
+    const content = new Blob([svg], { type: 'image/svg+xml' });
+    const { error: uploadError } = await this.client.storage
+      .from(asset.storageBucket)
+      .upload(asset.storagePath, content, { contentType: 'image/svg+xml', upsert: true });
+    throwIfError(uploadError);
+    const digest = await crypto.subtle.digest('SHA-256', await content.arrayBuffer());
+    const sha256 = Array.from(new Uint8Array(digest), (value) =>
+      value.toString(16).padStart(2, '0'),
+    ).join('');
+    const { error } = await this.client
+      .from('artifacts')
+      .update({
+        byte_size: content.size,
+        sha256,
+        metadata: { ...asset.metadata, editedAt: new Date().toISOString() },
+      })
+      .eq('id', asset.id);
+    throwIfError(error);
+  }
+
+  async deleteDerivedSvgLogo(asset: ResearchArtifact) {
+    if (asset.contentType !== 'image/svg+xml' || asset.metadata.vectorSuggestion !== true) {
+      throw new Error('Only generated SVG logo variants can be deleted.');
+    }
+    const { error: storageError } = await this.client.storage
+      .from(asset.storageBucket)
+      .remove([asset.storagePath]);
+    throwIfError(storageError);
+    const { error } = await this.client.from('artifacts').delete().eq('id', asset.id);
+    throwIfError(error);
+  }
+
+  async deleteLogoAsset(asset: ResearchArtifact) {
+    if (asset.kind !== 'asset' || asset.metadata.assetType !== 'logo') {
+      throw new Error('Only organisation logo assets can be permanently deleted.');
+    }
+    const { data: deletionPaths, error: pathsError } = await this.client.rpc(
+      'prospect_logo_deletion_paths',
+      { p_asset_id: asset.id },
+    );
+    throwIfError(pathsError);
+    const pathsByBucket = new Map<string, string[]>();
+    for (const row of (deletionPaths ?? []) as DatabaseRow[]) {
+      const bucket = readString(row, 'storage_bucket');
+      const path = readString(row, 'storage_path');
+      if (!bucket || !path) continue;
+      pathsByBucket.set(bucket, [...(pathsByBucket.get(bucket) ?? []), path]);
+    }
+    if (!pathsByBucket.size) throw new Error('The organisation logo files could not be found.');
+    for (const [bucket, paths] of pathsByBucket) {
+      const { error: storageError } = await this.client.storage.from(bucket).remove(paths);
+      throwIfError(storageError);
+    }
+    const { error } = await this.client.rpc('delete_prospect_logo_asset', {
+      p_asset_id: asset.id,
+    });
+    throwIfError(error);
+  }
+
   async saveBrandKit(
     businessId: string,
-    draft: Pick<BrandKit, 'primaryLogoAssetId' | 'approvedAssetIds' | 'palette' | 'notes'>,
+    draft: Pick<
+      BrandKit,
+      'primaryLogoAssetId' | 'editableLogoAssetId' | 'approvedAssetIds' | 'palette' | 'notes'
+    >,
     approve = false,
     recordActivity = true,
   ) {
@@ -1373,6 +1527,9 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     const assetIds = [...new Set(draft.approvedAssetIds)];
     if (draft.primaryLogoAssetId && !assetIds.includes(draft.primaryLogoAssetId)) {
       assetIds.unshift(draft.primaryLogoAssetId);
+    }
+    if (draft.editableLogoAssetId && !assetIds.includes(draft.editableLogoAssetId)) {
+      assetIds.push(draft.editableLogoAssetId);
     }
     if (approve) {
       if (!draft.primaryLogoAssetId)
@@ -1387,6 +1544,9 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     const existing = workspace.brandKit;
     const payload = {
       primary_logo_artifact_id: draft.primaryLogoAssetId || null,
+      ...(draft.editableLogoAssetId
+        ? { editable_logo_artifact_id: draft.editableLogoAssetId }
+        : {}),
       approved_asset_ids: assetIds,
       palette: draft.palette,
       notes: draft.notes.trim(),
@@ -1740,6 +1900,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     targetSourceUrl?: string,
     buildInstruction?: string,
     agentPackageId?: string,
+    sourceBuilderRunId?: string,
   ) {
     const { error } = await this.client.rpc('request_website_build', {
       target_business_id: businessId,
@@ -1747,6 +1908,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       requested_target_source_url: targetSourceUrl ?? null,
       requested_build_instruction: buildInstruction?.trim() || null,
       requested_agent_package_id: agentPackageId ?? null,
+      requested_source_builder_run_id: sourceBuilderRunId ?? null,
     });
     throwIfError(error);
     const workspace = await this.getWorkspace(businessId);

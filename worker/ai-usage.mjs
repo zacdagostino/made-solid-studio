@@ -1,8 +1,16 @@
 /**
- * Persists provider-reported AI usage as a ledger. Costs are deliberately only
- * stored when the worker has an explicit configured price; token counts alone
- * must never be presented as a billed amount.
+ * Persists provider-reported AI usage as a ledger. A deployment-specific rate
+ * card takes priority, with published OpenAI rates used for the standard Codex
+ * test-builder model so its recorded token usage is not needlessly unpriced.
  */
+const PUBLISHED_OPENAI_PRICING_VERSION = 'OpenAI API standard pricing 2026-07-24';
+const PUBLISHED_OPENAI_PRICING = Object.freeze({
+  // `gpt-5.6` is the builder's documented alias for the standard gpt-5.6-sol rate.
+  'gpt-5.6': { inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 30 },
+  'gpt-5.6-sol': { inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 30 },
+  // Older runs recorded the CLI label when no explicit model was supplied.
+  'codex cli': { inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 30 },
+});
 function number(value) {
   return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
 }
@@ -56,9 +64,16 @@ function configuredPrice(model) {
   }
 }
 
+function publishedOpenAiPrice(model) {
+  const price = PUBLISHED_OPENAI_PRICING[model.trim().toLowerCase()];
+  return price ? { ...price, pricingVersion: PUBLISHED_OPENAI_PRICING_VERSION } : undefined;
+}
+
 export function pricedUsage({ model, usage }) {
   const normalized = responseUsage(usage);
-  const price = configuredPrice(model);
+  const configured = configuredPrice(model);
+  const published = configured ? undefined : publishedOpenAiPrice(model);
+  const price = configured ?? published;
   if (!price)
     return { ...normalized, costUsd: null, costSource: 'unavailable', pricingVersion: null };
   const nonCachedInput = Math.max(0, normalized.inputTokens - normalized.cachedInputTokens);
@@ -71,7 +86,7 @@ export function pricedUsage({ model, usage }) {
     ...normalized,
     costUsd: Number(costUsd.toFixed(8)),
     costSource: 'configured_rate',
-    pricingVersion: 'SITEFORGE_AI_PRICING_JSON',
+    pricingVersion: configured ? 'SITEFORGE_AI_PRICING_JSON' : published.pricingVersion,
   };
 }
 

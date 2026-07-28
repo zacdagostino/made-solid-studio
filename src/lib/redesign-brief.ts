@@ -418,6 +418,7 @@ export function createBriefDraft(
             id: brandKit.id,
             version: brandKit.version,
             primaryLogoAssetId: brandKit.primaryLogoAssetId,
+            editableLogoAssetId: brandKit.editableLogoAssetId,
             approvedAssetIds: brandKit.approvedAssetIds,
             palette: brandKit.palette,
           }

@@ -3,14 +3,21 @@
 import { createHash } from 'node:crypto';
 import { hostname } from 'node:os';
 import { createClient } from '@supabase/supabase-js';
-import ImageTracer from 'imagetracerjs';
 import { chromium } from 'playwright';
 import { recordAiUsage } from './ai-usage.mjs';
 import { assertPublicUrl } from './security.mjs';
 import { coloursFromSvg, isBrandColour } from './brand-evidence.mjs';
+import {
+  extractLogoPalette,
+  lockRasterColoursToSource,
+  vectorizeRasterLogo,
+} from './logo-vectorizer.mjs';
+import { alphaMattePreview, logoMatte, transparentLogoVariants } from './logo-variants.mjs';
 
 const artifactBucket = 'siteforge-artifacts';
 const requestTimeoutMs = 90_000;
+const imageGenerationTimeoutMs = 150_000;
+const rasterisationTimeoutMs = 30_000;
 const maxBrandEvidencePages = 8;
 const cancellationPollMs = 500;
 const workerHeartbeatMs = 10_000;
@@ -68,6 +75,14 @@ function createTimedFetch(timeoutMs) {
     const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
     return fetch(input, { ...init, signal });
   };
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
 }
 
 function throwIfAborted(signal) {
@@ -196,53 +211,395 @@ function canCreateVectorSuggestion(asset, annotation) {
   );
 }
 
-async function vectorizeLogo(browser, blob) {
+function canCreateEditableLogoVariant(asset, annotation) {
+  if (isDerivedVectorSuggestion(asset)) return false;
+  return (
+    annotation?.reviewState === 'approved' &&
+    annotation.businessAssociation === 'target_business' &&
+    ['primary_logo', 'secondary_mark'].includes(annotation.suggestedRole)
+  );
+}
+
+async function rasteriseLogo(browser, blob, options = {}) {
   const page = await browser.newPage({ viewport: { width: 512, height: 512 } });
-  let imageData;
   try {
     const source = `data:${blob.type || 'image/png'};base64,${Buffer.from(
       await blob.arrayBuffer(),
     ).toString('base64')}`;
     await page.setContent(`<img id="asset" src="${source}">`);
-    imageData = await page.evaluate(async () => {
-      const image = document.querySelector('#asset');
-      if (!(image instanceof HTMLImageElement)) throw new Error('The raster logo could not load.');
-      await image.decode();
-      const longestEdge = 320;
-      const scale = Math.min(1, longestEdge / Math.max(image.naturalWidth, image.naturalHeight));
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-      const context = canvas.getContext('2d', { willReadFrequently: true });
-      if (!context) throw new Error('The raster logo could not be read.');
-      context.drawImage(image, 0, 0, canvas.width, canvas.height);
-      const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
-      return { width: pixels.width, height: pixels.height, data: Array.from(pixels.data) };
-    });
+    const raster = await withTimeout(
+      page.evaluate(async (settings) => {
+        const image = document.querySelector('#asset');
+        if (!(image instanceof HTMLImageElement))
+          throw new Error('The raster logo could not load.');
+        await image.decode();
+        const longestEdge = settings.longestEdge ?? 1_400;
+        const pixelBudget = settings.pixelBudget ?? 1_500_000;
+        const scale =
+          settings.width && settings.height
+            ? undefined
+            : Math.min(
+                1,
+                longestEdge / Math.max(image.naturalWidth, image.naturalHeight),
+                Math.sqrt(pixelBudget / (image.naturalWidth * image.naturalHeight)),
+              );
+        const canvas = document.createElement('canvas');
+        canvas.width = settings.width ?? Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = settings.height ?? Math.max(1, Math.round(image.naturalHeight * scale));
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        if (!context) throw new Error('The raster logo could not be read.');
+        if (settings.background) {
+          context.fillStyle = settings.background;
+          context.fillRect(0, 0, canvas.width, canvas.height);
+        }
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = 'high';
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+        let pixelBinary = '';
+        const pixelBytes = pixels.data;
+        const chunkSize = 32_768;
+        for (let offset = 0; offset < pixelBytes.length; offset += chunkSize) {
+          pixelBinary += String.fromCharCode(
+            ...pixelBytes.subarray(offset, Math.min(offset + chunkSize, pixelBytes.length)),
+          );
+        }
+        return {
+          width: pixels.width,
+          height: pixels.height,
+          pixelBase64: globalThis.btoa(pixelBinary),
+          png: canvas.toDataURL('image/png').split(',')[1],
+        };
+      }, options),
+      rasterisationTimeoutMs,
+      'The private logo rasterisation step exceeded its time limit.',
+    );
+    if (
+      !Number.isInteger(raster.width) ||
+      !Number.isInteger(raster.height) ||
+      raster.width < 1 ||
+      raster.height < 1 ||
+      raster.width * raster.height > 1_500_000 ||
+      typeof raster.pixelBase64 !== 'string' ||
+      !raster.png
+    ) {
+      throw new Error('The prepared logo image did not pass the private raster validation check.');
+    }
+    const data = Buffer.from(raster.pixelBase64, 'base64');
+    if (data.byteLength !== raster.width * raster.height * 4) {
+      throw new Error('The prepared logo pixels did not pass the private raster validation check.');
+    }
+    return {
+      width: raster.width,
+      height: raster.height,
+      data: Uint8ClampedArray.from(data),
+      png: raster.png,
+    };
   } finally {
     await page.close();
   }
-  const svg = ImageTracer.imagedataToSVG(
-    {
-      width: imageData.width,
-      height: imageData.height,
-      data: Uint8ClampedArray.from(imageData.data),
-    },
-    {
-      numberofcolors: 3,
-      colorquantcycles: 2,
-      pathomit: 8,
-      ltres: 1,
-      qtres: 1,
-      rightangleenhance: true,
-      viewbox: true,
-      desc: false,
-    },
-  );
-  if (typeof svg !== 'string' || !svg.startsWith('<svg') || Buffer.byteLength(svg) > 1_500_000) {
-    throw new Error('The vector tracer did not produce a reviewable SVG.');
+}
+
+function imageDataFromRaster(raster) {
+  return {
+    width: raster.width,
+    height: raster.height,
+    data: Uint8ClampedArray.from(raster.data),
+  };
+}
+
+function enhancementDimensions(width, height) {
+  const sourceRatio = Math.max(width / height, 1 / 3);
+  const ratio = Math.min(sourceRatio, 3);
+  // A 1024px master keeps private browser rasterisation reliable in constrained worker memory.
+  // The original captured logo remains the source of truth for geometry and colour.
+  const longEdge = 1024;
+  if (ratio >= 1) {
+    return {
+      width: longEdge,
+      height: Math.max(16, Math.round(longEdge / ratio / 16) * 16),
+    };
   }
-  return svg;
+  return {
+    width: Math.max(16, Math.round((longEdge * ratio) / 16) * 16),
+    height: longEdge,
+  };
+}
+
+function imageGenerationDimensions(width, height) {
+  const minimumPixels = 1_050_000;
+  const scale = Math.max(1, Math.sqrt(minimumPixels / Math.max(1, width * height)));
+  return {
+    width: Math.ceil((width * scale) / 16) * 16,
+    height: Math.ceil((height * scale) / 16) * 16,
+  };
+}
+
+function enhancementMatte(palette) {
+  // GPT Image cannot return alpha. Pick a matte that does not disappear behind a
+  // light logo, then recover transparency deterministically after the edit.
+  const containsLightMark = palette.some(
+    (colour) => colour.red >= 232 && colour.green >= 232 && colour.blue >= 232,
+  );
+  return containsLightMark ? '#17191d' : '#ffffff';
+}
+
+function visibleLogoMask(imageData) {
+  const { width, height, data } = imageData;
+  const matte = logoMatte(imageData);
+  const mask = new Uint8Array(width * height);
+  let left = width;
+  let top = height;
+  let right = -1;
+  let bottom = -1;
+  let visible = 0;
+  for (let index = 0, pixel = 0; index < data.length; index += 4, pixel += 1) {
+    const red = data[index];
+    const green = data[index + 1];
+    const blue = data[index + 2];
+    const alpha = data[index + 3];
+    const distanceFromMatte = matte
+      ? (matte.red - red) ** 2 + (matte.green - green) ** 2 + (matte.blue - blue) ** 2
+      : Number.POSITIVE_INFINITY;
+    if (alpha < 128 || distanceFromMatte < 34 ** 2) continue;
+    mask[pixel] = 1;
+    visible += 1;
+    const x = pixel % width;
+    const y = Math.floor(pixel / width);
+    left = Math.min(left, x);
+    top = Math.min(top, y);
+    right = Math.max(right, x);
+    bottom = Math.max(bottom, y);
+  }
+  return {
+    mask,
+    visible,
+    bounds: visible ? { left, top, right, bottom } : undefined,
+  };
+}
+
+function enhancementFidelity(reference, candidate) {
+  if (reference.width !== candidate.width || reference.height !== candidate.height) {
+    return { accepted: false, detail: 'The AI result changed the source canvas dimensions.' };
+  }
+  const source = visibleLogoMask(reference);
+  const enhanced = visibleLogoMask(candidate);
+  if (!source.bounds || !enhanced.bounds) {
+    return { accepted: false, detail: 'The AI result did not contain a visible logo.' };
+  }
+  let intersection = 0;
+  for (let index = 0; index < source.mask.length; index += 1) {
+    if (source.mask[index] && enhanced.mask[index]) intersection += 1;
+  }
+  const overlap = (2 * intersection) / Math.max(1, source.visible + enhanced.visible);
+  const sourceWidth = source.bounds.right - source.bounds.left + 1;
+  const sourceHeight = source.bounds.bottom - source.bounds.top + 1;
+  const enhancedWidth = enhanced.bounds.right - enhanced.bounds.left + 1;
+  const enhancedHeight = enhanced.bounds.bottom - enhanced.bounds.top + 1;
+  const widthRatio = enhancedWidth / sourceWidth;
+  const heightRatio = enhancedHeight / sourceHeight;
+  const areaRatio = enhanced.visible / source.visible;
+  const accepted =
+    overlap >= 0.74 &&
+    areaRatio >= 0.62 &&
+    areaRatio <= 1.5 &&
+    widthRatio >= 0.72 &&
+    widthRatio <= 1.32 &&
+    heightRatio >= 0.72 &&
+    heightRatio <= 1.32;
+  return {
+    accepted,
+    detail: accepted
+      ? `AI output passed the source-shape check (${Math.round(overlap * 100)}% overlap).`
+      : 'The AI output did not preserve the original logo geometry closely enough.',
+    overlap,
+  };
+}
+
+function enhancementFailure(response, body) {
+  const code = readString(recordValue(recordValue(body).error).code);
+  if (code === 'moderation_blocked') return 'The AI logo clean-up request was blocked.';
+  if (response.status === 401 || response.status === 403)
+    return 'The AI logo clean-up service could not be authenticated.';
+  if (response.status === 429)
+    return 'The AI logo clean-up service is busy. Retry the SVG conversion shortly.';
+  if (response.status >= 500)
+    return 'The AI logo clean-up service is temporarily unavailable. Retry shortly.';
+  return 'The AI logo clean-up service could not prepare this logo.';
+}
+
+async function enhanceLogoWithOpenAi({ apiKey, model, raster, matte, signal }) {
+  throwIfAborted(signal);
+  const body = Buffer.from(raster.png, 'base64');
+  const form = new FormData();
+  form.set('model', model);
+  form.set(
+    'prompt',
+    [
+      'This is a logo clean-up task, not a redesign.',
+      'Preserve the exact visible logo: every letter, word, mark, proportion, spacing, placement, and colour relationship must remain unchanged.',
+      'Do not add, remove, replace, restyle, redraw, translate, or invent anything.',
+      'Only remove compression artefacts and smooth pixelated or jagged edges so the existing logo is clearer for private vector tracing.',
+      `Keep the logo centred on the same plain ${matte} canvas with the same composition. Do not add a shadow, gradient, or texture.`,
+    ].join(' '),
+  );
+  form.set('quality', process.env.SITEFORGE_LOGO_ENHANCEMENT_QUALITY?.trim() || 'medium');
+  const outputSize = imageGenerationDimensions(raster.width, raster.height);
+  form.set('size', `${outputSize.width}x${outputSize.height}`);
+  form.append('image[]', new Blob([body], { type: 'image/png' }), 'logo-reference.png');
+  const response = await fetch('https://api.openai.com/v1/images/edits', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${apiKey}` },
+    signal: signal
+      ? AbortSignal.any([AbortSignal.timeout(imageGenerationTimeoutMs), signal])
+      : AbortSignal.timeout(imageGenerationTimeoutMs),
+    body: form,
+  });
+  const responseBody = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(enhancementFailure(response, recordValue(responseBody)));
+  const imageData = Array.isArray(recordValue(responseBody).data)
+    ? recordValue(responseBody).data
+    : [];
+  const output = readString(recordValue(imageData[0]).b64_json);
+  if (!output) throw new Error('The AI logo clean-up service returned no image.');
+  return {
+    blob: new Blob([Buffer.from(output, 'base64')], { type: 'image/png' }),
+    requestId: response.headers.get('x-request-id') || undefined,
+  };
+}
+
+async function createAlphaMatteWithOpenAi({ apiKey, model, raster, signal }) {
+  throwIfAborted(signal);
+  const body = Buffer.from(raster.png, 'base64');
+  const form = new FormData();
+  form.set('model', model);
+  form.set(
+    'prompt',
+    [
+      'Create a high-quality alpha matte for this exact logo, not a redesign.',
+      'Return only the same logo silhouette in solid black on a perfectly flat pure white background.',
+      'Black means fully visible logo; white means transparent background; use smooth grey only for antialiased edges.',
+      'Preserve every letter, curve, corner, spacing, proportion, and placement exactly. Do not add shadows, gradients, texture, colours, or any extra marks.',
+    ].join(' '),
+  );
+  // The source-verified silhouette corrects this request, so a low-quality matte is both
+  // sufficient for soft-edge coverage and much faster than a second high-quality render.
+  form.set('quality', process.env.SITEFORGE_LOGO_ALPHA_MATTE_QUALITY?.trim() || 'medium');
+  const outputSize = imageGenerationDimensions(raster.width, raster.height);
+  form.set('size', `${outputSize.width}x${outputSize.height}`);
+  form.append('image[]', new Blob([body], { type: 'image/png' }), 'logo-cleanup.png');
+  const response = await fetch('https://api.openai.com/v1/images/edits', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${apiKey}` },
+    signal: signal
+      ? AbortSignal.any([AbortSignal.timeout(imageGenerationTimeoutMs), signal])
+      : AbortSignal.timeout(imageGenerationTimeoutMs),
+    body: form,
+  });
+  const responseBody = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(enhancementFailure(response, recordValue(responseBody)));
+  const imageData = Array.isArray(recordValue(responseBody).data)
+    ? recordValue(responseBody).data
+    : [];
+  const output = readString(recordValue(imageData[0]).b64_json);
+  if (!output) throw new Error('The AI logo clean-up service returned no alpha matte.');
+  return {
+    blob: new Blob([Buffer.from(output, 'base64')], { type: 'image/png' }),
+    requestId: response.headers.get('x-request-id') || undefined,
+  };
+}
+
+async function rasterBlobFromPixels(browser, imageData) {
+  const page = await browser.newPage({ viewport: { width: 512, height: 512 } });
+  try {
+    const png = await page.evaluate(
+      ({ width, height, pixelBase64 }) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('The vectorizer input could not be prepared.');
+        const binary = globalThis.atob(pixelBase64);
+        const data = new Uint8ClampedArray(binary.length);
+        for (let index = 0; index < binary.length; index += 1) {
+          data[index] = binary.charCodeAt(index);
+        }
+        context.putImageData(new globalThis.ImageData(data, width, height), 0, 0);
+        return canvas.toDataURL('image/png').split(',')[1];
+      },
+      {
+        width: imageData.width,
+        height: imageData.height,
+        pixelBase64: Buffer.from(imageData.data).toString('base64'),
+      },
+    );
+    return new Blob([Buffer.from(png, 'base64')], { type: 'image/png' });
+  } finally {
+    await page.close();
+  }
+}
+
+async function vectorizeWithVectorizerAi({ apiId, apiSecret, raster, signal }) {
+  if (!apiId || !apiSecret) {
+    throw new Error(
+      'Vectorizer.AI requires VECTORIZER_AI_API_ID and VECTORIZER_AI_API_SECRET in server-only secrets.',
+    );
+  }
+  const form = new FormData();
+  form.set('image', raster, 'ai-remastered-logo.png');
+  const response = await fetch('https://api.vectorizer.ai/api/v1/vectorize', {
+    method: 'POST',
+    headers: { authorization: `Basic ${Buffer.from(`${apiId}:${apiSecret}`).toString('base64')}` },
+    signal: signal
+      ? AbortSignal.any([AbortSignal.timeout(imageGenerationTimeoutMs), signal])
+      : AbortSignal.timeout(imageGenerationTimeoutMs),
+    body: form,
+  });
+  const svg = await response.text();
+  if (!response.ok || !/<svg\b/i.test(svg)) {
+    throw new Error(
+      response.status === 401 || response.status === 403
+        ? 'Vectorizer.AI could not authenticate with the configured server-only credentials.'
+        : response.status === 429
+          ? 'Vectorizer.AI is busy. Retry the SVG conversion shortly.'
+          : 'Vectorizer.AI could not create a reviewable SVG from this logo.',
+    );
+  }
+  return editableSvgSource(new Blob([svg], { type: 'image/svg+xml' }));
+}
+
+function wixOriginalImageUrl(sourceUrl) {
+  try {
+    const url = new URL(sourceUrl);
+    if (url.protocol !== 'https:' || url.hostname !== 'static.wixstatic.com') return undefined;
+    const match = /^\/media\/([^/]+)\/v1\//.exec(url.pathname);
+    return match ? `https://static.wixstatic.com/media/${match[1]}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function highestQualityLogoSource(asset, fallback, signal) {
+  if (asset.content_type === 'image/svg+xml') return fallback;
+  const sourceUrl = wixOriginalImageUrl(readString(recordValue(asset.metadata).sourceUrl));
+  if (!sourceUrl) return fallback;
+  try {
+    const response = await fetch(sourceUrl, { signal });
+    const contentType = response.headers.get('content-type')?.split(';')[0].trim() || '';
+    const contentLength = Number(response.headers.get('content-length') || '0');
+    if (
+      !response.ok ||
+      !contentType.startsWith('image/') ||
+      (Number.isFinite(contentLength) && contentLength > 15 * 1024 * 1024)
+    ) {
+      return fallback;
+    }
+    const body = await response.arrayBuffer();
+    if (!body.byteLength || body.byteLength > 15 * 1024 * 1024) return fallback;
+    return new Blob([body], { type: contentType });
+  } catch {
+    return fallback;
+  }
 }
 
 async function storeVectorSuggestion(client, job, sourceAsset, svg) {
@@ -283,6 +640,336 @@ async function storeVectorSuggestion(client, job, sourceAsset, svg) {
     { onConflict: 'storage_path' },
   );
   if (artifactError) throw new Error('The worker could not index the private vector suggestion.');
+}
+
+function editableSvg(svg) {
+  const tokens = new Map();
+  function tokenFor(colour) {
+    const key = colour.trim();
+    if (!tokens.has(key)) tokens.set(key, `--siteforge-logo-colour-${tokens.size + 1}`);
+    return tokens.get(key);
+  }
+  const root = svg.replace(/<svg\b([^>]*)>/i, '<svg$1 data-siteforge-logo-variant="editable">');
+  return root.replace(/\b(fill|stroke)="(?!none\b)([^"]*)"/gi, (_match, property, colour) => {
+    const token = tokenFor(colour);
+    return `${property}="var(${token}, ${colour})"`;
+  });
+}
+
+async function editableSvgSource(blob) {
+  const svg = await blob.text();
+  if (!/^\s*<svg\b/i.test(svg) || Buffer.byteLength(svg) > 1_500_000) {
+    throw new Error('The source logo is not a reviewable SVG.');
+  }
+  return svg
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/\son\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+}
+
+async function loadArtifactBlob(client, artifact) {
+  const { data, error } = await client.storage
+    .from(artifact.storage_bucket || artifactBucket)
+    .download(artifact.storage_path);
+  if (error || !data) {
+    throw new Error('The saved AI clean-up image could not be loaded.');
+  }
+  return data;
+}
+
+async function storeAiEnhancedLogoVariant(client, job, sourceAsset, blob, enhancement) {
+  const metadata = recordValue(sourceAsset.metadata);
+  const retryToken = readString(job.editable_logo_retry_token);
+  const storagePath = `${job.organization_id}/${job.business_id}/${job.crawl_run_id}/derived/ai-enhanced-logo-${sourceAsset.id}${
+    retryToken ? `-${retryToken}` : ''
+  }.png`;
+  const content = Buffer.from(await blob.arrayBuffer());
+  const { error: uploadError } = await client.storage
+    .from(artifactBucket)
+    .upload(storagePath, content, {
+      contentType: 'image/png',
+      upsert: true,
+    });
+  if (uploadError) throw new Error('The worker could not save the private AI clean-up image.');
+  const { error: artifactError } = await client.from('artifacts').upsert(
+    {
+      organization_id: job.organization_id,
+      business_id: job.business_id,
+      crawl_run_id: job.crawl_run_id,
+      kind: 'asset',
+      label: `AI-cleaned tracing source from ${sourceAsset.label || 'approved logo'}`,
+      storage_bucket: artifactBucket,
+      storage_path: storagePath,
+      content_type: 'image/png',
+      byte_size: content.byteLength,
+      sha256: createHash('sha256').update(content).digest('hex'),
+      metadata: {
+        sourceUrl: readString(metadata.sourceUrl),
+        pageUrl: readString(metadata.pageUrl),
+        assetType: 'logo',
+        detail:
+          'Private AI clean-up suggestion used only as a reviewable tracing source. The final SVG remains colour-locked to the approved original logo.',
+        context: readString(metadata.context),
+        logoVariant: 'ai_enhanced',
+        privateAiSuggestion: true,
+        aiEnhancement: true,
+        aiEnhancementModel: enhancement.model,
+        aiEnhancementMatte: enhancement.matte,
+        ...(enhancement.requestId ? { aiEnhancementRequestId: enhancement.requestId } : {}),
+        ...(retryToken ? { retryToken } : {}),
+        derivedFromAssetId: sourceAsset.id,
+        derivedFromContentType: sourceAsset.content_type || 'image',
+        reviewState: 'needs_review',
+      },
+    },
+    { onConflict: 'storage_path' },
+  );
+  if (artifactError) throw new Error('The worker could not index the private AI clean-up image.');
+}
+
+async function storeLogoAppearanceVariants(
+  client,
+  browser,
+  job,
+  sourceAsset,
+  raster,
+  palette,
+  sourceReference,
+  alphaMatte,
+  alphaMatteBlob,
+  alphaMatteRequestId,
+  onStored,
+) {
+  const metadata = recordValue(sourceAsset.metadata);
+  const retryToken = readString(job.editable_logo_retry_token);
+  const variants = transparentLogoVariants(imageDataFromRaster(raster), palette, {
+    sourceReference: imageDataFromRaster(sourceReference),
+    alphaMatte: alphaMatte ? imageDataFromRaster(alphaMatte) : undefined,
+    useAiMatteOnly: Boolean(alphaMatte),
+  });
+  const matteVariant = alphaMatte
+    ? { key: 'alpha-matte', label: 'ChatGPT alpha matte', data: alphaMatte.data }
+    : alphaMattePreview(variants);
+  const matteBlob =
+    alphaMatteBlob ??
+    (await rasterBlobFromPixels(browser, {
+      width: raster.width,
+      height: raster.height,
+      data: matteVariant.data,
+    }));
+  const matteContent = Buffer.from(await matteBlob.arrayBuffer());
+  const matteStoragePath = `${job.organization_id}/${job.business_id}/${job.crawl_run_id}/derived/logo-alpha-matte-${sourceAsset.id}${
+    retryToken ? `-${retryToken}` : ''
+  }.png`;
+  const { error: matteUploadError } = await client.storage
+    .from(artifactBucket)
+    .upload(matteStoragePath, matteContent, {
+      contentType: 'image/png',
+      upsert: true,
+    });
+  if (matteUploadError) throw new Error('The worker could not save the alpha matte.');
+  const { error: matteArtifactError } = await client.from('artifacts').upsert(
+    {
+      organization_id: job.organization_id,
+      business_id: job.business_id,
+      crawl_run_id: job.crawl_run_id,
+      kind: 'asset',
+      label: `${matteVariant.label} from ${sourceAsset.label || 'approved logo'}`,
+      storage_bucket: artifactBucket,
+      storage_path: matteStoragePath,
+      content_type: 'image/png',
+      byte_size: matteContent.byteLength,
+      sha256: createHash('sha256').update(matteContent).digest('hex'),
+      metadata: {
+        sourceUrl: readString(metadata.sourceUrl),
+        pageUrl: readString(metadata.pageUrl),
+        assetType: 'logo_alpha_matte',
+        detail:
+          'Private, reviewable high-quality alpha matte created by ChatGPT. This exact black-and-white output drives the transparent logo versions.',
+        context: readString(metadata.context),
+        logoVariant: 'alpha_matte',
+        privateAiSuggestion: true,
+        aiAlphaMatte: true,
+        rawAiOutput: Boolean(alphaMatteBlob),
+        ...(alphaMatteRequestId ? { aiAlphaMatteRequestId: alphaMatteRequestId } : {}),
+        transparentBackground: false,
+        derivedFromAssetId: sourceAsset.id,
+        derivedFromContentType: sourceAsset.content_type || 'image',
+        ...(retryToken ? { retryToken } : {}),
+        reviewState: 'needs_review',
+      },
+    },
+    { onConflict: 'storage_path' },
+  );
+  if (matteArtifactError) throw new Error('The worker could not index the alpha matte.');
+  await onStored?.(matteVariant, 0, variants.length);
+  for (const [index, variant] of variants.entries()) {
+    const blob = await rasterBlobFromPixels(browser, {
+      width: raster.width,
+      height: raster.height,
+      data: variant.data,
+    });
+    const content = Buffer.from(await blob.arrayBuffer());
+    const storagePath = `${job.organization_id}/${job.business_id}/${job.crawl_run_id}/derived/logo-${variant.key}-${sourceAsset.id}${
+      retryToken ? `-${retryToken}` : ''
+    }.png`;
+    const { error: uploadError } = await client.storage
+      .from(artifactBucket)
+      .upload(storagePath, content, {
+        contentType: 'image/png',
+        upsert: true,
+      });
+    if (uploadError) throw new Error('The worker could not save a transparent logo version.');
+    const { error: artifactError } = await client.from('artifacts').upsert(
+      {
+        organization_id: job.organization_id,
+        business_id: job.business_id,
+        crawl_run_id: job.crawl_run_id,
+        kind: 'asset',
+        label: `${variant.label} transparent logo from ${sourceAsset.label || 'approved logo'}`,
+        storage_bucket: artifactBucket,
+        storage_path: storagePath,
+        content_type: 'image/png',
+        byte_size: content.byteLength,
+        sha256: createHash('sha256').update(content).digest('hex'),
+        metadata: {
+          sourceUrl: readString(metadata.sourceUrl),
+          pageUrl: readString(metadata.pageUrl),
+          assetType: 'logo_variant',
+          detail:
+            'Private transparent logo version derived from a verified high-fidelity clean-up source. Colours are deterministic and the original geometry is retained.',
+          context: readString(metadata.context),
+          logoVariant: 'appearance',
+          logoAppearance: variant.key,
+          transparentBackground: true,
+          derivedFromAssetId: sourceAsset.id,
+          derivedFromContentType: sourceAsset.content_type || 'image',
+          ...(retryToken ? { retryToken } : {}),
+          reviewState: 'needs_review',
+        },
+      },
+      { onConflict: 'storage_path' },
+    );
+    if (artifactError) throw new Error('The worker could not index a transparent logo version.');
+    await onStored?.(variant, index + 1, variants.length);
+  }
+}
+
+async function removePriorLogoAppearanceVariants(client, job, sourceAssetId) {
+  const { data: artifacts, error: artifactsError } = await client
+    .from('artifacts')
+    .select('id, storage_bucket, storage_path, metadata')
+    .eq('crawl_run_id', job.crawl_run_id)
+    .eq('kind', 'asset')
+    .contains('metadata', { derivedFromAssetId: sourceAssetId });
+  if (artifactsError) throw new Error('The worker could not locate the previous logo versions.');
+  const previousVariants = (artifacts ?? []).filter((artifact) =>
+    ['appearance', 'alpha_matte'].includes(readString(recordValue(artifact.metadata).logoVariant)),
+  );
+  if (!previousVariants.length) return;
+
+  const pathsByBucket = new Map();
+  for (const artifact of previousVariants) {
+    const bucket = artifact.storage_bucket || artifactBucket;
+    pathsByBucket.set(bucket, [...(pathsByBucket.get(bucket) ?? []), artifact.storage_path]);
+  }
+  for (const [bucket, paths] of pathsByBucket) {
+    const { error } = await client.storage.from(bucket).remove(paths);
+    if (error) throw new Error('The worker could not remove the previous logo version files.');
+  }
+  const { error: deleteError } = await client
+    .from('artifacts')
+    .delete()
+    .in(
+      'id',
+      previousVariants.map((artifact) => artifact.id),
+    );
+  if (deleteError)
+    throw new Error('The worker could not remove the previous logo version records.');
+}
+
+async function storeEditableLogoVariant(client, job, sourceAsset, svg, options = {}) {
+  const metadata = recordValue(sourceAsset.metadata);
+  const isRasterSource = sourceAsset.content_type !== 'image/svg+xml';
+  const retryToken = readString(job.editable_logo_retry_token);
+  const storagePath = `${job.organization_id}/${job.business_id}/${job.crawl_run_id}/derived/${
+    isRasterSource ? 'editable-logo-vtracer' : 'editable-logo'
+  }-${sourceAsset.id}${retryToken ? `-${retryToken}` : ''}.svg`;
+  const content = Buffer.from(editableSvg(svg), 'utf8');
+  const { error: uploadError } = await client.storage
+    .from(artifactBucket)
+    .upload(storagePath, content, { contentType: 'image/svg+xml', upsert: true });
+  if (uploadError) throw new Error('The worker could not save the editable SVG logo.');
+  const { error: artifactError } = await client.from('artifacts').upsert(
+    {
+      organization_id: job.organization_id,
+      business_id: job.business_id,
+      crawl_run_id: job.crawl_run_id,
+      kind: 'asset',
+      label: `${
+        options.simplifier
+          ? 'Geometry-fitted editable SVG'
+          : options.aiEnhancement
+            ? 'AI-assisted high-fidelity editable SVG'
+            : isRasterSource
+              ? 'High-fidelity editable SVG'
+              : 'Editable SVG'
+      } from ${sourceAsset.label || 'approved logo'}`,
+      storage_bucket: artifactBucket,
+      storage_path: storagePath,
+      content_type: 'image/svg+xml',
+      byte_size: content.byteLength,
+      sha256: createHash('sha256').update(content).digest('hex'),
+      metadata: {
+        sourceUrl: readString(metadata.sourceUrl),
+        pageUrl: readString(metadata.pageUrl),
+        assetType: 'logo',
+        detail: options.simplifier
+          ? 'Private editable SVG traced with geometry fitting for straight lines, sharp corners, and smooth Bézier curves. Original logo colours are retained as editable fill and stroke CSS variables.'
+          : options.aiEnhancement
+            ? 'Private editable SVG traced from an AI clean-up suggestion that passed a source-shape check. Original logo colours are retained as editable fill and stroke CSS variables.'
+            : 'Private editable SVG traced with VTracer from a human-approved logo. Source colours are retained as editable fill and stroke CSS variables.',
+        context: readString(metadata.context),
+        vectorSuggestion: true,
+        logoVariant: 'editable',
+        editableColourTokenPrefix: '--siteforge-logo-colour-',
+        vectorizer: options.vectorizer ?? (isRasterSource ? 'vtracer' : 'source-svg'),
+        ...(options.simplifier ? { svgSimplifier: options.simplifier } : {}),
+        ...(options.aiEnhancement
+          ? { aiEnhancement: true, aiEnhancementModel: options.aiEnhancementModel }
+          : {}),
+        ...(retryToken ? { retryToken } : {}),
+        derivedFromAssetId: sourceAsset.id,
+        derivedFromContentType: sourceAsset.content_type || 'image',
+        reviewState: 'needs_review',
+      },
+    },
+    { onConflict: 'storage_path' },
+  );
+  if (artifactError) throw new Error('The worker could not index the editable SVG logo.');
+}
+
+function shouldSimplifyLogoOutline(raster, palette) {
+  const width = Number(raster?.width) || 0;
+  const height = Number(raster?.height) || 0;
+  const longestEdge = Math.max(width, height);
+  return (
+    Array.isArray(palette) &&
+    palette.length <= 2 &&
+    longestEdge > 600 &&
+    width / Math.max(height, 1) >= 1.35
+  );
+}
+
+async function resampleLogoForGeometrySimplification(browser, raster) {
+  if (!raster?.png) return raster;
+  return rasteriseLogo(
+    browser,
+    new Blob([Buffer.from(raster.png, 'base64')], { type: 'image/png' }),
+    {
+      longestEdge: 600,
+      pixelBudget: 400_000,
+    },
+  );
 }
 
 async function pixelColourCandidates(browser, blob) {
@@ -713,6 +1400,20 @@ async function processJob(client, job, workerId, apiKey, model) {
       .eq('kind', 'asset')
       .order('created_at');
     if (assetError) throw new Error('The worker could not load the private visual assets.');
+    const savedAiEnhancedLogoBySourceId = new Map();
+    for (const candidate of [...(assets ?? [])].sort(
+      (left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
+    )) {
+      const metadata = recordValue(candidate.metadata);
+      const sourceAssetId = readString(metadata.derivedFromAssetId);
+      if (
+        metadata.logoVariant === 'ai_enhanced' &&
+        sourceAssetId &&
+        !savedAiEnhancedLogoBySourceId.has(sourceAssetId)
+      ) {
+        savedAiEnhancedLogoBySourceId.set(sourceAssetId, candidate);
+      }
+    }
     const { data: pages, error: pagesError } = await client
       .from('crawl_pages')
       .select('url, page_type, title')
@@ -733,40 +1434,110 @@ async function processJob(client, job, workerId, apiKey, model) {
         storedAnnotationFromRow(annotation),
       ]),
     );
+    const { data: brandKits, error: brandKitsError } = await client
+      .from('brand_kits')
+      .select('primary_logo_artifact_id')
+      .eq('business_id', job.business_id)
+      .order('version', { ascending: false })
+      .limit(1);
+    if (brandKitsError) throw new Error('The worker could not load the Brand Kit logo choice.');
+    const selectedPrimaryLogoIds = new Set(
+      (brandKits ?? []).map((kit) => readString(kit.primary_logo_artifact_id)).filter(Boolean),
+    );
+    const retryEditableLogoAssetId = readString(job.editable_logo_retry_asset_id);
+    const simplifyEditableLogoGeometry = job.editable_logo_simplification_enabled === true;
+    const editableLogoVectorizerProvider =
+      readString(job.editable_logo_vectorizer_provider) === 'vectorizer_ai'
+        ? 'vectorizer_ai'
+        : 'vtracer';
+    const conversionAnnotation = (asset) => {
+      const annotation = annotationsByAsset.get(asset.id);
+      if (
+        annotation &&
+        annotation.reviewState === 'approved' &&
+        annotation.businessAssociation === 'target_business' &&
+        ['primary_logo', 'secondary_mark'].includes(annotation.suggestedRole)
+      ) {
+        return annotation;
+      }
+      if (!selectedPrimaryLogoIds.has(asset.id)) return annotation;
+      return {
+        suggestedRole: 'primary_logo',
+        businessAssociation: 'target_business',
+        reviewState: 'approved',
+        retryable: false,
+      };
+    };
     const derivedFromAssetIds = new Set(
       (assets ?? [])
         .filter((asset) => isDerivedVectorSuggestion(asset))
         .map((asset) => readString(recordValue(asset.metadata).derivedFromAssetId))
         .filter(Boolean),
     );
-    const selectedAssets = (assets ?? []).filter(
-      (asset) => !isDerivedVectorSuggestion(asset) && isSelectedForAnalysis(asset),
+    const editableVariantFromAssetIds = new Set(
+      (assets ?? [])
+        .filter((asset) => {
+          const metadata = recordValue(asset.metadata);
+          return (
+            metadata.logoVariant === 'editable' &&
+            (metadata.vectorizer === 'vtracer' ||
+              readString(metadata.derivedFromContentType) === 'image/svg+xml')
+          );
+        })
+        .map((asset) => readString(recordValue(asset.metadata).derivedFromAssetId))
+        .filter(Boolean),
     );
-    const assetsNeedingAnalysis = selectedAssets.filter(
-      (asset) =>
-        !isDerivedVectorSuggestion(asset) &&
-        (!annotationsByAsset.has(asset.id) || annotationsByAsset.get(asset.id)?.retryable),
-    );
-    const vectorCandidates = selectedAssets.filter(
-      (asset) =>
-        canCreateVectorSuggestion(asset, annotationsByAsset.get(asset.id)) &&
-        !derivedFromAssetIds.has(asset.id),
-    );
+    const selectedAssets = retryEditableLogoAssetId
+      ? (assets ?? []).filter(
+          (asset) => asset.id === retryEditableLogoAssetId && !isDerivedVectorSuggestion(asset),
+        )
+      : (assets ?? []).filter(
+          (asset) =>
+            !isDerivedVectorSuggestion(asset) &&
+            (isSelectedForAnalysis(asset) || selectedPrimaryLogoIds.has(asset.id)),
+        );
+    const assetsNeedingAnalysis = retryEditableLogoAssetId
+      ? []
+      : selectedAssets.filter(
+          (asset) =>
+            !isDerivedVectorSuggestion(asset) &&
+            !selectedPrimaryLogoIds.has(asset.id) &&
+            (!annotationsByAsset.has(asset.id) || annotationsByAsset.get(asset.id)?.retryable),
+        );
+    const vectorCandidates = retryEditableLogoAssetId
+      ? selectedAssets.filter(
+          (asset) =>
+            asset.id === retryEditableLogoAssetId &&
+            canCreateEditableLogoVariant(asset, conversionAnnotation(asset)),
+        )
+      : [];
     const totalItems =
-      assetsNeedingAnalysis.length +
-      vectorCandidates.length +
-      Math.min((pages ?? []).length, maxBrandEvidencePages);
+      assetsNeedingAnalysis.length + vectorCandidates.length + retryEditableLogoAssetId
+        ? 0
+        : Math.min((pages ?? []).length, maxBrandEvidencePages);
     await updateProgress(client, job, workerId, {
       progress_phase: 'preparing',
       progress_detail: assetsNeedingAnalysis.length
         ? 'Private visual assets loaded. Preparing newly captured images for analysis.'
         : vectorCandidates.length
-          ? 'Preparing review-required vector suggestions for approved raster logos.'
+          ? 'Preparing high-fidelity transparent logo versions from the approved logo.'
           : 'Existing visual suggestions retained. Refreshing deterministic brand evidence only.',
       current_asset_id: null,
       total_items: totalItems,
       completed_items: 0,
     });
+    if (retryEditableLogoAssetId) {
+      await cancellation.assertActive();
+      await removePriorLogoAppearanceVariants(client, job, retryEditableLogoAssetId);
+      await updateProgress(client, job, workerId, {
+        progress_phase: 'preparing_logo_enhancement',
+        progress_detail:
+          'Previous generated logo versions removed. Preparing the selected logo only.',
+        current_asset_id: retryEditableLogoAssetId,
+        total_items: totalItems,
+        completed_items: 0,
+      });
+    }
 
     let completedItems = 0;
     let progressQueue = Promise.resolve();
@@ -800,33 +1571,45 @@ async function processJob(client, job, workerId, apiKey, model) {
         altOrDetail: readString(metadata.detail),
         surroundingContext: readString(metadata.context),
       };
-      if (!apiKey) {
-        throw new Error('OPENAI_API_KEY is required to analyse newly captured visual assets.');
-      }
       let annotation;
-      try {
-        annotation = await analyzeAsset({
-          apiKey,
-          model,
-          blob,
-          context: sourceContext,
-          signal: cancellation.signal,
-        });
-      } catch (error) {
-        await cancellation.assertActive();
-        const detail = safeAssetPreparationDetail(error);
-        console.warn(`[asset-analysis-worker] skipped model analysis for ${asset.id}: ${detail}`);
+      if (!apiKey) {
         annotation = {
           observedDescription: '',
           visibleText: [],
           suggestedRole: 'unknown',
           businessAssociation: 'unknown',
           safeReuseNote: 'Review this captured image manually before deciding whether to reuse it.',
-          cautions: [detail],
+          cautions: [
+            'Vision analysis is unavailable because no server-only model key is configured.',
+          ],
           confidence: 'low',
-          raw: { processingStatus: 'unavailable', detail },
+          raw: { processingStatus: 'unavailable', detail: 'Vision analysis is unavailable.' },
         };
-      }
+      } else
+        try {
+          annotation = await analyzeAsset({
+            apiKey,
+            model,
+            blob,
+            context: sourceContext,
+            signal: cancellation.signal,
+          });
+        } catch (error) {
+          await cancellation.assertActive();
+          const detail = safeAssetPreparationDetail(error);
+          console.warn(`[asset-analysis-worker] skipped model analysis for ${asset.id}: ${detail}`);
+          annotation = {
+            observedDescription: '',
+            visibleText: [],
+            suggestedRole: 'unknown',
+            businessAssociation: 'unknown',
+            safeReuseNote:
+              'Review this captured image manually before deciding whether to reuse it.',
+            cautions: [detail],
+            confidence: 'low',
+            raw: { processingStatus: 'unavailable', detail },
+          };
+        }
       if (annotation.usage) {
         await recordAiUsage(client, {
           organizationId: job.organization_id,
@@ -886,7 +1669,7 @@ async function processJob(client, job, workerId, apiKey, model) {
       for (const asset of selectedAssets) {
         await cancellation.assertActive();
         if (isDerivedVectorSuggestion(asset)) continue;
-        const existingAnnotation = annotationsByAsset.get(asset.id);
+        const existingAnnotation = conversionAnnotation(asset);
         if (existingAnnotation && !existingAnnotation.retryable) {
           const metadata = recordValue(asset.metadata);
           const likelyLogo =
@@ -903,27 +1686,431 @@ async function processJob(client, job, workerId, apiKey, model) {
               );
               await cancellation.assertActive();
               if (
-                canCreateVectorSuggestion(asset, existingAnnotation) &&
-                !derivedFromAssetIds.has(asset.id)
+                asset.id === retryEditableLogoAssetId &&
+                canCreateEditableLogoVariant(asset, existingAnnotation)
               ) {
                 await updateProgress(client, job, workerId, {
-                  progress_phase: 'vectorising_logo',
+                  progress_phase: 'preparing_logo_enhancement',
                   progress_detail:
-                    'Creating a private vector suggestion from the approved raster logo.',
+                    'Preparing the highest-quality captured logo for private clean-up and tracing.',
                   current_asset_id: asset.id,
                   total_items: totalItems,
                   completed_items: completedItems,
                 });
                 try {
-                  await storeVectorSuggestion(
-                    client,
-                    job,
+                  const sourceForTracing = await highestQualityLogoSource(
                     asset,
-                    await vectorizeLogo(browser, blob),
+                    blob,
+                    cancellation.signal,
                   );
+                  let svg;
+                  let svgSimplifier;
+                  let usedAiEnhancement = false;
+                  let enhancementModel;
+                  if (asset.content_type === 'image/svg+xml') {
+                    await updateProgress(client, job, workerId, {
+                      progress_phase: 'retaining_source_svg',
+                      progress_detail:
+                        'The approved logo is already a vector, so its original SVG is retained without AI clean-up.',
+                      current_asset_id: asset.id,
+                      total_items: totalItems,
+                      completed_items: completedItems,
+                    });
+                    svg = await editableSvgSource(sourceForTracing);
+                  } else {
+                    const sourceRaster = await rasteriseLogo(browser, sourceForTracing);
+                    const sourceImageData = imageDataFromRaster(sourceRaster);
+                    const referencePalette = extractLogoPalette(sourceImageData);
+                    const aiMatte = enhancementMatte(referencePalette);
+                    let tracingRaster = sourceRaster;
+                    let shapeReferenceRaster = sourceRaster;
+                    let alphaMatteRaster;
+                    let alphaMatteBlob;
+                    let alphaMatteRequestId;
+                    enhancementModel =
+                      process.env.SITEFORGE_LOGO_ENHANCEMENT_MODEL?.trim() || 'gpt-image-2';
+                    const dimensions = enhancementDimensions(
+                      sourceRaster.width,
+                      sourceRaster.height,
+                    );
+                    let alphaMatteInput;
+                    let alphaMatteRequest;
+
+                    if (apiKey && editableLogoVectorizerProvider !== 'vectorizer_ai') {
+                      alphaMatteInput = await rasteriseLogo(browser, sourceForTracing, {
+                        ...dimensions,
+                        background: aiMatte,
+                      });
+                      await updateProgress(client, job, workerId, {
+                        progress_phase: 'enhancing_logo_and_alpha_matte',
+                        progress_detail:
+                          'ChatGPT is cleaning the logo and preparing its high-resolution alpha matte at the same time.',
+                        current_asset_id: asset.id,
+                        total_items: totalItems,
+                        completed_items: completedItems,
+                      });
+                      alphaMatteRequest = createAlphaMatteWithOpenAi({
+                        apiKey,
+                        model: enhancementModel,
+                        raster: alphaMatteInput,
+                        signal: cancellation.signal,
+                      })
+                        .then((result) => ({ result }))
+                        .catch((error) => ({ error }));
+                    }
+
+                    if (editableLogoVectorizerProvider === 'vectorizer_ai') {
+                      await updateProgress(client, job, workerId, {
+                        progress_phase: 'preparing_vectorizer_source',
+                        progress_detail:
+                          'Preparing the original captured logo for direct Vectorizer.AI conversion. ChatGPT remastering is skipped.',
+                        current_asset_id: asset.id,
+                        total_items: totalItems,
+                        completed_items: completedItems,
+                      });
+                    } else if (simplifyEditableLogoGeometry) {
+                      const savedAiEnhancedLogo = savedAiEnhancedLogoBySourceId.get(asset.id);
+                      let reusedSavedAiEnhancement = false;
+                      if (savedAiEnhancedLogo) {
+                        try {
+                          await updateProgress(client, job, workerId, {
+                            progress_phase: 'reusing_ai_enhanced_logo',
+                            progress_detail:
+                              'Reusing the saved ChatGPT clean-up image for this logo. No new AI request is needed.',
+                            current_asset_id: asset.id,
+                            total_items: totalItems,
+                            completed_items: completedItems,
+                          });
+                          tracingRaster = await rasteriseLogo(
+                            browser,
+                            await loadArtifactBlob(client, savedAiEnhancedLogo),
+                            {
+                              ...dimensions,
+                              background:
+                                readString(
+                                  recordValue(savedAiEnhancedLogo.metadata).aiEnhancementMatte,
+                                ) || aiMatte,
+                            },
+                          );
+                          shapeReferenceRaster = await rasteriseLogo(browser, sourceForTracing, {
+                            ...dimensions,
+                            background:
+                              readString(
+                                recordValue(savedAiEnhancedLogo.metadata).aiEnhancementMatte,
+                              ) || aiMatte,
+                          });
+                          usedAiEnhancement = true;
+                          enhancementModel =
+                            readString(
+                              recordValue(savedAiEnhancedLogo.metadata).aiEnhancementModel,
+                            ) || enhancementModel;
+                          reusedSavedAiEnhancement = true;
+                          await updateProgress(client, job, workerId, {
+                            progress_phase: 'ai_enhanced_logo_ready',
+                            progress_detail:
+                              'Reused the saved AI clean-up image. Original logo colours are now locked for the SVG trace.',
+                            current_asset_id: asset.id,
+                            total_items: totalItems,
+                            completed_items: completedItems,
+                          });
+                        } catch (error) {
+                          console.warn(
+                            `Could not reuse saved AI clean-up image for ${asset.id}; requesting a replacement.`,
+                            error,
+                          );
+                        }
+                      }
+
+                      if (reusedSavedAiEnhancement) {
+                        // The saved private remaster is the tracing source for this retry.
+                      } else if (!apiKey) {
+                        await updateProgress(client, job, workerId, {
+                          progress_phase: 'ai_cleanup_unavailable',
+                          progress_detail:
+                            'AI logo clean-up is unavailable without a server-only API key. Continuing with the highest-quality source.',
+                          current_asset_id: asset.id,
+                          total_items: totalItems,
+                          completed_items: completedItems,
+                        });
+                      } else {
+                        const enhancementInput = alphaMatteInput;
+                        shapeReferenceRaster = enhancementInput;
+                        await cancellation.assertActive();
+                        await updateProgress(client, job, workerId, {
+                          progress_phase: 'enhancing_logo_and_alpha_matte',
+                          progress_detail:
+                            'ChatGPT is cleaning compression artefacts and preparing the alpha matte in parallel.',
+                          current_asset_id: asset.id,
+                          total_items: totalItems,
+                          completed_items: completedItems,
+                        });
+                        let enhancement;
+                        try {
+                          enhancement = await enhanceLogoWithOpenAi({
+                            apiKey,
+                            model: enhancementModel,
+                            raster: enhancementInput,
+                            matte: aiMatte,
+                            signal: cancellation.signal,
+                          });
+                        } catch (error) {
+                          console.warn(
+                            `Could not create AI logo clean-up for ${asset.id}; continuing to the independent ChatGPT alpha matte.`,
+                            error,
+                          );
+                          await updateProgress(client, job, workerId, {
+                            progress_phase: 'ai_cleanup_unavailable',
+                            progress_detail:
+                              'The optional AI clean-up request failed. Continuing with the independent ChatGPT alpha matte request.',
+                            current_asset_id: asset.id,
+                            total_items: totalItems,
+                            completed_items: completedItems,
+                          });
+                        }
+                        await cancellation.assertActive();
+                        if (enhancement) {
+                          await updateProgress(client, job, workerId, {
+                            progress_phase: 'validating_logo_enhancement',
+                            progress_detail:
+                              'Checking the AI result against the original logo before allowing it into the SVG trace.',
+                            current_asset_id: asset.id,
+                            total_items: totalItems,
+                            completed_items: completedItems,
+                          });
+                          const enhancedRaster = await rasteriseLogo(browser, enhancement.blob, {
+                            ...dimensions,
+                            background: aiMatte,
+                          });
+                          const fidelity = enhancementFidelity(enhancementInput, enhancedRaster);
+                          if (fidelity.accepted) {
+                            await storeAiEnhancedLogoVariant(client, job, asset, enhancement.blob, {
+                              model: enhancementModel,
+                              requestId: enhancement.requestId,
+                              matte: aiMatte,
+                            });
+                            tracingRaster = enhancedRaster;
+                            usedAiEnhancement = true;
+                            await updateProgress(client, job, workerId, {
+                              progress_phase: 'ai_enhanced_logo_ready',
+                              progress_detail:
+                                'AI clean-up passed the source-shape check. Original logo colours are now locked for the SVG trace.',
+                              current_asset_id: asset.id,
+                              total_items: totalItems,
+                              completed_items: completedItems,
+                            });
+                          } else {
+                            await updateProgress(client, job, workerId, {
+                              progress_phase: 'ai_enhancement_rejected',
+                              progress_detail:
+                                'AI clean-up did not preserve the original shape closely enough. Continuing with the highest-quality source instead.',
+                              current_asset_id: asset.id,
+                              total_items: totalItems,
+                              completed_items: completedItems,
+                            });
+                          }
+                        }
+                      }
+                    } else {
+                      await updateProgress(client, job, workerId, {
+                        progress_phase: 'creating_alpha_matte',
+                        progress_detail:
+                          'Creating the ChatGPT alpha matte directly. The redundant AI clean-up request is skipped for faster logo versions.',
+                        current_asset_id: asset.id,
+                        total_items: totalItems,
+                        completed_items: completedItems,
+                      });
+                    }
+
+                    await cancellation.assertActive();
+                    if (alphaMatteRequest) {
+                      await updateProgress(client, job, workerId, {
+                        progress_phase: 'creating_alpha_matte',
+                        progress_detail:
+                          'Finalising the high-resolution black-and-white alpha matte that was prepared in parallel.',
+                        current_asset_id: asset.id,
+                        total_items: totalItems,
+                        completed_items: completedItems,
+                      });
+                      const alphaMatteResponse = await alphaMatteRequest;
+                      let aiMatteResult = alphaMatteResponse.result;
+                      if (alphaMatteResponse.error && alphaMatteInput) {
+                        await updateProgress(client, job, workerId, {
+                          progress_phase: 'retrying_alpha_matte',
+                          progress_detail:
+                            'The first ChatGPT matte request was unavailable. Retrying the matte once without substituting a generated pixel mask.',
+                          current_asset_id: asset.id,
+                          total_items: totalItems,
+                          completed_items: completedItems,
+                        });
+                        try {
+                          aiMatteResult = await createAlphaMatteWithOpenAi({
+                            apiKey,
+                            model: enhancementModel,
+                            raster: alphaMatteInput,
+                            signal: cancellation.signal,
+                          });
+                        } catch (error) {
+                          throw new Error(
+                            'ChatGPT did not return an alpha matte after two attempts. No replacement pixel mask was created.',
+                            { cause: error },
+                          );
+                        }
+                      }
+                      if (!aiMatteResult) {
+                        throw new Error(
+                          'ChatGPT did not return an alpha matte. No replacement pixel mask was created.',
+                          { cause: alphaMatteResponse.error },
+                        );
+                      }
+                      alphaMatteBlob = aiMatteResult.blob;
+                      alphaMatteRequestId = aiMatteResult.requestId;
+                      alphaMatteRaster = await rasteriseLogo(browser, alphaMatteBlob, {
+                        longestEdge: 2_048,
+                        pixelBudget: 1_500_000,
+                        background: '#ffffff',
+                      });
+                      if (
+                        tracingRaster.width !== alphaMatteRaster.width ||
+                        tracingRaster.height !== alphaMatteRaster.height
+                      ) {
+                        tracingRaster = await rasteriseLogo(
+                          browser,
+                          await rasterBlobFromPixels(browser, imageDataFromRaster(tracingRaster)),
+                          {
+                            width: alphaMatteRaster.width,
+                            height: alphaMatteRaster.height,
+                            background: aiMatte,
+                          },
+                        );
+                        shapeReferenceRaster = await rasteriseLogo(
+                          browser,
+                          await rasterBlobFromPixels(
+                            browser,
+                            imageDataFromRaster(shapeReferenceRaster),
+                          ),
+                          {
+                            width: alphaMatteRaster.width,
+                            height: alphaMatteRaster.height,
+                            background: aiMatte,
+                          },
+                        );
+                      }
+                    }
+                    await cancellation.assertActive();
+                    await updateProgress(client, job, workerId, {
+                      progress_phase: 'creating_logo_versions',
+                      progress_detail:
+                        'Removing the flat background and saving transparent original, black, white, and accent logo versions.',
+                      current_asset_id: asset.id,
+                      total_items: totalItems,
+                      completed_items: completedItems,
+                    });
+                    await storeLogoAppearanceVariants(
+                      client,
+                      browser,
+                      job,
+                      asset,
+                      tracingRaster,
+                      referencePalette,
+                      shapeReferenceRaster,
+                      alphaMatteRaster,
+                      alphaMatteBlob,
+                      alphaMatteRequestId,
+                      async (variant, savedCount, totalVariants) => {
+                        await cancellation.assertActive();
+                        await updateProgress(client, job, workerId, {
+                          progress_phase:
+                            savedCount === 0 ? 'alpha_matte_ready' : 'saving_logo_version',
+                          progress_detail:
+                            savedCount === 0
+                              ? 'Saved the reviewable alpha matte. Transparent logo versions are now being created from it.'
+                              : `Saved ${variant.label} transparent logo (${savedCount} of ${totalVariants}). It is now available in Assets.`,
+                          current_asset_id: asset.id,
+                          total_items: totalItems,
+                          completed_items: completedItems,
+                        });
+                      },
+                    );
+                    await cancellation.assertActive();
+                    if (
+                      simplifyEditableLogoGeometry &&
+                      shouldSimplifyLogoOutline(tracingRaster, referencePalette)
+                    ) {
+                      await updateProgress(client, job, workerId, {
+                        progress_phase: 'fitting_logo_geometry',
+                        progress_detail:
+                          'Detecting straight lines, corners and curved sections before the geometry-fitted SVG trace.',
+                        current_asset_id: asset.id,
+                        total_items: totalItems,
+                        completed_items: completedItems,
+                      });
+                      tracingRaster = await resampleLogoForGeometrySimplification(
+                        browser,
+                        tracingRaster,
+                      );
+                    }
+
+                    await cancellation.assertActive();
+                    await updateProgress(client, job, workerId, {
+                      progress_phase: 'vectorising_logo',
+                      progress_detail:
+                        editableLogoVectorizerProvider === 'vectorizer_ai'
+                          ? 'Sending the original colour-locked logo to Vectorizer.AI for an editable SVG trace.'
+                          : 'Tracing editable SVG shapes and locking the approved source colours into the result.',
+                      current_asset_id: asset.id,
+                      total_items: totalItems,
+                      completed_items: completedItems,
+                    });
+                    tracingRaster = lockRasterColoursToSource(
+                      imageDataFromRaster(tracingRaster),
+                      sourceImageData,
+                      referencePalette,
+                    );
+                    if (editableLogoVectorizerProvider === 'vectorizer_ai') {
+                      svg = await vectorizeWithVectorizerAi({
+                        apiId: process.env.VECTORIZER_AI_API_ID?.trim(),
+                        apiSecret: process.env.VECTORIZER_AI_API_SECRET?.trim(),
+                        raster: await rasterBlobFromPixels(browser, tracingRaster),
+                        signal: cancellation.signal,
+                      });
+                    } else {
+                      const vectorTrace = await vectorizeRasterLogo(tracingRaster, {
+                        referencePalette,
+                        simplifyGeometry: simplifyEditableLogoGeometry,
+                      });
+                      svg = vectorTrace.svg;
+                      svgSimplifier = vectorTrace.simplifier;
+                    }
+                  }
+                  if (
+                    editableLogoVectorizerProvider === 'vtracer' &&
+                    canCreateVectorSuggestion(asset, existingAnnotation)
+                  ) {
+                    await storeVectorSuggestion(client, job, asset, svg);
+                  }
+                  await storeEditableLogoVariant(client, job, asset, svg, {
+                    aiEnhancement: usedAiEnhancement,
+                    aiEnhancementModel: enhancementModel,
+                    simplifier: svgSimplifier,
+                    vectorizer: editableLogoVectorizerProvider,
+                  });
                   derivedFromAssetIds.add(asset.id);
-                } catch {
-                  // Vectorisation is optional enrichment. Keep the approved original logo usable.
+                  editableVariantFromAssetIds.add(asset.id);
+                } catch (error) {
+                  if (asset.id === retryEditableLogoAssetId) {
+                    throw new Error(
+                      `SVG conversion failed: ${error instanceof Error ? error.message : 'The vectoriser could not create an editable SVG.'}`,
+                      { cause: error },
+                    );
+                  }
+                  await updateProgress(client, job, workerId, {
+                    progress_phase: 'vectorisation_unavailable',
+                    progress_detail:
+                      'The optional SVG suggestion could not be created. The approved original logo remains available.',
+                    current_asset_id: asset.id,
+                    total_items: totalItems,
+                    completed_items: completedItems,
+                  });
                 }
                 completedItems += 1;
               }
@@ -939,30 +2126,32 @@ async function processJob(client, job, workerId, apiKey, model) {
           continue;
         }
       }
-      await cancellation.assertActive();
-      await updateProgress(client, job, workerId, {
-        progress_phase: 'collecting_brand_evidence',
-        progress_detail: 'Reading repeated interface colours from captured pages.',
-        current_asset_id: null,
-        total_items: totalItems,
-        completed_items: completedItems,
-      });
-      const interfaceEvidence = await collectRenderedInterfaceEvidence(browser, pages ?? [], () =>
-        cancellation.assertActive(),
-      );
-      brandEvidence.push(...interfaceEvidence);
-      completedItems += Math.min((pages ?? []).length, maxBrandEvidencePages);
-      await cancellation.assertActive();
-      const evidenceCount = await saveBrandColourEvidence(client, job, brandEvidence);
-      await updateProgress(client, job, workerId, {
-        progress_phase: 'saving_brand_evidence',
-        progress_detail: evidenceCount
-          ? `Saved ${evidenceCount} private brand-colour observations for review.`
-          : 'No reliable brand colours were found. Manual colour review is still available.',
-        current_asset_id: null,
-        total_items: totalItems,
-        completed_items: completedItems,
-      });
+      if (!retryEditableLogoAssetId) {
+        await cancellation.assertActive();
+        await updateProgress(client, job, workerId, {
+          progress_phase: 'collecting_brand_evidence',
+          progress_detail: 'Reading repeated interface colours from captured pages.',
+          current_asset_id: null,
+          total_items: totalItems,
+          completed_items: completedItems,
+        });
+        const interfaceEvidence = await collectRenderedInterfaceEvidence(browser, pages ?? [], () =>
+          cancellation.assertActive(),
+        );
+        brandEvidence.push(...interfaceEvidence);
+        completedItems += Math.min((pages ?? []).length, maxBrandEvidencePages);
+        await cancellation.assertActive();
+        const evidenceCount = await saveBrandColourEvidence(client, job, brandEvidence);
+        await updateProgress(client, job, workerId, {
+          progress_phase: 'saving_brand_evidence',
+          progress_detail: evidenceCount
+            ? `Saved ${evidenceCount} private brand-colour observations for review.`
+            : 'No reliable brand colours were found. Manual colour review is still available.',
+          current_asset_id: null,
+          total_items: totalItems,
+          completed_items: completedItems,
+        });
+      }
     } finally {
       await browser.close();
     }
@@ -972,13 +2161,19 @@ async function processJob(client, job, workerId, apiKey, model) {
 }
 
 async function markFailed(client, job, error) {
+  const message = error instanceof Error ? error.message : '';
+  const errorSummary =
+    /Target crashed|rasterisation step exceeded|prepared logo image did not pass/i.test(message)
+      ? 'Logo conversion stopped because the private image processor could not safely prepare this file. Your original logo is unchanged; retry to use the memory-safe conversion path.'
+      : message
+        ? message.slice(0, 500)
+        : 'Asset analysis failed.';
   const { error: updateError } = await client
     .from('asset_analysis_jobs')
     .update({
       status: 'failed',
       lease_expires_at: null,
-      error_summary:
-        error instanceof Error ? error.message.slice(0, 500) : 'Asset analysis failed.',
+      error_summary: errorSummary,
     })
     .eq('id', job.id)
     .eq('worker_id', job.worker_id)
@@ -1048,7 +2243,7 @@ async function processNext(client, workerId, apiKey, model) {
 }
 
 async function main() {
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  const apiKey = process.env.OPENAI_API_KEY?.trim() || process.env.SITEFORGE_CODEX_API_KEY?.trim();
   const supabaseUrl = requiredEnvironment('SITEFORGE_SUPABASE_URL');
   const serviceRoleKey = requiredEnvironment('SITEFORGE_SUPABASE_SERVICE_ROLE_KEY');
   const model = process.env.SITEFORGE_ASSET_VISION_MODEL?.trim() || 'gpt-5';

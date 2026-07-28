@@ -43,6 +43,11 @@ export type WorkspaceRepository = {
     direction: string,
   ): Promise<AgentPackageProposal | undefined>;
   approveAgentPackageForTesting(packageId: string): Promise<AgentPackage | undefined>;
+  stageAgentPackageBehaviours(
+    packageId: string,
+    behaviourIds: string[],
+  ): Promise<AgentPackage | undefined>;
+  approveAgentPackageForProduction(packageId: string): Promise<AgentPackage | undefined>;
   promoteAgentPackage(packageId: string): Promise<AgentPackage | undefined>;
   listBusinesses(): Promise<Business[]>;
   getWorkspace(businessId: string): Promise<ProspectWorkspace | undefined>;
@@ -59,6 +64,10 @@ export type WorkspaceRepository = {
     patch: Pick<AuditFinding, 'title' | 'finding' | 'recommendation' | 'severity' | 'reviewState'>,
   ): Promise<void>;
   requestAssetAnalysis(businessId: string): Promise<AssetAnalysisJob | undefined>;
+  requestEditableLogoRetry(
+    asset: ResearchArtifact,
+    options?: { simplifyGeometry?: boolean; vectorizerProvider?: 'vtracer' | 'vectorizer_ai' },
+  ): Promise<AssetAnalysisJob | undefined>;
   cancelAssetAnalysis(businessId: string): Promise<void>;
   requestAssetRefresh(businessId: string): Promise<AssetRefreshJob | undefined>;
   cancelAssetRefresh(businessId: string): Promise<void>;
@@ -70,9 +79,15 @@ export type WorkspaceRepository = {
       'suggestedRole' | 'businessAssociation' | 'reviewState' | 'humanNotes'
     >,
   ): Promise<void>;
+  saveDerivedSvgLogo(asset: ResearchArtifact, svg: string): Promise<void>;
+  deleteDerivedSvgLogo(asset: ResearchArtifact): Promise<void>;
+  deleteLogoAsset(asset: ResearchArtifact): Promise<void>;
   saveBrandKit(
     businessId: string,
-    draft: Pick<BrandKit, 'primaryLogoAssetId' | 'approvedAssetIds' | 'palette' | 'notes'>,
+    draft: Pick<
+      BrandKit,
+      'primaryLogoAssetId' | 'editableLogoAssetId' | 'approvedAssetIds' | 'palette' | 'notes'
+    >,
     approve?: boolean,
     recordActivity?: boolean,
   ): Promise<BrandKit | undefined>;
@@ -91,6 +106,7 @@ export type WorkspaceRepository = {
     targetSourceUrl?: string,
     buildInstruction?: string,
     agentPackageId?: string,
+    sourceBuilderRunId?: string,
   ): Promise<BuilderRun | undefined>;
   resumeWebsiteBuild(builderRunId: string): Promise<BuilderRun | undefined>;
   cancelWebsiteBuild(businessId: string): Promise<void>;
@@ -318,7 +334,8 @@ export class SiteforgeRepository {
     const packageRecord = await this.get<MetaRecord>('meta', localAgentPackageKey);
     if (!packageRecord) return [];
     try {
-      const parsed = JSON.parse(packageRecord.value) as AgentPackage;
+      const parsed = JSON.parse(packageRecord.value) as AgentPackage | AgentPackage[];
+      if (Array.isArray(parsed)) return parsed.filter((agentPackage) => Boolean(agentPackage?.id));
       return parsed?.id ? [parsed] : [];
     } catch {
       return [];
@@ -335,6 +352,14 @@ export class SiteforgeRepository {
 
   async approveAgentPackageForTesting(): Promise<AgentPackage | undefined> {
     throw new Error('Agent package approval requires the protected Supabase refinement worker.');
+  }
+
+  async approveAgentPackageForProduction(): Promise<AgentPackage | undefined> {
+    throw new Error('Agent package approval requires the protected Supabase refinement worker.');
+  }
+
+  async stageAgentPackageBehaviours(): Promise<AgentPackage | undefined> {
+    throw new Error('Behaviour staging requires the protected Supabase refinement worker.');
   }
 
   async promoteAgentPackage(): Promise<AgentPackage | undefined> {
@@ -829,6 +854,10 @@ export class SiteforgeRepository {
     throw new Error('Asset analysis requires the protected Supabase worker.');
   }
 
+  async requestEditableLogoRetry(): Promise<AssetAnalysisJob | undefined> {
+    throw new Error('SVG retries require the protected Supabase workspace.');
+  }
+
   async cancelAssetAnalysis(): Promise<void> {
     throw new Error('Asset analysis requires the protected Supabase worker.');
   }
@@ -850,6 +879,18 @@ export class SiteforgeRepository {
 
   async updateAssetAnnotation() {
     throw new Error('Asset annotations require the protected Supabase worker.');
+  }
+
+  async saveDerivedSvgLogo() {
+    throw new Error('Editable SVG logos require the protected Supabase workspace.');
+  }
+
+  async deleteDerivedSvgLogo() {
+    throw new Error('Editable SVG logos require the protected Supabase workspace.');
+  }
+
+  async deleteLogoAsset() {
+    throw new Error('Logo deletion requires the protected Supabase workspace.');
   }
 
   async saveBrandKit(): Promise<BrandKit | undefined> {

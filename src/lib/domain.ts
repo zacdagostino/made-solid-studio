@@ -160,6 +160,11 @@ export type AssetAnalysisJob = {
   errorSummary?: string;
   progressPhase?: string;
   progressDetail?: string;
+  currentAssetId?: string;
+  editableLogoRetryAssetId?: string;
+  editableLogoRetryToken?: string;
+  editableLogoSimplificationEnabled?: boolean;
+  editableLogoVectorizerProvider?: 'vtracer' | 'vectorizer_ai';
   totalItems: number;
   completedItems: number;
   cancelRequestedAt?: string;
@@ -233,6 +238,7 @@ export type BrandKit = {
   version: number;
   status: 'draft' | 'approved';
   primaryLogoAssetId?: string;
+  editableLogoAssetId?: string;
   approvedAssetIds: string[];
   palette: BrandPalette;
   notes: string;
@@ -308,6 +314,7 @@ export type RedesignBriefDraft = {
     id: string;
     version: number;
     primaryLogoAssetId: string;
+    editableLogoAssetId?: string;
     approvedAssetIds: string[];
     palette: BrandPalette;
   };
@@ -398,7 +405,8 @@ export type BuilderRunStatus =
   'queued' | 'running' | 'paused' | 'ready' | 'review_required' | 'failed' | 'cancelled';
 export type BuilderQualityStatus = 'passed' | 'needs_review' | 'failed' | 'not_run';
 export type BuilderRunMode = 'homepage_test' | 'page_test' | 'full_site';
-export type AgentPackageStatus = 'draft' | 'test_ready' | 'published' | 'superseded';
+export type AgentPackageStatus =
+  'draft' | 'test_ready' | 'production_ready' | 'published' | 'superseded';
 export type AgentPackageProposalStatus =
   'queued' | 'running' | 'ready' | 'failed' | 'accepted' | 'rejected';
 export type AgentPackageCapabilityAssessment = 'policy_only' | 'foundation_change_required';
@@ -416,6 +424,7 @@ export type AgentPackage = {
   summary: string;
   capabilityAssessment: AgentPackageCapabilityAssessment;
   capabilityProposal?: string;
+  stagedBehaviourIds?: string[];
   createdAt: string;
   updatedAt: string;
   approvedAt?: string;
@@ -456,6 +465,7 @@ export type BuilderRun = {
   id: string;
   businessId: string;
   buildManifestId: string;
+  parentBuilderRunId?: string;
   buildMode: BuilderRunMode;
   targetSourceUrl?: string;
   buildInstruction?: string;

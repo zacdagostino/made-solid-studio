@@ -41,12 +41,14 @@ SITEFORGE_CODEX_MODEL=gpt-5.6
 SITEFORGE_CODEX_BIN=codex
 SITEFORGE_AGENT_PACKAGE_MODEL=gpt-5.6
 # Optional rate card for the in-app AI usage page. Values are USD per 1M tokens.
-SITEFORGE_AI_PRICING_JSON='{"gpt-5":{"inputPerMillion":0,"cachedInputPerMillion":0,"outputPerMillion":0},"default":{"inputPerMillion":0,"cachedInputPerMillion":0,"outputPerMillion":0}}'
+# It overrides the published standard gpt-5.6 Codex test-builder rate.
+SITEFORGE_AI_PRICING_JSON='{"gpt-5.6":{"inputPerMillion":5,"cachedInputPerMillion":0.5,"outputPerMillion":30}}'
 ```
 
-The worker always records provider token usage. It records a dollar value only when this reviewed
-rate card is set (or when a future provider returns a billed amount directly), so the in-app total
-never treats an unpriced subscription or unknown rate as a real cost.
+The worker always records provider token usage. It automatically prices the standard `gpt-5.6`
+Codex test-builder alias at the published OpenAI standard rate current on 2026-07-24. Configure a
+reviewed rate card for any other model, non-standard processing tier, subscription, or invoice
+adjustment so the in-app total never treats an unknown amount as a real cost.
 
 ## Run
 
