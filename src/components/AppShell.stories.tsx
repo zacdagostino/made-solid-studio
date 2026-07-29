@@ -3,7 +3,7 @@ import { AppShell } from './AppShell';
 import { Card, Eyebrow } from './ui';
 
 const meta = {
-  title: 'SiteForge/App shell',
+  title: 'Made Solid Studio/App shell',
   component: AppShell,
   parameters: {
     layout: 'fullscreen',
@@ -15,7 +15,7 @@ type Story = StoryObj<typeof meta>;
 
 export const NavigationResponsive: Story = {
   render: () => (
-    <AppShell onSignOut={async () => undefined} userEmail="alex@siteforge.studio">
+    <AppShell onSignOut={async () => undefined} userEmail="alex@madesolid.studio">
       <Card className="storybook-shell-content">
         <Eyebrow>Work surface</Eyebrow>
         <h1>Responsive navigation shell</h1>

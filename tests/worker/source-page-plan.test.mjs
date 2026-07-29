@@ -11,15 +11,37 @@ test('creates a stable private output map for every selected source page', () =>
   ]);
 
   assert.deepEqual(
-    pages.map(({ sourceUrl, outputPath }) => ({ sourceUrl, outputPath })),
+    pages.map(({ sourceUrl, publicPath, outputPath, sourcePath }) => ({
+      sourceUrl,
+      publicPath,
+      outputPath,
+      sourcePath,
+    })),
     [
-      { sourceUrl: 'https://example.com/', outputPath: 'index.html' },
-      { sourceUrl: 'https://example.com/about-us', outputPath: 'about-us.html' },
+      {
+        sourceUrl: 'https://example.com/',
+        publicPath: '/',
+        outputPath: 'index.html',
+        sourcePath: 'app/page.tsx',
+      },
+      {
+        sourceUrl: 'https://example.com/about-us',
+        publicPath: '/about-us/',
+        outputPath: 'about-us/index.html',
+        sourcePath: 'app/about-us/page.tsx',
+      },
       {
         sourceUrl: 'https://example.com/post/Helpful%20Article',
-        outputPath: 'post--helpful-article.html',
+        publicPath: '/post/helpful-article/',
+        outputPath: 'post/helpful-article/index.html',
+        sourcePath: 'app/post/helpful-article/page.tsx',
       },
-      { sourceUrl: 'https://example.com/about-us', outputPath: 'about-us-2.html' },
+      {
+        sourceUrl: 'https://example.com/about-us',
+        publicPath: '/about-us-2/',
+        outputPath: 'about-us-2/index.html',
+        sourcePath: 'app/about-us-2/page.tsx',
+      },
     ],
   );
 });

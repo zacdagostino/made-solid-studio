@@ -1,8 +1,9 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
-import { Button, Card, Eyebrow, StatusBadge } from './ui';
+import { Wrench, X } from 'lucide-react';
+import { Button, ButtonGroup, ButtonLink, Card, Eyebrow, IconButton, StatusBadge } from './ui';
 
 const meta = {
-  title: 'SiteForge/Foundation',
+  title: 'Made Solid Studio/Foundation',
   component: Button,
   parameters: {
     layout: 'centered',
@@ -23,6 +24,44 @@ export const Secondary: Story = {
     children: 'Review record',
     variant: 'secondary',
   },
+};
+
+export const SmallTextAction: Story = {
+  args: {
+    children: (
+      <>
+        <Wrench aria-hidden="true" size={15} />
+        Workshop behaviour
+      </>
+    ),
+    size: 'small',
+    variant: 'secondary',
+  },
+};
+
+export const IconOnly: Story = {
+  render: () => (
+    <IconButton label="Close dialog" variant="quiet">
+      <X aria-hidden="true" size={18} />
+    </IconButton>
+  ),
+};
+
+export const ActionGroup: Story = {
+  render: () => (
+    <ButtonGroup>
+      <Button variant="secondary">Cancel</Button>
+      <Button>Save changes</Button>
+    </ButtonGroup>
+  ),
+};
+
+export const NavigationLink: Story = {
+  render: () => (
+    <ButtonLink href="#button-link-example" variant="secondary">
+      Open record
+    </ButtonLink>
+  ),
 };
 
 export const Disabled: Story = {

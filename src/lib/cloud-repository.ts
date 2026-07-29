@@ -4,8 +4,12 @@ import type {
   AgentPackage,
   AgentPackageProposal,
   AiUsageRecord,
+  ApprovedVisualContent,
   AssetAnalysisJob,
   AssetAnnotation,
+  VisualContentCandidate,
+  VisualContentJob,
+  StructuredVisualContent,
   BrandColourEvidence,
   BrandKit,
   Audit,
@@ -35,10 +39,15 @@ import {
   buildManifestSchemaVersion,
   codexBuilderContractVersion,
   createBuildManifestData,
+  currentManifestContentMatchesBrief,
   manifestSourceMatchesBrief,
 } from './build-manifest';
 import { canonicalWebsiteUrl, type WorkspaceRepository } from './repository';
-import { assetGuidanceFromAnnotations, createBriefDraft } from './redesign-brief';
+import {
+  assetGuidanceFromAnnotations,
+  createBriefDraft,
+  visualContentMatchesBrief,
+} from './redesign-brief';
 
 type DatabaseRow = Record<string, unknown>;
 
@@ -132,6 +141,50 @@ function readOptionalNumber(row: DatabaseRow, key: string) {
     return Number.isFinite(parsed) ? parsed : undefined;
   }
   return undefined;
+}
+
+function plainHtmlText(value: string) {
+  return value
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function imageSourceToken(sourceUrl: string) {
+  try {
+    const pathParts = new URL(sourceUrl).pathname.split('/').filter(Boolean);
+    const mediaIndex = pathParts.indexOf('media');
+    const mediaName = mediaIndex >= 0 ? pathParts[mediaIndex + 1] : pathParts.at(-1);
+    return mediaName?.split('~')[0] ?? '';
+  } catch {
+    return sourceUrl.split('/').at(-1)?.split('~')[0] ?? '';
+  }
+}
+
+function visualSourceLocation(html: string, sourceImageUrl: string) {
+  const token = imageSourceToken(sourceImageUrl);
+  const imageIndex = token ? html.indexOf(token) : -1;
+  if (imageIndex < 0) return undefined;
+  const beforeImage = html.slice(0, imageIndex);
+  const headingExpression = /<h[1-6]\b[^>]*>([\s\S]*?)<\/h[1-6]>/gi;
+  let heading = '';
+  for (const match of beforeImage.matchAll(headingExpression)) {
+    const candidate = plainHtmlText(match[1] ?? '');
+    if (candidate) heading = candidate;
+  }
+  const presentationMarkup = html.slice(Math.max(0, imageIndex - 5_000), imageIndex + 5_000);
+  const sourcePresentation = /\b(carousel|slider|slideshow)\b/i.test(presentationMarkup)
+    ? 'carousel'
+    : /\bgallery\b/i.test(presentationMarkup)
+      ? 'gallery'
+      : 'image';
+  return { heading: heading.slice(0, 180), sourcePresentation };
 }
 
 function captureFromRow(row: DatabaseRow, businessId: string, website?: Website): ResearchCapture {
@@ -253,6 +306,77 @@ function assetAnalysisFromRow(row: DatabaseRow): AssetAnalysisJob {
     totalItems: readNumber(row, 'total_items'),
     completedItems: readNumber(row, 'completed_items'),
     cancelRequestedAt,
+    createdAt: readString(row, 'created_at'),
+    updatedAt: readString(row, 'updated_at'),
+  };
+}
+
+function visualContentCandidateFromRow(row: DatabaseRow): VisualContentCandidate {
+  const structuredContent = recordValue(row.structured_content);
+  const humanStructuredContent = recordValue(row.human_structured_content);
+  return {
+    id: readString(row, 'id'),
+    assetId: readString(row, 'asset_id'),
+    businessId: readString(row, 'business_id'),
+    crawlRunId: readString(row, 'crawl_run_id'),
+    sourcePageUrl: readString(row, 'source_page_url'),
+    sectionHeading: readString(row, 'section_heading'),
+    sourcePresentation: readString(
+      row,
+      'source_presentation',
+    ) as VisualContentCandidate['sourcePresentation'],
+    contentType: readString(row, 'content_type') as VisualContentCandidate['contentType'],
+    title: readString(row, 'title'),
+    body: readString(row, 'body'),
+    attribution: readString(row, 'attribution'),
+    sourceContext:
+      typeof row.source_context === 'object' &&
+      row.source_context !== null &&
+      !Array.isArray(row.source_context)
+        ? (row.source_context as Record<string, unknown>)
+        : {},
+    confidence: readString(row, 'confidence') as VisualContentCandidate['confidence'],
+    reviewState: readString(row, 'review_state') as VisualContentCandidate['reviewState'],
+    humanTitle: readString(row, 'human_title'),
+    humanBody: readString(row, 'human_body'),
+    humanAttribution: readString(row, 'human_attribution'),
+    humanNotes: readString(row, 'human_notes'),
+    structuredContent: structuredContent as StructuredVisualContent,
+    humanStructuredContent: humanStructuredContent as
+      StructuredVisualContent | Record<string, never>,
+    structureStatus:
+      readString(row, 'structure_status') === 'ready'
+        ? 'ready'
+        : readString(row, 'structure_status') === 'failed'
+          ? 'failed'
+          : 'pending',
+    structureError: readOptionalString(row, 'structure_error'),
+    model: readOptionalString(row, 'model'),
+    analyzedAt: readOptionalString(row, 'analyzed_at'),
+    reviewedAt: readOptionalString(row, 'reviewed_at'),
+  };
+}
+
+function visualContentJobFromRow(row: DatabaseRow): VisualContentJob {
+  const status = readString(row, 'status');
+  return {
+    id: readString(row, 'id'),
+    businessId: readString(row, 'business_id'),
+    crawlRunId: readString(row, 'crawl_run_id'),
+    status:
+      row.cancel_requested_at && status === 'failed'
+        ? 'cancelled'
+        : status === 'queued' || status === 'running' || status === 'ready' || status === 'failed'
+          ? status
+          : 'failed',
+    model: readOptionalString(row, 'model'),
+    errorSummary: readOptionalString(row, 'error_summary'),
+    progressPhase: readOptionalString(row, 'progress_phase'),
+    progressDetail: readOptionalString(row, 'progress_detail'),
+    currentCandidateId: readOptionalString(row, 'current_candidate_id'),
+    totalItems: readNumber(row, 'total_items'),
+    completedItems: readNumber(row, 'completed_items'),
+    cancelRequestedAt: readOptionalString(row, 'cancel_requested_at'),
     createdAt: readString(row, 'created_at'),
     updatedAt: readString(row, 'updated_at'),
   };
@@ -395,6 +519,9 @@ function briefFromRow(row: DatabaseRow): RedesignBrief {
       ...(Array.isArray(draft.capabilityInventory)
         ? { capabilityInventory: draft.capabilityInventory }
         : {}),
+      approvedVisualContent: Array.isArray(draft.approvedVisualContent)
+        ? (draft.approvedVisualContent as ApprovedVisualContent[])
+        : [],
     } as RedesignBrief['draft'],
     createdAt: readString(row, 'created_at'),
     updatedAt: readString(row, 'updated_at'),
@@ -519,6 +646,9 @@ function agentPackageProposalFromRow(row: DatabaseRow): AgentPackageProposal {
 function builderRunFromRow(row: DatabaseRow): BuilderRun {
   const status = readString(row, 'status');
   const agentPackage = recordValue(row.agent_packages);
+  const builderArtifacts = Array.isArray(row.builder_artifacts)
+    ? (row.builder_artifacts as DatabaseRow[])
+    : undefined;
   return {
     id: readString(row, 'id'),
     businessId: readString(row, 'business_id'),
@@ -527,13 +657,25 @@ function builderRunFromRow(row: DatabaseRow): BuilderRun {
     buildMode:
       readString(row, 'build_mode') === 'full_site'
         ? 'full_site'
-        : readString(row, 'build_mode') === 'page_test'
-          ? 'page_test'
-          : 'homepage_test',
+        : readString(row, 'build_mode') === 'site_test'
+          ? 'site_test'
+          : readString(row, 'build_mode') === 'page_test'
+            ? 'page_test'
+            : 'homepage_test',
     targetSourceUrl: readOptionalString(row, 'target_source_url'),
+    targetSourceUrls: Array.isArray(row.target_source_urls)
+      ? row.target_source_urls.filter(
+          (sourceUrl): sourceUrl is string => typeof sourceUrl === 'string' && Boolean(sourceUrl),
+        )
+      : undefined,
     buildInstruction: readOptionalString(row, 'build_instruction'),
     agentPackageId: readOptionalString(row, 'agent_package_id'),
     agentPackageVersion: readOptionalNumber(agentPackage, 'version'),
+    agentStudioSourceAt: readOptionalString(row, 'agent_studio_source_at'),
+    agentStudioFeatureId: readOptionalString(row, 'agent_studio_feature_id'),
+    sourceCheckpointAvailable: builderArtifacts
+      ? builderArtifacts.some((artifact) => readString(artifact, 'kind') === 'checkpoint')
+      : undefined,
     status:
       status === 'queued' ||
       status === 'running' ||
@@ -844,6 +986,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       facts,
       audits,
       assetJobs,
+      visualContentJobs,
       briefs,
       manifests,
       builderRuns,
@@ -868,6 +1011,12 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         .eq('business_id', businessId)
         .order('created_at', { ascending: false }),
       this.client
+        .from('visual_content_jobs')
+        .select('*')
+        .eq('business_id', businessId)
+        .order('created_at', { ascending: false })
+        .limit(1),
+      this.client
         .from('redesign_briefs')
         .select('*')
         .eq('business_id', businessId)
@@ -879,7 +1028,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         .order('generated_at', { ascending: false }),
       this.client
         .from('builder_runs')
-        .select('*, agent_packages(version)')
+        .select('*, agent_packages(version), builder_artifacts(kind, label)')
         .eq('business_id', businessId)
         .order('created_at', { ascending: false }),
       this.client
@@ -917,6 +1066,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       facts,
       audits,
       assetJobs,
+      visualContentJobs,
       briefs,
       manifests,
       builderRuns,
@@ -956,6 +1106,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       artifactsResult,
       packetsResult,
       annotationsResult,
+      visualContentResult,
       brandColourEvidenceResult,
       brandKitsResult,
     ] = relevantCaptureIds.length
@@ -981,6 +1132,12 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
             .in('crawl_run_id', relevantCaptureIds)
             .order('created_at'),
           this.client
+            .from('visual_content_candidates')
+            .select('*')
+            .in('crawl_run_id', relevantCaptureIds)
+            .order('source_page_url')
+            .order('created_at'),
+          this.client
             .from('brand_colour_evidence')
             .select('*')
             .in('crawl_run_id', relevantCaptureIds)
@@ -999,11 +1156,13 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
           { data: [], error: null },
           { data: [], error: null },
           { data: [], error: null },
+          { data: [], error: null },
         ];
     throwIfError(pagesResult.error);
     throwIfError(artifactsResult.error);
     throwIfError(packetsResult.error);
     throwIfError(annotationsResult.error);
+    throwIfError(visualContentResult.error);
     throwIfError(brandColourEvidenceResult.error);
     throwIfError(brandKitsResult.error);
     const logoArtifactsResult = await this.client
@@ -1111,6 +1270,12 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       assetAnnotations: ((annotationsResult.data ?? []) as DatabaseRow[])
         .map(assetAnnotationFromRow)
         .filter((annotation) => annotation.crawlRunId === latestCapture?.id),
+      visualContentCandidates: ((visualContentResult.data ?? []) as DatabaseRow[])
+        .map(visualContentCandidateFromRow)
+        .filter((candidate) => candidate.crawlRunId === latestCapture?.id),
+      visualContentJob: (visualContentJobs.data ?? [])[0]
+        ? visualContentJobFromRow((visualContentJobs.data ?? [])[0] as DatabaseRow)
+        : undefined,
       brandColourEvidence: ((brandColourEvidenceResult.data ?? []) as DatabaseRow[])
         .map(brandColourEvidenceFromRow)
         .filter((evidence) => evidence.crawlRunId === latestCapture?.id),
@@ -1448,6 +1613,157 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     throwIfError(briefError);
   }
 
+  async requestVisualContentExtraction(businessId: string) {
+    const { error } = await this.client.rpc('request_visual_content_extraction', {
+      target_business_id: businessId,
+    });
+    throwIfError(error);
+    const { data: candidates, error: candidatesError } = await this.client
+      .from('visual_content_candidates')
+      .select('*')
+      .eq('business_id', businessId)
+      .eq('review_state', 'needs_review');
+    throwIfError(candidatesError);
+    const rows = (candidates ?? []) as DatabaseRow[];
+    const crawlRunIds = [
+      ...new Set(rows.map((row) => readString(row, 'crawl_run_id')).filter(Boolean)),
+    ];
+    const sourcePageUrls = new Set(rows.map((row) => readString(row, 'source_page_url')));
+    if (crawlRunIds.length && sourcePageUrls.size) {
+      const { data: htmlArtifacts, error: htmlArtifactsError } = await this.client
+        .from('artifacts')
+        .select('storage_bucket, storage_path, metadata')
+        .in('crawl_run_id', crawlRunIds)
+        .eq('kind', 'html');
+      throwIfError(htmlArtifactsError);
+      const htmlByPageUrl = new Map<string, string>();
+      for (const artifact of (htmlArtifacts ?? []) as DatabaseRow[]) {
+        const metadata =
+          typeof artifact.metadata === 'object' &&
+          artifact.metadata !== null &&
+          !Array.isArray(artifact.metadata)
+            ? (artifact.metadata as Record<string, unknown>)
+            : {};
+        const pageUrl = typeof metadata.sourceUrl === 'string' ? metadata.sourceUrl : '';
+        if (!sourcePageUrls.has(pageUrl) || htmlByPageUrl.has(pageUrl)) continue;
+        const { data: htmlBlob, error: htmlError } = await this.client.storage
+          .from(readOptionalString(artifact, 'storage_bucket') ?? 'siteforge-artifacts')
+          .download(readString(artifact, 'storage_path'));
+        if (htmlError || !htmlBlob) continue;
+        htmlByPageUrl.set(pageUrl, await htmlBlob.text());
+      }
+      await Promise.all(
+        rows.map(async (row) => {
+          const sourceContext =
+            typeof row.source_context === 'object' &&
+            row.source_context !== null &&
+            !Array.isArray(row.source_context)
+              ? (row.source_context as Record<string, unknown>)
+              : {};
+          const sourceImageUrl =
+            typeof sourceContext.sourceImageUrl === 'string' ? sourceContext.sourceImageUrl : '';
+          const location = visualSourceLocation(
+            htmlByPageUrl.get(readString(row, 'source_page_url')) ?? '',
+            sourceImageUrl,
+          );
+          if (!location) return;
+          const { error: locationError } = await this.client
+            .from('visual_content_candidates')
+            .update({
+              section_heading: location.heading,
+              source_presentation: location.sourcePresentation,
+              source_context: {
+                ...sourceContext,
+                sectionAssociation: location.heading
+                  ? 'nearest_preceding_heading_in_saved_html'
+                  : 'page_only',
+              },
+            })
+            .eq('id', readString(row, 'id'))
+            .eq('review_state', 'needs_review');
+          throwIfError(locationError);
+        }),
+      );
+    }
+    const { data: jobId, error: queueError } = await this.client.rpc(
+      'request_structured_visual_content',
+      { target_business_id: businessId },
+    );
+    throwIfError(queueError);
+    const { data: job, error: jobError } = await this.client
+      .from('visual_content_jobs')
+      .select('*')
+      .eq('id', jobId)
+      .maybeSingle();
+    throwIfError(jobError);
+    return job ? visualContentJobFromRow(job as DatabaseRow) : undefined;
+  }
+
+  async cancelVisualContentExtraction(businessId: string) {
+    const { error } = await this.client.rpc('cancel_structured_visual_content', {
+      target_business_id: businessId,
+    });
+    throwIfError(error);
+  }
+
+  async updateVisualContentCandidate(
+    candidate: VisualContentCandidate,
+    patch: Pick<
+      VisualContentCandidate,
+      | 'contentType'
+      | 'reviewState'
+      | 'humanTitle'
+      | 'humanBody'
+      | 'humanAttribution'
+      | 'humanNotes'
+      | 'humanStructuredContent'
+    >,
+  ) {
+    const { error } = await this.client
+      .from('visual_content_candidates')
+      .update({
+        content_type: patch.contentType,
+        review_state: patch.reviewState,
+        human_title: patch.humanTitle,
+        human_body: patch.humanBody,
+        human_attribution: patch.humanAttribution,
+        human_notes: patch.humanNotes,
+        human_structured_content: patch.humanStructuredContent,
+        reviewed_at: patch.reviewState === 'needs_review' ? null : new Date().toISOString(),
+      })
+      .eq('id', candidate.id);
+    throwIfError(error);
+
+    const workspace = await this.getWorkspace(candidate.businessId);
+    const brief = workspace?.redesignBrief;
+    if (!workspace || !brief || brief.status !== 'draft') return;
+    const approvedVisualContent = workspace.visualContentCandidates
+      .map((item) => (item.id === candidate.id ? { ...item, ...patch } : item))
+      .filter((item) => item.reviewState === 'approved')
+      .map((item) => ({
+        id: item.id,
+        assetId: item.assetId,
+        contentType: item.contentType,
+        title: item.humanTitle || item.title,
+        body: item.humanBody || item.body,
+        attribution: item.humanAttribution || item.attribution,
+        sourcePageUrl: item.sourcePageUrl,
+        sectionHeading: item.sectionHeading,
+        sourcePresentation: item.sourcePresentation,
+        presentationInstruction: 'builder_decides' as const,
+        structuredContent:
+          Object.keys(item.humanStructuredContent).length > 0
+            ? (item.humanStructuredContent as StructuredVisualContent)
+            : item.structuredContent,
+      }));
+    const { error: briefError } = await this.client
+      .from('redesign_briefs')
+      .update({ draft: { ...brief.draft, approvedVisualContent } })
+      .eq('id', brief.id)
+      .eq('status', 'draft');
+    throwIfError(briefError);
+  }
+
   async saveDerivedSvgLogo(asset: ResearchArtifact, svg: string) {
     if (asset.contentType !== 'image/svg+xml' || asset.metadata.logoVariant !== 'editable') {
       throw new Error('Only derived editable SVG logos can be changed.');
@@ -1609,6 +1925,8 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       workspace.assetAnnotations,
       brandKit,
       workspace.capturedPages,
+      undefined,
+      workspace.visualContentCandidates,
     );
     if (!generated.draft.brandKit) {
       throw new Error('The approved Brand Kit could not be attached to the new brief revision.');
@@ -1660,23 +1978,33 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         'A completed Research Packet is required before a redesign brief can be drafted.',
       );
     }
-    if (recordValue(workspace.researchPacket.data.capabilityAnalysis).status !== 'ready') {
-      const { error } = await this.client.rpc('request_capability_analysis', {
-        target_business_id: businessId,
-      });
-      throwIfError(error);
-      return undefined;
-    }
     const latestBrief = workspace.redesignBrief;
+    const visualContentIsCurrent = visualContentMatchesBrief(
+      workspace.visualContentCandidates,
+      latestBrief,
+    );
     if (latestBrief?.status === 'draft' && Array.isArray(latestBrief.draft.capabilityInventory)) {
       return latestBrief;
     }
     if (
       latestBrief?.status === 'approved' &&
       manifestSourceMatchesBrief(workspace, latestBrief) &&
-      Array.isArray(latestBrief.draft.capabilityInventory)
+      Array.isArray(latestBrief.draft.capabilityInventory) &&
+      visualContentIsCurrent &&
+      currentManifestContentMatchesBrief(workspace, latestBrief)
     ) {
       return latestBrief;
+    }
+    const hasReusableCapabilityInventory = Array.isArray(latestBrief?.draft.capabilityInventory);
+    if (
+      recordValue(workspace.researchPacket.data.capabilityAnalysis).status !== 'ready' &&
+      !hasReusableCapabilityInventory
+    ) {
+      const { error } = await this.client.rpc('request_capability_analysis', {
+        target_business_id: businessId,
+      });
+      throwIfError(error);
+      return undefined;
     }
     const generated = createBriefDraft(
       workspace.business.name,
@@ -1685,6 +2013,8 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       workspace.assetAnnotations,
       workspace.brandKit,
       workspace.capturedPages,
+      undefined,
+      workspace.visualContentCandidates,
     );
     generated.sourceSelections.pageUrls = [
       ...new Set(workspace.capturedPages.map((page) => page.url)),
@@ -1767,6 +2097,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       workspace.brandKit,
       workspace.capturedPages,
       brief.sourceSelections.pageUrls,
+      workspace.visualContentCandidates,
     );
     const draft = {
       ...brief.draft,
@@ -1901,11 +2232,13 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     buildInstruction?: string,
     agentPackageId?: string,
     sourceBuilderRunId?: string,
+    targetSourceUrls?: string[],
   ) {
     const { error } = await this.client.rpc('request_website_build', {
       target_business_id: businessId,
       requested_mode: mode,
       requested_target_source_url: targetSourceUrl ?? null,
+      requested_target_source_urls: targetSourceUrls?.length ? targetSourceUrls : null,
       requested_build_instruction: buildInstruction?.trim() || null,
       requested_agent_package_id: agentPackageId ?? null,
       requested_source_builder_run_id: sourceBuilderRunId ?? null,
@@ -1913,6 +2246,42 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     throwIfError(error);
     const workspace = await this.getWorkspace(businessId);
     return workspace?.latestBuilderRun;
+  }
+
+  async moveBuilderRunToAgentStudio(builderRunId: string) {
+    const { data, error } = await this.client.rpc('move_builder_run_to_agent_studio', {
+      target_builder_run_id: builderRunId,
+    });
+    throwIfError(error);
+    const { data: run, error: runError } = await this.client
+      .from('builder_runs')
+      .select('*, agent_packages(version), builder_artifacts(kind)')
+      .eq('id', data as string)
+      .single();
+    throwIfError(runError);
+    return builderRunFromRow(run as DatabaseRow);
+  }
+
+  async requestAgentStudioSiteTest(
+    sourceBuilderRunId: string,
+    buildInstruction: string,
+    agentPackageId: string,
+    featureId: string,
+  ) {
+    const { data, error } = await this.client.rpc('request_agent_studio_site_test', {
+      target_source_builder_run_id: sourceBuilderRunId,
+      requested_build_instruction: buildInstruction.trim(),
+      requested_agent_package_id: agentPackageId,
+      requested_feature_id: featureId,
+    });
+    throwIfError(error);
+    const { data: run, error: runError } = await this.client
+      .from('builder_runs')
+      .select('*, agent_packages(version), builder_artifacts(kind)')
+      .eq('id', data as string)
+      .single();
+    throwIfError(runError);
+    return builderRunFromRow(run as DatabaseRow);
   }
 
   async resumeWebsiteBuild(builderRunId: string) {

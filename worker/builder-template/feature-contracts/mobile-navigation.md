@@ -1,25 +1,29 @@
-# Mobile navigation feature contract
+# Mobile navigation component contract
 
-Implement this feature in the generated page's own local HTML, CSS, and JavaScript. It is not supplied by `main.js`.
+Implement this as generated React site components. Base UI Dialog may supply modal focus and dismissal behaviour, but all visual composition belongs to this website.
 
-## Required behaviour
+## Required markup and behaviour
 
-- At mobile and tablet widths, replace the visible desktop route list with a clearly labelled menu trigger at the leading edge of the header.
-- The trigger must communicate `aria-expanded`, have a 44px minimum touch target, and animate between its closed and open states when motion is allowed.
-- Open an accessible dialog or disclosure from the same side as the trigger. It must include the real approved logo, a visible close control, and one vertical route list.
-- When motion is allowed, animate the drawer entrance and reveal route links in a clear, restrained sequence: the first link begins first, then each following link enters after it. Use a visible opacity and position/scale transition rather than only changing colour. Disable this choreography under `prefers-reduced-motion` while leaving every link immediately visible.
-- Close on the close control, Escape, backdrop press where a backdrop exists, and route selection. Move focus into the open menu and return focus to the trigger when it closes.
-- Keep desktop navigation visible at desktop widths. Respect `prefers-reduced-motion`; no essential content or control may depend on animation.
-- On motion-enabled visits, hide the header after a deliberate downward scroll and reveal it on any upward scroll. Opening the menu must leave the header visible; closing it must not disable future scroll behaviour.
+- At compact widths replace the desktop route list with an icon-only trigger at the leading edge of the header.
+- Render a real `button` with `data-siteforge-menu-trigger`, `aria-expanded="false"` initially, and the accessible name `Open navigation`. While open, change the name to `Close navigation`.
+- Never render the words `Menu`, `Navigation`, `Open`, or `Close` inside or beside the trigger. The rendered content is only the generated icon.
+- Give the trigger and visible close control at least a 44×44 CSS-pixel target.
+- Render the open surface with `data-siteforge-navigation-dialog`. Treat it as a dialog or deliberate disclosure with a single vertical route hierarchy, the real approved logo, and a clear visible close control marked `data-siteforge-navigation-close`.
+- Close on the close control, Escape, backdrop press, and route selection. Move focus into the surface and restore it to the trigger on dismissal.
+- Animate the icon, surface, and link sequence only when motion is allowed. Under `prefers-reduced-motion`, every route and control is immediately available.
+- Keep desktop navigation visible at desktop width. The compact dialog must not leak tablet/desktop grid rules.
+- A scroll-responsive header may hide after a deliberate downward scroll and must return on any upward scroll. An open navigation surface always keeps the header visible.
 
 ## Creative ownership
 
-Choose the menu-control form, icon choreography, drawer composition, link entrance sequence, typography, spacing, surfaces, and brand-colour treatment for this specific business and page. The result must feel designed for this site, not like a browser-default or repeated SiteForge component.
+Own the icon geometry, trigger styling, drawer or sheet composition, placement, typography, spacing, surfaces, motion, link hierarchy, and brand treatment. Do not recreate a Made Solid Studio component, use a generic heading, or accept Base UI's examples as the visual design.
 
-Create a coherent, accessible colour relationship across the header, drawer, controls, links, and approved brand assets. Choose surfaces and accents from the page's established visual system, then check that the open drawer feels intentional, legible, and visually connected to the rest of the page. Do not use colour combinations that make important brand assets, controls, or navigation labels difficult to distinguish.
+Use the direct header and drawer surfaces to select appropriate approved logo-family members. The open state must feel connected to this site's design system while preserving legibility and focus visibility.
 
-You may use local CSS and JavaScript freely, but no dependencies, remote scripts, duplicate navigation models, generic `Navigation` heading, or unstyled text buttons.
+## Required evidence
 
-## Evidence before completion
+The protected worker verifies:
 
-Check closed and open states at 320x568 and 375x812, plus tablet and desktop. In the open mobile screenshot, inspect overall colour coherence, contrast, and the relationship between the drawer and header. Confirm no horizontal overflow, keyboard operation, focus restoration, Escape dismissal, visible focus, and a reduced-motion fallback.
+- closed layout at 320×568, 375×812, 768×1024, and 1440×900;
+- open navigation at 320×568, 375×812, and 768×1024;
+- trigger position, accurate accessible name, `aria-expanded`, vertical link stacking, close control, Escape dismissal, focus entry and restoration, route-selection dismissal, overflow, touch targets, and reduced motion.

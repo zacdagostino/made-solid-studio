@@ -2219,6 +2219,14 @@ async function processNext(client, workerId, apiKey, model) {
       .eq('id', job.id)
       .eq('worker_id', workerId);
     if (completeError) throw completeError;
+    const { error: contentRecoveryError } = await client.rpc('request_visual_content_extraction', {
+      target_business_id: job.business_id,
+    });
+    if (contentRecoveryError) {
+      console.warn(
+        `[asset-analysis-worker] visual-content recovery was not available for ${job.id}: ${contentRecoveryError.message}`,
+      );
+    }
     await client.from('activities').insert({
       organization_id: job.organization_id,
       business_id: job.business_id,

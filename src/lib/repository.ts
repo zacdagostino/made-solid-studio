@@ -5,6 +5,8 @@ import type {
   AssetAnnotation,
   AssetAnalysisJob,
   AssetRefreshJob,
+  VisualContentCandidate,
+  VisualContentJob,
   BrandKit,
   Audit,
   AuditFinding,
@@ -30,9 +32,10 @@ import {
   buildManifestSchemaVersion,
   codexBuilderContractVersion,
   createBuildManifestData,
+  currentManifestContentMatchesBrief,
   manifestSourceMatchesBrief,
 } from './build-manifest';
-import { createBriefDraft } from './redesign-brief';
+import { createBriefDraft, visualContentMatchesBrief } from './redesign-brief';
 
 export type WorkspaceRepository = {
   bootstrap(): Promise<void>;
@@ -79,6 +82,21 @@ export type WorkspaceRepository = {
       'suggestedRole' | 'businessAssociation' | 'reviewState' | 'humanNotes'
     >,
   ): Promise<void>;
+  requestVisualContentExtraction(businessId: string): Promise<VisualContentJob | undefined>;
+  cancelVisualContentExtraction(businessId: string): Promise<void>;
+  updateVisualContentCandidate(
+    candidate: VisualContentCandidate,
+    patch: Pick<
+      VisualContentCandidate,
+      | 'contentType'
+      | 'reviewState'
+      | 'humanTitle'
+      | 'humanBody'
+      | 'humanAttribution'
+      | 'humanNotes'
+      | 'humanStructuredContent'
+    >,
+  ): Promise<void>;
   saveDerivedSvgLogo(asset: ResearchArtifact, svg: string): Promise<void>;
   deleteDerivedSvgLogo(asset: ResearchArtifact): Promise<void>;
   deleteLogoAsset(asset: ResearchArtifact): Promise<void>;
@@ -107,6 +125,14 @@ export type WorkspaceRepository = {
     buildInstruction?: string,
     agentPackageId?: string,
     sourceBuilderRunId?: string,
+    targetSourceUrls?: string[],
+  ): Promise<BuilderRun | undefined>;
+  moveBuilderRunToAgentStudio(builderRunId: string): Promise<BuilderRun | undefined>;
+  requestAgentStudioSiteTest(
+    sourceBuilderRunId: string,
+    buildInstruction: string,
+    agentPackageId: string,
+    featureId: string,
   ): Promise<BuilderRun | undefined>;
   resumeWebsiteBuild(builderRunId: string): Promise<BuilderRun | undefined>;
   cancelWebsiteBuild(businessId: string): Promise<void>;
@@ -124,9 +150,9 @@ export type WorkspaceRepository = {
 };
 
 const databaseName = 'siteforge-os';
-const databaseVersion = 4;
+const databaseVersion = 5;
 const legacyStorageKey = 'siteforge-os.records.v2';
-const localAgentPackageKey = 'agent-package-v4';
+const localAgentPackageKey = 'agent-package-v6';
 
 type StoreName =
   | 'activities'
@@ -134,6 +160,7 @@ type StoreName =
   | 'artifacts'
   | 'businesses'
   | 'buildManifests'
+  | 'builderRuns'
   | 'briefs'
   | 'concepts'
   | 'contacts'
@@ -170,11 +197,12 @@ function openDatabase() {
     request.onupgradeneeded = () => {
       const database = request.result;
       const upgradeTransaction = request.transaction;
-      if (!upgradeTransaction) throw new Error('Unable to initialise SiteForge storage.');
+      if (!upgradeTransaction) throw new Error('Unable to initialise Made Solid Studio storage.');
       (
         [
           'businesses',
           'buildManifests',
+          'builderRuns',
           'briefs',
           'websites',
           'contacts',
@@ -199,7 +227,8 @@ function openDatabase() {
       });
     };
     request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error('Unable to open SiteForge storage.'));
+    request.onerror = () =>
+      reject(request.error ?? new Error('Unable to open Made Solid Studio storage.'));
   });
 }
 
@@ -312,16 +341,30 @@ export class SiteforgeRepository {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify({
-          id: 'agent-package-local-v4',
-          version: 4,
+          id: 'agent-package-local-v6',
+          version: 6,
           status: 'published',
-          builderContractVersion: codexBuilderContractVersion,
-          foundationVersion: 'siteforge-static-builder-v1',
+          builderContractVersion: 'made-solid-studio-builder-agent-v6',
+          foundationVersion: 'made-solid-studio-next-builder-v2',
           foundationChecksum: 'local-source-controlled-foundation',
           contractAddendum: '',
           instructionsAddendum: '',
-          summary: 'Current source-controlled production builder package.',
-          capabilityAssessment: 'policy_only',
+          summary:
+            'Next.js App Router production builder with generated design systems, typed components, runtime profiles, and enforced framework quality gates.',
+          capabilityAssessment: 'foundation_change_required',
+          stagedBehaviourIds: [
+            'motion-runtime',
+            'scoped-revision',
+            'brand-introduction',
+            'hero-handoff',
+            'responsive-sidebar',
+            'contextual-logo-selection',
+            'visual-content-recovery',
+            'site-navigation-architecture',
+            'next-component-architecture',
+            'runtime-profiles',
+            'framework-quality-gates',
+          ],
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           publishedAt: new Date().toISOString(),
@@ -482,6 +525,7 @@ export class SiteforgeRepository {
       audits,
       briefs,
       buildManifests,
+      builderRuns,
       concepts,
       reports,
       tasks,
@@ -496,6 +540,7 @@ export class SiteforgeRepository {
       this.getAllForBusiness<Audit>('audits', businessId),
       this.getAllForBusiness<RedesignBrief>('briefs', businessId),
       this.getAllForBusiness<BuildManifest>('buildManifests', businessId),
+      this.getAllForBusiness<BuilderRun>('builderRuns', businessId),
       this.getAllForBusiness<RedesignConcept>('concepts', businessId),
       this.getAllForBusiness<DecisionReport>('reports', businessId),
       this.getAllForBusiness<Task>('tasks', businessId),
@@ -531,6 +576,8 @@ export class SiteforgeRepository {
         : [],
       assetAnnotations: [],
       assetAnalysisJobs: [],
+      visualContentCandidates: [],
+      visualContentJob: undefined,
       brandColourEvidence: [],
       previousCapture,
       previousFacts: previousCapture
@@ -550,7 +597,10 @@ export class SiteforgeRepository {
       ),
       builderArtifacts: [],
       builderEvents: [],
-      builderRuns: [],
+      latestBuilderRun: builderRuns.sort((left, right) =>
+        right.createdAt.localeCompare(left.createdAt),
+      )[0],
+      builderRuns: builderRuns.sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
       aiUsageRecords: [],
       concept: concepts[0],
       report: reports[0],
@@ -881,6 +931,18 @@ export class SiteforgeRepository {
     throw new Error('Asset annotations require the protected Supabase worker.');
   }
 
+  async requestVisualContentExtraction(): Promise<VisualContentJob | undefined> {
+    throw new Error('Visual content recovery requires the protected Supabase workspace.');
+  }
+
+  async cancelVisualContentExtraction(): Promise<void> {
+    throw new Error('Visual content recovery requires the protected Supabase workspace.');
+  }
+
+  async updateVisualContentCandidate() {
+    throw new Error('Visual content recovery requires the protected Supabase workspace.');
+  }
+
   async saveDerivedSvgLogo() {
     throw new Error('Editable SVG logos require the protected Supabase workspace.');
   }
@@ -912,16 +974,6 @@ export class SiteforgeRepository {
         'A completed Research Packet is required before a redesign brief can be drafted.',
       );
     }
-    if (
-      !workspace.researchPacket.data.capabilityAnalysis ||
-      typeof workspace.researchPacket.data.capabilityAnalysis !== 'object' ||
-      (workspace.researchPacket.data.capabilityAnalysis as Record<string, unknown>).status !==
-        'ready'
-    ) {
-      throw new Error(
-        'AI capability analysis must complete from the saved capture before a brief can be drafted.',
-      );
-    }
     const existingBriefs = await this.getAllForBusiness<RedesignBrief>('briefs', businessId);
     const latestBrief = existingBriefs.sort((left, right) => right.version - left.version)[0];
     if (latestBrief?.status === 'draft' && Array.isArray(latestBrief.draft.capabilityInventory)) {
@@ -930,9 +982,21 @@ export class SiteforgeRepository {
     if (
       latestBrief?.status === 'approved' &&
       manifestSourceMatchesBrief(workspace, latestBrief) &&
-      Array.isArray(latestBrief.draft.capabilityInventory)
+      Array.isArray(latestBrief.draft.capabilityInventory) &&
+      visualContentMatchesBrief(workspace.visualContentCandidates, latestBrief) &&
+      currentManifestContentMatchesBrief(workspace, latestBrief)
     ) {
       return latestBrief;
+    }
+    const capabilityAnalysis = workspace.researchPacket.data.capabilityAnalysis;
+    const capabilityAnalysisIsReady =
+      capabilityAnalysis &&
+      typeof capabilityAnalysis === 'object' &&
+      (capabilityAnalysis as Record<string, unknown>).status === 'ready';
+    if (!capabilityAnalysisIsReady && !Array.isArray(latestBrief?.draft.capabilityInventory)) {
+      throw new Error(
+        'AI capability analysis must complete from the saved capture before the first brief can be drafted.',
+      );
     }
     const now = new Date().toISOString();
     const generated = createBriefDraft(
@@ -942,6 +1006,8 @@ export class SiteforgeRepository {
       workspace.assetAnnotations,
       undefined,
       workspace.capturedPages,
+      undefined,
+      workspace.visualContentCandidates,
     );
     generated.sourceSelections.pageUrls = [
       ...new Set(workspace.capturedPages.map((page) => page.url)),
@@ -1028,6 +1094,7 @@ export class SiteforgeRepository {
       workspace.brandKit,
       workspace.capturedPages,
       brief.sourceSelections.pageUrls,
+      workspace.visualContentCandidates,
     );
     const now = new Date().toISOString();
     const refreshed: RedesignBrief = {
@@ -1134,6 +1201,25 @@ export class SiteforgeRepository {
 
   async requestWebsiteBuild(): Promise<BuilderRun | undefined> {
     throw new Error('Private preview builds require the protected Supabase builder worker.');
+  }
+
+  async moveBuilderRunToAgentStudio(builderRunId: string): Promise<BuilderRun | undefined> {
+    const run = await this.get<BuilderRun>('builderRuns', builderRunId);
+    if (!run) return undefined;
+    if (run.status !== 'ready' && run.status !== 'review_required') {
+      throw new Error('Only a completed private build can move into Agent Studio.');
+    }
+    const movedRun = {
+      ...run,
+      agentStudioSourceAt: run.agentStudioSourceAt ?? new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await this.put('builderRuns', movedRun);
+    return movedRun;
+  }
+
+  async requestAgentStudioSiteTest(): Promise<BuilderRun | undefined> {
+    throw new Error('Multi-page Agent Studio tests require the protected Supabase builder worker.');
   }
 
   async resumeWebsiteBuild(): Promise<BuilderRun | undefined> {

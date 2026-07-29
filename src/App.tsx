@@ -21,6 +21,7 @@ import {
   FormInput,
   Globe2,
   ListChecks,
+  LayoutDashboard,
   LoaderCircle,
   PackageCheck,
   Play,
@@ -47,6 +48,7 @@ import {
   useState,
   type CSSProperties,
   type FormEvent,
+  type KeyboardEvent,
   type RefObject,
   type ReactNode,
 } from 'react';
@@ -54,16 +56,26 @@ import type { Session } from '@supabase/supabase-js';
 import * as Dialog from '@radix-ui/react-dialog';
 import builderContractSource from '../worker/codex-builder-contract.md?raw';
 import builderInstructionsSource from '../worker/builder-template/AGENTS.md?raw';
+import componentArchitectureContractSource from '../worker/builder-template/feature-contracts/component-architecture.md?raw';
 import mobileNavigationContractSource from '../worker/builder-template/feature-contracts/mobile-navigation.md?raw';
+import runtimeProfilesContractSource from '../worker/builder-template/feature-contracts/runtime-profiles.md?raw';
+import siteNavigationArchitectureContractSource from '../worker/builder-template/feature-contracts/site-navigation-architecture.md?raw';
+import semanticContentRecoveryContractSource from '../worker/builder-template/feature-contracts/semantic-content-recovery.md?raw';
 import builderPackageSource from '../worker/builder-template/package.json?raw';
-import motionRuntimeSource from '../worker/builder-template/src/main.js?raw';
+import motionRuntimeSource from '../worker/builder-template/src/components/foundation/site-runtime.tsx?raw';
 import builderWorkerSource from '../worker/builder-worker.mjs?raw';
+import buildManifestSource from './lib/build-manifest.ts?raw';
 import { AppShell, type AppPage } from './components/AppShell';
+import { AgentArchitectureOverview } from './components/AgentArchitectureOverview';
 import {
   Button,
+  ButtonGroup,
+  ButtonLink,
   Card,
   ConfirmationDialog,
   Eyebrow,
+  IconButton,
+  IndeterminateProgress,
   StatusBadge,
   ToastRegion,
   type ToastNotice,
@@ -83,6 +95,7 @@ import {
   type CapabilityDecision,
   type BriefSourceSelections,
   type BuilderArtifact,
+  type BuildManifestPage,
   type BuilderPreviewMode,
   type BuilderRunEvidence,
   type BuilderRunMode,
@@ -95,9 +108,11 @@ import {
   type RedesignBriefDraft,
   type ResearchArtifact,
   type Task,
+  type StructuredVisualContent,
+  type VisualContentCandidate,
 } from './lib/domain';
 import { SupabaseWorkspaceRepository } from './lib/cloud-repository';
-import { codexBuilderContractVersion, manifestSourceMatchesBrief } from './lib/build-manifest';
+import { manifestSourceMatchesBrief } from './lib/build-manifest';
 import { brandColourEvidenceSummary, rankBrandColourEvidence } from './lib/brand-colours';
 import { detectCapabilities } from './lib/capability-inventory';
 import { siteforgeRepository, type WorkspaceRepository } from './lib/repository';
@@ -124,16 +139,16 @@ type Route =
 
 const lastRouteStorageKey = 'siteforge-os.last-route';
 
-const workspaceTabs: Array<{ id: WorkspaceTab; label: string }> = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'research', label: 'Research' },
-  { id: 'packet', label: 'Packet' },
-  { id: 'assets', label: 'Assets' },
-  { id: 'brief', label: 'Brief' },
-  { id: 'redesign', label: 'Build & preview' },
-  { id: 'audit', label: 'Audit' },
-  { id: 'report', label: 'Report' },
-  { id: 'activity', label: 'Activity' },
+const workspaceTabs = [
+  { id: 'overview' as const, label: 'Overview', icon: LayoutDashboard },
+  { id: 'research' as const, label: 'Research', icon: Search },
+  { id: 'packet' as const, label: 'Packet', icon: ClipboardCheck },
+  { id: 'assets' as const, label: 'Assets', icon: FileImage },
+  { id: 'brief' as const, label: 'Brief', icon: FilePenLine },
+  { id: 'redesign' as const, label: 'Build & preview', icon: Wrench },
+  { id: 'audit' as const, label: 'Audit', icon: ShieldAlert },
+  { id: 'report' as const, label: 'Report', icon: FileText },
+  { id: 'activity' as const, label: 'Activity', icon: Clock3 },
 ];
 
 function isWorkspaceTab(value: string | undefined): value is WorkspaceTab {
@@ -1061,16 +1076,15 @@ function WorkspaceHeader({
             workspace={workspace}
           />
           <div className="workspace-header__identity-actions">
-            <Button
-              aria-label="Open prospect settings"
+            <IconButton
               className="workspace-header__settings-button"
+              label="Open prospect settings"
               onClick={onOpenSettings}
               ref={settingsButtonRef}
-              size="compact"
               variant="quiet"
             >
               <Settings aria-hidden="true" size={18} />
-            </Button>
+            </IconButton>
           </div>
         </div>
         {canApprove && !isApproved ? (
@@ -1132,9 +1146,9 @@ function WorkspaceSettingsDialog({
         <Dialog.Content className="workspace-settings-dialog">
           <Dialog.Title className="sr-only">Prospect settings</Dialog.Title>
           <Dialog.Close asChild>
-            <Button aria-label="Close prospect settings" size="compact" variant="quiet">
+            <IconButton label="Close prospect settings" variant="quiet">
               <X aria-hidden="true" size={18} />
-            </Button>
+            </IconButton>
           </Dialog.Close>
           <ProspectSettingsPanel onDelete={onDelete} workspace={workspace} />
         </Dialog.Content>
@@ -1143,7 +1157,16 @@ function WorkspaceSettingsDialog({
   );
 }
 
-const loadingTitle = 'SiteForge OS'.split('');
+function LoadingBrand() {
+  return (
+    <span aria-label="Made Solid Studio" className="workspace-loading__brand">
+      <span aria-hidden="true" className="workspace-loading__mark" />
+      <strong aria-hidden="true" className="workspace-loading__wordmark">
+        <span>Made Solid</span> <span className="brand__studio">Studio</span>
+      </strong>
+    </span>
+  );
+}
 
 function WorkspaceLoadingOverlay({
   loading,
@@ -1166,26 +1189,13 @@ function WorkspaceLoadingOverlay({
 
   return (
     <div
-      aria-label="Loading SiteForge OS workspace"
+      aria-label="Loading Made Solid Studio workspace"
       aria-live="polite"
       className="workspace-loading"
       data-phase={phase}
       role="status"
     >
-      <span aria-label="SiteForge OS" className="workspace-loading__letters">
-        {loadingTitle.map((letter, index) => (
-          <span
-            aria-hidden="true"
-            key={`${letter}-${index}`}
-            style={{ '--letter-index': index } as CSSProperties}
-          >
-            {letter === ' ' ? '\u00a0' : letter}
-          </span>
-        ))}
-      </span>
-      <span aria-hidden="true" className="workspace-loading__title-motion">
-        SiteForge OS
-      </span>
+      <LoadingBrand />
       <p>{phase === 'entering' ? 'Preparing your workspace' : 'Workspace ready'}</p>
     </div>
   );
@@ -1200,17 +1210,7 @@ function WorkspaceErrorOverlay({
 }) {
   return (
     <div aria-live="assertive" className="workspace-loading workspace-loading--error" role="alert">
-      <span aria-label="SiteForge OS" className="workspace-loading__letters">
-        {loadingTitle.map((letter, index) => (
-          <span
-            aria-hidden="true"
-            key={`${letter}-${index}`}
-            style={{ '--letter-index': index } as CSSProperties}
-          >
-            {letter === ' ' ? '\u00a0' : letter}
-          </span>
-        ))}
-      </span>
+      <LoadingBrand />
       <p>{message}</p>
       <div className="workspace-loading__error-actions">
         <Button onClick={() => window.location.reload()} variant="secondary">
@@ -1807,9 +1807,9 @@ function ExpandableImage({
             <img alt={alt} src={src} />
             <ImageFileType sourceUrl={src} />
             <Dialog.Close asChild>
-              <Button aria-label={`Close ${label}`} size="compact" variant="quiet">
+              <IconButton label={`Close ${label}`} variant="quiet">
                 <X aria-hidden="true" size={18} />
-              </Button>
+              </IconButton>
             </Dialog.Close>
           </Dialog.Content>
         </Dialog.Portal>
@@ -1963,9 +1963,9 @@ function CapturedSiteMap({
                 </Dialog.Description>
               </div>
               <Dialog.Close asChild>
-                <Button aria-label="Close full URL map" size="compact" variant="quiet">
+                <IconButton label="Close full URL map" variant="quiet">
                   <X aria-hidden="true" size={18} />
-                </Button>
+                </IconButton>
               </Dialog.Close>
             </div>
             <div className="captured-site-map__body">
@@ -2157,9 +2157,9 @@ function PageInventory({ pages, assets }: { pages: CapturedPage[]; assets: Resea
                 ) : null}
               </div>
               <Dialog.Close asChild>
-                <Button aria-label="Close image preview" size="compact" variant="quiet">
+                <IconButton label="Close image preview" variant="quiet">
                   <X aria-hidden="true" size={18} />
-                </Button>
+                </IconButton>
               </Dialog.Close>
             </div>
             {previewAsset && urls[previewAsset.id] ? (
@@ -2222,15 +2222,17 @@ function PageInventoryItem({
             ) : null}
           </span>
         </button>
-        <a
+        <ButtonLink
           aria-label={`Open captured page: ${page.title || page.url}`}
-          className="button button--quiet button--compact page-inventory__external"
+          className="page-inventory__external"
           href={page.url}
           rel="noreferrer"
+          size="icon"
           target="_blank"
+          variant="quiet"
         >
           <ArrowUpRight aria-hidden="true" size={17} />
-        </a>
+        </ButtonLink>
       </div>
       {hasImageInventory ? (
         <div className="page-inventory__images" hidden={!imagesOpen} id={`page-images-${page.id}`}>
@@ -2496,6 +2498,23 @@ function isTextPreviewFile(file: BuilderArtifact) {
   );
 }
 
+function isWorkingSourceArtifact(file: BuilderArtifact) {
+  return (
+    file.kind === 'draft_file' &&
+    file.metadata.state !== 'compiled_working_draft' &&
+    isTextPreviewFile(file)
+  );
+}
+
+function latestArtifactsByLabel(files: BuilderArtifact[]) {
+  const latest = new Map<string, BuilderArtifact>();
+  for (const file of files) {
+    const current = latest.get(file.label);
+    if (!current || current.createdAt < file.createdAt) latest.set(file.label, file);
+  }
+  return [...latest.values()];
+}
+
 function changedLineNumbers(previous: string, current: string) {
   const before = previous.split('\n');
   const after = current.split('\n');
@@ -2690,9 +2709,9 @@ function BuilderPreviewFileEntry({
                 <Dialog.Title>{file.label}</Dialog.Title>
               </div>
               <Dialog.Close asChild>
-                <Button aria-label={`Close ${file.label}`} size="compact" variant="quiet">
+                <IconButton label={`Close ${file.label}`} variant="quiet">
                   <X aria-hidden="true" size={18} />
-                </Button>
+                </IconButton>
               </Dialog.Close>
             </div>
             <Dialog.Description className="muted-copy" id="builder-file-preview-description">
@@ -2758,13 +2777,13 @@ function TestDirectionResults({
     .split(/\n\s*\n/)
     .map((direction) => direction.trim())
     .filter(Boolean);
-  const sourceFiles = artifacts.filter(
-    (artifact) => artifact.kind === 'draft_file' && isTextPreviewFile(artifact),
+  const sourceFiles = latestArtifactsByLabel(
+    artifacts.filter((artifact) => isWorkingSourceArtifact(artifact)),
   );
   const previousByPath = new Map(
-    previousArtifacts
-      .filter((artifact) => artifact.kind === 'draft_file')
-      .map((artifact) => [artifact.label, artifact]),
+    latestArtifactsByLabel(
+      previousArtifacts.filter((artifact) => isWorkingSourceArtifact(artifact)),
+    ).map((artifact) => [artifact.label, artifact]),
   );
 
   if (!directions.length) return null;
@@ -2788,8 +2807,8 @@ function TestDirectionResults({
           <div>
             <p>
               These files are the saved result of this test run. When a run has multiple directions,
-              SiteForge shows the run&apos;s resulting changes rather than claiming a file came from
-              one sentence alone.
+              Made Solid Studio shows the run&apos;s resulting changes rather than claiming a file
+              came from one sentence alone.
             </p>
             {sourceFiles.length ? (
               <ul className="builder-run-inspector__files">
@@ -3678,6 +3697,583 @@ function AssetReviewPanel({
   );
 }
 
+const visualContentTypeLabels: Record<VisualContentCandidate['contentType'], string> = {
+  testimonial: 'Testimonial or feedback',
+  service: 'Service information',
+  contact: 'Contact information',
+  pricing: 'Pricing',
+  faq: 'Question and answer',
+  process: 'Process',
+  table: 'Table',
+  list: 'List',
+  general: 'General content',
+};
+
+function hasStructuredVisualContent(
+  value: StructuredVisualContent | Record<string, never>,
+): value is StructuredVisualContent {
+  return value.schemaVersion === 1 && typeof value.kind === 'string';
+}
+
+function StructuredContentPreview({ content }: { content: StructuredVisualContent }) {
+  if (content.kind === 'testimonial' && content.testimonial.quote) {
+    const attribution = [
+      content.testimonial.person,
+      content.testimonial.role,
+      content.testimonial.organisation,
+    ].filter(Boolean);
+    return (
+      <blockquote className="structured-preview__quote">
+        <p>{content.testimonial.quote}</p>
+        {attribution.length ? <footer>{attribution.join(' · ')}</footer> : null}
+      </blockquote>
+    );
+  }
+  if (content.kind === 'table' && content.table.columns.length) {
+    return (
+      <div className="structured-preview__table-wrap">
+        <table>
+          {content.table.caption ? <caption>{content.table.caption}</caption> : null}
+          <thead>
+            <tr>
+              {content.table.columns.map((column, index) => (
+                <th key={`${column}-${index}`} scope="col">
+                  {column || `Column ${index + 1}`}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {content.table.rows.map((row, rowIndex) => (
+              <tr key={rowIndex}>
+                {content.table.columns.map((_, cellIndex) => (
+                  <td key={cellIndex}>
+                    {row[cellIndex] || <span aria-label="Empty cell">—</span>}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {content.table.footnotes.map((footnote, index) => (
+          <small key={index}>{footnote}</small>
+        ))}
+      </div>
+    );
+  }
+  if (content.kind === 'faq' && content.faqs.length) {
+    return (
+      <dl className="structured-preview__faqs">
+        {content.faqs.map((item, index) => (
+          <div key={index}>
+            <dt>{item.question}</dt>
+            <dd>{item.answer}</dd>
+          </div>
+        ))}
+      </dl>
+    );
+  }
+  if (content.items.length) {
+    return (
+      <dl className="structured-preview__items">
+        {content.items.map((item, index) => (
+          <div key={index}>
+            <dt>{item.label || item.value || `Item ${index + 1}`}</dt>
+            {item.label && item.value ? <dd>{item.value}</dd> : null}
+            {item.detail ? <dd className="muted-copy">{item.detail}</dd> : null}
+          </div>
+        ))}
+      </dl>
+    );
+  }
+  return <p className="structured-preview__body">{content.body}</p>;
+}
+
+function VisualContentCandidateEditor({
+  candidate,
+  assetUrl,
+  onUpdate,
+}: {
+  candidate: VisualContentCandidate;
+  assetUrl?: string;
+  onUpdate: (
+    candidate: VisualContentCandidate,
+    patch: Pick<
+      VisualContentCandidate,
+      | 'contentType'
+      | 'reviewState'
+      | 'humanTitle'
+      | 'humanBody'
+      | 'humanAttribution'
+      | 'humanNotes'
+      | 'humanStructuredContent'
+    >,
+  ) => Promise<void>;
+}) {
+  const [contentType, setContentType] = useState(candidate.contentType);
+  const [title, setTitle] = useState(candidate.humanTitle || candidate.title);
+  const [body, setBody] = useState(candidate.humanBody || candidate.body);
+  const [attribution, setAttribution] = useState(
+    candidate.humanAttribution || candidate.attribution,
+  );
+  const [notes, setNotes] = useState(candidate.humanNotes);
+  const sourceStructure = hasStructuredVisualContent(candidate.humanStructuredContent)
+    ? candidate.humanStructuredContent
+    : candidate.structuredContent;
+  const [structuredJson, setStructuredJson] = useState(
+    hasStructuredVisualContent(sourceStructure) ? JSON.stringify(sourceStructure, null, 2) : '',
+  );
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const fieldId = `visual-content-${candidate.id}`;
+
+  async function save(reviewState = candidate.reviewState) {
+    setSaving(true);
+    setMessage('');
+    try {
+      let humanStructuredContent: StructuredVisualContent | Record<string, never> = {};
+      if (structuredJson.trim()) {
+        const parsed = JSON.parse(structuredJson) as StructuredVisualContent;
+        if (!hasStructuredVisualContent(parsed)) {
+          throw new Error('Structured data must retain schemaVersion 1 and a content kind.');
+        }
+        humanStructuredContent = { ...parsed, kind: contentType };
+      }
+      await onUpdate(candidate, {
+        contentType,
+        reviewState,
+        humanTitle: title,
+        humanBody: body,
+        humanAttribution: attribution,
+        humanNotes: notes,
+        humanStructuredContent,
+      });
+      setMessage(
+        reviewState === 'approved'
+          ? 'Approved for the next brief.'
+          : reviewState === 'blocked'
+            ? 'Excluded from builder use.'
+            : 'Draft changes saved.',
+      );
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : 'This content review could not be saved.',
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <article className="visual-content-card">
+      <header className="visual-content-card__header">
+        <div>
+          <Eyebrow>{visualContentTypeLabels[candidate.contentType]}</Eyebrow>
+          <h4>{candidate.sectionHeading || 'Recovered image content'}</h4>
+        </div>
+        <div className="visual-content-card__meta">
+          <StatusBadge
+            tone={
+              candidate.reviewState === 'approved'
+                ? 'success'
+                : candidate.reviewState === 'blocked'
+                  ? 'danger'
+                  : 'warning'
+            }
+          >
+            {candidate.reviewState.replaceAll('_', ' ')}
+          </StatusBadge>
+          <StatusBadge tone={candidate.structureStatus === 'ready' ? 'success' : 'warning'}>
+            {candidate.structureStatus === 'ready' ? 'Structured' : candidate.structureStatus}
+          </StatusBadge>
+        </div>
+      </header>
+      <div className="visual-content-card__body">
+        <div className="visual-content-card__comparison">
+          {assetUrl ? (
+            <figure>
+              <figcaption>Captured source</figcaption>
+              <img
+                alt="Captured source containing information proposed for recovery"
+                className="visual-content-card__source"
+                src={assetUrl}
+              />
+            </figure>
+          ) : null}
+          <section className="structured-preview" aria-label="Recovered structured content">
+            <div className="structured-preview__heading">
+              <span>Recovered structure</span>
+              <small>
+                {candidate.confidence} confidence · {candidate.sourcePresentation} source
+              </small>
+            </div>
+            {candidate.structureStatus === 'ready' &&
+            hasStructuredVisualContent(sourceStructure) ? (
+              <>
+                {sourceStructure.heading ? <h5>{sourceStructure.heading}</h5> : null}
+                <StructuredContentPreview content={sourceStructure} />
+                {sourceStructure.uncertainties.length ? (
+                  <p className="structured-preview__uncertainty">
+                    {sourceStructure.uncertainties.length} uncertain value
+                    {sourceStructure.uncertainties.length === 1 ? '' : 's'} need review.
+                  </p>
+                ) : null}
+              </>
+            ) : candidate.structureStatus === 'failed' ? (
+              <p className="form-message form-message--error">
+                {candidate.structureError || 'This image could not be structured automatically.'}
+              </p>
+            ) : (
+              <div className="structured-preview__pending" role="status">
+                <span className="evidence-skeleton evidence-skeleton--value" />
+                <span className="evidence-skeleton evidence-skeleton--detail" />
+                <span>Waiting for structured analysis</span>
+              </div>
+            )}
+          </section>
+        </div>
+        <details className="visual-content-card__editor">
+          <summary>Edit recovered information</summary>
+          <div className="visual-content-card__fields">
+            <label htmlFor={`${fieldId}-type`}>Information type</label>
+            <select
+              id={`${fieldId}-type`}
+              onChange={(event) =>
+                setContentType(event.currentTarget.value as VisualContentCandidate['contentType'])
+              }
+              value={contentType}
+            >
+              {Object.entries(visualContentTypeLabels).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            <label htmlFor={`${fieldId}-title`}>Optional title</label>
+            <input
+              id={`${fieldId}-title`}
+              onChange={(event) => setTitle(event.currentTarget.value)}
+              value={title}
+            />
+            <label htmlFor={`${fieldId}-body`}>Plain-text fallback</label>
+            <textarea
+              id={`${fieldId}-body`}
+              onChange={(event) => setBody(event.currentTarget.value)}
+              rows={4}
+              value={body}
+            />
+            <label htmlFor={`${fieldId}-attribution`}>Plain-text attribution</label>
+            <input
+              id={`${fieldId}-attribution`}
+              onChange={(event) => setAttribution(event.currentTarget.value)}
+              value={attribution}
+            />
+            <label htmlFor={`${fieldId}-structure`}>Structured data</label>
+            <textarea
+              className="visual-content-card__json"
+              id={`${fieldId}-structure`}
+              onChange={(event) => setStructuredJson(event.currentTarget.value)}
+              rows={12}
+              spellCheck={false}
+              value={structuredJson}
+            />
+            <small>
+              Preserve the data meaning and uncertainty paths. This does not control the final
+              component.
+            </small>
+            <label htmlFor={`${fieldId}-notes`}>Review notes</label>
+            <textarea
+              id={`${fieldId}-notes`}
+              onChange={(event) => setNotes(event.currentTarget.value)}
+              rows={2}
+              value={notes}
+            />
+            <Button disabled={saving} onClick={() => void save()} variant="secondary">
+              {saving ? 'Saving changes' : 'Save draft changes'}
+            </Button>
+          </div>
+        </details>
+        <footer className="visual-content-card__actions">
+          <Button
+            disabled={
+              saving ||
+              candidate.structureStatus !== 'ready' ||
+              (!body.trim() && !hasStructuredVisualContent(sourceStructure))
+            }
+            onClick={() => void save('approved')}
+          >
+            <CheckCheck aria-hidden="true" size={16} />
+            Approve information
+          </Button>
+          <Button disabled={saving} onClick={() => void save('blocked')} variant="secondary">
+            Exclude
+          </Button>
+          {message ? <p role="status">{message}</p> : null}
+        </footer>
+      </div>
+    </article>
+  );
+}
+
+function VisualContentRecoveryPanel({
+  workspace,
+  onExtract,
+  onCancel,
+  onApproveAll,
+  onUpdate,
+}: {
+  workspace: ProspectWorkspace;
+  onExtract: () => Promise<void>;
+  onCancel: () => Promise<void>;
+  onApproveAll: () => Promise<void>;
+  onUpdate: (
+    candidate: VisualContentCandidate,
+    patch: Pick<
+      VisualContentCandidate,
+      | 'contentType'
+      | 'reviewState'
+      | 'humanTitle'
+      | 'humanBody'
+      | 'humanAttribution'
+      | 'humanNotes'
+      | 'humanStructuredContent'
+    >,
+  ) => Promise<void>;
+}) {
+  const [extracting, setExtracting] = useState(false);
+  const [message, setMessage] = useState('');
+  const [cancelling, setCancelling] = useState(false);
+  const [approvingAll, setApprovingAll] = useState(false);
+  const assets = workspace.artifacts.filter((artifact) => artifact.kind === 'asset');
+  const { urls } = usePrivateArtifactUrls(
+    assets,
+    'Captured source images could not be loaded. Refresh and check storage access.',
+  );
+  const candidates = workspace.visualContentCandidates;
+  const job = workspace.visualContentJob;
+  const active = job?.status === 'queued' || job?.status === 'running';
+  const approvedCount = candidates.filter(
+    (candidate) => candidate.reviewState === 'approved',
+  ).length;
+  const pendingCount = candidates.filter(
+    (candidate) => candidate.reviewState === 'needs_review',
+  ).length;
+  const approvableCount = candidates.filter(
+    (candidate) =>
+      candidate.reviewState === 'needs_review' &&
+      candidate.structureStatus === 'ready' &&
+      (hasStructuredVisualContent(candidate.structuredContent) ||
+        hasStructuredVisualContent(candidate.humanStructuredContent) ||
+        Boolean(candidate.humanBody || candidate.body)),
+  ).length;
+  const contentGroups = new Map<
+    string,
+    { pageUrl: string; sectionHeading: string; candidates: VisualContentCandidate[] }
+  >();
+  for (const candidate of candidates) {
+    const pageUrl = candidate.sourcePageUrl || 'Captured page';
+    const sectionHeading = candidate.sectionHeading || 'Content found on this page';
+    const key = `${pageUrl}\n${sectionHeading}`;
+    const group = contentGroups.get(key);
+    if (group) group.candidates.push(candidate);
+    else contentGroups.set(key, { pageUrl, sectionHeading, candidates: [candidate] });
+  }
+  const sourcePageCount = new Set(candidates.map((candidate) => candidate.sourcePageUrl)).size;
+
+  async function extract() {
+    setExtracting(true);
+    setMessage('');
+    try {
+      await onExtract();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Visual content could not be recovered.');
+    } finally {
+      setExtracting(false);
+    }
+  }
+
+  async function cancel() {
+    setCancelling(true);
+    setMessage('');
+    try {
+      await onCancel();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Recovery could not be cancelled.');
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  async function approveAll() {
+    setApprovingAll(true);
+    setMessage('');
+    try {
+      await onApproveAll();
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : 'The recovered information could not be approved for builds.',
+      );
+    } finally {
+      setApprovingAll(false);
+    }
+  }
+
+  return (
+    <Card className="workspace-panel visual-content-panel">
+      <div className="visual-content-panel__hero">
+        <div>
+          <Eyebrow>Captured information recovery</Eyebrow>
+          <h2>Recover image-based information</h2>
+          <p className="muted-copy">
+            Turn saved screenshots, tables, testimonials and text graphics into editable semantic
+            information. The current capture is reused; the website is not visited again.
+          </p>
+          <div className="visual-content-panel__contract">
+            <span>Page and section provenance retained</span>
+            <span>Tables and lists keep their structure</span>
+            <span>Builder chooses the final component</span>
+          </div>
+        </div>
+        <div className="visual-content-panel__actions">
+          {approvableCount ? (
+            <Button
+              disabled={approvingAll || active}
+              onClick={() => void approveAll()}
+              type="button"
+            >
+              <CheckCheck aria-hidden="true" size={16} />
+              {approvingAll
+                ? 'Preparing builder handoff'
+                : `Approve all ${approvableCount} for builds`}
+            </Button>
+          ) : null}
+          <Button
+            disabled={extracting || active || !workspace.assetAnnotations.length}
+            onClick={() => void extract()}
+            type="button"
+            variant={approvableCount ? 'secondary' : 'primary'}
+          >
+            <Sparkles aria-hidden="true" size={16} />
+            {extracting
+              ? 'Queueing recovery'
+              : active
+                ? 'Recovery in progress'
+                : candidates.length
+                  ? 'Analyse saved images again'
+                  : 'Recover structured content'}
+          </Button>
+          {active ? (
+            <Button
+              disabled={cancelling || Boolean(job?.cancelRequestedAt)}
+              onClick={() => void cancel()}
+              type="button"
+              variant="secondary"
+            >
+              <Ban aria-hidden="true" size={16} />
+              {cancelling || job?.cancelRequestedAt ? 'Stopping recovery' : 'Cancel'}
+            </Button>
+          ) : null}
+          {approvableCount ? (
+            <small>
+              Approves the saved recovered information and refreshes the Brief and Build Manifest
+              for both Agent Studio tests and complete prospect builds.
+            </small>
+          ) : null}
+        </div>
+      </div>
+      {candidates.length ? (
+        <dl className="visual-content-panel__summary">
+          <div>
+            <dt>Recovered</dt>
+            <dd>{candidates.length}</dd>
+          </div>
+          <div>
+            <dt>Needs review</dt>
+            <dd>{pendingCount}</dd>
+          </div>
+          <div>
+            <dt>Approved</dt>
+            <dd>{approvedCount}</dd>
+          </div>
+          <div>
+            <dt>Source pages</dt>
+            <dd>{sourcePageCount}</dd>
+          </div>
+        </dl>
+      ) : null}
+      {active ? (
+        <div className="visual-content-progress" role="status" aria-live="polite">
+          <div>
+            <Sparkles aria-hidden="true" size={18} />
+            <strong>{job?.progressDetail || 'Preparing saved images for interpretation.'}</strong>
+          </div>
+          <span>
+            {job?.totalItems
+              ? `${job.completedItems} of ${job.totalItems} images structured`
+              : 'Loading candidate images'}
+          </span>
+        </div>
+      ) : null}
+      {job?.status === 'failed' && job.progressPhase !== 'cancelled' ? (
+        <p className="form-message form-message--error">
+          {job.errorSummary || 'Structured content recovery failed. Try the saved images again.'}
+        </p>
+      ) : null}
+      {!workspace.assetAnnotations.length ? (
+        <EmptyState
+          detail="Analyse the saved images first. That vision pass reads visible text; it still does not require another website capture."
+          icon={Sparkles}
+          title="Image analysis is needed"
+        />
+      ) : !candidates.length ? (
+        <EmptyState
+          detail="Run recovery to find and structure useful information in the saved images. Decorative images and logos are ignored."
+          icon={FileText}
+          title="No recovered content yet"
+        />
+      ) : (
+        <div className="visual-content-pages">
+          {[...contentGroups.values()].map(
+            ({ pageUrl, sectionHeading, candidates: groupItems }) => (
+              <section className="visual-content-page" key={`${pageUrl}-${sectionHeading}`}>
+                <header>
+                  <div>
+                    <Eyebrow>Captured page</Eyebrow>
+                    <h3>{sectionHeading}</h3>
+                  </div>
+                  <StatusBadge tone="neutral">
+                    {groupItems.length} item{groupItems.length === 1 ? '' : 's'}
+                  </StatusBadge>
+                  <a href={pageUrl} rel="noreferrer" target="_blank">
+                    {pageUrl}
+                  </a>
+                </header>
+                <div className="visual-content-grid">
+                  {groupItems.map((candidate) => (
+                    <VisualContentCandidateEditor
+                      assetUrl={urls[candidate.assetId]}
+                      candidate={candidate}
+                      key={candidate.id}
+                      onUpdate={onUpdate}
+                    />
+                  ))}
+                </div>
+              </section>
+            ),
+          )}
+        </div>
+      )}
+      {message ? (
+        <p className="form-message form-message--error" role="alert">
+          {message}
+        </p>
+      ) : null}
+    </Card>
+  );
+}
+
 function isHexColour(value?: string) {
   return /^#[0-9a-f]{6}$/i.test(value ?? '');
 }
@@ -4383,17 +4979,15 @@ function BrandKitPanel({
                           <small>Derived vector suggestion — review before selecting</small>
                         ) : null}
                       </span>
-                      <Button
-                        aria-label={`Permanently delete ${asset.label || 'logo candidate'}`}
+                      <IconButton
                         className="brand-kit__logo-delete"
+                        label={`Permanently delete ${asset.label || 'logo candidate'}`}
                         onClick={() => deleteLogo(asset)}
-                        size="compact"
                         title="Delete logo permanently"
-                        type="button"
                         variant="danger"
                       >
                         <Trash2 aria-hidden="true" size={16} />
-                      </Button>
+                      </IconButton>
                     </div>
                   ))}
               </fieldset>
@@ -5494,6 +6088,7 @@ function builderRunLabel(status: BuilderRun['status']) {
 function builderRunModeLabel(mode: BuilderRunMode) {
   if (mode === 'homepage_test') return 'Homepage test';
   if (mode === 'page_test') return 'Page test';
+  if (mode === 'site_test') return 'Multi-page feature test';
   return 'Complete prospect build';
 }
 
@@ -5528,7 +6123,9 @@ function testBuildChangeSummary(run: BuilderRun, previousRun?: BuilderRun) {
   }
   if (
     run.buildMode !== previousRun.buildMode ||
-    run.targetSourceUrl !== previousRun.targetSourceUrl
+    run.targetSourceUrl !== previousRun.targetSourceUrl ||
+    JSON.stringify(run.targetSourceUrls ?? []) !==
+      JSON.stringify(previousRun.targetSourceUrls ?? [])
   ) {
     changes.push(`Test target changed to ${builderRunModeLabel(run.buildMode).toLowerCase()}`);
   }
@@ -5536,6 +6133,17 @@ function testBuildChangeSummary(run: BuilderRun, previousRun?: BuilderRun) {
   return changes.length
     ? changes.join(' · ')
     : `No agent-contract change from the previous test (${run.templateVersion}).`;
+}
+
+function builderRunPageCount(workspace: ProspectWorkspace, run: BuilderRun) {
+  if (run.buildMode === 'homepage_test') return 1;
+  if (run.buildMode === 'page_test') return run.targetSourceUrls?.length || 1;
+  const manifest = workspace.buildManifests.find(
+    (candidate) => candidate.id === run.buildManifestId,
+  );
+  return (
+    manifest?.data.selectedPages.length ?? workspace.buildManifest?.data.selectedPages.length ?? 0
+  );
 }
 
 function buildProgressMilestones(run: BuilderRun, screenshots: BuilderArtifact[]) {
@@ -5982,6 +6590,8 @@ function BuilderRunPanel({
   onDeleteBuild,
   onOpenPreview,
   onLoadBuildEvidence,
+  onMoveToAgentStudio,
+  onRequestSiteTest,
   onStageBehaviours,
   onRequestProposal,
 }: {
@@ -5994,12 +6604,20 @@ function BuilderRunPanel({
     buildInstruction?: string,
     agentPackageId?: string,
     sourceBuilderRunId?: string,
+    targetSourceUrls?: string[],
   ) => Promise<void>;
   onResumeBuild?: (builderRunId: string) => Promise<void>;
   onCancelBuild: () => Promise<void>;
   onDeleteBuild: (businessId: string) => Promise<void>;
   onOpenPreview: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
   onLoadBuildEvidence: (builderRunId: string) => Promise<BuilderRunEvidence>;
+  onMoveToAgentStudio?: (builderRunId: string) => Promise<void>;
+  onRequestSiteTest?: (
+    sourceBuilderRunId: string,
+    buildInstruction: string,
+    agentPackageId: string,
+    featureId: string,
+  ) => Promise<void>;
   onStageBehaviours?: (packageId: string, behaviourIds: string[]) => Promise<void>;
   onRequestProposal?: (basePackageId: string, direction: string) => Promise<void>;
 }) {
@@ -6014,10 +6632,20 @@ function BuilderRunPanel({
   const [isCancelling, setIsCancelling] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isOpeningPreview, setIsOpeningPreview] = useState(false);
+  const [movingRunId, setMovingRunId] = useState<string>();
+  const [isRequestingSiteTest, setIsRequestingSiteTest] = useState(false);
   const [message, setMessage] = useState('');
-  const [targetSourceUrl, setTargetSourceUrl] = useState('');
-  const [testPageAction, setTestPageAction] = useState<'create' | 'revise'>('create');
+  const [targetSourceUrls, setTargetSourceUrls] = useState<string[]>([]);
+  const [pageSearchQuery, setPageSearchQuery] = useState('');
+  const pageSelectionManifestIdRef = useRef<string>();
+  const pendingPageSelectionFocusUrlRef = useRef<string>();
+  const pageSelectionInputRefs = useRef(new Map<string, HTMLInputElement>());
+  const [testPageAction, setTestPageAction] = useState<'create' | 'revise' | 'website'>('create');
   const [sourceBuilderRunId, setSourceBuilderRunId] = useState('');
+  const [studioSourceBuilderRunId, setStudioSourceBuilderRunId] = useState('');
+  const [siteFeatureDirection, setSiteFeatureDirection] = useState(
+    'Repair the multi-page navigation architecture. Keep primary destinations consistent on every page, use the exact generated HTML output paths, organise deeper pages beneath meaningful parent routes, and ensure every generated page is reachable from the homepage. Preserve all unrelated content, styling, and interactions.',
+  );
   const [retainedTestContextId, setRetainedTestContextId] = useState<string>();
   const [buildDirections, setBuildDirections] = useState<string[]>([]);
   const [selectedBehaviourIds, setSelectedBehaviourIds] = useState<string[]>([]);
@@ -6035,6 +6663,7 @@ function BuilderRunPanel({
   const publishedPackage = agentPackages.find(
     (agentPackage) => agentPackage.status === 'published',
   );
+  const pendingProductionFeatureCount = pendingProductionFeatureIds(agentPackages).length;
   const [selectedAgentPackageId, setSelectedAgentPackageId] = useState<string>();
   const selectedAgentPackage = agentPackages.find(
     (agentPackage) => agentPackage.id === selectedAgentPackageId,
@@ -6068,27 +6697,81 @@ function BuilderRunPanel({
                 : 'package-behaviour',
             title: `Package v${selectedAgentPackage.version} testing behaviour`,
             detail: selectedAgentPackage.capabilityProposal || selectedAgentPackage.summary,
-            revision: `v${selectedAgentPackage.version}.0`,
+            revision: `v${selectedAgentPackage.version}.0.2`,
             change:
-              'Latest edit: this package-specific behaviour is isolated from the remaining test behaviours so it can be staged independently.',
+              'Latest edit: the package now builds a pinned Next.js, TypeScript, Tailwind, and Base UI project with generated site-specific components.',
           },
           {
             id: 'hero-handoff',
             title: 'Visible hero entrance after the logo handoff',
             detail:
               'After the logo has reached the real navigation mark, the hero heading, supporting copy, and visual media reveal separately. The entrance no longer plays behind the loading overlay, so visitors can see it happen.',
-            revision: `v${selectedAgentPackage.version}.1`,
+            revision: `v${selectedAgentPackage.version}.2`,
             change:
-              'Latest edit: hero copy and media wait for the logo handoff, then reveal as distinct visible steps.',
+              'Latest edit: reveal, factual-counter, and approved-logo handoff behaviour now runs through the locked React SiteRuntime component.',
           },
           {
             id: 'responsive-sidebar',
             title: 'Mobile & tablet sidebar navigation',
             detail:
               'Below desktop width, the header links become a leading-edge sidebar that reuses the real logo and header palette and opens from the trigger side. On motion-enabled visits, the header slides away after a downward scroll and returns on any upward scroll. It supports close, backdrop, Escape, keyboard focus, route selection, and reduced-motion users; desktop navigation stays visible.',
-            revision: `v${selectedAgentPackage.version}.3`,
+            revision: `v${selectedAgentPackage.version}.13`,
             change:
-              'Latest edit: navigation is now generated from its Markdown feature contract, with a required animated icon, staggered links, and coherent accessible colour treatment.',
+              'Latest edit: compact navigation is now a generated React/Base UI component verified open and closed for leading position, focus entry and restoration, Escape, reduced motion, vertical routes, touch size, and overflow.',
+          },
+          {
+            id: 'contextual-logo-selection',
+            title: 'Context-aware logo selection',
+            detail:
+              'The builder treats the approved source logo and its transparent versions as one family. It chooses white or white-with-accent on dark surfaces, and original, black-with-accent, or black on light surfaces, with a stable protective surface for photography or mixed backgrounds.',
+            revision: `v${selectedAgentPackage.version}.5`,
+            change:
+              'Latest edit: approved logo-family files now use framework-safe public asset paths while retaining exact appearance and light/dark surface verification.',
+          },
+          {
+            id: 'visual-content-recovery',
+            title: 'Semantic recovery from image-based content',
+            detail:
+              'Human-approved text recovered from captured images keeps its source page and section provenance, while the builder chooses a new accessible component or section instead of copying the old image, carousel, gallery, or screenshot treatment.',
+            revision: `v${selectedAgentPackage.version}.14`,
+            change:
+              'Latest edit: testimonial analysis now recognises short trailing role and organisation lines as visible attribution, keeping them out of the quotation so every feedback item receives consistent attribution formatting in the single build pass.',
+          },
+          {
+            id: 'site-navigation-architecture',
+            title: 'Multi-page navigation architecture',
+            detail:
+              'Every selected output remains a real page. Primary destinations stay consistent while deeper pages are organised through meaningful parent pages, nested navigation, breadcrumbs, cards, or contextual links, and every page remains reachable from the homepage.',
+            revision: `v${selectedAgentPackage.version}.23`,
+            change:
+              'Latest edit: Refine now searches approved pages by name, path, or URL while keeping every selected page pinned in a dedicated group above the filtered results.',
+          },
+          {
+            id: 'next-component-architecture',
+            title: 'Next.js generated component architecture',
+            detail:
+              'The agent creates each business’s visual tokens, UI primitives, patterns, sections, site components, layouts, and pages on a pinned strict TypeScript, Tailwind, Base UI, and Lucide foundation.',
+            revision: `v${selectedAgentPackage.version}.18`,
+            change:
+              'Latest edit: locked mechanics are now separated from generated appearance, so audited behaviour is reused without imposing a Bootstrap-style visual theme.',
+          },
+          {
+            id: 'runtime-profiles',
+            title: 'Production runtime and capability profiles',
+            detail:
+              'Every manifest selects static marketing, managed forms, or a managed Next.js runtime and records typed production adapters without pretending a private static preview is a live backend.',
+            revision: `v${selectedAgentPackage.version}.19`,
+            change:
+              'Latest edit: approved capabilities now carry explicit preview, production service, secret, configuration, and BUILD_NOTES handoff requirements.',
+          },
+          {
+            id: 'framework-quality-gates',
+            title: 'Framework and responsive quality gates',
+            detail:
+              'Generated source must pass formatting, lint, strict typing, production build, route and provenance checks, browser interactions, accessibility, and exact responsive evidence.',
+            revision: `v${selectedAgentPackage.version}.22`,
+            change:
+              'Latest edit: page-set tests now compile, verify route provenance, and capture responsive and accessibility evidence for every selected output.',
           },
         ]
       : [];
@@ -6105,6 +6788,12 @@ function BuilderRunPanel({
   const testOnlyFeatures = [
     agentPackageFeatures.find((feature) => feature.id === 'motion-runtime'),
     agentPackageFeatures.find((feature) => feature.id === 'responsive-sidebar'),
+    agentPackageFeatures.find((feature) => feature.id === 'contextual-logo-selection'),
+    agentPackageFeatures.find((feature) => feature.id === 'visual-content-recovery'),
+    agentPackageFeatures.find((feature) => feature.id === 'site-navigation-architecture'),
+    agentPackageFeatures.find((feature) => feature.id === 'next-component-architecture'),
+    agentPackageFeatures.find((feature) => feature.id === 'runtime-profiles'),
+    agentPackageFeatures.find((feature) => feature.id === 'framework-quality-gates'),
     ...(includesBrandIntroduction
       ? [agentPackageFeatures.find((feature) => feature.id === 'brand-introduction')]
       : []),
@@ -6114,14 +6803,7 @@ function BuilderRunPanel({
       behaviourId === 'hero-handoff' ? feature.id === 'motion-runtime' : feature.id === behaviourId,
     );
   const featureHasWorkshopSource = (feature?: AgentFeature) =>
-    Boolean(
-      feature?.files.some((featureFile) => {
-        const file = currentAgentPackageFiles.find(
-          (candidate) => candidate.label === featureFile.label,
-        );
-        return file?.path.endsWith('.js') || file?.path.endsWith('.mjs');
-      }),
-    );
+    agentFeatureHasWorkshopSource(feature);
 
   async function sendWorkshopToTesting() {
     if (!publishedPackage || !workshopFeature || !workshopDirection.trim() || !onRequestProposal)
@@ -6148,13 +6830,138 @@ function BuilderRunPanel({
   const [historyEvidence, setHistoryEvidence] = useState<
     Record<string, BuilderRunEvidenceState | undefined>
   >({});
-  const pageTestOptions = (workspace.buildManifest?.data.selectedPages ?? []).filter((page) => {
+  const allPageTestOptions = workspace.buildManifest?.data.selectedPages ?? [];
+  const homepageTestOption = allPageTestOptions.find((page) => {
+    try {
+      return new URL(page.url).pathname.replace(/\/+$/, '') === '';
+    } catch {
+      return false;
+    }
+  });
+  const pageTestOptions = allPageTestOptions.filter((page) => {
     try {
       return new URL(page.url).pathname.replace(/\/+$/, '') !== '';
     } catch {
       return false;
     }
   });
+  const initialPageTestUrl = homepageTestOption?.url ?? allPageTestOptions[0]?.url;
+  const normalizedPageSearchQuery = pageSearchQuery.trim().toLocaleLowerCase();
+  const selectedPageTestOptions = allPageTestOptions.filter((page) =>
+    targetSourceUrls.includes(page.url),
+  );
+  const availablePageTestOptions = allPageTestOptions.filter((page) => {
+    if (targetSourceUrls.includes(page.url)) return false;
+    if (!normalizedPageSearchQuery) return true;
+    return [page.title, page.publicPath, page.url].some(
+      (value) =>
+        typeof value === 'string' && value.toLocaleLowerCase().includes(normalizedPageSearchQuery),
+    );
+  });
+  useEffect(() => {
+    if (pageSelectionManifestIdRef.current === workspace.buildManifest?.id) return;
+    pageSelectionManifestIdRef.current = workspace.buildManifest?.id;
+    setTargetSourceUrls(initialPageTestUrl ? [initialPageTestUrl] : []);
+    setPageSearchQuery('');
+  }, [initialPageTestUrl, workspace.buildManifest?.id]);
+  useEffect(() => {
+    const sourceUrl = pendingPageSelectionFocusUrlRef.current;
+    if (!sourceUrl) return;
+    const frame = window.requestAnimationFrame(() => {
+      pageSelectionInputRefs.current.get(sourceUrl)?.focus();
+      pendingPageSelectionFocusUrlRef.current = undefined;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [targetSourceUrls]);
+  function renderPageSetOption(page: BuildManifestPage) {
+    const checked = targetSourceUrls.includes(page.url);
+    let pathname = page.publicPath;
+    try {
+      pathname = new URL(page.url).pathname || '/';
+    } catch {
+      // The immutable manifest URL remains the useful fallback label.
+    }
+    return (
+      <label key={page.url}>
+        <input
+          checked={checked}
+          disabled={isRequesting || isRequestingSiteTest}
+          onChange={() => {
+            pendingPageSelectionFocusUrlRef.current = page.url;
+            setTargetSourceUrls((current) =>
+              checked
+                ? current.filter((sourceUrl) => sourceUrl !== page.url)
+                : allPageTestOptions
+                    .filter(
+                      (candidate) => current.includes(candidate.url) || candidate.url === page.url,
+                    )
+                    .map((candidate) => candidate.url),
+            );
+          }}
+          ref={(element) => {
+            if (element) pageSelectionInputRefs.current.set(page.url, element);
+            else pageSelectionInputRefs.current.delete(page.url);
+          }}
+          type="checkbox"
+        />
+        <span>
+          <strong>{page.title || pathname}</strong>
+          <small>{pathname}</small>
+        </span>
+        {page.url === homepageTestOption?.url ? <em>Homepage</em> : null}
+      </label>
+    );
+  }
+  const studioSourceRuns = workspace.builderRuns
+    .filter(
+      (candidate) =>
+        Boolean(candidate.agentStudioSourceAt) &&
+        candidate.sourceCheckpointAvailable !== false &&
+        (candidate.status === 'ready' || candidate.status === 'review_required'),
+    )
+    .sort((first, second) => second.createdAt.localeCompare(first.createdAt));
+  const studioMultiPageSourceRuns = studioSourceRuns.filter(
+    (candidate) =>
+      (candidate.buildMode === 'full_site' ||
+        candidate.buildMode === 'site_test' ||
+        Boolean(candidate.targetSourceUrls?.length)) &&
+      builderRunPageCount(workspace, candidate) > 1,
+  );
+  const studioSourceById = new Map(studioSourceRuns.map((candidate) => [candidate.id, candidate]));
+  function studioLineageRootId(candidate: BuilderRun) {
+    let current = candidate;
+    const visited = new Set([current.id]);
+    while (current.parentBuilderRunId) {
+      const parent = studioSourceById.get(current.parentBuilderRunId);
+      if (!parent || visited.has(parent.id)) break;
+      visited.add(parent.id);
+      current = parent;
+    }
+    return current.id;
+  }
+  const studioVersionGroupsByRoot = new Map<string, BuilderRun[]>();
+  studioSourceRuns.forEach((candidate) => {
+    const rootId = studioLineageRootId(candidate);
+    studioVersionGroupsByRoot.set(rootId, [
+      ...(studioVersionGroupsByRoot.get(rootId) ?? []),
+      candidate,
+    ]);
+  });
+  const studioVersionGroups = [...studioVersionGroupsByRoot.values()]
+    .map((group) => group.sort((first, second) => second.createdAt.localeCompare(first.createdAt)))
+    .sort((first, second) => second[0]!.createdAt.localeCompare(first[0]!.createdAt));
+  const selectedStudioSource = studioMultiPageSourceRuns.find(
+    (candidate) => candidate.id === studioSourceBuilderRunId,
+  );
+  useEffect(() => {
+    if (
+      studioSourceBuilderRunId &&
+      studioMultiPageSourceRuns.some((candidate) => candidate.id === studioSourceBuilderRunId)
+    ) {
+      return;
+    }
+    setStudioSourceBuilderRunId(studioMultiPageSourceRuns[0]?.id ?? '');
+  }, [studioMultiPageSourceRuns, studioSourceBuilderRunId]);
   useEffect(() => {
     if (selectedAgentPackageId && testPackages.some((item) => item.id === selectedAgentPackageId)) {
       return;
@@ -6170,19 +6977,66 @@ function BuilderRunPanel({
     setOptimisticallyStagedBehaviourIds([]);
     setLeavingBehaviourIds([]);
   }, [selectedAgentPackage?.id]);
-  const homepageTestReady = workspace.builderRuns.some(
+  const requiredHomepageAgentPackageId = isTestBuild
+    ? selectedAgentPackageId
+    : publishedPackage?.id;
+  const currentManifest = workspace.buildManifest;
+  const compatibleManifestIds = new Set(
+    workspace.buildManifests
+      .filter(
+        (manifest) =>
+          manifest.id === currentManifest?.id ||
+          (manifest.crawlRunId === currentManifest?.crawlRunId &&
+            manifest.researchPacketId === currentManifest?.researchPacketId),
+      )
+      .map((manifest) => manifest.id),
+  );
+  if (currentManifest) compatibleManifestIds.add(currentManifest.id);
+  const completedHomepageTests = workspace.builderRuns.filter(
     (candidate) =>
-      candidate.buildManifestId === workspace.buildManifest?.id &&
       candidate.buildMode === 'homepage_test' &&
-      (!selectedAgentPackageId || candidate.agentPackageId === selectedAgentPackageId) &&
       (candidate.status === 'ready' || candidate.status === 'review_required'),
   );
+  const exactHomepageTestReady = completedHomepageTests.some(
+    (candidate) =>
+      candidate.buildManifestId === workspace.buildManifest?.id &&
+      (!requiredHomepageAgentPackageId ||
+        candidate.agentPackageId === requiredHomepageAgentPackageId),
+  );
+  const compatibleHomepageTestReady =
+    !isTestBuild &&
+    completedHomepageTests.some(
+      (candidate) =>
+        compatibleManifestIds.has(candidate.buildManifestId) &&
+        candidate.agentPackageId === requiredHomepageAgentPackageId,
+    );
+  const homepageTestReady = exactHomepageTestReady || compatibleHomepageTestReady;
+  const homepageTestForDifferentPackage = completedHomepageTests.find(
+    (candidate) =>
+      compatibleManifestIds.has(candidate.buildManifestId) &&
+      candidate.agentPackageId !== requiredHomepageAgentPackageId,
+  );
+  const homepageRequirementDetail = exactHomepageTestReady
+    ? 'A homepage test for this Build Manifest is ready. The complete prospect build remains private until separately approved for sharing.'
+    : compatibleHomepageTestReady
+      ? `A compatible homepage test is ready. The complete build will automatically rebase its design direction onto the current Build Manifest, production package v${publishedPackage?.version ?? '?'}, approved logos, and recovered content.`
+      : homepageTestForDifferentPackage
+        ? `The homepage test for this Build Manifest used agent package v${homepageTestForDifferentPackage.agentPackageVersion ?? '?'}. Run and review the homepage test with the current production package v${publishedPackage?.version ?? '?'} before starting the complete website.`
+        : 'Complete and review a homepage test in Agent Studio for this Build Manifest before starting the complete prospect build.';
+  const loadedRunEvidence = run ? historyEvidence[run.id] : undefined;
+  const currentRunEvidenceLoading = !runIsLatest && loadedRunEvidence?.status === 'loading';
+  const currentRunEvidenceError =
+    !runIsLatest && loadedRunEvidence?.status === 'error' ? loadedRunEvidence.message : undefined;
   const currentArtifacts = runIsLatest
     ? workspace.builderArtifacts.filter((artifact) => artifact.builderRunId === run?.id)
-    : [];
+    : loadedRunEvidence?.status === 'ready'
+      ? loadedRunEvidence.evidence.artifacts
+      : [];
   const currentEvents = runIsLatest
     ? workspace.builderEvents.filter((event) => event.builderRunId === run?.id)
-    : [];
+    : loadedRunEvidence?.status === 'ready'
+      ? loadedRunEvidence.evidence.events
+      : [];
   const previewFiles = currentArtifacts.filter((artifact) => artifact.kind === 'site_file');
   const screenshots = currentArtifacts.filter((artifact) => artifact.kind === 'screenshot');
   const progressMilestones = run ? buildProgressMilestones(run, screenshots) : [];
@@ -6197,7 +7051,7 @@ function BuilderRunPanel({
     setPendingBuild(undefined);
   }, [pendingBuild, runId]);
 
-  const showCurrentRunLogs = Boolean(!pendingBuild && run && runIsLatest);
+  const showCurrentRunLogs = Boolean(!pendingBuild && run);
   const frozenDraft =
     run?.status === 'paused' || run?.status === 'failed' || run?.status === 'cancelled';
   const retainedTestContext = isTestBuild && frozenDraft && Boolean(run);
@@ -6207,9 +7061,11 @@ function BuilderRunPanel({
     if (run.agentPackageId && testPackages.some((item) => item.id === run.agentPackageId)) {
       setSelectedAgentPackageId(run.agentPackageId);
     }
-    setTestPageAction(run.parentBuilderRunId ? 'revise' : 'create');
+    setTestPageAction(
+      run.buildMode === 'site_test' ? 'website' : run.parentBuilderRunId ? 'revise' : 'create',
+    );
     setSourceBuilderRunId(run.parentBuilderRunId ?? '');
-    setTargetSourceUrl(run.targetSourceUrl ?? '');
+    if (run.targetSourceUrls?.length) setTargetSourceUrls(run.targetSourceUrls);
     setRetainedTestContextId(run.id);
   }, [active, frozenDraft, isTestBuild, retainedTestContextId, run, testPackages]);
   const draftAvailable = currentArtifacts.some(
@@ -6220,17 +7076,31 @@ function BuilderRunPanel({
       artifact.kind === 'checkpoint' && artifact.label === 'Latest private source checkpoint',
   );
   const savedSourceAvailable =
-    checkpointAvailable || currentArtifacts.some((artifact) => artifact.kind === 'draft_file');
-  const homepageSelected = !targetSourceUrl;
-  const selectedPageCanBuild = homepageSelected || homepageTestReady;
-  const previousTestPages = workspace.builderRuns
+    checkpointAvailable || currentArtifacts.some((artifact) => isWorkingSourceArtifact(artifact));
+  const homepageSelected =
+    targetSourceUrls.length === 1 && targetSourceUrls[0] === homepageTestOption?.url;
+  const selectedPageCanBuild = targetSourceUrls.length > 0;
+  const currentSelectedPageUrls = new Set(
+    (currentManifest?.data.selectedPages ?? []).map((page) => page.url),
+  );
+  const completedTestPages = workspace.builderRuns
     .filter(
       (candidate) =>
-        candidate.buildManifestId === workspace.buildManifest?.id &&
+        compatibleManifestIds.has(candidate.buildManifestId) &&
         candidate.buildMode !== 'full_site' &&
+        !candidate.targetSourceUrls?.length &&
+        (!candidate.targetSourceUrl || currentSelectedPageUrls.has(candidate.targetSourceUrl)) &&
         (candidate.status === 'ready' || candidate.status === 'review_required'),
     )
     .sort((first, second) => first.createdAt.localeCompare(second.createdAt));
+  const previousTestPages = completedTestPages.filter(
+    (candidate) => candidate.sourceCheckpointAvailable !== false,
+  );
+  const unavailableTestPageIds = new Set(
+    completedTestPages
+      .filter((candidate) => candidate.sourceCheckpointAvailable === false)
+      .map((candidate) => candidate.id),
+  );
   const selectedSourceRun = previousTestPages.find(
     (candidate) => candidate.id === sourceBuilderRunId,
   );
@@ -6259,9 +7129,52 @@ function BuilderRunPanel({
   const latestHistoryState = historyRuns[0] ? historyEvidence[historyRuns[0].id] : undefined;
   const completedTestRuns = isTestBuild
     ? runs.filter(
-        (candidate) => candidate.status === 'ready' || candidate.status === 'review_required',
+        (candidate) =>
+          !candidate.agentStudioSourceAt &&
+          (candidate.status === 'ready' || candidate.status === 'review_required'),
       )
     : [];
+
+  async function moveToAgentStudio(builderRunId: string) {
+    if (!onMoveToAgentStudio) return;
+    setMovingRunId(builderRunId);
+    setMessage('');
+    try {
+      await onMoveToAgentStudio(builderRunId);
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : 'This build could not move into Agent Studio.',
+      );
+    } finally {
+      setMovingRunId(undefined);
+    }
+  }
+
+  async function requestSiteTest() {
+    if (
+      !onRequestSiteTest ||
+      !selectedStudioSource ||
+      !selectedAgentPackageId ||
+      !siteFeatureDirection.trim()
+    )
+      return;
+    setIsRequestingSiteTest(true);
+    setMessage('');
+    try {
+      await onRequestSiteTest(
+        selectedStudioSource.id,
+        siteFeatureDirection.trim(),
+        selectedAgentPackageId,
+        'site-navigation-architecture',
+      );
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : 'The multi-page feature test could not be queued.',
+      );
+    } finally {
+      setIsRequestingSiteTest(false);
+    }
+  }
 
   async function loadHistoryEvidence(builderRunId: string) {
     if (historyEvidence[builderRunId]?.status === 'loading') return;
@@ -6286,10 +7199,16 @@ function BuilderRunPanel({
     }
   }
 
+  useEffect(() => {
+    if (!run || runIsLatest || loadedRunEvidence) return;
+    void loadHistoryEvidence(run.id);
+  }, [loadedRunEvidence, run, runIsLatest]);
+
   async function requestBuild(
     mode: BuilderRunMode,
     targetSourceUrl?: string,
     sourceBuilderRunId?: string,
+    selectedTargetSourceUrls?: string[],
   ) {
     setIsRequesting(true);
     setMessage('');
@@ -6302,8 +7221,9 @@ function BuilderRunPanel({
           .map((direction) => direction.trim())
           .filter(Boolean)
           .join('\n\n'),
-        isTestBuild ? selectedAgentPackageId : undefined,
+        isTestBuild ? selectedAgentPackageId : publishedPackage?.id,
         sourceBuilderRunId,
+        selectedTargetSourceUrls,
       );
     } catch (error) {
       setPendingBuild(undefined);
@@ -6425,7 +7345,7 @@ function BuilderRunPanel({
           </h3>
           <p className="muted-copy">
             {isTestBuild
-              ? 'Tests one approved page against this manifest, then saves a private draft and logs for agent refinement. It does not publish or contact anyone.'
+              ? 'Tests one approved page or one feature across a moved whole-site source, then saves a private draft and logs for agent refinement. It does not publish or contact anyone.'
               : 'Builds this prospect’s complete private website from its immutable Build Manifest, then saves source, responsive captures, and automated checks for review. It does not publish or contact anyone.'}
           </p>
         </div>
@@ -6458,9 +7378,13 @@ function BuilderRunPanel({
               <div>
                 <dt>Test approach</dt>
                 <dd>
-                  {run?.parentBuilderRunId
-                    ? 'Revise previous page (scoped)'
-                    : 'Create page from scratch'}
+                  {run?.buildMode === 'site_test'
+                    ? 'Whole-site feature revision'
+                    : run?.targetSourceUrls?.length
+                      ? `Create ${run.targetSourceUrls.length} pages from scratch`
+                      : run?.parentBuilderRunId
+                        ? 'Revise previous page (scoped)'
+                        : 'Create page from scratch'}
                 </dd>
               </div>
             </dl>
@@ -6503,10 +7427,13 @@ function BuilderRunPanel({
         {isTestBuild && !active && !retainedTestContext ? (
           <div className="builder-run__tests">
             <label className="builder-run__package-picker">
-              <span>Test package</span>
+              <span className="agent-production-version-label">
+                Test package
+                <AgentProductionNotification count={pendingProductionFeatureCount} />
+              </span>
               <select
                 aria-label="Test agent package"
-                disabled={isRequesting || !testPackages.length}
+                disabled={isRequesting || isRequestingSiteTest || !testPackages.length}
                 onChange={(event) => setSelectedAgentPackageId(event.target.value)}
                 value={selectedAgentPackageId ?? ''}
               >
@@ -6523,14 +7450,14 @@ function BuilderRunPanel({
                   : 'This test is pinned to a derived package and cannot change the production package.'}
               </small>
             </label>
-            <p className="builder-run__action-label">Test a page</p>
+            <p className="builder-run__action-label">Test</p>
             <div className="builder-page-test">
               <fieldset className="builder-page-test__actions">
                 <legend>Test approach</legend>
                 <label>
                   <input
                     checked={testPageAction === 'create'}
-                    disabled={isRequesting}
+                    disabled={isRequesting || isRequestingSiteTest}
                     name="test-page-action"
                     onChange={() => setTestPageAction('create')}
                     type="radio"
@@ -6540,39 +7467,132 @@ function BuilderRunPanel({
                 <label>
                   <input
                     checked={testPageAction === 'revise'}
-                    disabled={isRequesting}
+                    disabled={isRequesting || isRequestingSiteTest}
                     name="test-page-action"
                     onChange={() => setTestPageAction('revise')}
                     type="radio"
                   />
                   <span>Revise previous page</span>
                 </label>
+                <label>
+                  <input
+                    checked={testPageAction === 'website'}
+                    disabled={isRequesting || isRequestingSiteTest}
+                    name="test-page-action"
+                    onChange={() => setTestPageAction('website')}
+                    type="radio"
+                  />
+                  <span>Revise a website</span>
+                </label>
               </fieldset>
               {testPageAction === 'create' ? (
-                <label>
-                  <span>Approved page</span>
-                  <select
-                    aria-label="Page to test"
-                    disabled={isRequesting}
-                    onChange={(event) => setTargetSourceUrl(event.target.value)}
-                    value={targetSourceUrl}
-                  >
-                    <option value="">Homepage</option>
-                    {pageTestOptions.map((page) => (
-                      <option key={page.url} value={page.url}>
-                        {page.title || new URL(page.url).pathname}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : (
+                <fieldset aria-describedby="builder-page-set-help" className="builder-page-set">
+                  <legend>
+                    <span>Approved pages</span>
+                    <strong aria-live="polite">{targetSourceUrls.length} selected</strong>
+                  </legend>
+                  <div className="builder-page-set__toolbar">
+                    <p>Select any combination to build together from a clean foundation.</p>
+                    <ButtonGroup>
+                      <Button
+                        disabled={
+                          isRequesting ||
+                          isRequestingSiteTest ||
+                          targetSourceUrls.length === allPageTestOptions.length
+                        }
+                        onClick={() =>
+                          setTargetSourceUrls(allPageTestOptions.map((page) => page.url))
+                        }
+                        type="button"
+                        variant="quiet"
+                      >
+                        Select all
+                      </Button>
+                      <Button
+                        disabled={isRequesting || isRequestingSiteTest || !targetSourceUrls.length}
+                        onClick={() => setTargetSourceUrls([])}
+                        type="button"
+                        variant="quiet"
+                      >
+                        Clear
+                      </Button>
+                    </ButtonGroup>
+                  </div>
+                  <label className="builder-page-set__search">
+                    <span>Search approved pages</span>
+                    <span className="builder-page-set__search-control">
+                      <Search aria-hidden="true" size={18} />
+                      <input
+                        autoComplete="off"
+                        disabled={isRequesting || isRequestingSiteTest}
+                        onChange={(event) => setPageSearchQuery(event.target.value)}
+                        placeholder="Search name, path, or URL"
+                        type="search"
+                        value={pageSearchQuery}
+                      />
+                      {pageSearchQuery ? (
+                        <IconButton
+                          disabled={isRequesting || isRequestingSiteTest}
+                          label="Clear page search"
+                          onClick={() => setPageSearchQuery('')}
+                          type="button"
+                          variant="quiet"
+                        >
+                          <X aria-hidden="true" size={16} />
+                        </IconButton>
+                      ) : null}
+                    </span>
+                  </label>
+                  <div className="builder-page-set__options">
+                    {selectedPageTestOptions.length ? (
+                      <section
+                        aria-labelledby="builder-page-set-selected-title"
+                        className="builder-page-set__group builder-page-set__group--selected"
+                      >
+                        <div className="builder-page-set__group-heading">
+                          <strong id="builder-page-set-selected-title">Selected pages</strong>
+                          <span>Pinned at top</span>
+                        </div>
+                        <div className="builder-page-set__grid">
+                          {selectedPageTestOptions.map(renderPageSetOption)}
+                        </div>
+                      </section>
+                    ) : null}
+                    <section
+                      aria-labelledby="builder-page-set-results-title"
+                      className="builder-page-set__group"
+                    >
+                      <div className="builder-page-set__group-heading">
+                        <strong id="builder-page-set-results-title">
+                          {normalizedPageSearchQuery ? 'Search results' : 'Available pages'}
+                        </strong>
+                        <span>
+                          {availablePageTestOptions.length}{' '}
+                          {availablePageTestOptions.length === 1 ? 'page' : 'pages'}
+                        </span>
+                      </div>
+                      {availablePageTestOptions.length ? (
+                        <div className="builder-page-set__grid">
+                          {availablePageTestOptions.map(renderPageSetOption)}
+                        </div>
+                      ) : (
+                        <p className="builder-page-set__empty" role="status">
+                          {normalizedPageSearchQuery
+                            ? 'No unselected pages match this search. Selected pages remain pinned above.'
+                            : 'Every approved page is selected and pinned above.'}
+                        </p>
+                      )}
+                    </section>
+                  </div>
+                </fieldset>
+              ) : testPageAction === 'revise' ? (
                 <>
                   <label>
                     <span>Previous private page</span>
                     <select
                       aria-describedby="builder-revision-help"
                       aria-label="Previous built page"
-                      disabled={isRequesting || !previousTestPages.length}
+                      disabled={isRequesting || isRequestingSiteTest || !previousTestPages.length}
                       onChange={(event) => setSourceBuilderRunId(event.target.value)}
                       value={sourceBuilderRunId}
                     >
@@ -6581,16 +7601,25 @@ function BuilderRunPanel({
                           ? 'Choose a private test page'
                           : 'No private test page is available'}
                       </option>
-                      {previousTestPages.map((candidate, index) => {
+                      {completedTestPages.map((candidate, index) => {
                         const sourcePage = pageTestOptions.find(
                           (page) => page.url === candidate.targetSourceUrl,
                         );
+                        const usesPriorManifest =
+                          candidate.buildManifestId !== workspace.buildManifest?.id;
+                        const sourceUnavailable = unavailableTestPageIds.has(candidate.id);
                         return (
-                          <option key={candidate.id} value={candidate.id}>
+                          <option
+                            disabled={sourceUnavailable}
+                            key={candidate.id}
+                            value={candidate.id}
+                          >
                             Test {index + 1} —{' '}
                             {sourcePage?.title ??
                               (candidate.targetSourceUrl ? 'Selected page' : 'Homepage')}{' '}
                             · package v{candidate.agentPackageVersion ?? 4}
+                            {usesPriorManifest ? ' · apply current assets' : ''}
+                            {sourceUnavailable ? ' · source checkpoint unavailable' : ''}
                           </option>
                         );
                       })}
@@ -6602,8 +7631,9 @@ function BuilderRunPanel({
                       id="builder-revision-help"
                       role="alert"
                     >
-                      There are no completed private tests to revise yet. Create a test page from
-                      scratch first, then return here to select it.
+                      {completedTestPages.length
+                        ? 'The completed tests shown here do not have a saved source checkpoint, so they cannot be revised safely. Create a new test from scratch; completed new tests preserve revisable source.'
+                        : 'There are no completed private tests to revise yet. Create a test page from scratch first, then return here to select it.'}
                     </p>
                   ) : !selectedSourceRun ? (
                     <p
@@ -6613,51 +7643,155 @@ function BuilderRunPanel({
                     >
                       Select a test version before starting a revision.
                     </p>
-                  ) : null}
+                  ) : selectedSourceRun.buildManifestId !== workspace.buildManifest?.id ? (
+                    <p className="muted-copy" id="builder-revision-help">
+                      This completed page uses the same captured research as the current manifest.
+                      The revision will keep its design baseline while replacing its prior asset set
+                      with the current approved Brand Kit and logo versions.
+                    </p>
+                  ) : (
+                    <p className="muted-copy" id="builder-revision-help">
+                      The revision will restore this completed page and use the current approved
+                      assets.
+                    </p>
+                  )}
                 </>
+              ) : (
+                <section
+                  aria-labelledby="agent-studio-site-test-title"
+                  className="builder-page-test__website"
+                >
+                  <div className="agent-studio-site-test__header">
+                    <div>
+                      <Eyebrow>Whole-site source</Eyebrow>
+                      <h4 id="agent-studio-site-test-title">Revise a website</h4>
+                      <p>
+                        Keep the complete generated website intact, change one agent feature, and
+                        save the result as the newest linked test version.
+                      </p>
+                    </div>
+                    {selectedStudioSource ? (
+                      <StatusBadge tone="success">
+                        {builderRunPageCount(workspace, selectedStudioSource)} pages
+                      </StatusBadge>
+                    ) : null}
+                  </div>
+                  {studioMultiPageSourceRuns.length ? (
+                    <div className="agent-studio-site-test__controls">
+                      <label>
+                        <span>Website version to revise</span>
+                        <select
+                          disabled={isRequestingSiteTest}
+                          onChange={(event) => setStudioSourceBuilderRunId(event.target.value)}
+                          value={studioSourceBuilderRunId}
+                        >
+                          {studioMultiPageSourceRuns.map((sourceRun, index) => (
+                            <option key={sourceRun.id} value={sourceRun.id}>
+                              {index === 0
+                                ? 'Newest'
+                                : `Earlier version ${studioMultiPageSourceRuns.length - index}`}
+                              {' · '}
+                              {builderRunPageCount(workspace, sourceRun)} page
+                              {builderRunPageCount(workspace, sourceRun) === 1 ? '' : 's'}
+                              {' · v'}
+                              {sourceRun.agentPackageVersion ?? '?'}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <article className="agent-studio-site-test__feature">
+                        <FolderTree aria-hidden="true" size={20} />
+                        <span>
+                          <strong>Multi-page navigation architecture</strong>
+                          <small>
+                            Exact routes, consistent primary links, nested child pages, and
+                            reachability from the homepage.
+                          </small>
+                        </span>
+                      </article>
+                      <label className="agent-studio-site-test__direction">
+                        <span>Feature direction</span>
+                        <textarea
+                          disabled={isRequestingSiteTest}
+                          maxLength={4000}
+                          onChange={(event) => setSiteFeatureDirection(event.target.value)}
+                          rows={4}
+                          value={siteFeatureDirection}
+                        />
+                      </label>
+                      <Button
+                        disabled={
+                          isRequestingSiteTest ||
+                          !selectedStudioSource ||
+                          !selectedAgentPackageId ||
+                          !siteFeatureDirection.trim()
+                        }
+                        onClick={() => void requestSiteTest()}
+                        type="button"
+                      >
+                        <Play aria-hidden="true" size={16} />
+                        {isRequestingSiteTest ? 'Creating linked version' : 'Revise website'}
+                      </Button>
+                    </div>
+                  ) : (
+                    <p className="form-message form-message--error" role="alert">
+                      No whole-site source is available yet. Move a completed multi-page prospect
+                      build into Agent Studio, then return here to revise it.
+                    </p>
+                  )}
+                </section>
               )}
-              <Button
-                disabled={
-                  isRequesting ||
-                  !selectedAgentPackageId ||
-                  (testPageAction === 'create' ? !selectedPageCanBuild : !selectedSourceRun)
-                }
-                onClick={() =>
-                  void requestBuild(
-                    testPageAction === 'revise'
-                      ? selectedSourceRun?.targetSourceUrl
-                        ? 'page_test'
-                        : 'homepage_test'
+              {testPageAction !== 'website' ? (
+                <>
+                  <Button
+                    disabled={
+                      isRequesting ||
+                      !selectedAgentPackageId ||
+                      (testPageAction === 'create' ? !selectedPageCanBuild : !selectedSourceRun)
+                    }
+                    onClick={() =>
+                      void requestBuild(
+                        testPageAction === 'revise'
+                          ? selectedSourceRun?.targetSourceUrl
+                            ? 'page_test'
+                            : 'homepage_test'
+                          : homepageSelected
+                            ? 'homepage_test'
+                            : 'page_test',
+                        testPageAction === 'revise'
+                          ? selectedSourceRun?.targetSourceUrl
+                          : undefined,
+                        testPageAction === 'revise' ? selectedSourceRun?.id : undefined,
+                        testPageAction === 'create' && !homepageSelected
+                          ? targetSourceUrls
+                          : undefined,
+                      )
+                    }
+                    type="button"
+                    variant="secondary"
+                  >
+                    <Play aria-hidden="true" size={16} />
+                    {isRequesting
+                      ? 'Queueing builder'
+                      : testPageAction === 'revise'
+                        ? 'Revise private page'
+                        : 'Build test page'}
+                  </Button>
+                  <small id="builder-page-set-help">
+                    {testPageAction === 'revise'
+                      ? previousTestPages.length
+                        ? 'Test numbers match the private previews in Test versions. The selected test becomes this revision’s private source; it never reads or changes the prospect’s public website.'
+                        : completedTestPages.length
+                          ? 'These completed tests predate a usable saved source checkpoint. Create a fresh test to establish a revisable private source.'
+                          : 'Complete a private homepage or page test first. Only completed private previews can be revised.'
                       : homepageSelected
-                        ? 'homepage_test'
-                        : 'page_test',
-                    testPageAction === 'revise'
-                      ? selectedSourceRun?.targetSourceUrl
-                      : targetSourceUrl || undefined,
-                    testPageAction === 'revise' ? selectedSourceRun?.id : undefined,
-                  )
-                }
-                type="button"
-                variant="secondary"
-              >
-                <Play aria-hidden="true" size={16} />
-                {isRequesting
-                  ? 'Queueing builder'
-                  : testPageAction === 'revise'
-                    ? 'Revise private page'
-                    : 'Build test page'}
-              </Button>
-              <small>
-                {testPageAction === 'revise'
-                  ? previousTestPages.length
-                    ? 'Test numbers match the private previews in Test versions. The selected test becomes this revision’s private source; it never reads or changes the prospect’s public website.'
-                    : 'Complete a private homepage or page test first. Only completed private previews can be revised.'
-                  : homepageSelected
-                    ? 'Creates a new private homepage test from the approved manifest. It does not read, continue, or change an earlier private draft or the prospect’s public website.'
-                    : homepageTestReady
-                      ? 'Creates a private test from the approved homepage direction. It never changes the prospect’s public website.'
-                      : 'Complete and review the homepage test before testing another selected page.'}
-              </small>
+                        ? 'Creates a new private homepage test from the approved manifest. It does not read, continue, or change an earlier private draft or the prospect’s public website.'
+                        : `Creates ${targetSourceUrls.length} selected page${
+                            targetSourceUrls.length === 1 ? '' : 's'
+                          } together from the clean locked foundation. It does not inherit an earlier test or change the prospect’s public website.`}
+                  </small>
+                </>
+              ) : null}
               {message ? (
                 <p className="form-message form-message--error" role="alert">
                   {message}
@@ -6749,7 +7883,7 @@ function BuilderRunPanel({
                           onClick={() =>
                             setWorkshopFeature(workshopFeatureForBehaviour(behaviour.id))
                           }
-                          size="compact"
+                          size="small"
                           type="button"
                           variant="secondary"
                         >
@@ -6830,9 +7964,9 @@ function BuilderRunPanel({
                       <Wrench aria-hidden="true" size={14} /> Workshoped
                     </StatusBadge>
                     <Dialog.Close asChild>
-                      <Button aria-label="Close foundation workshop" size="compact" variant="quiet">
+                      <IconButton label="Close foundation workshop" variant="quiet">
                         <X aria-hidden="true" size={18} />
-                      </Button>
+                      </IconButton>
                     </Dialog.Close>
                   </div>
                   <p className="muted-copy">
@@ -6850,7 +7984,7 @@ function BuilderRunPanel({
                       value={workshopDirection}
                     />
                   </label>
-                  <div className="foundation-workshop-dialog__actions">
+                  <ButtonGroup className="foundation-workshop-dialog__actions">
                     <Button
                       disabled={!workshopDirection.trim() || isSendingWorkshop}
                       onClick={() => void sendWorkshopToTesting()}
@@ -6859,7 +7993,7 @@ function BuilderRunPanel({
                       <CheckCheck aria-hidden="true" size={16} />
                       {isSendingWorkshop ? 'Sending to test' : 'Approve & send to test feature'}
                     </Button>
-                  </div>
+                  </ButtonGroup>
                 </Dialog.Content>
               </Dialog.Portal>
             </Dialog.Root>
@@ -6914,20 +8048,18 @@ function BuilderRunPanel({
                             rows={2}
                             value={direction}
                           />
-                          <Button
-                            aria-label={`Remove direction ${index + 1}`}
+                          <IconButton
                             disabled={isRequesting}
+                            label={`Remove direction ${index + 1}`}
                             onClick={() =>
                               setBuildDirections((current) =>
                                 current.filter((_, itemIndex) => itemIndex !== index),
                               )
                             }
-                            size="compact"
-                            type="button"
                             variant="quiet"
                           >
                             <X aria-hidden="true" size={16} />
-                          </Button>
+                          </IconButton>
                         </span>
                       </div>
                     ))}
@@ -6946,19 +8078,30 @@ function BuilderRunPanel({
                 Build the complete private website for this prospect from its approved Build
                 Manifest. This is separate from Agent Studio test runs.
               </p>
+              {publishedPackage ? (
+                <p className="builder-page-test__production-version">
+                  <span>Production version</span>
+                  <strong className="agent-production-version-value">
+                    v{publishedPackage.version}
+                    <AgentProductionNotification count={pendingProductionFeatureCount} />
+                  </strong>
+                  <small>This exact published version will be pinned to the build.</small>
+                </p>
+              ) : (
+                <p className="form-message form-message--error" role="alert">
+                  No production builder version is available. Publish a production package before
+                  starting this build.
+                </p>
+              )}
               <Button
-                disabled={isRequesting || !homepageTestReady}
+                disabled={isRequesting || !homepageTestReady || !publishedPackage}
                 onClick={() => void requestBuild('full_site')}
                 type="button"
               >
                 <Play aria-hidden="true" size={16} />
                 {isRequesting ? 'Queueing prospect build' : 'Build complete prospect website'}
               </Button>
-              <small>
-                {homepageTestReady
-                  ? 'A homepage test for this Build Manifest is ready. The complete prospect build remains private until separately approved for sharing.'
-                  : 'Complete and review a homepage test in Agent Studio for this Build Manifest before starting the complete prospect build.'}
-              </small>
+              <small>{homepageRequirementDetail}</small>
             </div>
           </div>
         ) : null}
@@ -6973,6 +8116,27 @@ function BuilderRunPanel({
               <ArrowUpRight aria-hidden="true" size={16} />
               {isOpeningPreview ? 'Opening preview' : 'Open private prospect preview'}
             </Button>
+          ) : null}
+          {!isTestBuild &&
+          run &&
+          (run.status === 'ready' || run.status === 'review_required') &&
+          onMoveToAgentStudio ? (
+            run.agentStudioSourceAt ? (
+              <Button disabled type="button" variant="secondary">
+                <Check aria-hidden="true" size={16} />
+                Available in Agent Studio
+              </Button>
+            ) : (
+              <Button
+                disabled={movingRunId === run.id}
+                onClick={() => void moveToAgentStudio(run.id)}
+                type="button"
+                variant="secondary"
+              >
+                <FolderTree aria-hidden="true" size={16} />
+                {movingRunId === run.id ? 'Moving into Agent Studio' : 'Move to Agent Studio'}
+              </Button>
+            )
           ) : null}
           {active ? (
             <Button
@@ -7018,6 +8182,81 @@ function BuilderRunPanel({
           </div>
         ) : null}
       </div>
+
+      {isTestBuild && studioSourceRuns.length ? (
+        <section
+          className="test-build-versions test-build-versions--lineage"
+          aria-labelledby="agent-studio-version-lineage-title"
+        >
+          <div className="test-build-versions__header">
+            <Eyebrow>Linked whole-site tests</Eyebrow>
+            <h4 id="agent-studio-version-lineage-title">Feature test versions</h4>
+            <p className="muted-copy">
+              Newest first. Each version keeps its source link so another focused feature test can
+              continue from any completed point.
+            </p>
+          </div>
+          {studioVersionGroups.map((group, groupIndex) => (
+            <ol
+              aria-label={`Whole-site test lineage ${studioVersionGroups.length - groupIndex}`}
+              key={studioLineageRootId(group[0]!)}
+            >
+              {group.map((sourceRun, index) => (
+                <li
+                  className={sourceRun.id === studioSourceBuilderRunId ? 'is-selected' : undefined}
+                  key={sourceRun.id}
+                >
+                  <div className="test-build-versions__summary">
+                    <div>
+                      <div className="test-build-versions__labels">
+                        <strong>
+                          {sourceRun.buildMode === 'site_test'
+                            ? `Version ${group.length - index}`
+                            : 'Original build'}
+                        </strong>
+                        {index === 0 ? <StatusBadge tone="success">Newest</StatusBadge> : null}
+                        <StatusBadge tone="neutral">
+                          {builderRunPageCount(workspace, sourceRun)} page
+                          {builderRunPageCount(workspace, sourceRun) === 1 ? '' : 's'}
+                        </StatusBadge>
+                      </div>
+                      <small>
+                        {builderRunModeLabel(sourceRun.buildMode)} ·{' '}
+                        {formatDateTime(sourceRun.createdAt)}
+                      </small>
+                      <p>
+                        {sourceRun.agentStudioFeatureId
+                          ? `Feature tested: ${agentBehaviourTitle(sourceRun.agentStudioFeatureId)}`
+                          : 'Immutable source moved from the prospect build workspace.'}
+                      </p>
+                      <BuilderRunUsage records={workspace.aiUsageRecords} run={sourceRun} />
+                    </div>
+                    <ButtonGroup>
+                      <Button
+                        disabled={isOpeningPreview}
+                        onClick={() => void openPreview(sourceRun.id, 'ready')}
+                        type="button"
+                        variant="secondary"
+                      >
+                        <ArrowUpRight aria-hidden="true" size={16} />
+                        Open preview
+                      </Button>
+                      <Button
+                        onClick={() => setStudioSourceBuilderRunId(sourceRun.id)}
+                        type="button"
+                        variant="quiet"
+                      >
+                        <Check aria-hidden="true" size={16} />
+                        Use as source
+                      </Button>
+                    </ButtonGroup>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          ))}
+        </section>
+      ) : null}
 
       {isTestBuild && completedTestRuns.length ? (
         active || retainedTestContext ? (
@@ -7068,6 +8307,19 @@ function BuilderRunPanel({
                       <ArrowUpRight aria-hidden="true" size={16} />
                       {isOpeningPreview ? 'Opening preview' : 'Open preview'}
                     </Button>
+                    {onMoveToAgentStudio ? (
+                      <Button
+                        disabled={movingRunId === testRun.id}
+                        onClick={() => void moveToAgentStudio(testRun.id)}
+                        type="button"
+                        variant="quiet"
+                      >
+                        <FolderTree aria-hidden="true" size={16} />
+                        {movingRunId === testRun.id
+                          ? 'Moving into Agent Studio'
+                          : 'Move to Agent Studio'}
+                      </Button>
+                    ) : null}
                   </div>
                 </li>
               ))}
@@ -7148,6 +8400,17 @@ function BuilderRunPanel({
                     <dt>Quality status</dt>
                     <dd>{run.qualitySummary.status.replaceAll('_', ' ')}</dd>
                   </div>
+                  {!isTestBuild ? (
+                    <div>
+                      <dt>Production version</dt>
+                      <dd className="agent-production-version-value">
+                        v{run.agentPackageVersion ?? '?'}
+                        {run.agentPackageVersion === publishedPackage?.version ? (
+                          <AgentProductionNotification count={pendingProductionFeatureCount} />
+                        ) : null}
+                      </dd>
+                    </div>
+                  ) : null}
                   <div>
                     <dt>Preview files</dt>
                     <dd>
@@ -7194,6 +8457,16 @@ function BuilderRunPanel({
                   detail="The build is queued or preparing. This panel will populate as the worker saves activity."
                   label="Waiting for the builder to report activity"
                 />
+              ) : currentRunEvidenceLoading ? (
+                <BuilderActivityWaiting
+                  detail="Loading the saved activity, files, diagnostics, and responsive evidence for this prospect build."
+                  label="Loading prospect build activity"
+                />
+              ) : null}
+              {currentRunEvidenceError ? (
+                <p className="form-message form-message--error" role="alert">
+                  {currentRunEvidenceError}
+                </p>
               ) : null}
             </div>
           ) : null}
@@ -7221,10 +8494,14 @@ function BuilderRunPanel({
                       </BuilderNewActivityItem>
                     ))}
                 </ol>
-              ) : active ? (
+              ) : active || currentRunEvidenceLoading ? (
                 <BuilderActivityWaiting
-                  detail="The working preview appears after Codex saves its first private draft."
-                  label="Codex is preparing its first update"
+                  detail={
+                    active
+                      ? 'The working preview appears after Codex saves its first private draft.'
+                      : 'Loading the saved Codex stream for this prospect build.'
+                  }
+                  label={active ? 'Codex is preparing its first update' : 'Loading Codex activity'}
                 />
               ) : (
                 <p className="muted-copy">No visible Codex activity was recorded for this build.</p>
@@ -7294,7 +8571,7 @@ function BuilderRunPanel({
                 </ol>
               ) : (
                 <p className="muted-copy">
-                  {active
+                  {active || currentRunEvidenceLoading
                     ? 'Waiting for the worker to record its first diagnostic.'
                     : 'No private diagnostics were recorded for this build.'}
                 </p>
@@ -7474,9 +8751,9 @@ function BuilderRunPanel({
                     </Dialog.Title>
                   </div>
                   <Dialog.Close asChild>
-                    <Button aria-label="Close build inspector" size="compact" variant="quiet">
+                    <IconButton label="Close build inspector" variant="quiet">
                       <X aria-hidden="true" size={20} />
-                    </Button>
+                    </IconButton>
                   </Dialog.Close>
                 </div>
                 <Dialog.Description className="muted-copy" id="builder-run-inspector-description">
@@ -7576,21 +8853,15 @@ function BuilderSettingsControl({
   return (
     <Dialog.Root>
       <Dialog.Trigger asChild>
-        <Button
-          aria-label={iconOnly ? 'Builder settings' : undefined}
-          size={compact || iconOnly ? 'compact' : 'default'}
-          title={iconOnly ? 'Builder settings' : undefined}
-          type="button"
-          variant="secondary"
-        >
-          {iconOnly ? (
+        {iconOnly ? (
+          <IconButton label="Builder settings" variant="secondary">
             <Settings aria-hidden="true" size={18} />
-          ) : (
-            <>
-              <SlidersHorizontal aria-hidden="true" size={16} /> Builder settings
-            </>
-          )}
-        </Button>
+          </IconButton>
+        ) : (
+          <Button size={compact ? 'small' : 'default'} variant="secondary">
+            <SlidersHorizontal aria-hidden="true" size={16} /> Builder settings
+          </Button>
+        )}
       </Dialog.Trigger>
       <Dialog.Portal>
         <Dialog.Overlay className="builder-settings-overlay" />
@@ -7604,9 +8875,9 @@ function BuilderSettingsControl({
               <Dialog.Title>Builder settings</Dialog.Title>
             </div>
             <Dialog.Close asChild>
-              <Button aria-label="Close builder settings" size="compact" variant="quiet">
+              <IconButton label="Close builder settings" variant="quiet">
                 <X aria-hidden="true" size={20} />
-              </Button>
+              </IconButton>
             </Dialog.Close>
           </div>
           <Dialog.Description className="muted-copy" id="builder-settings-description">
@@ -7639,8 +8910,8 @@ function BuilderSettingsControl({
               <Eyebrow>Shared builder package</Eyebrow>
               <h3 id="builder-settings-package-title">What every build receives</h3>
               <p className="muted-copy">
-                These source-controlled components are locked during a build and reused for every
-                prospect.
+                These source-controlled foundation files are locked during a build. Codex creates
+                each prospect’s visual system and site components inside that boundary.
               </p>
             </div>
             <dl>
@@ -7655,13 +8926,15 @@ function BuilderSettingsControl({
                 <dt>Template guidance</dt>
                 <dd>
                   <code>worker/builder-template/AGENTS.md</code>
-                  <span>Mobile-first implementation and reusable static-site rules.</span>
+                  <span>
+                    Mobile-first Next.js architecture and site-specific component-system rules.
+                  </span>
                 </dd>
               </div>
               <div>
                 <dt>Built-in motion</dt>
                 <dd>
-                  <code>worker/builder-template/src/main.js</code>
+                  <code>worker/builder-template/src/components/foundation/site-runtime.tsx</code>
                   <span>Viewport reveals, factual counters, and reduced-motion support.</span>
                 </dd>
               </div>
@@ -7669,7 +8942,10 @@ function BuilderSettingsControl({
                 <dt>Quality gate</dt>
                 <dd>
                   <code>worker/builder-worker.mjs</code>
-                  <span>Static build, page coverage, responsive captures, and axe checks.</span>
+                  <span>
+                    Framework verification, route coverage, responsive interactions, captures, and
+                    axe.
+                  </span>
                 </dd>
               </div>
             </dl>
@@ -7972,9 +9248,9 @@ function DataManagementPanel({
                 <Dialog.Description>{selected?.workspace.business.name}</Dialog.Description>
               </div>
               <Dialog.Close asChild>
-                <Button aria-label="Close record details" size="compact" variant="quiet">
+                <IconButton label="Close record details" variant="quiet">
                   <X aria-hidden="true" size={18} />
-                </Button>
+                </IconButton>
               </Dialog.Close>
             </div>
             <dl className="data-record-dialog__details">
@@ -8037,16 +9313,15 @@ function DataManagementRecord({
         <Button aria-label={`Open ${record.label}`} onClick={onOpen} variant="secondary">
           Open <ArrowUpRight aria-hidden="true" size={15} />
         </Button>
-        <Button
-          aria-label={`Delete ${record.label} for ${record.workspace.business.name}`}
+        <IconButton
           className="data-management__delete"
+          label={`Delete ${record.label} for ${record.workspace.business.name}`}
           onClick={onDelete}
-          size="compact"
           title={`Delete ${record.label}`}
           variant="quiet"
         >
           <Trash2 aria-hidden="true" size={17} />
-        </Button>
+        </IconButton>
       </div>
     </div>
   );
@@ -8694,23 +9969,63 @@ const currentAgentPackageFiles = [
   },
   {
     group: 'Feature contract',
+    path: 'worker/builder-template/feature-contracts/component-architecture.md',
+    label: 'Component architecture contract',
+    detail:
+      'Generated tokens, primitives, patterns, sections, site components, layouts, and pages.',
+    content: componentArchitectureContractSource,
+  },
+  {
+    group: 'Feature contract',
     path: 'worker/builder-template/feature-contracts/mobile-navigation.md',
     label: 'Mobile navigation contract',
     detail: 'Markdown requirements and creative freedom for generated mobile navigation.',
     content: mobileNavigationContractSource,
   },
   {
+    group: 'Feature contract',
+    path: 'worker/builder-template/feature-contracts/runtime-profiles.md',
+    label: 'Runtime profiles contract',
+    detail:
+      'Static marketing, managed forms, and managed Next.js production capability boundaries.',
+    content: runtimeProfilesContractSource,
+  },
+  {
+    group: 'Feature contract',
+    path: 'worker/builder-template/feature-contracts/site-navigation-architecture.md',
+    label: 'Site navigation architecture',
+    detail:
+      'Exact routes, nested page relationships, consistent primary destinations, and whole-site reachability.',
+    content: siteNavigationArchitectureContractSource,
+  },
+  {
+    group: 'Feature contract',
+    path: 'worker/builder-template/feature-contracts/semantic-content-recovery.md',
+    label: 'Semantic recovery contract',
+    detail:
+      'Required source-page coverage and accessible component rules for approved image-based information.',
+    content: semanticContentRecoveryContractSource,
+  },
+  {
+    group: 'Builder handoff',
+    path: 'src/lib/build-manifest.ts',
+    label: 'Semantic content grouping',
+    detail:
+      'Deterministically groups approved items by source page, section context, and semantic role for every build manifest.',
+    content: buildManifestSource,
+  },
+  {
     group: 'Builder foundation',
-    path: 'worker/builder-template/src/main.js',
+    path: 'worker/builder-template/src/components/foundation/site-runtime.tsx',
     label: 'Motion runtime',
-    detail: 'Local motion and brand-handoff behaviour.',
+    detail: 'Locked React motion, factual counter, and approved-logo handoff behaviour.',
     content: motionRuntimeSource,
   },
   {
     group: 'Builder foundation',
     path: 'worker/builder-template/package.json',
     label: 'Template packages',
-    detail: 'Locked static-preview build command and package boundary.',
+    detail: 'Pinned framework, component, styling, icon, and verification boundary.',
     content: builderPackageSource,
   },
   {
@@ -8748,10 +10063,144 @@ function agentPackageFilePresentation(file: AgentPackageFile) {
   if (file.path.endsWith('.json')) {
     return { Icon: FileCode2, label: 'JSON config', tone: 'config' } as const;
   }
+  if (file.path.endsWith('.ts') || file.path.endsWith('.tsx')) {
+    return { Icon: FileCode2, label: 'TypeScript handoff', tone: 'javascript' } as const;
+  }
   return { Icon: FileCode2, label: 'JavaScript runtime', tone: 'javascript' } as const;
 }
 
 const agentPackageFeatures: AgentFeature[] = [
+  {
+    id: 'next-component-architecture',
+    title: 'Next.js generated component architecture',
+    detail:
+      'Builds strict TypeScript App Router sites from clean routes while letting Codex create each business’s tokens, primitives, patterns, sections, site components, layouts, and pages.',
+    files: [
+      {
+        label: 'Component architecture contract',
+        detail:
+          'Defines the generated layers, creative ownership, native HTML boundary, Base UI behaviour boundary, and abstraction discipline.',
+        terms: ['The foundation locks dependencies', 'Creative ownership', 'Behaviour boundary'],
+      },
+      {
+        label: 'Template instructions',
+        detail:
+          'Requires strict TypeScript, Tailwind and semantic tokens, native HTML first, and site-specific generated components.',
+        terms: ['Architecture', 'agent owns the visual system', 'component system'],
+      },
+      {
+        label: 'Template packages',
+        detail:
+          'Pins Next.js, React, TypeScript, Tailwind, Base UI, component variants, class composition, icons, lint, and formatting.',
+        terms: ['next', '@base-ui/react', 'tailwindcss', 'typescript', 'verify'],
+      },
+      {
+        label: 'Builder worker',
+        detail:
+          'Stages the immutable foundation, locks framework files, restores typed checkpoints, and compiles static App Router output.',
+        terms: [
+          'builderFoundationVersion',
+          'templateDependenciesDirectory',
+          'compiledOutputDirectoryName',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'runtime-profiles',
+    title: 'Production runtime & capability profiles',
+    detail:
+      'Classifies builds as static marketing, managed forms, or managed Next.js runtime and keeps production integrations behind explicit reviewed adapters.',
+    files: [
+      {
+        label: 'Runtime profiles contract',
+        detail:
+          'Defines preview honesty and the production service boundary for static, form, booking, account, commerce, and integration capabilities.',
+        terms: ['static-marketing', 'managed-forms', 'managed-next-runtime'],
+      },
+      {
+        label: 'Semantic content grouping',
+        detail:
+          'Adds the typed architecture, capability adapters, component layers, and required quality profile to every immutable manifest.',
+        terms: ['buildArchitecture', 'productionRuntime', 'capabilityAdapters', 'qualityProfile'],
+      },
+      {
+        label: 'Template instructions',
+        detail:
+          'Requires complete visitor states and a BUILD_NOTES production handoff without fabricated backend behaviour.',
+        terms: ['Capabilities and production honesty', 'BUILD_NOTES.md'],
+      },
+    ],
+  },
+  {
+    id: 'framework-quality-gates',
+    title: 'Framework, interaction & responsive quality gates',
+    detail:
+      'Runs formatting, ESLint, strict type checks, production compilation, route validation, exact responsive captures, compact-navigation interaction checks, overflow checks, browser errors, and axe.',
+    files: [
+      {
+        label: 'Template packages',
+        detail: 'Defines the deterministic verify command executed by Codex and the worker.',
+        terms: ['format:check', 'lint', 'typecheck', 'verify'],
+      },
+      {
+        label: 'Builder worker',
+        detail:
+          'Uses the required 320, 375, 768, and 1440 viewports and checks open/closed navigation, focus, reduced motion, touch targets, overflow, console errors, and screenshots.',
+        terms: [
+          'previewViewports',
+          'responsiveInteractionEvidence',
+          'responsive-interactions',
+          'browser-console',
+        ],
+      },
+      {
+        label: 'Builder contract',
+        detail:
+          'Makes framework verification and responsive interaction evidence release requirements.',
+        terms: ['Quality and delivery', 'Required viewports'],
+      },
+    ],
+  },
+  {
+    id: 'site-navigation-architecture',
+    title: 'Multi-page navigation architecture',
+    detail:
+      'Keeps primary destinations stable, maps links to exact generated outputs, and makes every selected page reachable through meaningful nested navigation without crowding the header.',
+    files: [
+      {
+        label: 'Site navigation architecture',
+        detail:
+          'Defines exact route targets, parent and child navigation, responsive hierarchy, and whole-site reachability.',
+        terms: [
+          'Every generated page must be reachable',
+          'Do not satisfy this by placing every page',
+          'parent landing page',
+          'Feature-only Agent Studio revisions',
+        ],
+      },
+      {
+        label: 'Builder contract',
+        detail: 'Makes multi-page navigation architecture a required generated feature.',
+        terms: ['Multi-page navigation architecture is a required generated feature'],
+      },
+      {
+        label: 'Template instructions',
+        detail: 'Requires the feature contract for every multi-page build.',
+        terms: ['feature-contracts/site-navigation-architecture.md'],
+      },
+      {
+        label: 'Builder worker',
+        detail:
+          'Preserves the full restored site during a feature-only revision and checks exact targets, stable headers, and transitive reachability.',
+        terms: [
+          'feature-only multi-page Agent Studio revision',
+          'nested-page-reachability',
+          'unreachableSelectedPageProblems',
+        ],
+      },
+    ],
+  },
   {
     id: 'motion-runtime',
     title: 'Entrance motion & factual counters',
@@ -8819,6 +10268,8 @@ const agentPackageFeatures: AgentFeature[] = [
         terms: [
           'Creative ownership',
           'Required behaviour',
+          'data-siteforge-menu-trigger',
+          'icon-only',
           'icon choreography',
           'scroll behaviour',
         ],
@@ -8832,6 +10283,89 @@ const agentPackageFeatures: AgentFeature[] = [
         label: 'Template instructions',
         detail: 'Makes the feature contract a required step in every generated page.',
         terms: ['feature-contracts/mobile-navigation.md', 'creative, page-specific feature'],
+      },
+    ],
+  },
+  {
+    id: 'contextual-logo-selection',
+    title: 'Context-aware logo selection',
+    detail:
+      'Chooses an approved logo-family member for each direct surface and records the light/dark decision for quality review.',
+    files: [
+      {
+        label: 'Builder worker',
+        detail:
+          'Stages explicit logo-family metadata and verifies declared context against the selected file.',
+        terms: ['approvedAssetDescriptor', 'logoFamilyPrimaryAssetId', 'contextualLogoProblems'],
+      },
+      {
+        label: 'Builder contract',
+        detail: 'Makes contextual logo selection part of the generated-site contract.',
+        terms: ['Contextual logo selection is a required generated feature'],
+      },
+      {
+        label: 'Template instructions',
+        detail: 'Requires the builder to inspect the logo inventory before choosing an asset.',
+        terms: ['feature-contracts/contextual-logo-selection.md'],
+      },
+    ],
+  },
+  {
+    id: 'visual-content-recovery',
+    title: 'Semantic recovery from image-based content',
+    detail:
+      'Groups approved recovered information by source context and semantic role, requires complete traceable coverage, and leaves integration, composition, and styling to the builder.',
+    files: [
+      {
+        label: 'Semantic content grouping',
+        detail:
+          'Creates stable source-page and semantic-role groups while retaining every approved item.',
+        terms: [
+          'groupApprovedVisualContent',
+          'coverageInstruction',
+          'integrationInstruction',
+          'approvedVisualContentGroups',
+        ],
+      },
+      {
+        label: 'Semantic recovery contract',
+        detail:
+          'Defines mandatory group and item coverage, builder design ownership, semantic fidelity, and provenance annotations.',
+        terms: [
+          'Required group and item coverage',
+          'Builder design decision',
+          'data-siteforge-recovered-group-id',
+          'data-siteforge-recovered-content-id',
+        ],
+      },
+      {
+        label: 'Builder contract',
+        detail:
+          'Makes grouped semantic coverage mandatory while leaving layout and styling decisions to the builder.',
+        terms: [
+          'Semantic content recovery is a required generated feature',
+          'quality review verifies coverage and semantic fidelity',
+        ],
+      },
+      {
+        label: 'Template instructions',
+        detail:
+          'Requires the builder to decide how each group integrates into the page and annotate every recovered composition.',
+        terms: ['feature-contracts/semantic-content-recovery.md'],
+      },
+      {
+        label: 'Builder worker',
+        detail:
+          'Passes grouped content to Codex and validates complete, content-specific design decisions and semantic coverage.',
+        terms: [
+          'semanticContentCoverageCheck',
+          'semanticCompositionDecisionCheck',
+          'must name its actual',
+          'contentShape',
+          'semanticElementRules',
+          'semantic-content-coverage',
+          'omits approved recovered group',
+        ],
       },
     ],
   },
@@ -8854,6 +10388,159 @@ const agentPackageFeatures: AgentFeature[] = [
     ],
   },
 ];
+
+const lockedFoundationWorkshopFeatureIds = new Set([
+  'next-component-architecture',
+  'framework-quality-gates',
+]);
+
+function agentFeatureHasWorkshopSource(feature?: AgentFeature) {
+  if (!feature || lockedFoundationWorkshopFeatureIds.has(feature.id)) return false;
+  return feature.files.some((featureFile) => {
+    const file = currentAgentPackageFiles.find(
+      (candidate) => candidate.label === featureFile.label,
+    );
+    return file?.path.endsWith('.js') || file?.path.endsWith('.mjs');
+  });
+}
+
+const agentBehaviourTitles: Record<string, string> = {
+  'motion-runtime': 'Entrance motion & factual counters',
+  'scoped-revision': 'Scoped page refinement',
+  'package-behaviour': 'Package testing behaviour',
+  'brand-introduction': 'Brand introduction',
+  'hero-handoff': 'Visible hero entrance after the logo handoff',
+  'responsive-sidebar': 'Mobile & tablet sidebar navigation',
+  'contextual-logo-selection': 'Context-aware logo selection',
+  'visual-content-recovery': 'Semantic recovery from image-based content',
+  'site-navigation-architecture': 'Multi-page navigation architecture',
+  'next-component-architecture': 'Next.js generated component architecture',
+  'runtime-profiles': 'Production runtime and capability profiles',
+  'framework-quality-gates': 'Framework and responsive quality gates',
+};
+
+const legacyProductionBehaviourIds = ['motion-runtime', 'scoped-revision'];
+
+function productionBehaviourInventory(
+  agentPackage: AgentPackage,
+  packages: AgentPackage[],
+  visited = new Set<string>(),
+): string[] {
+  if (visited.has(agentPackage.id)) return [];
+  const nextVisited = new Set(visited).add(agentPackage.id);
+  const basePackage = agentPackage.basePackageId
+    ? packages.find((candidate) => candidate.id === agentPackage.basePackageId)
+    : undefined;
+  const inheritedBehaviourIds = basePackage
+    ? productionBehaviourInventory(basePackage, packages, nextVisited)
+    : legacyProductionBehaviourIds;
+  return [...inheritedBehaviourIds, ...(agentPackage.stagedBehaviourIds ?? [])].filter(
+    (behaviourId, index, behaviourIds) => behaviourIds.indexOf(behaviourId) === index,
+  );
+}
+
+function pendingProductionFeatureIds(packages: AgentPackage[]) {
+  const publishedPackage = packages.find((candidate) => candidate.status === 'published');
+  if (!publishedPackage) return [];
+  const publishedFeatures = new Set(productionBehaviourInventory(publishedPackage, packages));
+  const developedBehaviourIds = [
+    'hero-handoff',
+    ...agentPackageFeatures
+      .map((feature) => feature.id)
+      .filter((featureId) => !legacyProductionBehaviourIds.includes(featureId)),
+  ];
+  const packageById = new Map(packages.map((candidate) => [candidate.id, candidate]));
+  const descendsFromPublished = (candidate: AgentPackage) => {
+    let basePackageId = candidate.basePackageId;
+    const visited = new Set<string>();
+    while (basePackageId && !visited.has(basePackageId)) {
+      if (basePackageId === publishedPackage.id) return true;
+      visited.add(basePackageId);
+      basePackageId = packageById.get(basePackageId)?.basePackageId;
+    }
+    return false;
+  };
+  return [
+    ...new Set(
+      [
+        ...developedBehaviourIds,
+        ...packages
+          .filter(
+            (candidate) =>
+              (candidate.status === 'test_ready' || candidate.status === 'production_ready') &&
+              descendsFromPublished(candidate),
+          )
+          .flatMap((candidate) => candidate.stagedBehaviourIds ?? []),
+      ].filter((featureId) => !publishedFeatures.has(featureId)),
+    ),
+  ];
+}
+
+function AgentProductionNotification({ count }: { count: number }) {
+  if (!count) return null;
+  const label = `${count} new agent feature${count === 1 ? '' : 's'} awaiting production approval`;
+  return (
+    <span aria-label={label} className="agent-production-notification" title={label}>
+      {count}
+    </span>
+  );
+}
+
+function implementationFeatureId(behaviourId: string) {
+  if (behaviourId === 'hero-handoff') return 'motion-runtime';
+  return behaviourId;
+}
+
+function agentBehaviourTitle(behaviourId: string) {
+  const knownTitle = agentBehaviourTitles[behaviourId];
+  if (knownTitle) return knownTitle;
+  return behaviourId
+    .split('-')
+    .filter(Boolean)
+    .map((part, index) => (index === 0 ? `${part.charAt(0).toUpperCase()}${part.slice(1)}` : part))
+    .join(' ');
+}
+
+function agentPackageContractVersion(agentPackage?: AgentPackage) {
+  return agentPackage
+    ? `made-solid-studio-builder-agent-v${agentPackage.version}`
+    : 'made-solid-studio-builder-agent';
+}
+
+function brandedFoundationVersion(version: string) {
+  return version.replace(/^siteforge-/, 'made-solid-studio-');
+}
+
+function brandedBuilderContractVersion(version: string) {
+  return version.replace(/^siteforge-/, 'made-solid-studio-');
+}
+
+function AgentPackageFeatureList({
+  behaviourIds,
+  version,
+  heading = `Features included in v${version}`,
+  ariaLabel = `Features included in agent package v${version}`,
+}: {
+  behaviourIds: string[];
+  version: number;
+  heading?: string;
+  ariaLabel?: string;
+}) {
+  if (!behaviourIds.length) return null;
+  return (
+    <div className="agent-package-feature-list">
+      <strong>{heading}</strong>
+      <ul aria-label={ariaLabel}>
+        {behaviourIds.map((behaviourId) => (
+          <li key={behaviourId}>
+            <Check aria-hidden="true" size={15} />
+            <span>{agentBehaviourTitle(behaviourId)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 function highlightedFeatureLines(content: string, terms: string[]) {
   const normalizedTerms = terms.map((term) => term.toLowerCase());
@@ -8907,17 +10594,11 @@ function FeatureImplementationFiles({
             <strong>{feature.title}</strong>
             <p>{feature.detail}</p>
           </div>
-          {onOpenWorkshop &&
-          feature.files.some((featureFile) => {
-            const file = currentAgentPackageFiles.find(
-              (candidate) => candidate.label === featureFile.label,
-            );
-            return file?.path.endsWith('.js') || file?.path.endsWith('.mjs');
-          }) ? (
+          {onOpenWorkshop && agentFeatureHasWorkshopSource(feature) ? (
             <Button
               className="feature-implementation-files__workshop"
               onClick={() => onOpenWorkshop(feature)}
-              size="compact"
+              size="small"
               type="button"
               variant="secondary"
             >
@@ -8958,12 +10639,14 @@ function FeatureImplementationFiles({
                     </span>
                     <ArrowUpRight aria-hidden="true" size={15} />
                   </button>
-                  {onOpenWorkshop && (file.path.endsWith('.js') || file.path.endsWith('.mjs')) ? (
+                  {onOpenWorkshop &&
+                  agentFeatureHasWorkshopSource(feature) &&
+                  (file.path.endsWith('.js') || file.path.endsWith('.mjs')) ? (
                     <Button
                       aria-label={`Workshop JavaScript: ${file.label}`}
                       className="feature-implementation-files__file-workshop"
                       onClick={() => onOpenWorkshop(feature)}
-                      size="compact"
+                      size="small"
                       type="button"
                       variant="quiet"
                     >
@@ -9024,7 +10707,7 @@ function FeatureImplementationFiles({
                   aria-pressed={showFullFile}
                   className="builder-file-preview-dialog__source-toggle"
                   onClick={() => setShowFullFile((current) => !current)}
-                  size="compact"
+                  size="small"
                   title={
                     showFullFile
                       ? 'Show the focused implementation excerpt'
@@ -9037,9 +10720,9 @@ function FeatureImplementationFiles({
                 </Button>
               ) : null}
               <Dialog.Close asChild>
-                <Button aria-label="Close feature file" size="compact" variant="quiet">
+                <IconButton label="Close feature file" variant="quiet">
                   <X aria-hidden="true" size={18} />
-                </Button>
+                </IconButton>
               </Dialog.Close>
             </div>
             {selection
@@ -9074,12 +10757,12 @@ const agentPackageBaseline = [
   {
     label: 'Foundation',
     detail:
-      'The template keeps a local motion runtime, a locked static build command, and implementation instructions that every generated site receives.',
+      'The template pins Next.js, TypeScript, Tailwind, Base UI, static export, and a locked React runtime while leaving generated visual components editable.',
   },
   {
     label: 'Quality gate',
     detail:
-      'The protected worker checks that generated pages retain the local runtime, replace the locked starter page, and pass the private quality workflow.',
+      'The worker runs format, lint, strict type checks, production compilation, clean-route validation, browser interactions, accessibility, and exact responsive evidence.',
   },
   {
     label: 'Studio workflow',
@@ -9094,15 +10777,15 @@ const agentArchitectureLayers = [
     purpose:
       'The tested template code and locked package boundary every generated site starts from.',
     behaviour:
-      'It provides the static website shell, local runtime, build command, and the quality checks the protected worker expects.',
-    files: ['Motion runtime', 'Template packages'],
+      'It provides the pinned Next.js compiler, TypeScript and Tailwind toolchain, Base UI behaviour layer, static export, React runtime, and quality commands.',
+    files: ['Motion runtime', 'Template packages', 'Component architecture contract'],
   },
   {
     name: 'Built-in capabilities',
     purpose: 'Reusable behaviours the foundation can safely provide to every appropriate build.',
     behaviour:
-      'The current foundation features are entrance motion and counters for genuine metrics plus the approved-logo introduction. Mobile navigation is a generated, creative feature governed by its Markdown contract.',
-    files: ['Motion runtime'],
+      'The foundation supplies difficult mechanics; Codex generates each site’s tokens, primitives, patterns, sections, navigation, layouts, pages, and approved capability interfaces.',
+    files: ['Motion runtime', 'Component architecture contract', 'Runtime profiles contract'],
   },
   {
     name: 'Agent package',
@@ -9163,54 +10846,81 @@ function AgentStudioSectionNavigation({
 }
 
 function AgentPackageConfiguration({
+  architectureMapOpen,
   packages,
   proposals,
   testedPackageIds,
+  onArchitectureMapCloseAutoFocus,
+  onArchitectureMapOpenChange,
   onRequestProposal,
   onApproveForTesting,
   onApproveForProduction,
   onPromote,
 }: {
+  architectureMapOpen: boolean;
   packages: AgentPackage[];
   proposals: AgentPackageProposal[];
   testedPackageIds: Set<string>;
+  onArchitectureMapCloseAutoFocus: () => void;
+  onArchitectureMapOpenChange: (open: boolean) => void;
   onRequestProposal: (basePackageId: string, direction: string) => Promise<void>;
   onApproveForTesting: (packageId: string) => Promise<void>;
   onApproveForProduction: (packageId: string) => Promise<void>;
   onPromote: (packageId: string) => Promise<void>;
 }) {
   const [selectedFile, setSelectedFile] = useState<(typeof currentAgentPackageFiles)[number]>();
-  const [direction, setDirection] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const selectedFileTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [actionPackageId, setActionPackageId] = useState<string>();
+  const [packageAction, setPackageAction] = useState<'approve' | 'ready' | 'promote'>();
   const [message, setMessage] = useState('');
   const [workshopFeature, setWorkshopFeature] = useState<AgentFeature>();
   const [workshopDirection, setWorkshopDirection] = useState('');
   const [isSendingWorkshop, setIsSendingWorkshop] = useState(false);
+  const [inspectedProductionPackageId, setInspectedProductionPackageId] = useState('');
   const publishedPackage = packages.find((item) => item.status === 'published');
   const draftPackages = packages.filter((item) =>
     ['draft', 'test_ready', 'production_ready'].includes(item.status),
   );
-
-  async function submitProposal(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!publishedPackage || !direction.trim()) return;
-    setIsSubmitting(true);
-    setMessage('');
-    try {
-      await onRequestProposal(publishedPackage.id, direction.trim());
-      setDirection('');
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : 'The package proposal could not be queued.',
-      );
-    } finally {
-      setIsSubmitting(false);
-    }
-  }
+  const releaseCandidate = [...draftPackages]
+    .filter(
+      (item) =>
+        item.basePackageId === publishedPackage?.id &&
+        ['test_ready', 'production_ready'].includes(item.status) &&
+        (item.stagedBehaviourIds?.length ?? 0) > 0,
+    )
+    .sort((left, right) => right.version - left.version)[0];
+  const releaseFeatureCount = releaseCandidate?.stagedBehaviourIds?.length ?? 0;
+  const pendingProductionFeatureCount = pendingProductionFeatureIds(packages).length;
+  const releaseHasTestEvidence = releaseCandidate
+    ? testedPackageIds.has(releaseCandidate.id)
+    : false;
+  const releaseIsProductionDraft = releaseCandidate?.status === 'production_ready';
+  const isCreatingReleaseDraft =
+    actionPackageId === releaseCandidate?.id && packageAction === 'ready';
+  const isPublishingRelease =
+    actionPackageId === releaseCandidate?.id && packageAction === 'promote';
+  const productionVersions = [...packages]
+    .filter((item) => ['published', 'superseded', 'production_ready'].includes(item.status))
+    .sort((left, right) => right.version - left.version);
+  const inspectedProductionPackage =
+    productionVersions.find((item) => item.id === inspectedProductionPackageId) ??
+    productionVersions[0];
+  const inspectedProductionBase = inspectedProductionPackage?.basePackageId
+    ? packages.find((item) => item.id === inspectedProductionPackage.basePackageId)
+    : undefined;
+  const inspectedBehaviourIds = inspectedProductionPackage
+    ? productionBehaviourInventory(inspectedProductionPackage, packages)
+    : [];
+  const inspectedImplementationFeatureIds = inspectedBehaviourIds
+    .map(implementationFeatureId)
+    .filter((featureId, index, featureIds) => featureIds.indexOf(featureId) === index);
+  const inspectedImplementationFeatures = inspectedImplementationFeatureIds
+    .map((featureId) => agentPackageFeatures.find((feature) => feature.id === featureId))
+    .filter((feature): feature is AgentFeature => Boolean(feature));
 
   async function runPackageAction(packageId: string, action: 'approve' | 'ready' | 'promote') {
     setActionPackageId(packageId);
+    setPackageAction(action);
     setMessage('');
     try {
       if (action === 'approve') await onApproveForTesting(packageId);
@@ -9222,6 +10932,7 @@ function AgentPackageConfiguration({
       );
     } finally {
       setActionPackageId(undefined);
+      setPackageAction(undefined);
     }
   }
 
@@ -9249,24 +10960,118 @@ function AgentPackageConfiguration({
     <section className="agent-package-config" aria-labelledby="agent-package-config-title">
       <div className="agent-package-config__header">
         <div>
-          <Eyebrow>Published builder agent</Eyebrow>
-          <h2 id="agent-package-config-title">
-            Builder agent package · v{publishedPackage?.version ?? 4}
+          <div className="agent-package-config__published-row">
+            <Eyebrow>Published builder agent</Eyebrow>
+            <StatusBadge tone="success">Published</StatusBadge>
+          </div>
+          <h2 className="agent-production-version-value" id="agent-package-config-title">
+            <span>Builder agent package · v{publishedPackage?.version ?? 4}</span>
+            <AgentProductionNotification count={pendingProductionFeatureCount} />
           </h2>
           <p className="muted-copy">
             This is the source-controlled package used by every private prospect build. It combines
             the agent policy with the tested builder foundation; it is not a single test direction.
           </p>
+          {publishedPackage?.stagedBehaviourIds?.length ? (
+            <AgentPackageFeatureList
+              behaviourIds={publishedPackage.stagedBehaviourIds}
+              version={publishedPackage.version}
+            />
+          ) : null}
         </div>
-        <StatusBadge tone="success">Published</StatusBadge>
       </div>
+
+      {releaseCandidate ? (
+        <section
+          aria-labelledby="agent-production-release-title"
+          aria-busy={isCreatingReleaseDraft || isPublishingRelease}
+          className="agent-package-config__release-callout"
+        >
+          <div className="agent-package-config__release-icon" aria-hidden="true">
+            <PackageCheck size={24} />
+          </div>
+          <div>
+            <Eyebrow>Production release</Eyebrow>
+            <h3 id="agent-production-release-title">
+              {releaseIsProductionDraft
+                ? `Production draft v${releaseCandidate.version}`
+                : `Create production v${releaseCandidate.version}`}
+            </h3>
+            <p>
+              {releaseFeatureCount} tested feature{releaseFeatureCount === 1 ? '' : 's'}{' '}
+              {releaseIsProductionDraft
+                ? 'are saved in this immutable production draft. Publishing makes it the package used by future complete prospect builds.'
+                : releaseHasTestEvidence
+                  ? `are staged and ready. Create the immutable production draft from the current v${publishedPackage?.version ?? 4} package; publishing remains a separate confirmation.`
+                  : 'are staged. Complete a private homepage test with this package before creating its production draft.'}
+            </p>
+            <AgentPackageFeatureList
+              behaviourIds={releaseCandidate.stagedBehaviourIds ?? []}
+              version={releaseCandidate.version}
+            />
+          </div>
+          <div className="agent-package-config__release-action">
+            <StatusBadge
+              tone={releaseHasTestEvidence || releaseIsProductionDraft ? 'success' : 'warning'}
+            >
+              {releaseIsProductionDraft
+                ? 'Unpublished draft'
+                : releaseHasTestEvidence
+                  ? `${releaseFeatureCount} ready`
+                  : 'Test required'}
+            </StatusBadge>
+            <Button
+              disabled={
+                actionPackageId === releaseCandidate.id ||
+                (!releaseIsProductionDraft && !releaseHasTestEvidence)
+              }
+              onClick={() =>
+                void runPackageAction(
+                  releaseCandidate.id,
+                  releaseIsProductionDraft ? 'promote' : 'ready',
+                )
+              }
+              type="button"
+            >
+              <PackageCheck aria-hidden="true" size={17} />
+              {isCreatingReleaseDraft
+                ? `Creating production draft v${releaseCandidate.version}`
+                : isPublishingRelease
+                  ? `Publishing v${releaseCandidate.version}`
+                  : releaseIsProductionDraft
+                    ? `Publish v${releaseCandidate.version} to production`
+                    : releaseHasTestEvidence
+                      ? `Create production v${releaseCandidate.version} draft`
+                      : 'Complete homepage test first'}
+            </Button>
+          </div>
+          {isCreatingReleaseDraft || isPublishingRelease ? (
+            <IndeterminateProgress
+              className="agent-package-config__release-progress"
+              detail={
+                isCreatingReleaseDraft
+                  ? `Saving v${releaseCandidate.version} as an unpublished production draft. This can take a few minutes; you can leave this page open.`
+                  : `Publishing v${releaseCandidate.version}. Future complete builds will use it after this finishes.`
+              }
+              label={
+                isCreatingReleaseDraft
+                  ? `Creating production draft v${releaseCandidate.version}`
+                  : `Publishing production package v${releaseCandidate.version}`
+              }
+            />
+          ) : null}
+        </section>
+      ) : null}
 
       <dl className="agent-package-config__identity">
         <div>
           <dt>Published version</dt>
           <dd>
-            <strong>v{publishedPackage?.version ?? 4} · Current production package</strong>
-            <code>{publishedPackage?.builderContractVersion ?? codexBuilderContractVersion}</code>
+            <strong className="agent-production-version-value">
+              v{publishedPackage?.version ?? 4} · Current production package
+              <AgentProductionNotification count={pendingProductionFeatureCount} />
+            </strong>
+            <code>{agentPackageContractVersion(publishedPackage)}</code>
           </dd>
         </div>
         <div>
@@ -9283,55 +11088,232 @@ function AgentPackageConfiguration({
         </div>
       </dl>
 
-      <section
-        aria-labelledby="agent-package-layers-title"
-        className="agent-package-config__explanation"
-      >
-        <div>
-          <Eyebrow>Architecture map</Eyebrow>
-          <h3 id="agent-package-layers-title">How a website build is assembled</h3>
-          <p>
-            These layers have different jobs. A build direction uses a package; a package uses
-            tested capabilities and its foundation.
-          </p>
-        </div>
-        <ol className="agent-package-config__architecture-map">
-          {agentArchitectureLayers.map((layer, index) => (
-            <li key={layer.name}>
-              <span aria-hidden="true" className="agent-package-config__architecture-number">
-                {index + 1}
-              </span>
-              <div>
-                <strong>{layer.name}</strong>
-                <p>{layer.purpose}</p>
-                <small>{layer.behaviour}</small>
-                {layer.files.length ? (
-                  <div className="agent-package-config__layer-files">
-                    {layer.files.map((label) => {
-                      const file = currentAgentPackageFiles.find((item) => item.label === label);
-                      return file ? (
-                        <button key={file.path} onClick={() => setSelectedFile(file)} type="button">
-                          <FileText aria-hidden="true" size={14} />
-                          View {file.label}
-                        </button>
-                      ) : null;
-                    })}
-                  </div>
-                ) : (
-                  <span className="agent-package-config__run-scoped">Stored with each run</span>
-                )}
-              </div>
-            </li>
-          ))}
-        </ol>
-      </section>
-
-      <FeatureImplementationFiles
-        detail="Every listed feature maps to the source files that implement it. Open a file to see the enabling lines highlighted."
-        features={agentPackageFeatures}
-        heading="Built-in feature implementation"
-        onOpenWorkshop={setWorkshopFeature}
+      <AgentArchitectureOverview
+        contractVersion={agentPackageContractVersion(publishedPackage)}
+        foundationVersion={brandedFoundationVersion(
+          publishedPackage?.foundationVersion ?? 'made-solid-studio-next-builder-v2',
+        )}
+        onOpenSource={(label, trigger) => {
+          const file = currentAgentPackageFiles.find((candidate) => candidate.label === label);
+          if (file) {
+            selectedFileTriggerRef.current = trigger;
+            setSelectedFile(file);
+          }
+        }}
+        packageVersion={publishedPackage?.version ?? 6}
       />
+
+      <Dialog.Root onOpenChange={onArchitectureMapOpenChange} open={architectureMapOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="builder-file-preview-overlay" />
+          <Dialog.Content
+            aria-describedby="agent-architecture-map-description"
+            className="agent-architecture-map-dialog"
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              onArchitectureMapCloseAutoFocus();
+            }}
+          >
+            <header className="agent-architecture-map-dialog__header">
+              <div>
+                <Eyebrow>Architecture map</Eyebrow>
+                <Dialog.Title>How a website build is assembled</Dialog.Title>
+              </div>
+              <Dialog.Close asChild>
+                <IconButton label="Close architecture map" variant="quiet">
+                  <X aria-hidden="true" size={20} />
+                </IconButton>
+              </Dialog.Close>
+            </header>
+            <Dialog.Description className="muted-copy" id="agent-architecture-map-description">
+              These layers have different jobs. A build direction uses a package; a package uses
+              tested capabilities and its foundation.
+            </Dialog.Description>
+            <ol className="agent-package-config__architecture-map">
+              {agentArchitectureLayers.map((layer, index) => (
+                <li key={layer.name}>
+                  <span aria-hidden="true" className="agent-package-config__architecture-number">
+                    {index + 1}
+                  </span>
+                  <div>
+                    <strong>{layer.name}</strong>
+                    <p>{layer.purpose}</p>
+                    <small>{layer.behaviour}</small>
+                    {layer.files.length ? (
+                      <div className="agent-package-config__layer-files">
+                        {layer.files.map((label) => {
+                          const file = currentAgentPackageFiles.find(
+                            (item) => item.label === label,
+                          );
+                          return file ? (
+                            <button
+                              key={file.path}
+                              onClick={() => {
+                                onArchitectureMapOpenChange(false);
+                                setSelectedFile(file);
+                              }}
+                              type="button"
+                            >
+                              <FileText aria-hidden="true" size={14} />
+                              View {file.label}
+                            </button>
+                          ) : null;
+                        })}
+                      </div>
+                    ) : (
+                      <span className="agent-package-config__run-scoped">Stored with each run</span>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <section
+        aria-labelledby="production-feature-versions-title"
+        className="production-feature-versions"
+      >
+        <div className="production-feature-versions__overview">
+          <header className="production-feature-versions__header">
+            <div>
+              <Eyebrow>Production feature history</Eyebrow>
+              <h3 id="production-feature-versions-title">Built-in features by version</h3>
+              <p>
+                Select a production release or unpublished production draft to inspect its complete
+                feature inventory and the changes recorded against its base version.
+              </p>
+            </div>
+            <label>
+              <span className="agent-production-version-label">
+                Production version
+                <AgentProductionNotification count={pendingProductionFeatureCount} />
+              </span>
+              <select
+                onChange={(event) => setInspectedProductionPackageId(event.currentTarget.value)}
+                value={inspectedProductionPackage?.id ?? ''}
+              >
+                {productionVersions.map((agentPackage) => (
+                  <option key={agentPackage.id} value={agentPackage.id}>
+                    v{agentPackage.version} ·{' '}
+                    {agentPackage.status === 'published'
+                      ? `Published${
+                          pendingProductionFeatureCount
+                            ? ` · ${pendingProductionFeatureCount} awaiting approval`
+                            : ''
+                        }`
+                      : agentPackage.status === 'production_ready'
+                        ? 'Unpublished production draft'
+                        : 'Previous production'}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </header>
+
+          {inspectedProductionPackage ? (
+            <>
+              <div className="production-feature-versions__summary">
+                <div>
+                  <StatusBadge
+                    tone={inspectedProductionPackage.status === 'published' ? 'success' : 'neutral'}
+                  >
+                    {inspectedProductionPackage.status === 'published'
+                      ? 'Current production'
+                      : inspectedProductionPackage.status === 'production_ready'
+                        ? 'Unpublished draft'
+                        : 'Previous production'}
+                  </StatusBadge>
+                  <h4 className="agent-production-version-value">
+                    Agent package v{inspectedProductionPackage.version}
+                    {inspectedProductionPackage.status === 'published' ? (
+                      <AgentProductionNotification count={pendingProductionFeatureCount} />
+                    ) : null}
+                  </h4>
+                  <p>{inspectedProductionPackage.summary}</p>
+                </div>
+                <dl>
+                  <div>
+                    <dt>Based on</dt>
+                    <dd>
+                      {inspectedProductionBase
+                        ? `Production v${inspectedProductionBase.version}`
+                        : `Published v${inspectedProductionPackage.version} lineage root`}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Builder contract</dt>
+                    <dd>{agentPackageContractVersion(inspectedProductionPackage)}</dd>
+                  </div>
+                  <div>
+                    <dt>Foundation</dt>
+                    <dd>
+                      {brandedFoundationVersion(inspectedProductionPackage.foundationVersion)}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+
+              <div className="production-feature-versions__comparison">
+                <section aria-labelledby="production-version-changes-title">
+                  <Eyebrow>Version difference</Eyebrow>
+                  <h4 id="production-version-changes-title">
+                    {inspectedProductionBase
+                      ? `Changes from v${inspectedProductionBase.version}`
+                      : `Published v${inspectedProductionPackage.version} baseline`}
+                  </h4>
+                  {inspectedProductionPackage.stagedBehaviourIds?.length ? (
+                    <AgentPackageFeatureList
+                      ariaLabel={`Changes introduced in agent package v${inspectedProductionPackage.version}`}
+                      behaviourIds={inspectedProductionPackage.stagedBehaviourIds}
+                      heading={`${inspectedProductionPackage.stagedBehaviourIds.length} recorded feature change${inspectedProductionPackage.stagedBehaviourIds.length === 1 ? '' : 's'}`}
+                      version={inspectedProductionPackage.version}
+                    />
+                  ) : (
+                    <p className="muted-copy">
+                      This published lineage root has no version-level feature additions recorded.
+                    </p>
+                  )}
+                </section>
+                <section aria-labelledby="production-version-inventory-title">
+                  <Eyebrow>Complete inventory</Eyebrow>
+                  <h4 id="production-version-inventory-title">
+                    Built into production v{inspectedProductionPackage.version}
+                  </h4>
+                  <AgentPackageFeatureList
+                    ariaLabel={`Complete feature inventory for agent package v${inspectedProductionPackage.version}`}
+                    behaviourIds={inspectedBehaviourIds}
+                    heading={`${inspectedBehaviourIds.length} built-in feature${inspectedBehaviourIds.length === 1 ? '' : 's'}`}
+                    version={inspectedProductionPackage.version}
+                  />
+                </section>
+              </div>
+
+              {inspectedProductionPackage.version <= 4 ? (
+                <p className="production-feature-versions__legacy-note">
+                  <strong>Historical source boundary.</strong> v4 predates immutable per-feature
+                  file snapshots. The inventory shows its recorded baseline only; current source
+                  files are not presented as an exact v4 snapshot.
+                </p>
+              ) : null}
+            </>
+          ) : (
+            <p className="muted-copy">No production package versions are available yet.</p>
+          )}
+        </div>
+
+        {inspectedProductionPackage && inspectedProductionPackage.version > 4 ? (
+          <FeatureImplementationFiles
+            detail={`These are the implementation files associated with the recorded features in production v${inspectedProductionPackage.version}. Open a file to inspect its enabling lines.`}
+            features={inspectedImplementationFeatures}
+            heading={`Built-in feature implementation · v${inspectedProductionPackage.version}`}
+            onOpenWorkshop={
+              inspectedProductionPackage.status === 'published' ? setWorkshopFeature : undefined
+            }
+          />
+        ) : null}
+      </section>
 
       <Dialog.Root
         onOpenChange={(open) => {
@@ -9355,9 +11337,9 @@ function AgentPackageConfiguration({
                 <Wrench aria-hidden="true" size={14} /> Workshoped
               </StatusBadge>
               <Dialog.Close asChild>
-                <Button aria-label="Close foundation workshop" size="compact" variant="quiet">
+                <IconButton label="Close foundation workshop" variant="quiet">
                   <X aria-hidden="true" size={18} />
-                </Button>
+                </IconButton>
               </Dialog.Close>
             </div>
             <p className="muted-copy">
@@ -9375,7 +11357,7 @@ function AgentPackageConfiguration({
                 value={workshopDirection}
               />
             </label>
-            <div className="foundation-workshop-dialog__actions">
+            <ButtonGroup className="foundation-workshop-dialog__actions">
               <Button
                 disabled={!workshopDirection.trim() || isSendingWorkshop}
                 onClick={() => void sendWorkshopToTesting()}
@@ -9388,7 +11370,7 @@ function AgentPackageConfiguration({
                 Sending creates a versioned test-package proposal. The current production package
                 remains unchanged.
               </small>
-            </div>
+            </ButtonGroup>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
@@ -9450,41 +11432,12 @@ function AgentPackageConfiguration({
         </div>
         <div className="agent-package-config__version-row">
           <StatusBadge tone="success">Published</StatusBadge>
-          <strong>v{publishedPackage?.version ?? 4} · Current production package</strong>
+          <strong className="agent-production-version-value">
+            v{publishedPackage?.version ?? 4} · Current production package
+            <AgentProductionNotification count={pendingProductionFeatureCount} />
+          </strong>
           <span>Prospect builds use this package today.</span>
         </div>
-      </section>
-
-      <section
-        className="agent-package-config__proposal"
-        aria-labelledby="agent-package-proposal-title"
-      >
-        <div>
-          <Eyebrow>Refine the package</Eyebrow>
-          <h3 id="agent-package-proposal-title">Create a derived test package</h3>
-          <p>
-            Describe the behaviour you want to improve. The protected refinement worker turns it
-            into reviewable Markdown addenda, or flags that a builder-foundation code change is
-            required instead.
-          </p>
-        </div>
-        <form onSubmit={(event) => void submitProposal(event)}>
-          <label>
-            <span>Direction for a v{(publishedPackage?.version ?? 4) + 1} test package</span>
-            <textarea
-              disabled={!publishedPackage || isSubmitting}
-              maxLength={4000}
-              onChange={(event) => setDirection(event.target.value)}
-              placeholder="For example: use quieter staggered reveals only for service groups; keep the hero immediate."
-              rows={4}
-              value={direction}
-            />
-          </label>
-          <Button disabled={!publishedPackage || !direction.trim() || isSubmitting} type="submit">
-            <Sparkles aria-hidden="true" size={16} />
-            {isSubmitting ? 'Creating proposal' : 'Create package proposal'}
-          </Button>
-        </form>
       </section>
 
       {proposals.length || draftPackages.length ? (
@@ -9526,6 +11479,12 @@ function AgentPackageConfiguration({
                     </StatusBadge>
                   </div>
                   <p>{proposal.summary ?? proposal.direction}</p>
+                  {draft?.stagedBehaviourIds?.length ? (
+                    <AgentPackageFeatureList
+                      behaviourIds={draft.stagedBehaviourIds}
+                      version={draft.version}
+                    />
+                  ) : null}
                   {proposal.capabilityAssessment === 'foundation_change_required' ? (
                     <p className="agent-package-config__foundation-note">
                       <strong>Foundation change required.</strong> {proposal.capabilityProposal}
@@ -9676,18 +11635,29 @@ function AgentPackageConfiguration({
       >
         <Dialog.Portal>
           <Dialog.Overlay className="builder-file-preview-overlay" />
-          <Dialog.Content className="builder-file-preview-dialog agent-package-config__dialog">
+          <Dialog.Content
+            className="builder-file-preview-dialog agent-package-config__dialog"
+            onCloseAutoFocus={(event) => {
+              if (!selectedFileTriggerRef.current) return;
+              event.preventDefault();
+              selectedFileTriggerRef.current.focus();
+              selectedFileTriggerRef.current = null;
+            }}
+          >
             <div className="builder-file-preview-dialog__header">
               <div>
-                <Eyebrow>
-                  {selectedFile?.group ?? 'Agent package'} · v{publishedPackage?.version ?? 4}
-                </Eyebrow>
+                <div className="agent-production-version-label">
+                  <Eyebrow>
+                    {selectedFile?.group ?? 'Agent package'} · v{publishedPackage?.version ?? 4}
+                  </Eyebrow>
+                  <AgentProductionNotification count={pendingProductionFeatureCount} />
+                </div>
                 <Dialog.Title>{selectedFile?.label}</Dialog.Title>
               </div>
               <Dialog.Close asChild>
-                <Button aria-label="Close agent file" size="compact" variant="quiet">
+                <IconButton label="Close agent file" variant="quiet">
                   <X aria-hidden="true" size={18} />
-                </Button>
+                </IconButton>
               </Dialog.Close>
             </div>
             <Dialog.Description className="muted-copy">
@@ -9716,6 +11686,8 @@ function AgentStudioPage({
   onDeleteBuild,
   onOpenPreview,
   onLoadBuildEvidence,
+  onMoveToAgentStudio,
+  onRequestSiteTest,
   onRequestAgentPackageProposal,
   onApproveAgentPackageForTesting,
   onStageAgentPackageBehaviours,
@@ -9737,12 +11709,20 @@ function AgentStudioPage({
     buildInstruction?: string,
     agentPackageId?: string,
     sourceBuilderRunId?: string,
+    targetSourceUrls?: string[],
   ) => Promise<void>;
   onResumeBuild: (builderRunId: string) => Promise<void>;
   onCancelBuild: (businessId: string) => Promise<void>;
   onDeleteBuild: (businessId: string) => Promise<void>;
   onOpenPreview: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
   onLoadBuildEvidence: (builderRunId: string) => Promise<BuilderRunEvidence>;
+  onMoveToAgentStudio: (builderRunId: string) => Promise<void>;
+  onRequestSiteTest: (
+    sourceBuilderRunId: string,
+    buildInstruction: string,
+    agentPackageId: string,
+    featureId: string,
+  ) => Promise<void>;
   onRequestAgentPackageProposal: (basePackageId: string, direction: string) => Promise<void>;
   onApproveAgentPackageForTesting: (packageId: string) => Promise<void>;
   onStageAgentPackageBehaviours: (packageId: string, behaviourIds: string[]) => Promise<void>;
@@ -9770,6 +11750,8 @@ function AgentStudioPage({
     'Some prospect logos could not be loaded.',
   );
   const [prospectPickerOpen, setProspectPickerOpen] = useState(false);
+  const [architectureMapOpen, setArchitectureMapOpen] = useState(false);
+  const architectureMapTriggerRef = useRef<HTMLButtonElement>(null);
   const selectedLogo = selectedWorkspace?.brandKit?.primaryLogoAssetId
     ? selectedWorkspace.artifacts.find(
         (artifact) => artifact.id === selectedWorkspace.brandKit?.primaryLogoAssetId,
@@ -9806,17 +11788,29 @@ function AgentStudioPage({
           </p>
         </div>
         <div className="agent-studio__header-actions">
-          <StatusBadge tone="success">Published v4</StatusBadge>
-          <BuilderSettingsControl />
+          <AgentStudioSectionNavigation onSelectSection={onSelectSection} section={section} />
+          <BuilderSettingsControl iconOnly />
+          {isArchitecturePage ? (
+            <IconButton
+              className="agent-studio__architecture-map-trigger"
+              label="Open architecture map"
+              onClick={() => setArchitectureMapOpen(true)}
+              ref={architectureMapTriggerRef}
+              variant="secondary"
+            >
+              <CircleHelp aria-hidden="true" size={19} />
+            </IconButton>
+          ) : null}
         </div>
       </div>
 
-      <AgentStudioSectionNavigation onSelectSection={onSelectSection} section={section} />
-
       {isArchitecturePage ? (
         <AgentPackageConfiguration
+          architectureMapOpen={architectureMapOpen}
           onApproveForTesting={onApproveAgentPackageForTesting}
           onApproveForProduction={onApproveAgentPackageForProduction}
+          onArchitectureMapCloseAutoFocus={() => architectureMapTriggerRef.current?.focus()}
+          onArchitectureMapOpenChange={setArchitectureMapOpen}
           onPromote={onPromoteAgentPackage}
           onRequestProposal={onRequestAgentPackageProposal}
           packages={agentPackages}
@@ -9939,9 +11933,11 @@ function AgentStudioPage({
               onCancelBuild={() => onCancelBuild(selectedWorkspace.business.id)}
               onDeleteBuild={onDeleteBuild}
               onLoadBuildEvidence={onLoadBuildEvidence}
+              onMoveToAgentStudio={onMoveToAgentStudio}
               onOpenPreview={onOpenPreview}
               onRequestProposal={onRequestAgentPackageProposal}
               onResumeBuild={onResumeBuild}
+              onRequestSiteTest={onRequestSiteTest}
               onStageBehaviours={onStageAgentPackageBehaviours}
               onRequestBuild={(
                 mode,
@@ -9949,6 +11945,7 @@ function AgentStudioPage({
                 buildInstruction,
                 agentPackageId,
                 sourceBuilderRunId,
+                targetSourceUrls,
               ) =>
                 onRequestBuild(
                   selectedWorkspace.business.id,
@@ -9957,6 +11954,7 @@ function AgentStudioPage({
                   buildInstruction,
                   agentPackageId,
                   sourceBuilderRunId,
+                  targetSourceUrls,
                 )
               }
               workspace={selectedWorkspace}
@@ -9981,26 +11979,29 @@ function AgentStudioPage({
 
 function BuildManifestPanel({
   workspace,
+  agentPackages,
   onCreate,
-  onOpenAgentStudio,
   onRequestBuild,
   onCancelBuild,
   onDeleteBuild,
   onOpenPreview,
   onLoadBuildEvidence,
+  onMoveToAgentStudio,
 }: {
   workspace: ProspectWorkspace;
+  agentPackages: AgentPackage[];
   onCreate: () => Promise<void>;
-  onOpenAgentStudio: () => void;
   onRequestBuild: (
     mode: BuilderRunMode,
     targetSourceUrl?: string,
     buildInstruction?: string,
+    agentPackageId?: string,
   ) => Promise<void>;
   onCancelBuild: () => Promise<void>;
   onDeleteBuild: (businessId: string) => Promise<void>;
   onOpenPreview: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
   onLoadBuildEvidence: (builderRunId: string) => Promise<BuilderRunEvidence>;
+  onMoveToAgentStudio: (builderRunId: string) => Promise<void>;
 }) {
   const [isPreparing, setIsPreparing] = useState(false);
   const [isManifestOpen, setIsManifestOpen] = useState(false);
@@ -10074,6 +12075,19 @@ function BuildManifestPanel({
     : 0;
   const openQuestionCount = Array.isArray(data.openQuestions) ? data.openQuestions.length : 0;
   const uncertaintyCount = Array.isArray(data.uncertainties) ? data.uncertainties.length : 0;
+  const architecture = data.architecture;
+  const productionRuntimeLabel =
+    architecture?.productionRuntime === 'managed-next-runtime'
+      ? 'Managed Next.js runtime'
+      : architecture?.productionRuntime === 'managed-forms'
+        ? 'Managed forms'
+        : 'Static marketing';
+  const routeSummary = Array.isArray(data.selectedPages)
+    ? data.selectedPages
+        .slice(0, 4)
+        .map((page) => page.publicPath || page.url)
+        .join(', ')
+    : '';
 
   return (
     <Card className="workspace-panel brief-panel">
@@ -10141,14 +12155,9 @@ function BuildManifestPanel({
                 </Dialog.Description>
               </div>
               <Dialog.Close asChild>
-                <Button
-                  aria-label="Close Build Manifest"
-                  size="compact"
-                  type="button"
-                  variant="quiet"
-                >
+                <IconButton label="Close Build Manifest" variant="quiet">
                   <X aria-hidden="true" size={18} />
-                </Button>
+                </IconButton>
               </Dialog.Close>
             </div>
             <dl className="build-manifest-summary" aria-label="Build Manifest contents">
@@ -10177,6 +12186,41 @@ function BuildManifestPanel({
               </p>
             </section>
             <section className="build-manifest-dialog__section">
+              <h3>Engineering architecture</h3>
+              <p>
+                This package targets a pinned Next.js App Router and strict TypeScript foundation.
+                The agent creates the site-specific visual system and component layers; the
+                foundation supplies tested mechanics and verification.
+              </p>
+              <ul>
+                <li>
+                  Production profile: <strong>{productionRuntimeLabel}</strong>. The private preview
+                  remains a local static export.
+                </li>
+                <li>
+                  Generated layers:{' '}
+                  {architecture?.componentLayers?.join(', ') ??
+                    'tokens, UI, patterns, sections, site, layouts, and pages'}
+                  .
+                </li>
+                <li>
+                  {architecture?.capabilityAdapters?.length ?? 0} approved production capability
+                  adapter
+                  {(architecture?.capabilityAdapters?.length ?? 0) === 1 ? '' : 's'} recorded.
+                </li>
+                <li>
+                  Clean routes: {routeSummary || 'the selected source routes in this manifest'}.
+                </li>
+                <li>
+                  Responsive and interaction evidence is required at{' '}
+                  {architecture?.qualityProfile?.requiredViewports
+                    ?.map((viewport) => `${viewport.width}×${viewport.height}`)
+                    .join(', ') ?? '320×568, 375×812, 768×1024, and 1440×900'}
+                  .
+                </li>
+              </ul>
+            </section>
+            <section className="build-manifest-dialog__section">
               <h3>What the builder may use</h3>
               <ul>
                 <li>Permitted facts remain tied to their original captured evidence.</li>
@@ -10198,8 +12242,9 @@ function BuildManifestPanel({
             <section className="build-manifest-dialog__section">
               <h3>Private preview rules</h3>
               <p>
-                Contract {manifest.builderContractVersion}. The builder can generate a private
-                preview when ready, but sharing still requires further approval.
+                Contract {brandedBuilderContractVersion(manifest.builderContractVersion)}. The
+                builder can generate a private preview when ready, but sharing still requires
+                further approval.
               </p>
               <ul>
                 {Array.isArray(data.builderRules)
@@ -10211,26 +12256,13 @@ function BuildManifestPanel({
         </Dialog.Portal>
       </Dialog.Root>
 
-      <section className="agent-studio-handoff" aria-labelledby="agent-studio-handoff-title">
-        <div>
-          <Eyebrow>Agent refinement</Eyebrow>
-          <h3 id="agent-studio-handoff-title">Test this package in Agent Studio</h3>
-          <p className="muted-copy">
-            Use Agent Studio for homepage and page-level test builds. Those runs refine the shared
-            builder without becoming this prospect’s complete website.
-          </p>
-        </div>
-        <Button onClick={onOpenAgentStudio} type="button">
-          <Sparkles aria-hidden="true" size={16} />
-          Open Agent Studio
-        </Button>
-      </section>
-
       <BuilderRunPanel
+        agentPackages={agentPackages}
         buildKind="prospect"
         onCancelBuild={onCancelBuild}
         onDeleteBuild={onDeleteBuild}
         onLoadBuildEvidence={onLoadBuildEvidence}
+        onMoveToAgentStudio={onMoveToAgentStudio}
         onOpenPreview={onOpenPreview}
         onRequestBuild={onRequestBuild}
         workspace={workspace}
@@ -10648,6 +12680,7 @@ function AuditPanel({
 function WorkspaceContent({
   tab,
   workspace,
+  agentPackages,
   toggleTask,
   requestResearchCapture,
   requestAssetRefresh,
@@ -10661,6 +12694,10 @@ function WorkspaceContent({
   cancelAssetAnalysis,
   setAssetAnalysisSelected,
   updateAssetAnnotation,
+  requestVisualContentExtraction,
+  cancelVisualContentExtraction,
+  approveAllVisualContent,
+  updateVisualContentCandidate,
   saveBrandKit,
   pushLogoVersionsToBuilder,
   createBrandAwareBriefRevision,
@@ -10669,10 +12706,10 @@ function WorkspaceContent({
   updateRedesignBrief,
   approveRedesignBrief,
   createBuildManifest,
-  openAgentStudio,
   requestProspectBuild,
   cancelProspectBuild,
   deleteProspectBuilds,
+  moveBuilderRunToAgentStudio,
   openBuilderPreview,
   loadBuilderRunEvidence,
   approveAllAuditFindings,
@@ -10680,6 +12717,7 @@ function WorkspaceContent({
 }: {
   tab: WorkspaceTab;
   workspace: ProspectWorkspace;
+  agentPackages: AgentPackage[];
   toggleTask: (task: Task) => Promise<void>;
   requestResearchCapture: () => Promise<void>;
   requestAssetRefresh: () => Promise<void>;
@@ -10700,6 +12738,22 @@ function WorkspaceContent({
     patch: Pick<
       AssetAnnotation,
       'suggestedRole' | 'businessAssociation' | 'reviewState' | 'humanNotes'
+    >,
+  ) => Promise<void>;
+  requestVisualContentExtraction: () => Promise<void>;
+  cancelVisualContentExtraction: () => Promise<void>;
+  approveAllVisualContent: () => Promise<void>;
+  updateVisualContentCandidate: (
+    candidate: VisualContentCandidate,
+    patch: Pick<
+      VisualContentCandidate,
+      | 'contentType'
+      | 'reviewState'
+      | 'humanTitle'
+      | 'humanBody'
+      | 'humanAttribution'
+      | 'humanNotes'
+      | 'humanStructuredContent'
     >,
   ) => Promise<void>;
   saveBrandKit: (
@@ -10725,14 +12779,15 @@ function WorkspaceContent({
   ) => Promise<void>;
   approveRedesignBrief: (brief: RedesignBrief) => Promise<void>;
   createBuildManifest: () => Promise<void>;
-  openAgentStudio: () => void;
   requestProspectBuild: (
     mode: BuilderRunMode,
     targetSourceUrl?: string,
     buildInstruction?: string,
+    agentPackageId?: string,
   ) => Promise<void>;
   cancelProspectBuild: () => Promise<void>;
   deleteProspectBuilds: (businessId: string) => Promise<void>;
+  moveBuilderRunToAgentStudio: (builderRunId: string) => Promise<void>;
   openBuilderPreview: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
   loadBuilderRunEvidence: (builderRunId: string) => Promise<BuilderRunEvidence>;
   approveAllAuditFindings: () => Promise<void>;
@@ -10865,6 +12920,13 @@ function WorkspaceContent({
           onUpdateAnnotation={updateAssetAnnotation}
           workspace={workspace}
         />
+        <VisualContentRecoveryPanel
+          onExtract={requestVisualContentExtraction}
+          onCancel={cancelVisualContentExtraction}
+          onApproveAll={approveAllVisualContent}
+          onUpdate={updateVisualContentCandidate}
+          workspace={workspace}
+        />
         <BrandKitPanel
           onConvertLogo={requestEditableLogoRetry}
           onCreateRevision={createBrandAwareBriefRevision}
@@ -10907,11 +12969,12 @@ function WorkspaceContent({
     return (
       <div className="workspace-content-stack">
         <BuildManifestPanel
+          agentPackages={agentPackages}
           onCancelBuild={cancelProspectBuild}
           onCreate={createBuildManifest}
           onDeleteBuild={deleteProspectBuilds}
           onLoadBuildEvidence={loadBuilderRunEvidence}
-          onOpenAgentStudio={openAgentStudio}
+          onMoveToAgentStudio={moveBuilderRunToAgentStudio}
           onOpenPreview={openBuilderPreview}
           onRequestBuild={requestProspectBuild}
           workspace={workspace}
@@ -10971,6 +13034,7 @@ function WorkspaceContent({
 
 function WorkspacePage({
   workspace,
+  agentPackages,
   onBack,
   onApprove,
   onDelete,
@@ -10987,6 +13051,10 @@ function WorkspacePage({
   onCancelAssetAnalysis,
   onSetAssetAnalysisSelected,
   onUpdateAssetAnnotation,
+  onRequestVisualContentExtraction,
+  onCancelVisualContentExtraction,
+  onApproveAllVisualContent,
+  onUpdateVisualContentCandidate,
   onSaveBrandKit,
   onPushLogoVersionsToBuilder,
   onCreateBrandAwareBriefRevision,
@@ -10995,10 +13063,10 @@ function WorkspacePage({
   onUpdateRedesignBrief,
   onApproveRedesignBrief,
   onCreateBuildManifest,
-  onOpenAgentStudio,
   onRequestProspectBuild,
   onCancelProspectBuild,
   onDeleteProspectBuilds,
+  onMoveBuilderRunToAgentStudio,
   onOpenBuilderPreview,
   onLoadBuilderRunEvidence,
   onApproveAllAuditFindings,
@@ -11008,6 +13076,7 @@ function WorkspacePage({
   onTabChange,
 }: {
   workspace: ProspectWorkspace;
+  agentPackages: AgentPackage[];
   onBack: () => void;
   onApprove: () => void;
   onDelete: () => Promise<void>;
@@ -11033,6 +13102,22 @@ function WorkspacePage({
       'suggestedRole' | 'businessAssociation' | 'reviewState' | 'humanNotes'
     >,
   ) => Promise<void>;
+  onRequestVisualContentExtraction: () => Promise<void>;
+  onCancelVisualContentExtraction: () => Promise<void>;
+  onApproveAllVisualContent: () => Promise<void>;
+  onUpdateVisualContentCandidate: (
+    candidate: VisualContentCandidate,
+    patch: Pick<
+      VisualContentCandidate,
+      | 'contentType'
+      | 'reviewState'
+      | 'humanTitle'
+      | 'humanBody'
+      | 'humanAttribution'
+      | 'humanNotes'
+      | 'humanStructuredContent'
+    >,
+  ) => Promise<void>;
   onSaveBrandKit: (
     draft: Pick<
       BrandKit,
@@ -11056,14 +13141,15 @@ function WorkspacePage({
   ) => Promise<void>;
   onApproveRedesignBrief: (brief: RedesignBrief) => Promise<void>;
   onCreateBuildManifest: () => Promise<void>;
-  onOpenAgentStudio: () => void;
   onRequestProspectBuild: (
     mode: BuilderRunMode,
     targetSourceUrl?: string,
     buildInstruction?: string,
+    agentPackageId?: string,
   ) => Promise<void>;
   onCancelProspectBuild: () => Promise<void>;
   onDeleteProspectBuilds: (businessId: string) => Promise<void>;
+  onMoveBuilderRunToAgentStudio: (builderRunId: string) => Promise<void>;
   onOpenBuilderPreview: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
   onLoadBuilderRunEvidence: (builderRunId: string) => Promise<BuilderRunEvidence>;
   onApproveAllAuditFindings: () => Promise<void>;
@@ -11076,11 +13162,53 @@ function WorkspacePage({
   onVersionChange?: (versionId: string) => void;
 }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [workspacePickerOpen, setWorkspacePickerOpen] = useState(false);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
+  const workspacePickerRef = useRef<HTMLDivElement>(null);
+  const workspacePickerTriggerRef = useRef<HTMLButtonElement>(null);
+  const workspacePickerOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const activeWorkspaceTab = workspaceTabs.find((item) => item.id === tab) ?? workspaceTabs[0]!;
+
+  useEffect(() => {
+    if (!workspacePickerOpen) return;
+    const activeIndex = workspaceTabs.findIndex((item) => item.id === tab);
+    window.requestAnimationFrame(() => workspacePickerOptionRefs.current[activeIndex]?.focus());
+  }, [tab, workspacePickerOpen]);
+
+  useEffect(() => {
+    if (!workspacePickerOpen) return;
+    function closeOnOutsidePress(event: PointerEvent) {
+      if (!workspacePickerRef.current?.contains(event.target as Node)) {
+        setWorkspacePickerOpen(false);
+      }
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePress);
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePress);
+  }, [workspacePickerOpen]);
 
   function handleSettingsOpenChange(open: boolean) {
     setSettingsOpen(open);
     if (!open) window.requestAnimationFrame(() => settingsButtonRef.current?.focus());
+  }
+
+  function closeWorkspacePicker(restoreFocus = false) {
+    setWorkspacePickerOpen(false);
+    if (restoreFocus)
+      window.requestAnimationFrame(() => workspacePickerTriggerRef.current?.focus());
+  }
+
+  function handleWorkspacePickerKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeWorkspacePicker(true);
+      return;
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const direction = event.key === 'ArrowDown' ? 1 : -1;
+      const nextIndex = (index + direction + workspaceTabs.length) % workspaceTabs.length;
+      workspacePickerOptionRefs.current[nextIndex]?.focus();
+    }
   }
 
   return (
@@ -11109,27 +13237,87 @@ function WorkspacePage({
             role="tab"
             type="button"
           >
+            <item.icon aria-hidden="true" size={16} />
             {item.label}
           </button>
         ))}
       </div>
+      <div className="workspace-tab-picker" ref={workspacePickerRef}>
+        <span className="workspace-tab-picker__label" id="workspace-tab-picker-label">
+          Workspace section
+        </span>
+        <div className="workspace-tab-picker__control">
+          <Button
+            aria-controls="workspace-tab-picker-options"
+            aria-expanded={workspacePickerOpen}
+            aria-haspopup="menu"
+            aria-labelledby="workspace-tab-picker-label workspace-tab-picker-value"
+            className="workspace-tab-picker__trigger"
+            onClick={() => setWorkspacePickerOpen((open) => !open)}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                setWorkspacePickerOpen(true);
+              }
+              if (event.key === 'Escape') closeWorkspacePicker();
+            }}
+            ref={workspacePickerTriggerRef}
+            variant="secondary"
+          >
+            <activeWorkspaceTab.icon aria-hidden="true" size={18} />
+            <span id="workspace-tab-picker-value">{activeWorkspaceTab.label}</span>
+            <ChevronDown aria-hidden="true" className="workspace-tab-picker__icon" size={18} />
+          </Button>
+          {workspacePickerOpen ? (
+            <div
+              aria-labelledby="workspace-tab-picker-label"
+              className="workspace-tab-picker__menu"
+              id="workspace-tab-picker-options"
+              role="menu"
+            >
+              {workspaceTabs.map((item, index) => (
+                <Button
+                  aria-checked={tab === item.id}
+                  className="workspace-tab-picker__option"
+                  key={item.id}
+                  onClick={() => {
+                    onTabChange(item.id);
+                    closeWorkspacePicker(true);
+                  }}
+                  onKeyDown={(event) => handleWorkspacePickerKeyDown(event, index)}
+                  ref={(node) => {
+                    workspacePickerOptionRefs.current[index] = node;
+                  }}
+                  role="menuitemradio"
+                  variant="quiet"
+                >
+                  <item.icon aria-hidden="true" size={18} />
+                  <span>{item.label}</span>
+                  {tab === item.id ? <Check aria-hidden="true" size={16} /> : null}
+                </Button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </div>
       <section
-        aria-labelledby={`workspace-tab-${tab}`}
+        aria-label={activeWorkspaceTab.label}
         className="workspace-tab-panel"
         id={`workspace-${tab}`}
         key={tab}
         role="tabpanel"
       >
         <WorkspaceContent
+          agentPackages={agentPackages}
           approveAllAuditFindings={onApproveAllAuditFindings}
           approveRedesignBrief={onApproveRedesignBrief}
           createRedesignBrief={onCreateRedesignBrief}
           refreshRedesignBriefArchitecture={onRefreshRedesignBriefArchitecture}
           createBuildManifest={onCreateBuildManifest}
-          openAgentStudio={onOpenAgentStudio}
           requestProspectBuild={onRequestProspectBuild}
           cancelProspectBuild={onCancelProspectBuild}
           deleteProspectBuilds={onDeleteProspectBuilds}
+          moveBuilderRunToAgentStudio={onMoveBuilderRunToAgentStudio}
           openBuilderPreview={onOpenBuilderPreview}
           loadBuilderRunEvidence={onLoadBuilderRunEvidence}
           requestAssetAnalysis={onRequestAssetAnalysis}
@@ -11147,6 +13335,10 @@ function WorkspacePage({
           toggleTask={onToggleTask}
           updateAuditFinding={onUpdateAuditFinding}
           updateAssetAnnotation={onUpdateAssetAnnotation}
+          requestVisualContentExtraction={onRequestVisualContentExtraction}
+          cancelVisualContentExtraction={onCancelVisualContentExtraction}
+          approveAllVisualContent={onApproveAllVisualContent}
+          updateVisualContentCandidate={onUpdateVisualContentCandidate}
           saveBrandKit={onSaveBrandKit}
           pushLogoVersionsToBuilder={onPushLogoVersionsToBuilder}
           createBrandAwareBriefRevision={onCreateBrandAwareBriefRevision}
@@ -11384,10 +13576,10 @@ function WorkspaceApp({
           ]),
         });
       } catch (error) {
-        console.error('SiteForge workspace load failed.', error);
+        console.error('Made Solid Studio workspace load failed.', error);
         if (active)
           setStorageError(
-            'SiteForge could not load workspace data. Check your connection and organization access, then try again.',
+            'Made Solid Studio could not load workspace data. Check your connection and organization access, then try again.',
           );
       } finally {
         if (active) setLoading(false);
@@ -11420,6 +13612,8 @@ function WorkspaceApp({
     (candidate) =>
       candidate.assetAnalysis?.status === 'queued' ||
       candidate.assetAnalysis?.status === 'running' ||
+      candidate.visualContentJob?.status === 'queued' ||
+      candidate.visualContentJob?.status === 'running' ||
       candidate.latestBuilderRun?.status === 'queued' ||
       candidate.latestBuilderRun?.status === 'running' ||
       candidate.latestBuilderRun?.status === 'paused',
@@ -11485,6 +13679,9 @@ function WorkspaceApp({
     workspace?.assetAnalysis?.status === 'queued' || workspace?.assetAnalysis?.status === 'running';
   const activeAssetRefresh =
     workspace?.assetRefresh?.status === 'queued' || workspace?.assetRefresh?.status === 'running';
+  const activeVisualContent =
+    workspace?.visualContentJob?.status === 'queued' ||
+    workspace?.visualContentJob?.status === 'running';
   const activeBuilder =
     workspace?.latestBuilderRun?.status === 'queued' ||
     workspace?.latestBuilderRun?.status === 'running' ||
@@ -11502,6 +13699,7 @@ function WorkspaceApp({
       !activeAudit &&
       !activeAssetAnalysis &&
       !activeAssetRefresh &&
+      !activeVisualContent &&
       !activeBuilder &&
       !awaitingPreferredLogo
     )
@@ -11513,6 +13711,7 @@ function WorkspaceApp({
   }, [
     activeAssetAnalysis,
     activeAssetRefresh,
+    activeVisualContent,
     activeAudit,
     activeBuilder,
     activeCapture,
@@ -11520,6 +13719,7 @@ function WorkspaceApp({
     refreshData,
     workspace?.assetAnalysis?.id,
     workspace?.assetRefresh?.id,
+    workspace?.visualContentJob?.id,
     workspace?.audit?.id,
     workspace?.latestBuilderRun?.id,
     workspace?.latestCapture?.id,
@@ -11651,6 +13851,142 @@ function WorkspaceApp({
       title: 'Asset analysis queued',
       detail: 'The private worker will save editable visual descriptions for human review.',
       tone: 'warning',
+    });
+  }
+
+  async function requestVisualContentExtraction() {
+    if (!workspace) return;
+    const job = await repository.requestVisualContentExtraction(workspace.business.id);
+    if (!job) throw new Error('Structured image-content recovery could not be queued.');
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Structured content recovery queued',
+      detail:
+        'The private worker will interpret the saved images as tables, testimonials, lists and other semantic information. The website will not be recaptured.',
+      tone: 'warning',
+    });
+  }
+
+  async function cancelVisualContentExtraction() {
+    if (!workspace) return;
+    await repository.cancelVisualContentExtraction(workspace.business.id);
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Content recovery cancellation requested',
+      detail:
+        'The worker will stop before the next saved image. Completed candidates remain private.',
+      tone: 'warning',
+    });
+  }
+
+  async function updateVisualContentCandidate(
+    candidate: VisualContentCandidate,
+    patch: Pick<
+      VisualContentCandidate,
+      | 'contentType'
+      | 'reviewState'
+      | 'humanTitle'
+      | 'humanBody'
+      | 'humanAttribution'
+      | 'humanNotes'
+      | 'humanStructuredContent'
+    >,
+  ) {
+    await repository.updateVisualContentCandidate(candidate, patch);
+    if (patch.reviewState === 'approved') {
+      const currentWorkspace = await repository.getWorkspace(candidate.businessId);
+      const hasOtherReadyItems = currentWorkspace?.visualContentCandidates.some(
+        (item) =>
+          item.reviewState === 'needs_review' &&
+          item.structureStatus === 'ready' &&
+          (hasStructuredVisualContent(item.structuredContent) ||
+            hasStructuredVisualContent(item.humanStructuredContent) ||
+            Boolean(item.humanBody || item.body)),
+      );
+      if (!hasOtherReadyItems) {
+        try {
+          await prepareCurrentBuildHandoff(candidate.businessId);
+          setNotice({
+            id: crypto.randomUUID(),
+            title: 'Recovered information ready for builds',
+            detail:
+              'The current Brief and Build Manifest were refreshed automatically for test and complete builds.',
+            tone: 'success',
+          });
+        } catch (error) {
+          await refreshData();
+          throw new Error(
+            `The information was approved, but its builder handoff is not ready yet. ${
+              error instanceof Error ? error.message : 'Check the approved Brand Kit and try again.'
+            }`,
+            { cause: error },
+          );
+        }
+      }
+    }
+    await refreshData();
+  }
+
+  async function prepareCurrentBuildHandoff(businessId: string) {
+    const brief = await repository.createRedesignBrief(businessId);
+    if (!brief) {
+      throw new Error(
+        'The saved capture is still being interpreted. Try the build again when capability analysis is ready.',
+      );
+    }
+    if (brief.status !== 'approved') await repository.approveRedesignBrief(brief);
+    const manifest = await repository.createBuildManifest(businessId);
+    if (!manifest) throw new Error('The current Build Manifest could not be prepared.');
+    return manifest;
+  }
+
+  async function approveAllVisualContent() {
+    if (!workspace) return;
+    const candidates = workspace.visualContentCandidates.filter(
+      (candidate) =>
+        candidate.reviewState === 'needs_review' &&
+        candidate.structureStatus === 'ready' &&
+        (hasStructuredVisualContent(candidate.structuredContent) ||
+          hasStructuredVisualContent(candidate.humanStructuredContent) ||
+          Boolean(candidate.humanBody || candidate.body)),
+    );
+    if (!candidates.length) {
+      throw new Error('There is no ready recovered information waiting for approval.');
+    }
+
+    for (const candidate of candidates) {
+      await repository.updateVisualContentCandidate(candidate, {
+        contentType: candidate.contentType,
+        reviewState: 'approved',
+        humanTitle: candidate.humanTitle,
+        humanBody: candidate.humanBody,
+        humanAttribution: candidate.humanAttribution,
+        humanNotes: candidate.humanNotes,
+        humanStructuredContent: candidate.humanStructuredContent,
+      });
+    }
+
+    try {
+      await prepareCurrentBuildHandoff(workspace.business.id);
+    } catch (error) {
+      await refreshData();
+      throw new Error(
+        `The recovered information was approved, but its builder handoff is not ready yet. ${
+          error instanceof Error ? error.message : 'Check the approved Brand Kit and try again.'
+        }`,
+        { cause: error },
+      );
+    }
+
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Recovered information approved for builds',
+      detail:
+        'The current Brief and Build Manifest were refreshed automatically. Agent Studio tests and complete prospect builds will use this structured information.',
+      tone: 'success',
     });
   }
 
@@ -11922,6 +14258,11 @@ function WorkspaceApp({
   async function approveAgentPackageForProduction(packageId: string) {
     const agentPackage = await repository.approveAgentPackageForProduction(packageId);
     if (!agentPackage) throw new Error('The production draft could not be saved.');
+    setAgentPackages((currentPackages) =>
+      currentPackages.map((currentPackage) =>
+        currentPackage.id === agentPackage.id ? agentPackage : currentPackage,
+      ),
+    );
     await refreshData();
     setNotice({
       id: crypto.randomUUID(),
@@ -11935,6 +14276,15 @@ function WorkspaceApp({
   async function promoteAgentPackage(packageId: string) {
     const agentPackage = await repository.promoteAgentPackage(packageId);
     if (!agentPackage) throw new Error('The agent package could not be promoted.');
+    setAgentPackages((currentPackages) =>
+      currentPackages.map((currentPackage) => {
+        if (currentPackage.id === agentPackage.id) return agentPackage;
+        if (currentPackage.status === 'published') {
+          return { ...currentPackage, status: 'superseded' };
+        }
+        return currentPackage;
+      }),
+    );
     await refreshData();
     setNotice({
       id: crypto.randomUUID(),
@@ -11952,9 +14302,12 @@ function WorkspaceApp({
     buildInstruction?: string,
     agentPackageId?: string,
     sourceBuilderRunId?: string,
+    targetSourceUrls?: string[],
   ) {
-    const targetWorkspace = workspaces.find((candidate) => candidate.business.id === businessId);
-    if (!targetWorkspace) throw new Error('The selected test prospect is no longer available.');
+    const listedWorkspace = workspaces.find((candidate) => candidate.business.id === businessId);
+    if (!listedWorkspace) throw new Error('The selected test prospect is no longer available.');
+    await prepareCurrentBuildHandoff(businessId);
+    const targetWorkspace = (await repository.getWorkspace(businessId)) ?? listedWorkspace;
     const requestedInstruction = buildInstruction?.trim() || undefined;
     const resumeRun =
       !sourceBuilderRunId &&
@@ -11962,13 +14315,15 @@ function WorkspaceApp({
         targetWorkspace.latestBuilderRun?.status === 'cancelled') &&
       targetWorkspace.latestBuilderRun?.buildMode === mode &&
       targetWorkspace.latestBuilderRun?.targetSourceUrl === targetSourceUrl &&
+      JSON.stringify(targetWorkspace.latestBuilderRun?.targetSourceUrls ?? []) ===
+        JSON.stringify(targetSourceUrls ?? []) &&
       targetWorkspace.latestBuilderRun?.buildInstruction === requestedInstruction &&
       targetWorkspace.latestBuilderRun?.agentPackageId === agentPackageId &&
       targetWorkspace.builderArtifacts.some(
         (artifact) =>
           (artifact.kind === 'checkpoint' &&
             artifact.label === 'Latest private source checkpoint') ||
-          artifact.kind === 'draft_file',
+          isWorkingSourceArtifact(artifact),
       )
         ? targetWorkspace.latestBuilderRun
         : undefined;
@@ -11981,6 +14336,7 @@ function WorkspaceApp({
           requestedInstruction,
           agentPackageId,
           sourceBuilderRunId,
+          targetSourceUrls,
         );
     if (!run) throw new Error('The private preview could not be queued.');
     await refreshData();
@@ -12000,6 +14356,60 @@ function WorkspaceApp({
           : mode === 'page_test'
             ? 'The protected builder will use the approved homepage direction, then create only the selected private test page. The prospect’s public website is unchanged.'
             : 'The protected builder will create this prospect’s complete private website from the approved homepage direction and Build Manifest. The prospect’s public website is unchanged.',
+      tone: 'success',
+    });
+  }
+
+  async function moveBuilderRunToAgentStudio(builderRunId: string) {
+    const sourceRun = workspaces
+      .flatMap((candidate) => candidate.builderRuns)
+      .find((candidate) => candidate.id === builderRunId);
+    if (!sourceRun) throw new Error('The selected private build is no longer available.');
+    const movedRun = await repository.moveBuilderRunToAgentStudio(builderRunId);
+    if (!movedRun) throw new Error('This private build could not move into Agent Studio.');
+    await refreshData();
+    navigate({
+      page: 'agent-studio',
+      section: 'refine',
+      businessId: sourceRun.businessId,
+    });
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Build moved into Agent Studio',
+      detail: `${builderRunPageCount(
+        workspaces.find((candidate) => candidate.business.id === sourceRun.businessId)!,
+        sourceRun,
+      )} saved page${
+        builderRunPageCount(
+          workspaces.find((candidate) => candidate.business.id === sourceRun.businessId)!,
+          sourceRun,
+        ) === 1
+          ? ''
+          : 's'
+      } are available as the immutable source for a focused feature test.`,
+      tone: 'success',
+    });
+  }
+
+  async function requestAgentStudioSiteTest(
+    sourceBuilderRunId: string,
+    buildInstruction: string,
+    agentPackageId: string,
+    featureId: string,
+  ) {
+    const run = await repository.requestAgentStudioSiteTest(
+      sourceBuilderRunId,
+      buildInstruction,
+      agentPackageId,
+      featureId,
+    );
+    if (!run) throw new Error('The linked Agent Studio test version could not be queued.');
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Linked feature test queued',
+      detail:
+        'The complete saved site will be restored, only the navigation feature will be changed, and the result will appear above its source version.',
       tone: 'success',
     });
   }
@@ -12174,11 +14584,13 @@ function WorkspaceApp({
             onCancelBuild={cancelWebsiteBuildForBusiness}
             onDeleteBuild={deleteWebsiteBuild}
             onLoadBuildEvidence={(builderRunId) => repository.getBuilderRunEvidence(builderRunId)}
+            onMoveToAgentStudio={moveBuilderRunToAgentStudio}
             onOpenPreview={createBuilderPreviewUrl}
             onOpenProspect={(businessId) =>
               navigate({ page: 'prospects', businessId, tab: 'redesign' })
             }
             onRequestBuild={requestWebsiteBuildForBusiness}
+            onRequestSiteTest={requestAgentStudioSiteTest}
             onResumeBuild={resumeWebsiteBuildForBusiness}
             onRequestAgentPackageProposal={requestAgentPackageProposal}
             onPromoteAgentPackage={promoteAgentPackage}
@@ -12202,25 +14614,20 @@ function WorkspaceApp({
           />
         ) : route.businessId && workspace ? (
           <WorkspacePage
+            agentPackages={agentPackages}
             onApprove={approveWorkspace}
             onBack={() => navigate({ page: 'prospects' })}
             onDelete={deleteWorkspace}
             onApproveAllAuditFindings={approveAllAuditFindings}
             onApproveRedesignBrief={approveRedesignBrief}
             onCreateBuildManifest={createBuildManifest}
-            onOpenAgentStudio={() =>
-              navigate({
-                page: 'agent-studio',
-                section: 'refine',
-                businessId: workspace.business.id,
-              })
-            }
-            onRequestProspectBuild={(mode, targetSourceUrl, buildInstruction) =>
+            onRequestProspectBuild={(mode, targetSourceUrl, buildInstruction, agentPackageId) =>
               requestWebsiteBuildForBusiness(
                 workspace.business.id,
                 mode,
                 targetSourceUrl,
                 buildInstruction,
+                agentPackageId,
               )
             }
             onCancelProspectBuild={() => cancelWebsiteBuildForBusiness(workspace.business.id)}
@@ -12229,9 +14636,14 @@ function WorkspaceApp({
             onLoadBuilderRunEvidence={(builderRunId) =>
               repository.getBuilderRunEvidence(builderRunId)
             }
+            onMoveBuilderRunToAgentStudio={moveBuilderRunToAgentStudio}
             onCreateRedesignBrief={createRedesignBrief}
             onRefreshRedesignBriefArchitecture={refreshRedesignBriefArchitecture}
             onRequestAssetAnalysis={requestAssetAnalysis}
+            onRequestVisualContentExtraction={requestVisualContentExtraction}
+            onCancelVisualContentExtraction={cancelVisualContentExtraction}
+            onApproveAllVisualContent={approveAllVisualContent}
+            onUpdateVisualContentCandidate={updateVisualContentCandidate}
             onRequestEditableLogoRetry={requestEditableLogoRetry}
             onDeleteLogoAsset={deleteLogoAsset}
             onCancelAssetAnalysis={cancelAssetAnalysis}
@@ -12313,7 +14725,7 @@ function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
   return (
     <main className="auth-shell">
       <Card aria-labelledby="sign-in-title" className="auth-panel">
-        <Eyebrow>SiteForge OS</Eyebrow>
+        <Eyebrow>Made Solid Studio</Eyebrow>
         <h1 id="sign-in-title">Sign in to your workspace</h1>
         <p>Use the account created in Supabase. Your prospect records stay organization-scoped.</p>
         <form className="auth-form" onSubmit={submit}>
@@ -12348,7 +14760,7 @@ function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
 }
 
 function OrganizationSetup({ onCreated }: { onCreated: (organizationId: string) => void }) {
-  const [name, setName] = useState('SiteForge Studio');
+  const [name, setName] = useState('Made Solid Studio');
   const [state, setState] = useState<'idle' | 'submitting' | 'error'>('idle');
   const [message, setMessage] = useState('');
 

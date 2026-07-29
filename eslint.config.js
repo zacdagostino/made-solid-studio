@@ -10,6 +10,7 @@ export default [
       'test-results/**',
       'playwright-report/**',
       'storybook-static/**',
+      'worker/builder-template/**',
     ],
   },
   js.configs.recommended,

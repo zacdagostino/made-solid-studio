@@ -4,9 +4,12 @@ import type {
   BriefPagePlan,
   BriefSitemapEntry,
   CapturedPage,
+  RedesignBrief,
   RedesignBriefDraft,
   ResearchArtifact,
   ResearchPacket,
+  StructuredVisualContent,
+  VisualContentCandidate,
 } from './domain';
 import { detectCapabilities } from './capability-inventory';
 
@@ -360,6 +363,37 @@ export function assetGuidanceFromAnnotations(annotations: AssetAnnotation[]) {
     }));
 }
 
+export function approvedVisualContentFromCandidates(candidates: VisualContentCandidate[]) {
+  return candidates
+    .filter((candidate) => candidate.reviewState === 'approved')
+    .map((candidate) => ({
+      id: candidate.id,
+      assetId: candidate.assetId,
+      contentType: candidate.contentType,
+      title: candidate.humanTitle || candidate.title,
+      body: candidate.humanBody || candidate.body,
+      attribution: candidate.humanAttribution || candidate.attribution,
+      sourcePageUrl: candidate.sourcePageUrl,
+      sectionHeading: candidate.sectionHeading,
+      sourcePresentation: candidate.sourcePresentation,
+      presentationInstruction: 'builder_decides' as const,
+      structuredContent:
+        Object.keys(candidate.humanStructuredContent).length > 0
+          ? (candidate.humanStructuredContent as StructuredVisualContent)
+          : candidate.structuredContent,
+    }));
+}
+
+export function visualContentMatchesBrief(
+  candidates: VisualContentCandidate[],
+  brief: RedesignBrief | undefined,
+) {
+  return (
+    JSON.stringify(approvedVisualContentFromCandidates(candidates)) ===
+    JSON.stringify(brief?.draft.approvedVisualContent ?? [])
+  );
+}
+
 function brandGuidance(brandKit: BrandKit | undefined, annotations: AssetAnnotation[]) {
   if (!brandKit || brandKit.status !== 'approved' || !brandKit.primaryLogoAssetId) return [];
   const annotationsByAsset = new Map(
@@ -390,6 +424,7 @@ export function createBriefDraft(
   brandKit?: BrandKit,
   capturedPages: CapturedPage[] = [],
   selectedPageUrls?: string[],
+  visualContentCandidates: VisualContentCandidate[] = [],
 ) {
   const pages = sourcePages(packet, capturedPages);
   const selectedUrls = selectedPageUrls
@@ -412,6 +447,7 @@ export function createBriefDraft(
     pagePlans: architecturePages.map(planForPage),
     assetGuidance: approvedAssetGuidance,
     capabilityInventory: detectCapabilities(packet, capturedPages),
+    approvedVisualContent: approvedVisualContentFromCandidates(visualContentCandidates),
     brandKit:
       brandKit?.status === 'approved' && brandKit.primaryLogoAssetId
         ? {

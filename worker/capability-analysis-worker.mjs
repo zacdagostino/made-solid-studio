@@ -153,7 +153,7 @@ async function interpret(apiKey, model, input) {
     'Use only observable evidence. Do not infer hidden backends, subscriptions, ownership, access roles, payments, or integrations.',
     'A capability is a meaningful feature or repeatable workflow, not a normal static page. Return no capability when evidence is insufficient.',
     'For each item, cite only an exact sourceUrl present in the dossier, explain the evidence, and ask the human decision needed to scope a replacement.',
-    'Set no approval state; SiteForge will mark every result needs_review.',
+    'Set no approval state; Made Solid Studio will mark every result needs_review.',
     JSON.stringify(input),
   ].join('\n');
   const response = await fetch('https://api.openai.com/v1/responses', {

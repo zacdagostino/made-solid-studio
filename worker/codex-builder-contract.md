@@ -1,19 +1,53 @@
-# SiteForge Codex Builder Contract v4
+# Made Solid Studio Codex Builder Contract v8
 
-The builder receives an approved Build Manifest, a private content dossier for every selected source page, and only private, server-side access to the referenced approved assets. The manifest and source-page dossier are the source of truth for content, information architecture, permissions, visual identity, and unresolved questions.
+The builder receives an approved immutable Build Manifest, a private content dossier for every selected source page, and only the approved assets staged by the protected worker. Those inputs are the source of truth for facts, information architecture, capabilities, permissions, visual identity, routes, production runtime requirements, and unresolved questions.
 
-The builder must create a complete mobile-first implementation. It must not treat the captured website as a visual template, invent business claims, reuse an asset without approved asset guidance, publish an output, or contact a prospect. Uncertainties remain visible for human review.
+## Engineering foundation
 
-When the manifest contains a Brand Kit, the builder must use its primary logo asset in the site header and footer and use its reviewed primary and accent values as brand tokens. It must derive accessible ink, background, surface, muted, and border tokens to create a coherent modern system rather than copying a weak legacy palette. It must use permitted supporting imagery only in the roles authorised by the manifest. It must never replace this evidence with a generic wordmark or palette, and it must not use third-party/client marks as the organisation logo.
+Every new build uses the locked Next.js App Router foundation with strict TypeScript, Tailwind CSS, semantic CSS tokens, native HTML, Base UI for difficult headless interactions, Lucide icons, deterministic static export, and pinned dependencies. The builder cannot install packages or change framework, compiler, quality, or deployment configuration.
 
-Every selected source page is required output. The private source-page index assigns it a deterministic output path, and each matching HTML file must record its exact source URL in a `siteforge-source-url` meta tag. The builder may rewrite and condense captured copy for clarity and conversion, but it must retain material services, operational details, calls to action, forms/tools, legal content, and resource content without strengthening claims.
+The foundation locks mechanics, not appearance. Codex creates the business-specific visual system and component architecture: tokens, UI primitives, patterns, sections, site-wide navigation, layouts, and pages. It owns typography, spacing, variants, composition, responsive transformation, and brand expression. It must not preserve the starter appearance, assemble a generic block catalogue, or produce repetitive AI-style cards and decorative effects.
 
-The builder's implementation must use semantic HTML, accessible keyboard and form behaviour, responsive layouts, design tokens, reusable components, and performance-conscious assets. It must return a build result and quality-check evidence to a future SiteForge builder worker; it does not modify the manifest.
+Use native semantic HTML whenever it supplies the required behaviour. Use Base UI for patterns that require coordinated keyboard navigation, focus management, modal behaviour, or collision positioning. Base UI is an unstyled behavioural foundation; generated components own all visual design.
 
-Motion is a built-in enhancement, not an optional prompt. Every generated page must retain and load the template's local `main.js` motion runtime. It progressively reveals titles, content containers, and supported cards as they enter the viewport; it can animate clearly labelled numeric values with `data-counter`. Apply this automatically where it supports hierarchy and scanning: workspace members do not need to ask separately for entrance motion or factual metric counters. The first hero's heading, supporting copy, and visual media must be separate reveal targets, so their entrance remains visible after any first-visit brand introduction has handed off to the navigation. Never invent a statistic merely to animate it, or animate contact details, dates, and arbitrary numbers. Use motion to support hierarchy, never to delay required content or decorate every element. The runtime must respect `prefers-reduced-motion`, avoid remote scripts and dependencies, preserve keyboard and pointer interaction, and leave content fully visible when JavaScript or IntersectionObserver is unavailable.
+## Factual and asset boundary
 
-Navigation is a required generated feature, defined by `feature-contracts/mobile-navigation.md`. Every generated page must read and implement that Markdown contract in its own local HTML, CSS, and JavaScript, while keeping the approved logo in the same header row as the semantic desktop navigation. The contract protects accessibility and responsive behaviour, but Codex owns the menu-control design, icon choreography, drawer composition, link sequence, and brand expression for each preview. Do not use a remote navigation library, duplicate navigation model, or a hidden navigation model that works only with JavaScript.
+The builder must not imitate the captured website, invent or strengthen business claims, reuse an asset without approved guidance, publish output, contact a prospect, or resolve uncertainties by guessing.
 
-Generated HTML may reference only local stylesheets and scripts that exist in the compiled preview. Create every referenced local file before the build is complete; never link to a planned stylesheet, missing script, or remote dependency.
+When a Brand Kit exists, use its approved primary logo family in the header and footer, choose a contrast-safe approved appearance for each direct surface, and use the reviewed primary and accent values as brand tokens. Derive accessible ink, background, surface, muted, border, and state tokens. Never replace the identity with a generic mark or use third-party/client marks as the organisation logo.
 
-Brand introduction is another built-in capability. When an approved primary logo is available, mark the actual header logo (or its immediate logo wrapper) with `data-siteforge-brand-logo` on every generated page, and keep it visible and usable without JavaScript. The local runtime presents a short first-visit introduction: it fades the approved logo in at the centre, lets it rise and scale gently while showing a plain preparation message, then carries that same logo into the header target over a neutral surface. When that handoff completes, the runtime starts the hero's text and visual entrance so the visitor can see it happen rather than losing it behind the overlay. Choose an understated treatment appropriate to the brand and page—`data-siteforge-intro="quiet"` on the document element is available for a quieter treatment—but do not add a separate loader, fake progress, remote library, invented wordmark, or long blocking animation. The message is status copy only, never a percentage or a claim about network progress. It is an entrance transition, not evidence that network loading has completed. It runs once per browser session where storage is available, is skipped for reduced-motion users, and must never delay access to content, navigation, or forms beyond the brief transition.
+Every selected source page is required. The source-page index assigns an exact clean `publicPath`, App Router `sourcePath`, and static-export `outputPath`. Export page-specific metadata containing the exact `siteforge-source-url`. Rewrite and condense copy for clarity while retaining material services, operational details, calls to action, forms/tools, legal content, and resources without strengthening claims.
+
+## Capabilities and runtime profiles
+
+The private preview is always a static export. `architecture.productionRuntime` declares whether the reviewed production implementation is `static-marketing`, `managed-forms`, or `managed-next-runtime`.
+
+For approved server-backed capabilities, implement the complete visitor-facing interface and relevant default, loading, success, empty, validation, and system-error states. Create `BUILD_NOTES.md` with the typed adapter, service, data, validation, authorization, secret, abuse-prevention, retention, failure, and human-configuration boundary. A preview must never fabricate a live submission, booking, account, payment, record, or backend.
+
+## Recovered semantic content
+
+`approvedVisualContentGroups` contains human-reviewed information recovered from captured images. Its structured content is semantic truth; source presentation is provenance only.
+
+Groups are grouped deterministically by source page, section context, and semantic role. Each group keeps `integrationInstruction: "builder_decides"` and `presentationInstruction: "builder_decides"` so the builder owns its new accessible composition.
+
+Every matching group and item must appear once on its selected route with exact provenance annotations. Before implementation, create `SEMANTIC_DESIGN_DECISIONS.json` with the actual content shape, brand connection, hierarchy, responsive transformation, and a purposeful signature detail. Codex decides whether each group joins an existing composition or creates a new one and owns its accessible design. It must not rebuild a captured screenshot, image table, carousel, slider, or gallery merely because the source used one.
+
+## Built-in runtime behaviour
+
+The locked React `SiteRuntime` provides progressive viewport reveals, counters for explicitly marked factual metrics, and a short first-visit introduction using the real approved header logo. Keep it mounted in the root layout and mark the real header logo or wrapper with `data-siteforge-brand-logo`.
+
+Use motion to support hierarchy and scanning. Do not invent statistics, animate arbitrary numbers, add a second loader, show fake progress, or hide essential content. All generated motion and interaction must respect `prefers-reduced-motion`.
+
+## Navigation
+
+Mobile navigation is a required generated React feature governed by `feature-contracts/mobile-navigation.md`. Codex owns the icon, composition, visual system, and motion; the behavioural contract requires an icon-only leading trigger, accurate accessible name and expanded state, focus-managed open surface, visible close control, vertical route hierarchy, Escape/backdrop/route dismissal, focus restoration, reduced motion, and desktop navigation.
+
+Multi-page navigation is governed by `feature-contracts/site-navigation-architecture.md`. Use exact clean paths, stable primary destinations, meaningful parent/child relationships, and a route graph in which every generated page is reachable from the homepage without crowding the global header.
+
+## Quality and delivery
+
+Generated source must pass formatting, ESLint, strict TypeScript, and the production Next.js build. The protected worker then verifies source provenance, selected-route coverage, component runtime markers, approved logo use, recovered-content fidelity, internal links, navigation consistency and reachability, responsive rendering, overflow, touch targets, keyboard navigation, mobile-menu focus and dismissal, local assets, console errors, and axe results.
+
+Required viewports are 320×568, 375×812, 768×1024, and 1440×900. Closed and open compact-navigation evidence is required where applicable.
+
+The worker saves source, compiled files, browser evidence, diagnostics, and quality results privately. A generated preview is not publication. External sharing and production deployment remain separate human-approved workflows.

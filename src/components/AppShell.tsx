@@ -13,7 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useRef, useState, type PropsWithChildren } from 'react';
-import { Button } from './ui';
+import { Button, IconButton } from './ui';
 
 export type AppPage = 'today' | 'prospects' | 'agent-studio' | 'usage' | 'data' | 'settings';
 type Theme = 'light' | 'dark';
@@ -61,9 +61,12 @@ function Navigation({
 function Brand({ hidden = false }: { hidden?: boolean }) {
   return (
     <div className={hidden ? 'brand brand--loading-hidden' : 'brand'}>
+      <span aria-hidden="true" className="brand__mark" />
       <span>
-        <strong>SiteForge OS</strong>
-        <small>Modernisation ops</small>
+        <strong>
+          <span>Made Solid</span> <span className="brand__studio">Studio</span>
+        </strong>
+        <small>Website operations</small>
       </span>
     </div>
   );
@@ -142,17 +145,15 @@ function AccountControl({
         </span>
         <span className="account-control__email">{userEmail}</span>
       </div>
-      <Button
-        aria-label="Sign out"
+      <IconButton
         className="account-control__sign-out"
         disabled={signingOut}
+        label={signingOut ? 'Signing out' : 'Sign out'}
         onClick={() => void signOut()}
-        size="compact"
         variant="quiet"
       >
         <LogOut aria-hidden="true" size={18} />
-        <span className="sr-only">{signingOut ? 'Signing out' : 'Sign out'}</span>
-      </Button>
+      </IconButton>
       {error ? (
         <p className="account-control__error" role="alert">
           {error}
@@ -183,8 +184,6 @@ export function AppShell({
   const [theme, setTheme] = useState<Theme>(preferredTheme);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const mainRef = useRef<HTMLElement>(null);
-  const releaseStretchRef = useRef<number | undefined>(undefined);
-  const touchStartYRef = useRef<number | null>(null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -196,83 +195,8 @@ export function AppShell({
   }, [theme]);
 
   useEffect(() => {
-    const main = mainRef.current;
-    if (!main || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-
-    const canScrollWithinTarget = (target: EventTarget | null, direction: number) => {
-      let element = target instanceof HTMLElement ? target : null;
-      while (element && element !== main) {
-        const { overflowY } = window.getComputedStyle(element);
-        const canContinue =
-          direction < 0
-            ? element.scrollTop > 0
-            : element.scrollTop + element.clientHeight < element.scrollHeight - 1;
-        if (
-          (overflowY === 'auto' || overflowY === 'scroll') &&
-          element.scrollHeight > element.clientHeight &&
-          canContinue
-        ) {
-          return true;
-        }
-        element = element.parentElement;
-      }
-      return false;
-    };
-
-    const stretchAtBoundary = (direction: number, force: number) => {
-      const atTop = window.scrollY <= 0;
-      const atBottom =
-        window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 1;
-      if ((direction < 0 && !atTop) || (direction > 0 && !atBottom)) return false;
-
-      window.clearTimeout(releaseStretchRef.current);
-      main.dataset.overscroll = direction < 0 ? 'top' : 'bottom';
-      main.style.setProperty(
-        '--overscroll-stretch',
-        String(Math.min(0.012, Math.max(0.004, force))),
-      );
-      releaseStretchRef.current = window.setTimeout(() => {
-        main.style.setProperty('--overscroll-stretch', '0');
-      }, 80);
-      return true;
-    };
-
-    const onWheel = (event: WheelEvent) => {
-      if (event.ctrlKey || event.deltaY === 0) return;
-      const direction = Math.sign(event.deltaY);
-      if (canScrollWithinTarget(event.target, direction)) return;
-      if (stretchAtBoundary(direction, Math.abs(event.deltaY) / 5000)) event.preventDefault();
-    };
-
-    const onTouchStart = (event: TouchEvent) => {
-      touchStartYRef.current = event.touches[0]?.clientY ?? null;
-    };
-    const onTouchMove = (event: TouchEvent) => {
-      const startY = touchStartYRef.current;
-      const currentY = event.touches[0]?.clientY;
-      if (startY === null || currentY === undefined) return;
-      const distance = startY - currentY;
-      if (Math.abs(distance) < 2) return;
-      const direction = Math.sign(distance);
-      if (canScrollWithinTarget(event.target, direction)) return;
-      if (stretchAtBoundary(direction, Math.abs(distance) / 6000)) event.preventDefault();
-    };
-    const onTouchEnd = () => {
-      touchStartYRef.current = null;
-    };
-
-    window.addEventListener('wheel', onWheel, { passive: false });
-    window.addEventListener('touchstart', onTouchStart, { passive: true });
-    window.addEventListener('touchmove', onTouchMove, { passive: false });
-    window.addEventListener('touchend', onTouchEnd, { passive: true });
-    return () => {
-      window.clearTimeout(releaseStretchRef.current);
-      window.removeEventListener('wheel', onWheel);
-      window.removeEventListener('touchstart', onTouchStart);
-      window.removeEventListener('touchmove', onTouchMove);
-      window.removeEventListener('touchend', onTouchEnd);
-    };
-  }, []);
+    mainRef.current?.scrollTo({ top: 0 });
+  }, [contentKey]);
 
   return (
     <div className="app-shell">
@@ -291,15 +215,14 @@ export function AppShell({
       <header className="mobile-header">
         <Dialog.Root onOpenChange={setMenuOpen} open={menuOpen}>
           <Dialog.Trigger asChild>
-            <Button
-              aria-label="Open navigation menu"
+            <IconButton
               className="mobile-menu-trigger"
+              label="Open navigation menu"
               ref={menuTriggerRef}
-              size="compact"
               variant="quiet"
             >
               <Menu aria-hidden="true" size={20} />
-            </Button>
+            </IconButton>
           </Dialog.Trigger>
           <Dialog.Portal>
             <Dialog.Overlay className="navigation-overlay" />
@@ -315,9 +238,9 @@ export function AppShell({
               <div className="drawer-header">
                 <Brand hidden={isLoading} />
                 <Dialog.Close asChild>
-                  <Button aria-label="Close navigation menu" size="compact" variant="quiet">
+                  <IconButton label="Close navigation menu" variant="quiet">
                     <X aria-hidden="true" size={20} />
-                  </Button>
+                  </IconButton>
                 </Dialog.Close>
               </div>
               <Navigation

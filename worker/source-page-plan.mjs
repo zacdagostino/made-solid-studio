@@ -15,32 +15,54 @@ export function normaliseSourceUrl(value) {
 }
 
 export function sourcePagePlan(selectedPages) {
-  const usedPaths = new Set();
+  const usedRoutes = new Set();
   return selectedPages
     .filter((page) => typeof page?.url === 'string' && page.url)
     .map((page, index) => {
       const sourceUrl = normaliseSourceUrl(page.url);
       const pathname = new URL(sourceUrl).pathname;
-      const stem = pathname
+      const manifestRoutePath =
+        typeof page.routePath === 'string' &&
+        /^\/(?:[a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)*)?$/.test(page.routePath)
+          ? page.routePath
+          : undefined;
+      const sourceSegments = pathname
         .split('/')
         .filter(Boolean)
         .map(cleanPathSegment)
-        .filter(Boolean)
-        .join('--');
-      const basePath = `${stem || 'index'}.html`;
-      let outputPath = basePath;
+        .filter(Boolean);
+      const baseSegments = manifestRoutePath
+        ? manifestRoutePath.split('/').filter(Boolean)
+        : sourceSegments.length
+          ? sourceSegments
+          : [];
+      let routeSegments = baseSegments;
+      let routeKey = routeSegments.join('/');
       let duplicate = 2;
-      while (usedPaths.has(outputPath)) {
-        outputPath = `${stem || 'index'}-${duplicate}.html`;
+      while (usedRoutes.has(routeKey)) {
+        const lastSegment = baseSegments.at(-1) || 'home';
+        routeSegments = [...baseSegments.slice(0, -1), `${lastSegment}-${duplicate}`];
+        routeKey = routeSegments.join('/');
         duplicate += 1;
       }
-      usedPaths.add(outputPath);
+      usedRoutes.add(routeKey);
+      const routePath = routeSegments.length ? `/${routeSegments.join('/')}` : '/';
+      const publicPath = routePath === '/' ? '/' : `${routePath}/`;
+      const outputPath = routeSegments.length
+        ? `${routeSegments.join('/')}/index.html`
+        : 'index.html';
+      const sourcePath = routeSegments.length
+        ? `app/${routeSegments.join('/')}/page.tsx`
+        : 'app/page.tsx';
       return {
         index: index + 1,
         sourceUrl,
         title: typeof page.title === 'string' ? page.title : '',
         pageType: typeof page.pageType === 'string' ? page.pageType : '',
+        routePath,
+        publicPath,
         outputPath,
+        sourcePath,
       };
     });
 }

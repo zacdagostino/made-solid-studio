@@ -46,13 +46,14 @@ function wantsSandboxedDocument(request: Request) {
 }
 
 function previewCsp() {
+  const previewOrigin = new URL(supabaseUrl).origin;
   return [
     "default-src 'self' data: blob:",
     "img-src 'self' data: blob:",
     "style-src 'self' 'unsafe-inline'",
     "script-src 'self' 'unsafe-inline'",
     "font-src 'self' data:",
-    "connect-src 'none'",
+    `connect-src ${previewOrigin}`,
     "form-action 'none'",
     "base-uri 'self'",
   ].join('; ');
@@ -60,29 +61,168 @@ function previewCsp() {
 
 function isLockedStarterDocument(html: string) {
   return (
-    /<h1[^>]*>\s*private preview\s*<\/h1>/i.test(html) &&
-    /this file is replaced by the siteforge builder\./i.test(html)
+    /private preview/i.test(html) &&
+    /this route is replaced by the made solid studio builder\./i.test(html)
   );
 }
 
 const previewNavigationScript = `
   (() => {
     window.__siteforgePreviewNavigator = true;
+    const revealDocument = () => {
+      document.querySelector('[data-siteforge-preview-loading]')?.remove();
+      document.documentElement.style.removeProperty('visibility');
+    };
+    if (document.readyState === 'complete') revealDocument();
+    else window.addEventListener('load', revealDocument, { once: true });
+    window.setTimeout(revealDocument, 5000);
     const base = new URL(document.baseURI);
     const root = base.pathname.endsWith('/') ? base.pathname : base.pathname + '/';
-    document.addEventListener('click', (event) => {
+    document.addEventListener('click', async (event) => {
       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       const target = event.target instanceof Element ? event.target.closest('a[href]') : null;
       if (!target || target.target || target.hasAttribute('download')) return;
-      const next = new URL(target.href, document.baseURI);
-      if (next.origin !== base.origin || !next.pathname.startsWith(root)) return;
-      event.preventDefault();
-      if (window.parent !== window) {
-        window.parent.postMessage({ type: 'siteforge-preview:navigate', href: next.href }, '*');
+      const rawHref = target.getAttribute('href') || '';
+      if (rawHref.startsWith('#')) {
+        event.preventDefault();
+        const targetId = decodeURIComponent(rawHref.slice(1));
+        const section = targetId ? document.getElementById(targetId) : document.documentElement;
+        section?.scrollIntoView({ block: 'start' });
         return;
       }
-      window.location.assign(next.href);
+      const next = rawHref.startsWith('/')
+        ? new URL(rawHref.replace(/^\\/+/, ''), base)
+        : new URL(target.href, document.baseURI);
+      if (next.origin !== base.origin || !next.pathname.startsWith(root)) return;
+      event.preventDefault();
+      document.documentElement.setAttribute('aria-busy', 'true');
+      try {
+        const documentUrl = new URL(next);
+        documentUrl.searchParams.set('render', 'srcdoc');
+        const response = await fetch(documentUrl);
+        if (!response.ok) throw new Error('The requested preview page is unavailable.');
+        const payload = await response.json();
+        if (!payload || typeof payload.html !== 'string' || !payload.html) {
+          throw new Error('The requested preview page is invalid.');
+        }
+        if (window.parent !== window) {
+          window.parent.postMessage(
+            { type: 'siteforge-preview:navigated', href: next.href },
+            '*',
+          );
+        }
+        document.open();
+        document.write(payload.html);
+        document.close();
+      } catch (error) {
+        document.documentElement.removeAttribute('aria-busy');
+        console.error(
+          error instanceof Error ? error.message : 'The requested preview page could not be loaded.',
+        );
+      }
     }, true);
+
+    const trigger = document.querySelector('[data-siteforge-menu-trigger]');
+    const primaryNavigation = document.querySelector('nav[aria-label="Primary"]');
+    if (trigger instanceof HTMLButtonElement && primaryNavigation) {
+      const surface = document.createElement('div');
+      surface.hidden = true;
+      surface.setAttribute('data-siteforge-preview-navigation', 'true');
+      surface.innerHTML = \`
+        <div class="sf-preview-navigation__backdrop"></div>
+        <div aria-label="Site navigation" aria-modal="true" class="sf-preview-navigation__panel" role="dialog">
+          <button aria-label="Close navigation" class="sf-preview-navigation__close" type="button">×</button>
+          <nav aria-label="Mobile primary navigation"></nav>
+        </div>
+      \`;
+      const style = document.createElement('style');
+      style.textContent = \`
+        [data-siteforge-preview-navigation] {
+          position: fixed;
+          z-index: 2147482000;
+          inset: 0;
+        }
+        .sf-preview-navigation__backdrop {
+          position: absolute;
+          inset: 0;
+          background: rgb(0 0 0 / .52);
+        }
+        .sf-preview-navigation__panel {
+          position: relative;
+          display: grid;
+          width: min(21rem, calc(100% - 3rem));
+          min-height: 100%;
+          align-content: start;
+          gap: 1.5rem;
+          padding: 1rem;
+          color: #111;
+          background: #fff;
+          box-shadow: 1rem 0 3rem rgb(0 0 0 / .24);
+        }
+        .sf-preview-navigation__close {
+          display: inline-grid;
+          width: 2.75rem;
+          min-height: 2.75rem;
+          place-items: center;
+          justify-self: end;
+          border: 1px solid #bbb;
+          border-radius: .25rem;
+          color: inherit;
+          background: transparent;
+          font: 700 1.5rem/1 system-ui, sans-serif;
+          cursor: pointer;
+        }
+        .sf-preview-navigation__panel ul {
+          display: grid;
+          gap: .25rem;
+          margin: 0;
+          padding: 0;
+          list-style: none;
+        }
+        .sf-preview-navigation__panel a {
+          display: flex;
+          min-height: 2.75rem;
+          align-items: center;
+          padding: .75rem;
+          color: inherit;
+          font: 700 1rem/1.3 system-ui, sans-serif;
+          text-decoration: none;
+        }
+        .sf-preview-navigation__panel a:hover,
+        .sf-preview-navigation__panel a:focus-visible,
+        .sf-preview-navigation__close:hover,
+        .sf-preview-navigation__close:focus-visible {
+          outline: 3px solid #155eef;
+          outline-offset: 2px;
+        }
+      \`;
+      const mobileNavigation = surface.querySelector('nav');
+      const closeButton = surface.querySelector('.sf-preview-navigation__close');
+      const backdrop = surface.querySelector('.sf-preview-navigation__backdrop');
+      mobileNavigation?.append(primaryNavigation.querySelector('ul')?.cloneNode(true) ?? '');
+      document.head.append(style);
+      document.body.append(surface);
+
+      const closeNavigation = () => {
+        surface.hidden = true;
+        trigger.setAttribute('aria-expanded', 'false');
+        trigger.focus();
+      };
+      const openNavigation = () => {
+        surface.hidden = false;
+        trigger.setAttribute('aria-expanded', 'true');
+        if (closeButton instanceof HTMLButtonElement) closeButton.focus();
+      };
+      trigger.addEventListener('click', openNavigation);
+      closeButton?.addEventListener('click', closeNavigation);
+      backdrop?.addEventListener('click', closeNavigation);
+      mobileNavigation?.addEventListener('click', (event) => {
+        if (event.target instanceof Element && event.target.closest('a[href]')) closeNavigation();
+      });
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && !surface.hidden) closeNavigation();
+      });
+    }
   })();
 `;
 
@@ -102,13 +242,49 @@ function contentTypeFor(filePath: string) {
       '.jpg': 'image/jpeg',
       '.js': 'text/javascript; charset=utf-8',
       '.json': 'application/json; charset=utf-8',
+      '.md': 'text/markdown; charset=utf-8',
       '.png': 'image/png',
       '.svg': 'image/svg+xml',
+      '.txt': 'text/plain; charset=utf-8',
       '.webp': 'image/webp',
       '.woff': 'font/woff',
       '.woff2': 'font/woff2',
     }[extension] || 'application/octet-stream'
   );
+}
+
+function previewFileCandidates(filePath: string) {
+  const normalized = filePath.replace(/\/+$/, '') || 'index.html';
+  const candidates = [normalized];
+  if (!normalized.includes('.')) {
+    candidates.push(`${normalized}/index.html`);
+    candidates.push(`${normalized}.html`);
+    if (normalized.includes('/')) candidates.push(`${normalized.replaceAll('/', '--')}.html`);
+  }
+  return candidates.filter((candidate, index) => candidates.indexOf(candidate) === index);
+}
+
+function rewritePreviewRootReferences(source: string, base: string) {
+  return source
+    .replace(
+      /(\b(?:href|src|action)=["'])\/(?!\/)/gi,
+      (_match, prefix: string) => `${prefix}${base}`,
+    )
+    .replace(
+      /(\\"|\\')\/(?=(?:_next|assets)\b)/g,
+      (_match, escapedQuote: string) => `${escapedQuote}${base}`,
+    )
+    .replace(/url\(\s*(["']?)\/(?!\/)/gi, (_match, quote: string) => `url(${quote}${base}`);
+}
+
+function removeNextHydrationRuntime(source: string) {
+  return source
+    .replace(
+      /<link\b(?=[^>]*\brel=["']preload["'])(?=[^>]*\bas=["']script["'])(?=[^>]*\bhref=["'][^"']*\/_next\/static\/)[^>]*>/gi,
+      '',
+    )
+    .replace(/<script\b[^>]*\bsrc=["'][^"']*\/_next\/static\/[^"']*["'][^>]*>\s*<\/script>/gi, '')
+    .replace(/<script\b[^>]*>\s*(?:\(self\.__next_f|self\.__next_f)[\s\S]*?<\/script>/gi, '');
 }
 
 Deno.serve(async (request) => {
@@ -168,15 +344,25 @@ Deno.serve(async (request) => {
 
   const artifactKind = parsed.previewMode === 'draft' ? 'draft_file' : 'site_file';
   const artifactPrefix = parsed.previewMode === 'draft' ? 'draft' : 'site';
-  const storagePath = `${run.organization_id}/builder-runs/${parsed.runId}/${artifactPrefix}/${parsed.filePath}`;
-  const { data: artifact, error: artifactError } = await client
-    .from('builder_artifacts')
-    .select('content_type')
-    .eq('builder_run_id', parsed.runId)
-    .eq('kind', artifactKind)
-    .eq('storage_path', storagePath)
-    .maybeSingle();
-  if (artifactError || !artifact) return response(404);
+  let resolvedFilePath: string | undefined;
+  let storagePath: string | undefined;
+  for (const candidate of previewFileCandidates(parsed.filePath)) {
+    const candidateStoragePath = `${run.organization_id}/builder-runs/${parsed.runId}/${artifactPrefix}/${candidate}`;
+    const { data: artifact, error: artifactError } = await client
+      .from('builder_artifacts')
+      .select('id')
+      .eq('builder_run_id', parsed.runId)
+      .eq('kind', artifactKind)
+      .eq('storage_path', candidateStoragePath)
+      .maybeSingle();
+    if (artifactError) return response(404);
+    if (artifact) {
+      resolvedFilePath = candidate;
+      storagePath = candidateStoragePath;
+      break;
+    }
+  }
+  if (!resolvedFilePath || !storagePath) return response(404);
 
   const { data: file, error: downloadError } = await client.storage
     .from('siteforge-artifacts')
@@ -187,16 +373,18 @@ Deno.serve(async (request) => {
     'access-control-allow-origin': '*',
     'cache-control': 'no-store, private',
     'content-security-policy': previewCsp(),
-    'content-type': contentTypeFor(parsed.filePath),
+    'content-type': contentTypeFor(resolvedFilePath),
     'x-content-type-options': 'nosniff',
     'referrer-policy': 'no-referrer',
   });
   if (request.method === 'HEAD') return new Response(null, { headers });
 
-  if (parsed.filePath.toLowerCase().endsWith('.html')) {
+  if (resolvedFilePath.toLowerCase().endsWith('.html')) {
     const draftPrefix = parsed.previewMode === 'draft' ? '__draft__/' : '';
     const base = `${supabaseUrl}/functions/v1/siteforge-preview/${parsed.runId}/${parsed.token}/${draftPrefix}`;
     const navigationScript = `<script src="${base}__siteforge_preview_navigation__.js" defer></script>`;
+    const loadingStyle =
+      '<style data-siteforge-preview-loading="true">html{visibility:hidden}</style>';
     const source = await file.text();
     if (isLockedStarterDocument(source)) {
       return response(
@@ -204,11 +392,15 @@ Deno.serve(async (request) => {
         'This test saved the locked starter document instead of generated website output. Run a fresh test build before opening its private preview.',
       );
     }
-    const htmlWithHead = source.replace(
+    const rootedSource = rewritePreviewRootReferences(removeNextHydrationRuntime(source), base);
+    const htmlWithHead = rootedSource.replace(
       /<head(\s[^>]*)?>/i,
-      (match) => `${match}<base href="${base}">${navigationScript}`,
+      (match) => `${match}${loadingStyle}<base href="${base}">${navigationScript}`,
     );
-    const html = htmlWithHead === source ? `${navigationScript}${source}` : htmlWithHead;
+    const html =
+      htmlWithHead === rootedSource
+        ? `${loadingStyle}${navigationScript}${rootedSource}`
+        : htmlWithHead;
     // Supabase Edge Functions intentionally rewrite HTML GET responses to
     // text/plain. The SiteForge shell requests this JSON representation and
     // renders it into its already-sandboxed iframe via srcDoc instead.
@@ -218,6 +410,11 @@ Deno.serve(async (request) => {
     }
     headers.set('content-type', 'text/plain; charset=utf-8');
     return new Response(html, { headers });
+  }
+  if (resolvedFilePath.toLowerCase().endsWith('.css')) {
+    const draftPrefix = parsed.previewMode === 'draft' ? '__draft__/' : '';
+    const base = `${supabaseUrl}/functions/v1/siteforge-preview/${parsed.runId}/${parsed.token}/${draftPrefix}`;
+    return new Response(rewritePreviewRootReferences(await file.text(), base), { headers });
   }
   return new Response(file.stream(), { headers });
 });

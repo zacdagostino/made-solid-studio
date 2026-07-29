@@ -20,7 +20,7 @@ The configured application uses Supabase as its shared source of truth. Browser 
    npx supabase@latest db push
    ```
 
-4. Open the SiteForge app and sign in with the user created in Supabase Authentication. On first sign-in, name your organization. That call creates the owner membership used by Row Level Security policies.
+4. Open Made Solid Studio and sign in with the user created in Supabase Authentication. On first sign-in, name your organization. That call creates the owner membership used by Row Level Security policies.
 
 ## Current cloud workflow
 
@@ -45,10 +45,25 @@ The worker lives in `worker/capture-worker.mjs`. It is intentionally separate fr
 
 The worker captures only the requested homepage, validates URLs and redirects, respects homepage `robots.txt` rules, stores HTML/screenshots/check output in the private bucket, and records extracted page text as unverified evidence.
 
+## Builder worker
+
+The private builder requires Node.js 22 or later and a separately installed, lockfile-pinned
+Next.js foundation:
+
+```bash
+npm run setup:builder
+npm run worker:builder -- --once
+```
+
+Generated sites cannot install dependencies. The worker stages approved evidence and assets into a
+disposable workspace, compiles a private static export, and saves source, clean-route output,
+responsive screenshots, and quality results. Production deployment and service credentials remain
+outside the builder worker.
+
 ## Security boundaries
 
 - `.env.local` contains only browser-safe Vite variables and is ignored by Git.
 - Do not put database passwords, Supabase secret keys, or service-role keys in any `VITE_` variable.
 - The `siteforge-artifacts` bucket is private. A future crawler/worker uploads assets using a server-only secret key; the app reads them through authenticated access or short-lived signed URLs.
-- Never give the browser the worker secret, a service-role key, arbitrary crawl URLs, or production publishing credentials. The worker should accept only queued SiteForge capture IDs and must enforce URL, network, size, timeout, and redirect limits before fetching a page.
+- Never give the browser the worker secret, a service-role key, arbitrary crawl URLs, or production publishing credentials. The worker should accept only queued Made Solid Studio capture IDs and must enforce URL, network, size, timeout, and redirect limits before fetching a page.
 - All application records are organisation scoped. Row Level Security denies access until a user has an organisation membership.

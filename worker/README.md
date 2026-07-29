@@ -1,10 +1,19 @@
 # Protected Workers
 
-These are separate, server-only processes. The capture worker claims website-capture jobs, validates public targets, respects applicable `robots.txt` rules, discovers crawlable internal pages, captures responsive screenshots, stores private artifacts, extracts source evidence, and runs automated accessibility checks. The audit worker reads only those saved private artifacts and produces editable, evidence-linked findings. The asset-analysis worker sends each captured public image and its saved page context to a vision model, then saves private, editable suggestions for human review. It also collects deterministic, reviewable brand-colour evidence from SVG logo fills/strokes, logo-image pixels, CSS variables, and repeated rendered interface controls. The agent-package worker turns a refinement direction into a reviewable draft package derived from the published package; it cannot silently change the shared runtime or publish a package. The builder worker runs Codex in a disposable workspace to create a private website preview from an approved Build Manifest.
+These are separate, server-only processes. The capture worker claims website-capture jobs, validates public targets, respects applicable `robots.txt` rules, discovers crawlable internal pages, captures responsive screenshots, stores private artifacts, extracts source evidence, and runs automated accessibility checks. The audit worker reads only those saved private artifacts and produces editable, evidence-linked findings. The asset-analysis worker sends each captured public image and its saved page context to a vision model, then saves private, editable suggestions for human review. The visual-content worker reuses those saved private images to recover tables, testimonials, lists, FAQs, and other semantic information without recapturing the website. It also collects deterministic, reviewable brand-colour evidence from SVG logo fills/strokes, logo-image pixels, CSS variables, and repeated rendered interface controls. The agent-package worker turns a refinement direction into a reviewable draft package derived from the published package; it cannot silently change the shared runtime or publish a package. The builder worker runs Codex in a disposable workspace to create a private website preview from an approved Build Manifest.
 
 ## Runtime
 
 Use Node.js 22 or later. The worker relies on the native WebSocket implementation required by the Supabase client.
+
+Install the protected generated-site foundation separately from the Studio application:
+
+```bash
+npm run setup:builder
+```
+
+The foundation uses exact dependency versions and its own lockfile. Worker images must run this
+step before accepting build jobs; generated sites cannot install or change packages.
 
 ## Capture scope
 
@@ -104,6 +113,18 @@ Run the visual-asset worker continuously:
 npm run worker:assets
 ```
 
+Process one queued structured visual-content recovery:
+
+```bash
+npm run worker:visual-content -- --once
+```
+
+Run structured visual-content recovery continuously:
+
+```bash
+npm run worker:visual-content
+```
+
 Process one queued private website build:
 
 ```bash
@@ -126,6 +147,31 @@ Asset descriptions are suggestions, not verified facts. The worker instructs the
 
 The audit worker does not crawl the public web or contact a business. It can only analyse a completed capture that was explicitly attached to its queued audit.
 
-The builder worker reads only an approved Build Manifest, a private dossier for every selected captured page, and human-approved source assets. It copies a locked static website foundation into a temporary Git workspace, invokes `codex exec --json --sandbox workspace-write`, then runs a static build, responsive browser captures, and axe checks. Every selected source page has a required deterministic output path and a source-provenance marker; a missing or incorrect mapping fails the quality check. Codex may improve and condense captured copy, but must retain material services, operations, actions, forms/tools, legal content, and resources without strengthening claims. The worker persists a safe build timeline and uploads changed draft files while Codex works. Workspace members can open that short-lived working draft only after a generated homepage exists; it is explicitly unvalidated, blocks remote connections and form submissions, and disappears when the run ends. The worker saves finished source, output files, screenshots, event logs, and quality results privately. It never deploys the generated site, sends outreach, submits preview forms, or grants a prospect access. Production runners must be isolated containers with no deployment credentials and no outbound access except the Codex request path; the local worker is for trusted development only.
+The builder worker reads only an approved Build Manifest, a private dossier for every selected
+captured page, and human-approved source assets. It copies a pinned Next.js App Router foundation
+into a temporary Git workspace and invokes `codex exec --json --sandbox workspace-write`. The
+foundation fixes the framework, strict TypeScript, Tailwind, Base UI, Lucide, formatting, linting,
+typing, and export mechanics. Codex creates the business-specific tokens, UI primitives, patterns,
+sections, navigation, layouts, and pages rather than selecting a pre-themed component library.
+
+Each manifest assigns every selected source page a clean public route, exact App Router source file,
+static-export output file, and source-provenance marker. It also selects a production runtime
+profile: static marketing, managed forms, or managed Next.js. Private previews always remain
+honest static exports; capabilities that need services, secrets, accounts, payments, or persistent
+data receive a typed production-adapter handoff instead of fabricated live behaviour.
+
+The worker runs formatting, lint, strict typing, production compilation, route coverage,
+source-provenance, local-asset, browser-console, keyboard/focus, mobile-navigation, horizontal
+overflow, touch-target, axe, and responsive checks. Evidence is captured at 320×568, 375×812,
+768×1024, and 1440×900, including the open compact-navigation state. Source checkpoints are saved
+separately from compiled working drafts; a draft becomes viewable only after `out/index.html`
+replaces the starter.
+
+Codex may improve and condense captured copy, but must retain material services, operations,
+actions, forms/tools, legal content, and resources without strengthening claims. The worker saves
+finished source, exported files, screenshots, event logs, and quality results privately. It never
+deploys the generated site, sends outreach, submits preview forms, or grants a prospect access.
+Production runners must be isolated containers with no deployment credentials and no outbound
+access except the Codex request path; the local worker is for trusted development only.
 
 The worker needs an isolated runtime with outbound network controls, memory and CPU limits, a read-only filesystem, no production deployment credentials, and access only to the private `siteforge-artifacts` bucket. The URL checks in code are a defense-in-depth layer, not a replacement for network egress policy.

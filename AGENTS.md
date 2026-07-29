@@ -1,4 +1,4 @@
-# SiteForge OS Engineering Standards
+# Made Solid Studio Engineering Standards
 
 ## Scope and safety
 
@@ -57,6 +57,8 @@ Every user-facing change must be designed and verified at these viewport sizes:
 - Define component variants with explicit semantic names such as `primary`, `secondary`, `danger`, `compact`, and `loading`; do not encode behavior in a growing list of unrelated boolean props.
 - Components must own their internal layout and expose a small, documented API. Avoid components that depend on parent CSS selectors, hidden spacing assumptions, or a particular page location.
 - Use one shared implementation for repeated controls such as buttons, inputs, selects, alerts, empty states, tables, and dialogs. Do not duplicate component markup and styling between screens.
+- Build controls with the shared `Button`, `IconButton`, `ButtonLink`, and `ButtonGroup` primitives from `src/components/ui.tsx`. Use `Button` for every labelled action, `IconButton` only for a single icon with its required accessible label, and `ButtonLink` for navigation styled as a button; never force a labelled control into a fixed square or icon-only size. Component-local CSS may position these primitives but must not override their display mode, touch target, intrinsic width, padding, or interaction states.
+- Do not add raw `<button>` elements in product UI. Extend the shared primitives with a named semantic variant when a new button treatment is genuinely required, and add its hover, focus, active, disabled, and loading coverage before use.
 - Use Lucide icons where an icon is appropriate; pair unfamiliar icon-only controls with accessible labels and tooltips.
 - Keep page layouts unframed. Use cards only for repeated items, dialogs, or genuinely bounded tools; do not nest cards.
 - Avoid decorative gradients, visual clutter, and oversized marketing-style type in product workflows.
@@ -110,6 +112,11 @@ Every user-facing change must be designed and verified at these viewport sizes:
 - Prompt the model to describe directly observable content and visible text only. Nearby page context may orient the description but cannot prove ownership, service delivery, a project, client relationship, qualification, location, testimonial, endorsement, guarantee, or commercial claim.
 - Require explicit human review before any asset description, role, association, or reuse guidance is included in a redesign brief. Human approval can be changed to exclusion at any time and must be preserved as an auditable state.
 - Keep roles and associations structured. Use `unknown` or `third_party` whenever the business relationship is not directly established; do not force a guess to make the brief more complete.
+- Treat useful text embedded in a captured image as recoverable semantic content, not as a component screenshot to reproduce. Attach every candidate to its capture run, source page, source asset, nearest supported section context, and the original presentation type. Record a carousel, slider, gallery, or image tile only as provenance; it must never instruct the builder to recreate that presentation.
+- Recover image-contained testimonials, service information, contact details, pricing, FAQs, and process content only from the saved private asset plus directly visible text. Require human approval and editable wording before the content enters a redesign brief. The builder chooses a new accessible component or section and must not rebuild image-based text or a source carousel merely because the captured site used one.
+- Preserve the recovered information's semantic structure separately from presentation: table captions, columns, rows and footnotes; ordered items; FAQ pairs; testimonial quote and attribution fields; contact labels; pricing units; reading order; and field-level uncertainties. Never flatten structured information into one text blob, and never let a table or carousel source force the builder to use the same component.
+- Allow ready recovered items to be approved together. That approval must refresh the current immutable brief and Build Manifest automatically when the Brand Kit and other required inputs are already approved, so the same recovered information is available to Agent Studio tests and complete prospect builds without a separate manifest-preparation step.
+- Run visual-content recovery as post-capture enrichment against immutable saved artifacts and annotations. Do not require a recrawl when the relevant captured page HTML, image asset, and vision annotation already exist.
 
 ## Brand-colour evidence
 

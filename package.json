@@ -1,5 +1,5 @@
 {
-  "name": "siteforge-os",
+  "name": "made-solid-studio",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -23,8 +23,10 @@
     "worker:capture": "node worker/capture-worker.mjs",
     "worker:audit": "node worker/audit-worker.mjs",
     "worker:assets": "node worker/asset-analysis-worker.mjs",
+    "worker:visual-content": "node worker/visual-content-worker.mjs",
     "worker:agent-package": "node worker/agent-package-worker.mjs",
     "worker:builder": "node worker/builder-worker.mjs",
+    "setup:builder": "npm ci --prefix worker/builder-template",
     "workers": "node worker/supervisor.mjs",
     "test:worker": "node --test tests/worker/*.test.mjs",
     "verify": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run test:e2e"

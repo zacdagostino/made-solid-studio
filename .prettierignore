@@ -6,4 +6,7 @@ test-results/
 storybook-static/
 vite.config.d.ts
 vite.config.js
+worker/builder-template/.next/
+worker/builder-template/next-env.d.ts
+worker/builder-template/out/
 supabase/.temp/

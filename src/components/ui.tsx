@@ -1,5 +1,11 @@
 import { cva, type VariantProps } from 'class-variance-authority';
-import type { ButtonHTMLAttributes, HTMLAttributes, PropsWithChildren } from 'react';
+import type {
+  AnchorHTMLAttributes,
+  ButtonHTMLAttributes,
+  HTMLAttributes,
+  PropsWithChildren,
+  ReactNode,
+} from 'react';
 import { forwardRef } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
@@ -15,7 +21,8 @@ const buttonVariants = cva('button', {
     },
     size: {
       default: 'button--default',
-      compact: 'button--compact',
+      small: 'button--small',
+      icon: 'button--icon',
     },
   },
   defaultVariants: {
@@ -24,14 +31,62 @@ const buttonVariants = cva('button', {
   },
 });
 
-type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & VariantProps<typeof buttonVariants>;
+export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> &
+  VariantProps<typeof buttonVariants>;
+export type ButtonLinkProps = AnchorHTMLAttributes<HTMLAnchorElement> &
+  VariantProps<typeof buttonVariants>;
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, ...props }, ref) => (
-    <button ref={ref} className={cn(buttonVariants({ variant, size }), className)} {...props} />
+  ({ className, type = 'button', variant, size, ...props }, ref) => (
+    <button
+      ref={ref}
+      className={cn(buttonVariants({ variant, size }), className)}
+      type={type}
+      {...props}
+    />
   ),
 );
 Button.displayName = 'Button';
+
+export const ButtonLink = forwardRef<HTMLAnchorElement, ButtonLinkProps>(
+  ({ className, size, variant, ...props }, ref) => (
+    <a ref={ref} className={cn(buttonVariants({ size, variant }), className)} {...props} />
+  ),
+);
+ButtonLink.displayName = 'ButtonLink';
+
+type IconButtonProps = Omit<ButtonProps, 'aria-label' | 'children' | 'size'> & {
+  label: string;
+  children: ReactNode;
+};
+
+export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
+  ({ children, label, title, ...props }, ref) => (
+    <Button
+      aria-label={label}
+      ref={ref}
+      size="icon"
+      title={title ?? label}
+      type="button"
+      {...props}
+    >
+      {children}
+    </Button>
+  ),
+);
+IconButton.displayName = 'IconButton';
+
+export function ButtonGroup({
+  children,
+  className,
+  ...props
+}: PropsWithChildren<HTMLAttributes<HTMLDivElement>>) {
+  return (
+    <div className={cn('button-group', className)} {...props}>
+      {children}
+    </div>
+  );
+}
 
 export type ToastNotice = {
   id: string;
@@ -60,14 +115,9 @@ export function ToastRegion({
           <strong>{notice.title}</strong>
           <p>{notice.detail}</p>
         </div>
-        <Button
-          aria-label="Dismiss notification"
-          onClick={onDismiss}
-          size="compact"
-          variant="quiet"
-        >
+        <IconButton label="Dismiss notification" onClick={onDismiss} variant="quiet">
           <X aria-hidden="true" size={18} />
-        </Button>
+        </IconButton>
         {notice.action ? (
           <Button
             className="toast__action"
@@ -75,7 +125,7 @@ export function ToastRegion({
               notice.action?.onClick();
               onDismiss();
             }}
-            size="compact"
+            size="small"
             variant="secondary"
           >
             {notice.action.label}
@@ -117,7 +167,7 @@ export function ConfirmationDialog({
               {error}
             </p>
           ) : null}
-          <div className="confirmation-dialog__actions">
+          <ButtonGroup className="confirmation-dialog__actions">
             <Dialog.Close asChild>
               <Button disabled={isConfirming} variant="secondary">
                 Cancel
@@ -126,7 +176,7 @@ export function ConfirmationDialog({
             <Button disabled={isConfirming} onClick={onConfirm} variant="danger">
               {isConfirming ? 'Deleting' : confirmLabel}
             </Button>
-          </div>
+          </ButtonGroup>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
@@ -154,4 +204,28 @@ export function StatusBadge({
   tone = 'neutral',
 }: PropsWithChildren<{ tone?: 'neutral' | 'success' | 'warning' | 'danger' }>) {
   return <span className={cn('status-badge', `status-badge--${tone}`)}>{children}</span>;
+}
+
+export function IndeterminateProgress({
+  label,
+  detail,
+  className,
+}: {
+  label: string;
+  detail: string;
+  className?: string;
+}) {
+  return (
+    <div className={cn('indeterminate-progress', className)} role="status">
+      <div
+        aria-label={label}
+        aria-valuetext={detail}
+        className="indeterminate-progress__track"
+        role="progressbar"
+      >
+        <span className="indeterminate-progress__bar" />
+      </div>
+      <span>{detail}</span>
+    </div>
+  );
 }

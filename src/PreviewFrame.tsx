@@ -31,6 +31,15 @@ function previewDocumentFromResponse(payload: unknown) {
   return typeof html === 'string' && html.length ? html : undefined;
 }
 
+function previewCapabilityRoot(source: URL) {
+  const parts = source.pathname.split('/').filter(Boolean);
+  const previewIndex = parts.indexOf('siteforge-preview');
+  if (previewIndex === -1 || !parts[previewIndex + 1] || !parts[previewIndex + 2]) return undefined;
+  const includesDraftPrefix = parts[previewIndex + 3] === '__draft__';
+  const rootParts = parts.slice(0, previewIndex + (includesDraftPrefix ? 4 : 3));
+  return `/${rootParts.join('/')}/`;
+}
+
 export function PreviewFrame() {
   const [source, setSource] = useState(previewSourceUrl);
   const [isLoading, setIsLoading] = useState(Boolean(source));
@@ -39,7 +48,9 @@ export function PreviewFrame() {
 
   useEffect(() => {
     if (!source) {
-      setError('This private preview link is invalid. Return to SiteForge and open it again.');
+      setError(
+        'This private preview link is invalid. Return to Made Solid Studio and open it again.',
+      );
     } else {
       setError(undefined);
       setIsLoading(true);
@@ -72,16 +83,23 @@ export function PreviewFrame() {
 
   useEffect(() => {
     if (!source) return;
-    const root = source.pathname.slice(0, source.pathname.lastIndexOf('/') + 1);
+    const root = previewCapabilityRoot(source);
+    if (!root) return;
     const navigate = (event: MessageEvent<unknown>) => {
       if (typeof event.data !== 'object' || event.data === null) return;
       const message = event.data as { type?: unknown; href?: unknown };
-      if (message.type !== 'siteforge-preview:navigate' || typeof message.href !== 'string') return;
+      if (
+        message.type !== 'siteforge-preview:navigate' &&
+        message.type !== 'siteforge-preview:navigated'
+      )
+        return;
+      if (typeof message.href !== 'string') return;
       try {
         const next = new URL(message.href);
         if (next.origin !== source.origin || !next.pathname.startsWith(root)) return;
         next.hash = '';
         window.history.replaceState(null, '', `#/preview?source=${encodeURIComponent(next.href)}`);
+        if (message.type === 'siteforge-preview:navigated') return;
         setIsLoading(true);
         setError(undefined);
         setSource(next);
@@ -104,7 +122,7 @@ export function PreviewFrame() {
     return (
       <main className="preview-message">
         <h1>Preview unavailable</h1>
-        <p>This private preview link is invalid. Return to SiteForge and open it again.</p>
+        <p>This private preview link is invalid. Return to Made Solid Studio and open it again.</p>
       </main>
     );
   return (

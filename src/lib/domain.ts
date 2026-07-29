@@ -211,6 +211,111 @@ export type AssetAnnotation = {
   reviewedAt?: string;
 };
 
+export type VisualContentType =
+  | 'testimonial'
+  | 'service'
+  | 'contact'
+  | 'pricing'
+  | 'faq'
+  | 'process'
+  | 'table'
+  | 'list'
+  | 'general';
+
+export type StructuredVisualContent = {
+  schemaVersion: 1;
+  kind: VisualContentType;
+  heading: string;
+  body: string;
+  testimonial: {
+    quote: string;
+    person: string;
+    role: string;
+    organisation: string;
+  };
+  table: {
+    caption: string;
+    columns: string[];
+    rows: string[][];
+    footnotes: string[];
+  };
+  items: Array<{ label: string; value: string; detail: string }>;
+  faqs: Array<{ question: string; answer: string }>;
+  uncertainties: Array<{ path: string; detail: string }>;
+};
+
+export type VisualContentJob = {
+  id: string;
+  businessId: string;
+  crawlRunId: string;
+  status: AssetAnalysisStatus;
+  model?: string;
+  errorSummary?: string;
+  progressPhase?: string;
+  progressDetail?: string;
+  currentCandidateId?: string;
+  totalItems: number;
+  completedItems: number;
+  cancelRequestedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type VisualContentCandidate = {
+  id: string;
+  assetId: string;
+  businessId: string;
+  crawlRunId: string;
+  sourcePageUrl: string;
+  sectionHeading: string;
+  sourcePresentation: 'image' | 'carousel' | 'gallery' | 'unknown';
+  contentType: VisualContentType;
+  title: string;
+  body: string;
+  attribution: string;
+  sourceContext: Record<string, unknown>;
+  confidence: 'high' | 'medium' | 'low';
+  reviewState: ReviewState;
+  humanTitle: string;
+  humanBody: string;
+  humanAttribution: string;
+  humanNotes: string;
+  structuredContent: StructuredVisualContent;
+  humanStructuredContent: StructuredVisualContent | Record<string, never>;
+  structureStatus: 'pending' | 'ready' | 'failed';
+  structureError?: string;
+  model?: string;
+  analyzedAt?: string;
+  reviewedAt?: string;
+};
+
+export type ApprovedVisualContent = {
+  id: string;
+  assetId: string;
+  contentType: VisualContentType;
+  title: string;
+  body: string;
+  attribution: string;
+  sourcePageUrl: string;
+  sectionHeading: string;
+  sourcePresentation: VisualContentCandidate['sourcePresentation'];
+  presentationInstruction: 'builder_decides';
+  structuredContent: StructuredVisualContent;
+};
+
+export type ApprovedVisualContentGroup = {
+  id: string;
+  sourcePageUrl: string;
+  sectionHeading: string;
+  semanticRole: VisualContentType;
+  itemIds: string[];
+  items: ApprovedVisualContent[];
+  sourcePresentations: VisualContentCandidate['sourcePresentation'][];
+  coverageInstruction: 'all_items_required';
+  integrationInstruction: 'builder_decides';
+  presentationInstruction: 'builder_decides';
+};
+
 export type BrandColourEvidence = {
   id: string;
   assetId?: string;
@@ -310,6 +415,7 @@ export type RedesignBriefDraft = {
   assumptions: string[];
   openQuestions: string[];
   capabilityInventory?: CapabilityInventoryItem[];
+  approvedVisualContent?: ApprovedVisualContent[];
   brandKit?: {
     id: string;
     version: number;
@@ -351,6 +457,10 @@ export type BuildManifestPage = {
   title?: string;
   pageType?: string;
   canonicalUrl?: string;
+  routePath: string;
+  publicPath: string;
+  outputPath: string;
+  sourcePath: string;
   sourceSelected: boolean;
 };
 
@@ -361,6 +471,45 @@ export type BuildManifestAsset = {
   storageBucket: string;
   storagePath: string;
   sourceSelected: boolean;
+};
+
+export type BuildRuntimeProfile = 'static-marketing' | 'managed-forms' | 'managed-next-runtime';
+
+export type BuildCapabilityAdapter = {
+  capabilityId: string;
+  kind: CapabilityKind;
+  previewMode: 'honest-interface';
+  productionMode: 'static' | 'managed-adapter' | 'managed-next-runtime';
+  requiresSecrets: boolean;
+  requiresHumanConfiguration: boolean;
+};
+
+export type BuildArchitecture = {
+  sourceFramework: 'next-app-router';
+  language: 'typescript-strict';
+  styling: 'tailwind-and-semantic-css-tokens';
+  interactionFoundation: 'base-ui-and-native-html';
+  iconSystem: 'lucide';
+  previewRuntime: 'static-export';
+  productionRuntime: BuildRuntimeProfile;
+  componentLayers: ['tokens', 'ui', 'patterns', 'sections', 'site', 'layouts', 'pages'];
+  generationPolicy: {
+    agentOwnsVisualSystem: true;
+    agentOwnsSiteComponents: true;
+    lockedBehaviourNotAppearance: true;
+    dependenciesPinnedByFoundation: true;
+    nativeHtmlFirst: true;
+  };
+  capabilityAdapters: BuildCapabilityAdapter[];
+  qualityProfile: {
+    standard: 'wcag-2.2-aa';
+    requiredViewports: Array<{
+      id: 'mobile-small' | 'mobile' | 'tablet' | 'desktop';
+      width: number;
+      height: number;
+    }>;
+    checks: string[];
+  };
 };
 
 export type BuildManifestData = {
@@ -376,6 +525,9 @@ export type BuildManifestData = {
   selectedAssets: BuildManifestAsset[];
   approvedAssetGuidance: BriefAssetGuidance[];
   approvedCapabilities: CapabilityInventoryItem[];
+  approvedVisualContent: ApprovedVisualContent[];
+  approvedVisualContentGroups: ApprovedVisualContentGroup[];
+  architecture: BuildArchitecture;
   brandKit?: NonNullable<RedesignBriefDraft['brandKit']>;
   strategy: string;
   proposedSitemap: BriefSitemapEntry[];
@@ -404,7 +556,7 @@ export type BuildManifest = {
 export type BuilderRunStatus =
   'queued' | 'running' | 'paused' | 'ready' | 'review_required' | 'failed' | 'cancelled';
 export type BuilderQualityStatus = 'passed' | 'needs_review' | 'failed' | 'not_run';
-export type BuilderRunMode = 'homepage_test' | 'page_test' | 'full_site';
+export type BuilderRunMode = 'homepage_test' | 'page_test' | 'site_test' | 'full_site';
 export type AgentPackageStatus =
   'draft' | 'test_ready' | 'production_ready' | 'published' | 'superseded';
 export type AgentPackageProposalStatus =
@@ -468,9 +620,13 @@ export type BuilderRun = {
   parentBuilderRunId?: string;
   buildMode: BuilderRunMode;
   targetSourceUrl?: string;
+  targetSourceUrls?: string[];
   buildInstruction?: string;
   agentPackageId?: string;
   agentPackageVersion?: number;
+  agentStudioSourceAt?: string;
+  agentStudioFeatureId?: string;
+  sourceCheckpointAvailable?: boolean;
   status: BuilderRunStatus;
   templateVersion: string;
   model?: string;
@@ -635,6 +791,8 @@ export type ProspectWorkspace = {
   assetAnalysisJobs: AssetAnalysisJob[];
   assetRefresh?: AssetRefreshJob;
   assetAnnotations: AssetAnnotation[];
+  visualContentCandidates: VisualContentCandidate[];
+  visualContentJob?: VisualContentJob;
   brandColourEvidence: BrandColourEvidence[];
   brandKit?: BrandKit;
   redesignBrief?: RedesignBrief;

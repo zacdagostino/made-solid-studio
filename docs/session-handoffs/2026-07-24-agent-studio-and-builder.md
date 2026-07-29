@@ -1,4 +1,4 @@
-# SiteForge Agent Studio and builder handoff — 2026-07-24
+# Made Solid Studio Agent Studio and builder handoff — 2026-07-24
 
 ## Purpose
 
@@ -26,12 +26,28 @@ This is a redacted continuation note for a future Codex/Codespaces/tmux session.
 - `20260724123000_brand_intro_agent_package.sql` creates **v5 test-ready**, derived from v4, for the brand-introduction capability.
 - The Test-only refinement picker defaults to the latest test-ready package, then the published package.
 - v5 must be reviewed through a private homepage test before any future promotion decision. It is intentionally test-only.
+- `20260729130000_next_builder_foundation_v2.sql` publishes the v6 Next.js component foundation
+  and supersedes the earlier vanilla static-file package for new runs. Historic runs and their
+  artifacts remain immutable.
+
+## Generated-site architecture
+
+- The protected foundation pins Next.js App Router, React, strict TypeScript, Tailwind, Base UI,
+  Lucide, CVA, formatting, linting, typing, and static export.
+- Codex owns each site’s visual tokens, UI primitives, patterns, sections, navigation, layouts, and
+  pages. The foundation locks behaviour and tooling, not a Bootstrap-style appearance.
+- Every manifest records clean public routes, App Router source paths, exported output paths,
+  component layers, exact responsive evidence, and a static-marketing, managed-forms, or
+  managed-Next.js production runtime profile.
+- Private previews are compiled static exports. Production-only services are described through
+  explicit adapters and `src/BUILD_NOTES.md`; the preview never pretends a backend exists.
 
 ## Built-in capabilities
 
 ### Motion runtime
 
-- Local `worker/builder-template/src/main.js` reveals headings and containers as they enter view and can animate factual metrics marked with `data-counter`.
+- Local `worker/builder-template/src/components/foundation/site-runtime.tsx` reveals headings and
+  containers as they enter view and can animate factual metrics marked with `data-counter`.
 - It respects `prefers-reduced-motion`; no remote motion dependency is used.
 
 ### Brand introduction (v5 test package)
@@ -44,13 +60,15 @@ This is a redacted continuation note for a future Codex/Codespaces/tmux session.
 
 ## Private preview fix
 
-Supabase Edge Functions intentionally rewrite HTML GET responses to plain text. The preview service now returns an authenticated JSON document representation when queried with `render=srcdoc`; `src/PreviewFrame.tsx` fetches that payload and renders it inside the existing sandboxed iframe. Do not navigate directly to a Supabase preview URL: open it through SiteForge’s **Open preview** action.
+Supabase Edge Functions intentionally rewrite HTML GET responses to plain text. The preview service now returns an authenticated JSON document representation when queried with `render=srcdoc`; `src/PreviewFrame.tsx` fetches that payload and renders it inside the existing sandboxed iframe. Do not navigate directly to a Supabase preview URL: open it through Made Solid Studio’s **Open preview** action.
 
 ## Worker/runtime files worth reading first
 
 - `worker/codex-builder-contract.md`
 - `worker/builder-template/AGENTS.md`
-- `worker/builder-template/src/main.js`
+- `worker/builder-template/feature-contracts/component-architecture.md`
+- `worker/builder-template/feature-contracts/runtime-profiles.md`
+- `worker/builder-template/src/components/foundation/site-runtime.tsx`
 - `worker/builder-worker.mjs`
 - `worker/agent-package-worker.mjs`
 - `supabase/functions/siteforge-preview/index.ts`
