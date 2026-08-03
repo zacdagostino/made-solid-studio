@@ -8,9 +8,10 @@
   },
   "scripts": {
     "dev": "vite --config vite.config.ts",
-    "start:local": "node worker/local-dev.mjs",
+    "start:local": "node --env-file-if-exists=.env.preview.local worker/local-dev.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
+    "preview:host": "node preview-host/server.mjs",
     "typecheck": "tsc -b",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",

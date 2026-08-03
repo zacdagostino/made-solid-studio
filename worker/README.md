@@ -174,4 +174,10 @@ deploys the generated site, sends outreach, submits preview forms, or grants a p
 Production runners must be isolated containers with no deployment credentials and no outbound
 access except the Codex request path; the local worker is for trusted development only.
 
+Completed output is viewed through the separate `preview-host` service. That service validates the
+existing expiring preview capability, serves the saved export from its own origin with the compiled
+Next.js runtime intact, and denies form submission, remote connections, framing, and indexing.
+`VITE_SITEFORGE_PREVIEW_ORIGIN` points Studio at that visitor-style host. When it is not configured,
+Studio retains the Supabase `srcDoc` viewer as a compatibility fallback.
+
 The worker needs an isolated runtime with outbound network controls, memory and CPU limits, a read-only filesystem, no production deployment credentials, and access only to the private `siteforge-artifacts` bucket. The URL checks in code are a defense-in-depth layer, not a replacement for network egress policy.

@@ -71,6 +71,303 @@ async function mountPopulatedBuilderActivity(page) {
     </main>
   `);
   await page.addStyleTag({ path: studioStyles.pathname });
+  await page.addStyleTag({ content: '[hidden] { display: none !important; }' });
+}
+
+async function mountUsageTestAnalysis(page) {
+  await page.goto('/');
+  await page.setContent(`
+    <main style="height: auto">
+      <section class="usage-page" aria-labelledby="fixture-usage-title">
+        <header class="page-header">
+          <div>
+            <p class="eyebrow">Operations finance</p>
+            <h1 id="fixture-usage-title">AI usage &amp; spend</h1>
+            <p>Open any test to understand its token use, build scope, version lineage, and worker evidence.</p>
+          </div>
+        </header>
+        <section class="usage-panel" aria-labelledby="fixture-builds-title">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Builds</p>
+              <h2 id="fixture-builds-title">Codex build usage</h2>
+            </div>
+          </div>
+          <div class="usage-build-list">
+            <article class="usage-build">
+              <button aria-controls="fixture-analysis-22" aria-expanded="false" class="button button--quiet usage-build__trigger" type="button">
+                <span class="usage-build__identity">
+                  <span><strong>Test 22 · Homepage test</strong><small>Lecegroup</small></span>
+                  <span class="status-badge status-badge--warning">Quality review required</span>
+                </span>
+                <span class="usage-build__summary">
+                  <span><small>Total tokens</small><strong>398.8K</strong></span>
+                  <span><small>Fresh / cached input</small><strong>56.9K / 330.8K</strong></span>
+                  <span><small>Codex passes</small><strong>1</strong></span>
+                  <span><small>Spend</small><strong>$0.78</strong></span>
+                </span>
+                <span class="usage-build__open-label">Open analysis <span aria-hidden="true">⌄</span></span>
+              </button>
+              <div class="usage-build__content" id="fixture-analysis-22" hidden>
+                <div class="usage-build-analysis">
+                  <section class="usage-build-analysis__section">
+                    <div class="usage-build-analysis__heading">
+                      <div><p class="eyebrow">Token composition</p><h3>What the total contains</h3></div>
+                      <span>1 model pass</span>
+                    </div>
+                    <div aria-label="56.9K fresh input, 330.8K cached input, and 11.1K output tokens" class="usage-token-bar" role="img">
+                      <span class="usage-token-bar__fresh" style="width: 14.3%"></span>
+                      <span class="usage-token-bar__cached" style="width: 82.9%"></span>
+                      <span class="usage-token-bar__output" style="width: 2.8%"></span>
+                    </div>
+                    <dl class="usage-token-breakdown">
+                      <div><dt><span class="usage-token-key usage-token-key--fresh"></span>Fresh input</dt><dd>56.9K</dd></div>
+                      <div><dt><span class="usage-token-key usage-token-key--cached"></span>Cached input</dt><dd>330.8K · 85% of input</dd></div>
+                      <div><dt><span class="usage-token-key usage-token-key--output"></span>Model output</dt><dd>11.1K</dd></div>
+                      <div><dt>Reasoning subset</dt><dd>0</dd></div>
+                    </dl>
+                  </section>
+                  <section class="usage-build-analysis__section">
+                    <div class="usage-build-analysis__heading">
+                      <div><p class="eyebrow">Interpretation</p><h3>What likely drove usage</h3></div>
+                    </div>
+                    <ul class="usage-findings">
+                      <li class="usage-finding usage-finding--success"><strong>One Codex pass</strong><p>This run did not multiply usage through a full model restart.</p></li>
+                      <li class="usage-finding usage-finding--success"><strong>76% of unrelated manifest context removed</strong><p>344 KB was projected to 82.6 KB for one route before the agent ran.</p></li>
+                      <li class="usage-finding usage-finding--neutral"><strong>No post-Codex continuation recorded</strong><p>Safe handoff failures can reuse validated saved source.</p></li>
+                      <li class="usage-finding usage-finding--neutral"><strong>85% of input was cached</strong><p>Most input was reused context rather than newly supplied text.</p></li>
+                      <li class="usage-finding usage-finding--warning"><strong>Context-heavy, not output-heavy</strong><p>Only 3% of recorded tokens were model output.</p></li>
+                    </ul>
+                  </section>
+                  <section class="usage-build-analysis__section">
+                    <div class="usage-build-analysis__heading">
+                      <div><p class="eyebrow">Build context</p><h3>Scope and version lineage</h3></div>
+                    </div>
+                    <dl class="usage-context-grid">
+                      <div><dt>Test scope</dt><dd>Homepage test</dd></div>
+                      <div><dt>Selected routes</dt><dd>1</dd></div>
+                      <div><dt>Stored immutable manifest</dt><dd>344 KB</dd></div>
+                      <div><dt>Staged agent manifest</dt><dd>82.6 KB</dd></div>
+                      <div><dt>Context reduction</dt><dd>76%</dd></div>
+                      <div><dt>Staged assets</dt><dd>18</dd></div>
+                      <div><dt>Agent package</dt><dd>v5.0 · superseded</dd></div>
+                      <div><dt>Package contract</dt><dd>made-solid-studio-builder-agent-v5</dd></div>
+                      <div><dt>Manifest contract</dt><dd>made-solid-studio-codex-builder-v8</dd></div>
+                      <div><dt>Foundation</dt><dd>made-solid-studio-static-builder-v1</dd></div>
+                      <div><dt>Parent checkpoint</dt><dd>Clean foundation build</dd></div>
+                    </dl>
+                    <div class="usage-context-projection">
+                      <div class="usage-context-projection__heading">
+                        <div><h4>What the agent actually received</h4><p>The immutable record stays complete. Narrow tests receive a route-scoped working copy so unrelated pages and assets do not consume the model window.</p></div>
+                        <strong>76% smaller</strong>
+                      </div>
+                      <div aria-label="82.6 KB staged from 344 KB" class="usage-context-projection__bar" role="img"><span style="width: 24%"></span></div>
+                      <div class="usage-context-contracts">
+                        <span>Loaded contracts</span>
+                        <ul><li>component architecture</li><li>mobile navigation</li><li>contextual logo selection</li></ul>
+                      </div>
+                      <div class="usage-context-sections">
+                        <span>Route-scoped sections</span>
+                        <ul>
+                          <li><span>approvedAssetGuidance</span><strong>111 → 16</strong></li>
+                          <li><span>permittedFacts</span><strong>227 → 31</strong></li>
+                          <li><span>selectedAssets</span><strong>134 → 18</strong></li>
+                        </ul>
+                      </div>
+                    </div>
+                    <div class="usage-manifest-sections">
+                      <h4>Largest manifest sections</h4>
+                      <ol>
+                        <li><span>approvedAssetGuidance · 111 items</span><strong>124 KB</strong></li>
+                        <li><span>permittedFacts · 227 items</span><strong>79.8 KB</strong></li>
+                        <li><span>selectedAssets · 134 items</span><strong>50.8 KB</strong></li>
+                      </ol>
+                    </div>
+                  </section>
+                  <section class="usage-build-analysis__section">
+                    <div class="usage-build-analysis__heading">
+                      <div><p class="eyebrow">Worker evidence</p><h3>Retry and diagnostic signals</h3></div>
+                    </div>
+                    <p class="muted-copy">No retry, restart, or worker-error signal was saved for this test.</p>
+                  </section>
+                  <div class="usage-build-analysis__actions">
+                    <button class="button button--secondary" type="button">Open build workspace ↗</button>
+                  </div>
+                </div>
+              </div>
+            </article>
+          </div>
+        </section>
+      </section>
+    </main>
+  `);
+  await page.addStyleTag({ path: studioStyles.pathname });
+  await page.locator('.usage-build__trigger').evaluate((trigger) => {
+    trigger.addEventListener('click', () => {
+      const content = document.getElementById('fixture-analysis-22');
+      const open = trigger.getAttribute('aria-expanded') !== 'true';
+      trigger.setAttribute('aria-expanded', String(open));
+      trigger.closest('.usage-build')?.classList.toggle('is-open', open);
+      trigger.querySelector('.usage-build__open-label').firstChild.textContent = open
+        ? 'Close analysis '
+        : 'Open analysis ';
+      content.hidden = !open;
+    });
+  });
+}
+
+async function mountAgentPackageDialog(page) {
+  await page.goto('/');
+  await page.setContent(`
+    <main style="height: auto">
+      <article class="test-build-version">
+        <strong>Test 22</strong>
+        <button aria-haspopup="dialog" class="button button--inline" id="package-trigger" type="button">Package v5.0</button>
+      </article>
+      <div class="confirmation-overlay" id="package-overlay" hidden></div>
+      <section aria-describedby="package-description" aria-labelledby="package-title" class="agent-package-detail-dialog" id="package-dialog" role="dialog" tabindex="-1" hidden>
+        <header class="agent-package-detail-dialog__header">
+          <div><p class="eyebrow">Immutable test package</p><h2 id="package-title">Build package v5.0</h2></div>
+          <button aria-label="Close package details" class="button icon-button" id="package-close" type="button">×</button>
+        </header>
+        <p class="muted-copy" id="package-description">The package and foundation pinned to this exact test run. Package versions and manifest contract versions have separate release histories.</p>
+        <div class="agent-package-detail-dialog__summary"><span class="status-badge">superseded</span><p>The complete package configuration used by Test 22.</p></div>
+        <dl class="agent-package-detail-grid">
+          <div><dt>Package version</dt><dd>v5.0</dd></div>
+          <div><dt>Package ID</dt><dd>8a71d8f6-1928-47bd-b26c-21aca4489320</dd></div>
+          <div><dt>Based on</dt><dd>Package v4.0</dd></div>
+          <div><dt>Builder contract</dt><dd>made-solid-studio-builder-agent-v5.0</dd></div>
+          <div><dt>Builder foundation</dt><dd>made-solid-studio-static-builder-v1</dd></div>
+          <div><dt>Run template</dt><dd>siteforge-static-builder-v1</dd></div>
+          <div><dt>Capability assessment</dt><dd>approved</dd></div>
+          <div><dt>Created</dt><dd>28 July 2026, 10:46</dd></div>
+        </dl>
+        <section class="agent-package-detail-dialog__section">
+          <h3>Included behaviours</h3>
+          <ul class="agent-package-detail-dialog__behaviours">
+            <li><span aria-hidden="true">✓</span><span>Next.js generated component architecture</span><code>next-component-architecture</code></li>
+            <li><span aria-hidden="true">✓</span><span>Framework and responsive quality gates</span><code>framework-quality-gates</code></li>
+          </ul>
+        </section>
+        <section class="agent-package-detail-dialog__section"><h3>Contract addendum</h3><pre>No package-specific contract addendum.</pre></section>
+      </section>
+    </main>
+  `);
+  await page.addStyleTag({ path: studioStyles.pathname });
+  await page.addStyleTag({ content: '[hidden] { display: none !important; }' });
+  await page.evaluate(() => {
+    const trigger = document.getElementById('package-trigger');
+    const dialog = document.getElementById('package-dialog');
+    const overlay = document.getElementById('package-overlay');
+    const close = document.getElementById('package-close');
+    const setOpen = (open) => {
+      dialog.hidden = !open;
+      overlay.hidden = !open;
+      if (open) dialog.focus();
+      else trigger.focus();
+    };
+    trigger.addEventListener('click', () => setOpen(true));
+    close.addEventListener('click', () => setOpen(false));
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !dialog.hidden) setOpen(false);
+    });
+  });
+}
+
+async function mountBuilderFileExplorer(page) {
+  await page.goto('/');
+  await page.setContent(`
+    <div aria-describedby="file-explorer-description" aria-labelledby="file-explorer-title" class="builder-file-explorer-dialog" role="dialog">
+      <div class="builder-file-preview-dialog__header">
+        <div>
+          <p class="eyebrow">Private build workspace</p>
+          <h2 id="file-explorer-title">Generated files</h2>
+        </div>
+        <button aria-label="Close generated files" class="button icon-button" type="button">×</button>
+      </div>
+      <p class="muted-copy" id="file-explorer-description">Source is the editable Next.js project. Compiled site contains the browser-ready files produced from that source. Preview website opens the complete interactive result; selecting a file is only for inspection.</p>
+      <div class="builder-file-explorer">
+        <div class="builder-file-explorer__toolbar">
+          <div aria-label="Build file collection" class="builder-file-explorer__tabs" role="tablist">
+            <button aria-selected="true" class="button button--segmented" role="tab" type="button">Source <span>18</span></button>
+            <button aria-selected="false" class="button button--segmented" role="tab" type="button">Compiled site <span>32</span></button>
+          </div>
+          <div class="button-group">
+            <button class="button button--primary" type="button"><span aria-hidden="true">↗</span> Preview website</button>
+            <a class="button button--secondary builder-file-explorer__download" href="#download"><span aria-hidden="true">↓</span> Download source</a>
+          </div>
+        </div>
+        <label class="builder-file-explorer__search">
+          <span>Search source files</span>
+          <span><span aria-hidden="true">⌕</span><input autocomplete="off" placeholder="Search folders and files" type="search"></span>
+        </label>
+        <div class="builder-file-explorer__workspace">
+          <nav aria-label="Generated source files" class="builder-file-explorer__tree">
+            <div class="builder-file-explorer__branch">
+              <details class="builder-file-explorer__folder" open>
+                <summary><span aria-hidden="true">▸</span><span>src</span><small>12</small></summary>
+                <div class="builder-file-explorer__branch">
+                  <details class="builder-file-explorer__folder" open>
+                    <summary><span aria-hidden="true">▸</span><span>app</span><small>4</small></summary>
+                    <div class="builder-file-explorer__branch">
+                      <button aria-current="true" class="button button--tree is-selected" type="button"><span aria-hidden="true">◇</span><span>page.tsx</span></button>
+                      <button class="button button--tree" type="button"><span aria-hidden="true">◇</span><span>layout.tsx</span></button>
+                      <button class="button button--tree" type="button"><span aria-hidden="true">◇</span><span>globals.css</span></button>
+                    </div>
+                  </details>
+                  <details class="builder-file-explorer__folder">
+                    <summary><span aria-hidden="true">▸</span><span>components</span><small>8</small></summary>
+                    <div class="builder-file-explorer__branch">
+                      <button class="button button--tree" type="button"><span aria-hidden="true">◇</span><span>site-header.tsx</span></button>
+                    </div>
+                  </details>
+                </div>
+              </details>
+              <button class="button button--tree" type="button"><span aria-hidden="true">◇</span><span>package.json</span></button>
+              <button class="button button--tree" type="button"><span aria-hidden="true">◇</span><span>next.config.ts</span></button>
+            </div>
+          </nav>
+          <section aria-label="Selected build file" class="builder-file-explorer__preview">
+            <header>
+              <div>
+                <p class="eyebrow">Project source</p>
+                <h3>page.tsx</h3>
+                <p>src/app/page.tsx</p>
+              </div>
+              <a aria-label="Open page.tsx" class="button button--quiet" href="#open"><span aria-hidden="true">↗</span> Open file</a>
+            </header>
+            <pre class="builder-file-preview-dialog__source" tabindex="0">import { SiteHeader } from "../components/site-header";
+
+export default function HomePage() {
+  return (
+    &lt;main&gt;
+      &lt;SiteHeader /&gt;
+      &lt;h1&gt;Built for a better first impression.&lt;/h1&gt;
+    &lt;/main&gt;
+  );
+}</pre>
+          </section>
+        </div>
+      </div>
+    </div>
+  `);
+  await page.addStyleTag({ path: studioStyles.pathname });
+  await page.locator('[role="tab"]').evaluateAll((tabs) => {
+    tabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        tabs.forEach((candidate) =>
+          candidate.setAttribute('aria-selected', String(candidate === tab)),
+        );
+      });
+      tab.addEventListener('keydown', (event) => {
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+        event.preventDefault();
+        const nextTab = tabs.find((candidate) => candidate !== tab);
+        nextTab?.click();
+        nextTab?.focus();
+      });
+    });
+  });
 }
 
 async function mountBrandIntro(page) {
@@ -240,7 +537,8 @@ async function openReadyBuildManifest(page) {
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await page.goto('/#/prospects/business-demo-local-services/redesign');
   await expect(page.getByRole('heading', { name: 'Build Manifest ready' })).toBeVisible();
-  await page.getByRole('button', { name: 'Dismiss notification' }).click();
+  const dismissNotification = page.getByRole('button', { name: 'Dismiss notification' });
+  if (await dismissNotification.isVisible().catch(() => false)) await dismissNotification.click();
 }
 
 async function seedPublishedProductionFeatures(page, stagedBehaviourIds) {
@@ -351,6 +649,26 @@ async function seedAgentStudioWholeSiteSource(page) {
       createdAt: '2026-07-29T04:06:00.000Z',
       updatedAt: '2026-07-29T04:10:00.000Z',
     });
+    store.put({
+      id: 'builder-agent-studio-homepage-test',
+      businessId: 'business-demo-local-services',
+      buildManifestId: 'manifest-layout-check',
+      buildMode: 'homepage_test',
+      agentPackageId: 'agent-package-local-v6',
+      agentPackageVersion: 6,
+      status: 'ready',
+      templateVersion: 'made-solid-studio-next-builder-v2',
+      progressPhase: 'complete',
+      progressDetail: 'Homepage test ready.',
+      totalItems: 2,
+      completedItems: 2,
+      failureContext: {},
+      qualitySummary: { status: 'passed', checks: [], generatedAt: now },
+      startedAt: '2026-07-29T04:11:00.000Z',
+      completedAt: '2026-07-29T04:12:00.000Z',
+      createdAt: '2026-07-29T04:11:00.000Z',
+      updatedAt: '2026-07-29T04:12:00.000Z',
+    });
     await new Promise((resolve, reject) => {
       transaction.oncomplete = resolve;
       transaction.onerror = () => reject(transaction.error);
@@ -362,6 +680,60 @@ async function seedAgentStudioWholeSiteSource(page) {
   await page.reload();
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 }
+
+test('opens Agent Studio Testing for a legacy manifest without page output paths', async ({
+  page,
+}) => {
+  await seedAgentStudioWholeSiteSource(page);
+  await page.evaluate(async () => {
+    const database = await new Promise((resolve, reject) => {
+      const request = window.indexedDB.open('siteforge-os');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const transaction = database.transaction('buildManifests', 'readwrite');
+    const store = transaction.objectStore('buildManifests');
+    const manifest = await new Promise((resolve, reject) => {
+      const request = store.get('manifest-layout-check');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const legacyData = {
+      ...manifest.data,
+      selectedPages: manifest.data.selectedPages.map((pageItem) => {
+        const item = { ...pageItem };
+        delete item.outputPath;
+        return item;
+      }),
+    };
+    store.put({ ...manifest, data: legacyData });
+    await new Promise((resolve, reject) => {
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+    database.close();
+  });
+
+  await page.reload();
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+  await expect(
+    page.getByRole('heading', { name: 'Refine the builder, not a prospect' }),
+  ).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Testing could not be displayed' })).toHaveCount(
+    0,
+  );
+  await expect(page.getByRole('radio', { name: 'Revise a website' })).toBeVisible();
+  const legacyPageDisclosure = page.getByRole('button', { name: '2 pages built' }).first();
+  await legacyPageDisclosure.click();
+  await expect(page.getByRole('list', { name: 'Built pages' }).first()).toContainText('Services');
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+
+  const accessibility = await new AxeBuilder({ page }).include('.agent-studio').analyze();
+  expect(accessibility.violations).toEqual([]);
+});
 
 async function selectWorkspaceSection(page, name) {
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
@@ -445,6 +817,89 @@ test('keeps dense live build and diagnostic output readable and scrollable', asy
   await expect(page.locator('main')).toHaveScreenshot('builder-activity-output.png');
 });
 
+test('keeps generated build directories browsable across responsive viewports', async ({
+  page,
+}, testInfo) => {
+  await mountBuilderFileExplorer(page);
+
+  const dialog = page.getByRole('dialog', { name: 'Generated files' });
+  const sourceTab = dialog.getByRole('tab', { name: /Source/ });
+  const outputTab = dialog.getByRole('tab', { name: /Compiled site/ });
+  const viewWebsite = dialog.getByRole('button', { name: 'Preview website' });
+  const selectedFile = dialog.getByRole('button', { name: /page.tsx/ });
+  await expect(dialog).toBeVisible();
+  await expect(sourceTab).toHaveAttribute('aria-selected', 'true');
+  await outputTab.click();
+  await expect(outputTab).toHaveAttribute('aria-selected', 'true');
+  await sourceTab.click();
+  await expect(sourceTab).toBeFocused();
+  await page.keyboard.press('ArrowRight');
+  await expect(outputTab).toBeFocused();
+  await page.keyboard.press('ArrowLeft');
+  await expect(sourceTab).toBeFocused();
+  await expect(selectedFile).toHaveAttribute('aria-current', 'true');
+  await expect(viewWebsite).toBeVisible();
+  await expect(dialog.getByText('src/app/page.tsx')).toBeVisible();
+  await expect
+    .poll(async () => (await selectedFile.boundingBox())?.height ?? 0)
+    .toBeGreaterThanOrEqual(44);
+  await expect
+    .poll(async () => (await viewWebsite.boundingBox())?.height ?? 0)
+    .toBeGreaterThanOrEqual(44);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    await expect
+      .poll(async () => (await viewWebsite.boundingBox())?.height ?? 0)
+      .toBeGreaterThanOrEqual(44);
+    await page.setViewportSize(expectedViewports.mobile);
+  }
+
+  const workspaceColumns = await dialog
+    .locator('.builder-file-explorer__workspace')
+    .evaluate((element) => getComputedStyle(element).gridTemplateColumns);
+  if (testInfo.project.name === 'desktop' || testInfo.project.name === 'tablet') {
+    expect(workspaceColumns.split(' ').length).toBe(2);
+  } else {
+    expect(workspaceColumns.split(' ').length).toBe(1);
+  }
+
+  const accessibility = await new AxeBuilder({ page })
+    .include('.builder-file-explorer-dialog')
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect(dialog).toHaveScreenshot('builder-file-explorer.png');
+
+  const preview = dialog.locator('.builder-file-explorer__preview');
+  await preview.evaluate((element) => {
+    element.classList.add('builder-file-explorer__preview--website');
+    const header = element.querySelector('header');
+    if (!header) return;
+    header.innerHTML = `
+      <div>
+        <p class="eyebrow">Compiled site file</p>
+        <h3>index.html</h3>
+        <p>index.html</p>
+      </div>
+      `;
+    const note = document.createElement('p');
+    note.className = 'builder-file-explorer__website-note';
+    note.textContent =
+      'This pane shows the saved HTML source. Use Preview website above—or the direct Preview website action on the Test card—to run navigation, animations, styles, and compiled JavaScript together.';
+    header.insertAdjacentElement('afterend', note);
+  });
+  await expect(preview.getByRole('button', { name: /website/i })).toHaveCount(0);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  await expect(preview).toHaveScreenshot('builder-file-explorer-compiled-html.png');
+});
+
 test('keeps the AI usage page responsive and reachable from navigation', async ({
   page,
 }, testInfo) => {
@@ -460,6 +915,9 @@ test('keeps the AI usage page responsive and reachable from navigation', async (
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
     .toBe(true);
 
+  await page.goto('/#/usage/test-run-direct-link');
+  await expect(page.getByRole('heading', { name: 'AI usage & spend' })).toBeVisible();
+
   if (testInfo.project.name === 'mobile') {
     await page.setViewportSize({ width: 320, height: 568 });
     const trigger = page.getByRole('button', { name: 'Open navigation menu' });
@@ -469,6 +927,74 @@ test('keeps the AI usage page responsive and reachable from navigation', async (
     await page.keyboard.press('Escape');
     await expect(trigger).toBeFocused();
   }
+});
+
+test('opens a responsive per-test usage analysis', async ({ page }, testInfo) => {
+  await mountUsageTestAnalysis(page);
+
+  const trigger = page.getByRole('button', { name: /Test 22 · Homepage test/ });
+  const analysis = page.locator('#fixture-analysis-22');
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  await expect(analysis).toBeHidden();
+
+  await trigger.click();
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByRole('heading', { name: 'What the total contains' })).toBeVisible();
+  await expect(page.getByText('76% of unrelated manifest context removed')).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'What the agent actually received' }),
+  ).toBeVisible();
+  await expect(page.getByText('made-solid-studio-codex-builder-v8')).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+
+  const accessibility = await new AxeBuilder({ page }).include('.usage-page').analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect(page.locator('.usage-build')).toHaveScreenshot(
+    `usage-test-analysis-open-${testInfo.project.name}.png`,
+  );
+  await expect(page.locator('.usage-context-projection')).toHaveScreenshot(
+    `usage-staged-context-${testInfo.project.name}.png`,
+  );
+
+  await trigger.focus();
+  await page.keyboard.press('Enter');
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  await expect(analysis).toBeHidden();
+
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await trigger.click();
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+  }
+});
+
+test('opens the package pinned to an Agent Studio test', async ({ page }, testInfo) => {
+  await mountAgentPackageDialog(page);
+
+  const trigger = page.getByRole('button', { name: 'Package v5.0' });
+  await expect(trigger).toBeVisible();
+  await trigger.click();
+
+  const dialog = page.getByRole('dialog', { name: /Build package v\d+/ });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText('Builder contract', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('Builder foundation', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('Run template', { exact: true })).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+
+  const accessibility = await new AxeBuilder({ page }).include('#package-dialog').analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect(dialog).toHaveScreenshot(`agent-test-package-dialog-${testInfo.project.name}.png`);
+
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
 });
 
 test('centres the brand intro before carrying the logo into navigation', async ({
@@ -1014,6 +1540,66 @@ test('centres the workspace loading brand for each viewport', async ({ page }, t
   expect(descriptionGap).toBeLessThanOrEqual(56);
 });
 
+test('hydrates workspace data without interrupting the current view', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/#/prospects');
+  const launchLoader = page.getByLabel('Loading Made Solid Studio workspace');
+  await expect(launchLoader).toBeHidden();
+
+  const websiteUrl = page.getByLabel('Public website URL');
+  await websiteUrl.fill('a-very-long-prospect-domain.example/services-and-consultation');
+  await websiteUrl.focus();
+  const main = page.locator('main');
+  await main.evaluate((element) => element.scrollTo({ top: 120 }));
+  const scrollTop = await main.evaluate((element) => element.scrollTop);
+
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+
+  const syncStatus = page.getByLabel('Refreshing workspace data');
+  await expect(syncStatus).toBeVisible();
+  await expect(syncStatus).toContainText('Syncing workspace');
+  await expect(launchLoader).toBeHidden();
+  await expect(websiteUrl).toBeFocused();
+  await expect(websiteUrl).toHaveValue(
+    'a-very-long-prospect-domain.example/services-and-consultation',
+  );
+  await expect(page).toHaveURL(/#\/prospects$/);
+  expect(await main.evaluate((element) => element.scrollTop)).toBe(scrollTop);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+
+  const statusBox = await syncStatus.boundingBox();
+  const viewport = page.viewportSize();
+  expect(statusBox).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  if (statusBox && viewport) {
+    expect(statusBox.x).toBeGreaterThanOrEqual(0);
+    expect(statusBox.y).toBeGreaterThanOrEqual(0);
+    expect(statusBox.x + statusBox.width).toBeLessThanOrEqual(viewport.width);
+    expect(statusBox.y + statusBox.height).toBeLessThanOrEqual(viewport.height);
+  }
+
+  await expect(page).toHaveScreenshot('workspace-background-hydration.png', {
+    animations: 'disabled',
+  });
+  await expect(syncStatus).toBeHidden();
+
+  if (viewport?.width === expectedViewports.mobile.width) {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await page.reload();
+    await expect(launchLoader).toBeHidden();
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await expect(syncStatus).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    await expect(page).toHaveScreenshot('workspace-background-hydration-compact-mobile.png', {
+      animations: 'disabled',
+    });
+  }
+});
+
 test('leaves scroll-boundary gestures entirely native', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
@@ -1168,7 +1754,7 @@ test('keeps the build manifest package separate from the Agent Studio test contr
   await expect(prospectBuildAction).toBeVisible();
   await expect(prospectBuildAction).toBeDisabled();
   const productionVersion = page.getByText('Production version').locator('..');
-  await expect(productionVersion).toContainText('v6');
+  await expect(productionVersion).toContainText('v6.0');
   await expect(productionVersion.getByLabel(/new agent features awaiting/)).toHaveCount(0);
   await expect(productionVersion).toContainText(
     'This exact published version will be pinned to the build.',
@@ -1209,7 +1795,10 @@ test('keeps the build manifest package separate from the Agent Studio test contr
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
-    const publishedPackage = JSON.parse(packageRecord.value);
+    const storedPackages = JSON.parse(packageRecord.value);
+    const publishedPackage = Array.isArray(storedPackages)
+      ? storedPackages.find((agentPackage) => agentPackage.status === 'published')
+      : storedPackages;
     const now = new Date().toISOString();
     store.put({
       id: 'agent-package-v6',
@@ -1263,13 +1852,17 @@ test('keeps the build manifest package separate from the Agent Studio test contr
   await expect(
     page.getByRole('button', { name: /prepared prospect demo local services/i }),
   ).toBeVisible();
-  await expect(page.locator('.builder-page-set')).toBeVisible();
+  await expect(page.locator('.builder-page-set')).toHaveScreenshot('agent-page-set-selector.png', {
+    mask: [page.locator('.builder-page-set input[type="checkbox"]')],
+  });
   await expect(page.locator('.builder-page-set__options input:checked')).toHaveCount(1);
   await expect(page.getByText('1 selected', { exact: true })).toBeVisible();
+  await page.getByLabel('Test agent package').selectOption('agent-package-local-v7');
   await expect(page.getByLabel('Test agent package')).toHaveValue('agent-package-local-v7');
+  await expect(page.getByLabel('Test agent package')).toContainText('v7.0');
   expect(
     await page.getByLabel('Test agent package').locator('option').allTextContents(),
-  ).not.toContain('v8 · Production draft');
+  ).not.toContain('v8.0 · Production draft');
   await expect(page.getByRole('button', { name: 'Build test page' })).toBeVisible();
   await expect(page.locator('.builder-run__action-label')).toHaveText('Test');
   await expect(page.getByRole('radio', { name: 'Create page from scratch' })).toBeChecked();
@@ -1317,9 +1910,7 @@ test('keeps the build manifest package separate from the Agent Studio test contr
     expect(selectedGroupBox.y).toBeLessThan(availableGroupBox.y);
   }
   await page.mouse.move(0, 0);
-  await expect(page.locator('.builder-page-set')).toHaveScreenshot('agent-page-set-selector.png', {
-    mask: [page.locator('.builder-page-set input[type="checkbox"]')],
-  });
+  await expect(page.locator('.builder-page-set')).toBeVisible();
   await page.getByRole('button', { name: 'Clear', exact: true }).click();
   await expect(page.getByText('0 selected', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Build test page' })).toBeDisabled();
@@ -1343,30 +1934,28 @@ test('keeps the build manifest package separate from the Agent Studio test contr
   const testingBehaviour = page.locator('.builder-workflow__testing-behaviour');
   await expect(testingBehaviour).toBeVisible();
   await expect(testingBehaviour).toContainText('Testing behaviour');
-  await expect(testingBehaviour).toContainText('Package v7 testing behaviour');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.0.2');
-  await expect(testingBehaviour).toContainText(
-    'pinned Next.js, TypeScript, Tailwind, and Base UI project',
-  );
-  await expect(testingBehaviour).toContainText('locked React SiteRuntime component');
+  await expect(testingBehaviour).toContainText('Package v7.0 testing behaviour');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.0.10');
+  await expect(testingBehaviour).toContainText('first selected generated route');
+  await expect(testingBehaviour).toContainText('top-left geometry');
   await expect(testingBehaviour).toContainText('Visible hero entrance after the logo handoff');
   await expect(testingBehaviour).toContainText('Mobile & tablet sidebar navigation');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.13');
-  await expect(testingBehaviour).toContainText('generated React/Base UI component');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.15');
+  await expect(testingBehaviour).toContainText('full enter/exit travel');
   await expect(testingBehaviour).toContainText('Context-aware logo selection');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.5');
   await expect(testingBehaviour).toContainText('framework-safe public asset paths');
   await expect(testingBehaviour).toContainText('Semantic recovery from image-based content');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.14');
-  await expect(testingBehaviour).toContainText('consistent attribution formatting');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.23');
-  await expect(testingBehaviour).toContainText('keeping every selected page pinned');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.18');
-  await expect(testingBehaviour).toContainText('locked mechanics are now separated');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.15');
+  await expect(testingBehaviour).toContainText('excluded from reusable manifest assets');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.35');
+  await expect(testingBehaviour).toContainText('consistent content-derived page names');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.39');
+  await expect(testingBehaviour).toContainText('bounded scroll-depth composition');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.19');
   await expect(testingBehaviour).toContainText('explicit preview, production service');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.22');
-  await expect(testingBehaviour).toContainText('capture responsive and accessibility evidence');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.36');
+  await expect(testingBehaviour).toContainText('immutable selected-page mapping');
   await expect(testingBehaviour).toContainText(
     'Select behaviours to stage for the next production draft',
   );
@@ -1551,10 +2140,10 @@ test('shows one pending-feature count beside the current production agent versio
   await expect(prospectVersion.getByLabel(notificationName)).toHaveText('1');
   await expect(prospectVersion).toHaveScreenshot('prospect-production-version-notification.png');
 
-  await page.goto('/#/agent-studio/agent/business-demo-local-services');
+  await page.goto('/#/agent-studio/versions/business-demo-local-services');
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
   const packageConfiguration = page.locator('.agent-package-config');
-  await expect(packageConfiguration.getByLabel(notificationName)).toHaveCount(5);
+  await expect(packageConfiguration.getByLabel(notificationName).first()).toBeVisible();
   await expect(
     page.locator('.agent-package-config__header').getByLabel(notificationName),
   ).toHaveText('1');
@@ -1580,6 +2169,165 @@ test('shows one pending-feature count beside the current production agent versio
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
     .toBe(true);
+});
+
+test('keeps the active semantic recovery safeguard with its package version', async ({ page }) => {
+  await page.goto('/#/agent-studio/refine/business-demo-local-services');
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+
+  const update = page.getByRole('region', {
+    name: 'Semantic recovery safeguard · v6.16',
+  });
+  await expect(update).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Package versions' }).click();
+  await expect(page).toHaveURL(/\/agent-studio\/versions\/business-demo-local-services$/);
+  await expect(update).toContainText('Active in source');
+  await expect(update).toContainText(
+    'semantic-recovery safeguard and its production-release status',
+  );
+  await expect(update).toContainText('Production feature status:');
+  await expect(update).toHaveScreenshot('semantic-recovery-source-update.png');
+
+  const accessibility = await new AxeBuilder({ page })
+    .include('.agent-studio__source-update')
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+
+  await page.getByRole('button', { name: 'Agent architecture' }).click();
+  await expect(page).toHaveURL(/\/agent-studio\/agent\/business-demo-local-services$/);
+  await expect(update).toHaveCount(0);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+});
+
+test('displays the valid preview entry package above retained package versions', async ({
+  page,
+}, testInfo) => {
+  await openReadyBuildManifest(page);
+  await page.goto('/#/agent-studio/refine/business-demo-local-services');
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+
+  const packagePicker = page.getByLabel('Test agent package');
+  await expect(packagePicker).toHaveValue('agent-package-local-v6-9-valid-preview-entry');
+  await expect(packagePicker).toContainText('v6.9 · Approved test');
+  await expect(packagePicker).toContainText('v6.8 · Approved test');
+  await expect(packagePicker).toContainText('v6.7 · Approved test');
+  await expect(packagePicker).toContainText('v6.6 · Approved test');
+  await expect(packagePicker).toContainText('v6.5 · Approved test');
+  await expect(packagePicker).toContainText('v6.4 · Approved test');
+  await expect(packagePicker).toContainText('v6.3 · Approved test');
+  await expect(packagePicker).toContainText('v6.2 · Approved test');
+  await expect(packagePicker).toContainText('v6.1 · Approved test');
+  await expect(packagePicker).toContainText('v6.0 · Current production');
+
+  await page.getByRole('button', { name: 'Package versions' }).click();
+  const register = page.getByRole('region', { name: 'Every saved build package' });
+  const versions = register.locator('.agent-package-version-ledger__list > article');
+  await expect(versions).toHaveCount(10);
+  await expect(versions.nth(0)).toContainText('v6.9');
+  await expect(versions.nth(0)).toContainText('Approved test');
+  await expect(versions.nth(0)).toContainText('Valid preview entry test package');
+  await expect(versions.nth(1)).toContainText('v6.8');
+  await expect(versions.nth(1)).toContainText('Precise logo handoff test package');
+  await expect(versions.nth(2)).toContainText('v6.7');
+  await expect(versions.nth(2)).toContainText('Clean test start package');
+  await expect(versions.nth(3)).toContainText('v6.6');
+  await expect(versions.nth(3)).toContainText('Meaningful page names test package');
+  await expect(versions.nth(4)).toContainText('v6.5');
+  await expect(versions.nth(4)).toContainText('Resilient resume test package');
+  await expect(versions.nth(5)).toContainText('v6.4');
+  await expect(versions.nth(5)).toContainText('Immersive motion test package');
+  await expect(versions.nth(6)).toContainText('v6.3');
+  await expect(versions.nth(6)).toContainText('Resilient quality test package');
+  await expect(versions.nth(7)).toContainText('v6.2');
+  await expect(versions.nth(7)).toContainText('Expressive craft test package');
+  await expect(versions.nth(8)).toContainText('v6.1');
+  await expect(versions.nth(8)).toContainText('Creative composition test package');
+  await expect(versions.nth(9)).toContainText('v6.0');
+  await expect(versions.nth(9)).toContainText('Current production');
+  await expect(testInfo.project.name === 'mobile' ? versions.nth(0) : register).toHaveScreenshot(
+    'valid-preview-entry-package-register.png',
+  );
+
+  const accessibility = await new AxeBuilder({ page })
+    .include('.agent-package-version-ledger')
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+});
+
+test('keeps a failed test available without blocking another test', async ({ page }, testInfo) => {
+  await openReadyBuildManifest(page);
+  await page.evaluate(async () => {
+    const database = await new Promise((resolve, reject) => {
+      const request = window.indexedDB.open('siteforge-os');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const now = '2026-08-02T15:10:00.000Z';
+    const transaction = database.transaction('builderRuns', 'readwrite');
+    transaction.objectStore('builderRuns').put({
+      id: 'builder-failed-non-blocking-test',
+      businessId: 'business-demo-local-services',
+      buildManifestId: 'manifest-layout-check',
+      buildMode: 'page_test',
+      targetSourceUrls: ['https://example.com/services'],
+      agentPackageId: 'agent-package-local-v6-9-valid-preview-entry',
+      agentPackageVersion: 6.9,
+      sourceCheckpointAvailable: true,
+      status: 'failed',
+      templateVersion: 'made-solid-studio-next-builder-v2',
+      progressPhase: 'failed',
+      progressDetail: 'Verification stopped on an older saved runtime.',
+      totalItems: 7,
+      completedItems: 3,
+      failureCode: 'builder_unexpected_failure',
+      failureStage: 'worker_runtime',
+      failureAction: 'Review the frozen draft or start another test.',
+      failureContext: { detail: 'Protected runtime verification failed.' },
+      qualitySummary: { status: 'failed', checks: [], generatedAt: now },
+      startedAt: now,
+      completedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await new Promise((resolve, reject) => {
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+    database.close();
+  });
+
+  await page.reload();
+  await page.goto('/#/agent-studio/refine/business-demo-local-services');
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+  const stoppedTest = page.locator('.builder-active-test');
+  await expect(stoppedTest).toContainText('needs attention');
+  await expect(stoppedTest.getByRole('button', { name: 'Test something else' })).toBeVisible();
+  await expect(stoppedTest).toHaveScreenshot('failed-test-recovery-actions.png');
+
+  await stoppedTest.getByRole('button', { name: 'Test something else' }).click();
+  const chooser = page.locator('.builder-run__tests');
+  await expect(chooser).toBeVisible();
+  await expect(page.getByLabel('Test agent package')).toHaveValue(
+    'agent-package-local-v6-9-valid-preview-entry',
+  );
+  await expect(chooser).toHaveScreenshot('failed-test-alternate-test-chooser.png');
+
+  const accessibility = await new AxeBuilder({ page }).include('.builder-run').analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  if (testInfo.project.name === 'mobile') {
+    const button = await page.getByRole('button', { name: 'Build test page' }).boundingBox();
+    expect(button?.height).toBeGreaterThanOrEqual(44);
+  }
 });
 
 test('shows a responsive whole-site source and linked Agent Studio version UI', async ({
@@ -1608,7 +2356,45 @@ test('shows a responsive whole-site source and linked Agent Studio version UI', 
   await expect(versions.nth(1)).toContainText('Original build');
   await expect(lineage).toContainText('Original build');
   await expect(lineage).toContainText('2 pages');
+  const pageDisclosure = lineage.getByRole('button', { name: '2 pages built' }).first();
+  await pageDisclosure.click();
+  await expect(pageDisclosure).toHaveAttribute('aria-expanded', 'true');
+  const builtPages = lineage.getByRole('list', { name: 'Built pages' }).first();
+  await expect(builtPages).toContainText('Home');
+  await expect(builtPages).toContainText('/');
+  await expect(builtPages).toContainText('Services');
+  await expect(builtPages).toContainText('/services/');
+  const testVersions = page.getByRole('region', { name: 'Test versions', exact: true });
+  const homepagePages = testVersions.getByRole('button', { name: '1 page built' });
+  await homepagePages.focus();
+  await expect(homepagePages).toBeFocused();
+  await homepagePages.press('Enter');
+  await expect(testVersions.getByRole('list', { name: 'Built pages' })).toContainText('Home');
   await expect(lineage.getByRole('button', { name: 'Use as source' }).first()).toBeVisible();
+  const openApprovedWebsite = lineage.getByRole('button', { name: 'Preview website' }).first();
+  await expect(openApprovedWebsite).toHaveCSS('color', 'rgb(13, 13, 13)');
+  await openApprovedWebsite.hover();
+  await expect(openApprovedWebsite).toHaveCSS('color', 'rgb(13, 13, 13)');
+  await openApprovedWebsite.focus();
+  await expect(openApprovedWebsite).toBeFocused();
+  const browseFiles = lineage.getByRole('button', { name: 'Browse files' });
+  await expect(browseFiles).toHaveCount(2);
+  await browseFiles.first().click();
+  const generatedFiles = page.getByRole('dialog', { name: 'Generated files' });
+  await expect(generatedFiles).toBeVisible();
+  await expect(generatedFiles).toContainText(
+    'Compiled site contains the browser-ready files produced from that source.',
+  );
+  const previewWebsite = generatedFiles.getByRole('button', { name: 'Preview website' });
+  if (await previewWebsite.isVisible().catch(() => false)) {
+    await generatedFiles.getByRole('tab', { name: /Compiled site/ }).click();
+    await generatedFiles.getByRole('button', { name: /index\.html/ }).click();
+    await expect(previewWebsite).toHaveCount(1);
+    await expect(generatedFiles).toContainText('This pane shows the saved HTML source.');
+    await expect(generatedFiles.getByRole('link', { name: /Open index\.html/ })).toHaveCount(0);
+  }
+  await page.getByRole('button', { name: 'Close generated files' }).click();
+  await expect(generatedFiles).toBeHidden();
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
     .toBe(true);
@@ -1653,7 +2439,10 @@ test('separates test refinement from the published builder agent package', async
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
-    const publishedPackage = JSON.parse(packageRecord.value);
+    const storedPackages = JSON.parse(packageRecord.value);
+    const publishedPackage = Array.isArray(storedPackages)
+      ? storedPackages.find((agentPackage) => agentPackage.status === 'published')
+      : storedPackages;
     const now = new Date().toISOString();
     store.put({
       id: 'agent-package-v6',
@@ -1668,7 +2457,7 @@ test('separates test refinement from the published builder agent package', async
           version: 7,
           status: 'test_ready',
           basePackageId: publishedPackage.id,
-          builderContractVersion: 'made-solid-studio-builder-agent-v7',
+          builderContractVersion: 'made-solid-studio-builder-agent-v7.0',
           summary: 'Five tested behaviours staged for the next production package.',
           stagedBehaviourIds: [
             'hero-handoff',
@@ -1692,38 +2481,75 @@ test('separates test refinement from the published builder agent package', async
   });
   await page.reload();
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
-  await page.getByRole('button', { name: 'Agent architecture' }).click();
-  await expect(page).toHaveURL(/\/agent-studio\/agent\/business-demo-local-services$/);
-  await expect(page.getByRole('heading', { name: 'Builder agent architecture' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Agent architecture' })).toHaveAttribute(
+  await page.getByRole('button', { name: 'Package versions' }).click();
+  await expect(page).toHaveURL(/\/agent-studio\/versions\/business-demo-local-services$/);
+  await expect(page.getByRole('heading', { name: 'Build package versions' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Package versions' })).toHaveAttribute(
     'aria-current',
     'page',
   );
-  const architectureHeaderActions = page.locator('.agent-studio__header-actions');
-  await expect(architectureHeaderActions.locator('.status-badge')).toHaveCount(0);
-  const [refineBox, architectureBox, settingsBox, helpBox] = await Promise.all([
-    architectureHeaderActions.getByRole('button', { name: 'Refine', exact: true }).boundingBox(),
-    architectureHeaderActions.getByRole('button', { name: 'Agent architecture' }).boundingBox(),
-    architectureHeaderActions.getByRole('button', { name: 'Builder settings' }).boundingBox(),
-    architectureHeaderActions.getByRole('button', { name: 'Open architecture map' }).boundingBox(),
+  const versionsHeaderActions = page.locator('.agent-studio__header-actions');
+  await expect(versionsHeaderActions.locator('.status-badge')).toHaveCount(0);
+  const [refineBox, architectureBox, versionsBox, settingsBox] = await Promise.all([
+    versionsHeaderActions.getByRole('button', { name: 'Refine', exact: true }).boundingBox(),
+    versionsHeaderActions.getByRole('button', { name: 'Agent architecture' }).boundingBox(),
+    versionsHeaderActions.getByRole('button', { name: 'Package versions' }).boundingBox(),
+    versionsHeaderActions.getByRole('button', { name: 'Builder settings' }).boundingBox(),
   ]);
   expect(refineBox).not.toBeNull();
   expect(architectureBox).not.toBeNull();
+  expect(versionsBox).not.toBeNull();
   expect(settingsBox).not.toBeNull();
-  expect(helpBox).not.toBeNull();
-  if (refineBox && architectureBox && settingsBox && helpBox) {
+  if (refineBox && architectureBox && versionsBox && settingsBox) {
     expect(architectureBox.x).toBeGreaterThan(refineBox.x);
-    expect(helpBox.x).toBeGreaterThan(settingsBox.x);
+    expect(versionsBox.y > architectureBox.y || versionsBox.x > architectureBox.x).toBeTruthy();
+    expect(settingsBox.y > versionsBox.y || settingsBox.x > versionsBox.x).toBeTruthy();
     if (testInfo.project.name !== 'mobile') {
-      const controlCenters = [refineBox, architectureBox, settingsBox, helpBox].map(
+      const controlCenters = [refineBox, architectureBox, versionsBox, settingsBox].map(
         (box) => box.y + box.height / 2,
       );
       expect(Math.max(...controlCenters) - Math.min(...controlCenters)).toBeLessThanOrEqual(1);
     }
   }
   await expect(page.locator('.agent-studio__header')).toHaveScreenshot(
-    'agent-architecture-header.png',
+    'agent-package-versions-header.png',
   );
+  await expect(page.getByRole('heading', { name: 'Every saved build package' })).toBeVisible();
+  const versionCards = page.locator('.agent-package-version-ledger__list article');
+  await expect(versionCards).toHaveCount(11);
+  await expect(versionCards.first().getByRole('heading')).toHaveText('v7.0');
+  await expect(versionCards.nth(1).getByRole('heading')).toHaveText('v6.9');
+  await expect(versionCards.nth(2).getByRole('heading')).toHaveText('v6.8');
+  await expect(versionCards.nth(3).getByRole('heading')).toHaveText('v6.7');
+  await expect(versionCards.nth(4).getByRole('heading')).toHaveText('v6.6');
+  await expect(versionCards.nth(5).getByRole('heading')).toHaveText('v6.5');
+  await expect(versionCards.nth(6).getByRole('heading')).toHaveText('v6.4');
+  await expect(versionCards.nth(7).getByRole('heading')).toHaveText('v6.3');
+  await expect(versionCards.nth(8).getByRole('heading')).toHaveText('v6.2');
+  await expect(versionCards.nth(9).getByRole('heading')).toHaveText('v6.1');
+  await expect(versionCards.last().getByRole('heading')).toHaveText('v6.0');
+  await expect(page.locator('.agent-package-version-ledger')).toContainText(
+    'Newest exact release first',
+  );
+  await expect(page.locator('.agent-package-version-ledger')).toContainText(
+    'Available only to private package tests',
+  );
+  await expect(page.locator('.agent-package-version-ledger > header')).toHaveScreenshot(
+    'agent-package-version-register-header.png',
+  );
+  await expect(
+    page.locator('.agent-package-version-ledger__list article').first(),
+  ).toHaveScreenshot('agent-package-version-test-card.png');
+  await expect(page.locator('.agent-package-version-ledger__list article').last()).toHaveScreenshot(
+    'agent-package-version-production-card.png',
+  );
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    await page.setViewportSize({ width: 375, height: 812 });
+  }
   await expect(page.getByRole('heading', { name: /Builder agent package/i })).toBeVisible();
   const publishedAgentRow = page.locator('.agent-package-config__published-row');
   await expect(
@@ -1747,17 +2573,17 @@ test('separates test refinement from the published builder agent package', async
     expect(publishedBadgeBox.x).toBeGreaterThan(publishedSubtitleBox.x);
   }
   await expect(page.locator('.agent-package-config')).toContainText(
-    'made-solid-studio-builder-agent-v6',
+    'made-solid-studio-builder-agent-v6.0',
   );
   await expect(page.locator('.agent-package-config')).not.toContainText('siteforge-codex-builder');
   await expect(page.locator('.agent-package-config__header')).toHaveScreenshot(
     'agent-published-header.png',
   );
-  await expect(page.getByRole('heading', { name: 'Create production v7' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Create production v7.0' })).toBeVisible();
   await expect(page.getByText('5 tested features are staged')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Complete homepage test first' })).toBeDisabled();
   const releaseFeatures = page.getByRole('list', {
-    name: 'Features included in agent package v7',
+    name: 'Features included in agent package v7.0',
   });
   await expect(releaseFeatures.getByRole('listitem')).toHaveCount(5);
   await expect(releaseFeatures).toContainText('Brand introduction');
@@ -1801,11 +2627,11 @@ test('separates test refinement from the published builder agent package', async
   });
   await page.reload();
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
-  await expect(page.getByRole('heading', { name: 'Production draft v7' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Production draft v7.0' })).toBeVisible();
   await expect(
     page.locator('.agent-package-config__release-callout').getByText('Unpublished draft'),
   ).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Publish v7 to production' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Publish v7.0 to production' })).toBeEnabled();
   await expect(page.locator('.agent-package-config__release-callout')).toHaveScreenshot(
     'agent-production-draft-callout.png',
   );
@@ -1814,35 +2640,78 @@ test('separates test refinement from the published builder agent package', async
   await expect(productionVersionSelect).toHaveValue('agent-package-release-v7');
   await expect(
     page
-      .getByRole('list', { name: 'Changes introduced in agent package v7' })
+      .getByRole('list', { name: 'Changes introduced in agent package v7.0' })
       .getByRole('listitem'),
   ).toHaveCount(5);
   await expect(
     page
-      .getByRole('list', { name: 'Complete feature inventory for agent package v7' })
+      .getByRole('list', { name: 'Complete feature inventory for agent package v7.0' })
       .getByRole('listitem'),
   ).toHaveCount(7);
   await productionVersionSelect.selectOption({
-    label: 'v6 · Published · 9 awaiting approval',
+    label: 'v6.0 · Published · 9 awaiting approval',
   });
-  await expect(page.getByRole('heading', { name: 'Published v6 baseline' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Published v6.0 baseline' })).toBeVisible();
   await expect(
     page
-      .getByRole('list', { name: 'Complete feature inventory for agent package v6' })
+      .getByRole('list', { name: 'Complete feature inventory for agent package v6.0' })
       .getByRole('listitem'),
   ).toHaveCount(2);
   await expect(
     page.getByText('This published lineage root has no version-level feature additions recorded.'),
   ).toBeVisible();
   await productionVersionSelect.selectOption({
-    label: 'v7 · Unpublished production draft',
+    label: 'v7.0 · Unpublished production draft',
   });
-  await expect(page.getByRole('heading', { name: 'Changes from v6' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Changes from v6.0' })).toBeVisible();
   await expect(page.locator('.production-feature-versions__header')).toHaveScreenshot(
     'production-feature-version-controls.png',
   );
   await expect(page.locator('.production-feature-versions__overview')).toHaveScreenshot(
     'production-feature-version-inspector.png',
+  );
+  const featureImplementation = page.locator('.feature-implementation-files').filter({
+    has: page.getByRole('heading', { name: 'Built-in feature implementation' }),
+  });
+  await expect(featureImplementation).toContainText('Brand introduction');
+  await expect(featureImplementation).toContainText('Scoped page refinement');
+  const navigationFeature = featureImplementation.locator('article').filter({
+    hasText: 'Mobile & tablet sidebar navigation',
+  });
+  await expect(navigationFeature.getByRole('button', { name: 'Workshop feature' })).toHaveCount(0);
+  await navigationFeature
+    .getByRole('button', {
+      name: /worker\/builder-template\/feature-contracts\/mobile-navigation\.md/i,
+    })
+    .click();
+  const navigationContractDialog = page.getByRole('dialog', { name: 'Mobile navigation contract' });
+  await expect(navigationContractDialog).toContainText('Creative ownership');
+  await expect(navigationContractDialog.locator('.is-changed')).not.toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(navigationContractDialog).toBeHidden();
+
+  const brandFeature = featureImplementation.locator('article').filter({
+    hasText: 'Brand introduction',
+  });
+  await brandFeature
+    .getByRole('button', {
+      name: /worker\/builder-template\/src\/components\/foundation\/site-runtime\.tsx/i,
+    })
+    .click();
+  const featureDialog = page.getByRole('dialog', { name: 'Motion runtime' });
+  await expect(featureDialog.locator('.is-changed')).not.toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(
+    page.getByText('8 unpublished packages derived from this production package.'),
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: 'Agent architecture' }).click();
+  await expect(page).toHaveURL(/\/agent-studio\/agent\/business-demo-local-services$/);
+  await expect(page.getByRole('heading', { name: 'Builder agent architecture' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Every saved build package' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Built-in features by version' })).toHaveCount(0);
+  await expect(page.locator('.agent-studio__header')).toHaveScreenshot(
+    'agent-architecture-header.png',
   );
   const architectureMapTrigger = page.getByRole('button', { name: 'Open architecture map' });
   await expect(architectureMapTrigger).toBeVisible();
@@ -1865,30 +2734,8 @@ test('separates test refinement from the published builder agent package', async
   await expect(architectureMapTrigger).toBeFocused();
   await expect(page.getByText('Built-in capabilities', { exact: true })).toHaveCount(0);
   await expect(page.getByText('Build direction', { exact: true })).toHaveCount(0);
-  const featureImplementation = page.locator('.feature-implementation-files').filter({
-    has: page.getByRole('heading', { name: 'Built-in feature implementation' }),
-  });
-  await expect(featureImplementation).toContainText('Brand introduction');
-  await expect(featureImplementation).toContainText('Scoped page refinement');
-  const navigationFeature = featureImplementation.locator('article').filter({
-    hasText: 'Mobile & tablet sidebar navigation',
-  });
-  await expect(navigationFeature.getByRole('button', { name: 'Workshop feature' })).toHaveCount(0);
-  await navigationFeature
-    .getByRole('button', {
-      name: /worker\/builder-template\/feature-contracts\/mobile-navigation\.md/i,
-    })
-    .click();
-  const navigationContractDialog = page.getByRole('dialog', { name: 'Mobile navigation contract' });
-  await expect(navigationContractDialog).toContainText('Creative ownership');
-  await expect(navigationContractDialog.locator('.is-changed')).not.toHaveCount(0);
-  await page.keyboard.press('Escape');
-  await expect(navigationContractDialog).toBeHidden();
   await expect(
     page.getByRole('heading', { name: 'Directions can propose a capability, not create one' }),
-  ).toBeVisible();
-  await expect(
-    page.getByText('1 unpublished package derived from this production package.'),
   ).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Create a derived test package' })).toHaveCount(0);
   await expect(page.getByText('Refine the package', { exact: true })).toHaveCount(0);
@@ -1906,18 +2753,6 @@ test('separates test refinement from the published builder agent package', async
   await expect(fileDialog.locator('pre')).toContainText('Made Solid Studio Codex Builder Contract');
   await page.keyboard.press('Escape');
   await expect(fileDialog).toBeHidden();
-
-  const brandFeature = featureImplementation.locator('article').filter({
-    hasText: 'Brand introduction',
-  });
-  await brandFeature
-    .getByRole('button', {
-      name: /worker\/builder-template\/src\/components\/foundation\/site-runtime\.tsx/i,
-    })
-    .click();
-  const featureDialog = page.getByRole('dialog', { name: 'Motion runtime' });
-  await expect(featureDialog.locator('.is-changed')).not.toHaveCount(0);
-  await page.keyboard.press('Escape');
 
   await page.evaluate(async () => {
     const database = await new Promise((resolve, reject) => {
@@ -1960,16 +2795,22 @@ test('separates test refinement from the published builder agent package', async
   });
   await page.reload();
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+  await page.getByRole('button', { name: 'Package versions' }).click();
+  await expect(page).toHaveURL(/\/agent-studio\/versions\/business-demo-local-services$/);
   await expect(page.locator('.agent-studio__header').getByText('Published v7')).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Builder agent package · v7' })).toBeVisible();
   await expect(page.locator('.agent-package-config')).toContainText(
     'made-solid-studio-builder-agent-v7',
   );
   await expect(
-    page.getByRole('list', { name: 'Features included in agent package v7' }).getByRole('listitem'),
+    page
+      .getByRole('list', { name: 'Features included in agent package v7.0' })
+      .getByRole('listitem'),
   ).toHaveCount(5);
   await expect(page.getByRole('button', { name: 'Publish v7 to production' })).toHaveCount(0);
-  await expect(page.getByLabel('4 new agent features awaiting production approval')).toHaveCount(5);
+  await expect(
+    page.getByLabel('4 new agent features awaiting production approval').first(),
+  ).toBeVisible();
 
   await page.getByRole('button', { name: 'Refine', exact: true }).click();
   await expect(page).toHaveURL(/\/agent-studio\/refine\/business-demo-local-services$/);
@@ -2158,7 +2999,7 @@ test('creates a persistent prospect workspace from a public URL', async ({ page 
   await page.getByLabel('Public website URL').fill('acme-plumbing.example');
   await page.getByRole('button', { name: 'Create' }).click();
 
-  await expect(page.getByRole('status')).toContainText('Prospect created');
+  await expect(page.locator('.toast')).toContainText('Prospect created');
   await expect(page.locator('.toast')).toBeVisible();
   await expect(page.locator('.toast')).toHaveCSS('animation-name', /(?:^|,\s*)toast-in(?:,|$)/);
   const toastBox = await page.locator('.toast-region').boundingBox();

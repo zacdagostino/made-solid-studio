@@ -3,6 +3,7 @@ import {
   Bot,
   CalendarDays,
   Database,
+  LoaderCircle,
   LogOut,
   Menu,
   Moon,
@@ -167,6 +168,7 @@ export function AppShell({
   activePage = 'today',
   children,
   contentKey,
+  isHydrating = false,
   onNavigate,
   onSignOut,
   userEmail,
@@ -175,6 +177,7 @@ export function AppShell({
   activePage?: AppPage;
   /** Remounts the content transition when the active route or workspace section changes. */
   contentKey?: string;
+  isHydrating?: boolean;
   onNavigate?: (page: AppPage) => void;
   onSignOut?: () => Promise<void>;
   userEmail?: string;
@@ -264,6 +267,18 @@ export function AppShell({
         </Dialog.Root>
         <Brand hidden={isLoading} />
       </header>
+
+      {isHydrating ? (
+        <div
+          aria-label="Refreshing workspace data"
+          aria-live="polite"
+          className="workspace-sync-status"
+          role="status"
+        >
+          <LoaderCircle aria-hidden="true" size={16} />
+          <span>Syncing workspace</span>
+        </div>
+      ) : null}
 
       <main ref={mainRef}>
         <div className="page-transition" key={contentKey}>

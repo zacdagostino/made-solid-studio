@@ -130,7 +130,13 @@ function factFromRow(row: DatabaseRow): EvidenceFact {
 }
 
 function readNumber(row: DatabaseRow, key: string) {
-  return typeof row[key] === 'number' ? row[key] : 0;
+  const value = row[key];
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
 }
 
 function readOptionalNumber(row: DatabaseRow, key: string) {
@@ -443,7 +449,7 @@ function brandKitFromRow(row: DatabaseRow): BrandKit {
     id: readString(row, 'id'),
     businessId: readString(row, 'business_id'),
     crawlRunId: readString(row, 'crawl_run_id'),
-    version: readNumber(row, 'version'),
+    version: readOptionalNumber(row, 'version') ?? 0,
     status: readString(row, 'status') as BrandKit['status'],
     primaryLogoAssetId: readOptionalString(row, 'primary_logo_artifact_id'),
     editableLogoAssetId: readOptionalString(row, 'editable_logo_artifact_id'),
@@ -2345,6 +2351,41 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
   }
 
   async createBuilderPreviewUrl(builderRunId: string, mode: BuilderPreviewMode = 'ready') {
+    let entryPath = '';
+    if (mode === 'ready') {
+      const { data: previewRun } = await this.client
+        .from('builder_runs')
+        .select('build_manifest_id, target_source_url, target_source_urls')
+        .eq('id', builderRunId)
+        .maybeSingle();
+      const run = recordValue(previewRun);
+      const targetUrls = Array.isArray(run.target_source_urls)
+        ? run.target_source_urls.filter((value): value is string => typeof value === 'string')
+        : typeof run.target_source_url === 'string'
+          ? [run.target_source_url]
+          : [];
+      const firstTargetUrl = targetUrls[0];
+      const manifestId = readOptionalString(run, 'build_manifest_id');
+      if (firstTargetUrl && manifestId) {
+        const { data: previewManifest } = await this.client
+          .from('build_manifests')
+          .select('data')
+          .eq('id', manifestId)
+          .maybeSingle();
+        const manifestData = recordValue(recordValue(previewManifest).data);
+        const selectedPages = Array.isArray(manifestData.selectedPages)
+          ? manifestData.selectedPages.map(recordValue)
+          : [];
+        const selectedEntry = selectedPages.find(
+          (page) =>
+            typeof page.url === 'string' &&
+            canonicalWebsiteUrl(page.url) === canonicalWebsiteUrl(firstTargetUrl),
+        );
+        const publicPath = readOptionalString(selectedEntry ?? {}, 'publicPath');
+        if (publicPath && publicPath !== '/')
+          entryPath = `${publicPath.replace(/^\/+|\/+$/g, '')}/`;
+      }
+    }
     const { data, error } = await this.client.rpc('create_builder_preview_access', {
       target_builder_run_id: builderRunId,
       requested_mode: mode,
@@ -2357,7 +2398,14 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       throw new Error('The private preview service is not configured.');
     }
     const draftPath = mode === 'draft' ? '__draft__/' : '';
-    const sourceUrl = `${supabaseUrl}/functions/v1/siteforge-preview/${builderRunId}/${token}/${draftPath}`;
+    const visitorPreviewOrigin = import.meta.env.VITE_SITEFORGE_PREVIEW_ORIGIN?.trim().replace(
+      /\/+$/,
+      '',
+    );
+    if (visitorPreviewOrigin) {
+      return `${visitorPreviewOrigin}/site/${builderRunId}/${token}/${draftPath}${entryPath}`;
+    }
+    const sourceUrl = `${supabaseUrl}/functions/v1/siteforge-preview/${builderRunId}/${token}/${draftPath}${entryPath}`;
     return `${window.location.origin}${window.location.pathname}#/preview?source=${encodeURIComponent(sourceUrl)}`;
   }
 

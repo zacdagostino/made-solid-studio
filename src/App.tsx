@@ -12,6 +12,7 @@ import {
   CircleHelp,
   ClipboardCheck,
   Clock3,
+  Download,
   ExternalLink,
   FileCode2,
   FilePenLine,
@@ -41,12 +42,15 @@ import {
   X,
 } from 'lucide-react';
 import {
+  Component,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
+  type ErrorInfo,
   type FormEvent,
   type KeyboardEvent,
   type RefObject,
@@ -92,6 +96,7 @@ import {
   type AgentPackageProposal,
   type BrandKit,
   type BrandPalette,
+  type BuildManifest,
   type CapabilityDecision,
   type BriefSourceSelections,
   type BuilderArtifact,
@@ -128,11 +133,11 @@ type WorkspaceTab =
   | 'redesign'
   | 'report'
   | 'activity';
-type AgentStudioSection = 'refine' | 'agent';
+type AgentStudioSection = 'refine' | 'agent' | 'versions';
 type Route =
   | { page: 'today' }
   | { page: 'data' }
-  | { page: 'usage' }
+  | { page: 'usage'; builderRunId?: string }
   | { page: 'settings' }
   | { page: 'agent-studio'; section?: AgentStudioSection; businessId?: string }
   | { page: 'prospects'; businessId?: string; versionId?: string; tab?: WorkspaceTab };
@@ -156,7 +161,7 @@ function isWorkspaceTab(value: string | undefined): value is WorkspaceTab {
 }
 
 function isAgentStudioSection(value: string | undefined): value is AgentStudioSection {
-  return value === 'refine' || value === 'agent';
+  return value === 'refine' || value === 'agent' || value === 'versions';
 }
 
 function routeFromHash(hash: string): Route {
@@ -170,7 +175,7 @@ function routeFromHash(hash: string): Route {
     };
   }
   if (parts[0] === 'settings') return { page: 'settings' };
-  if (parts[0] === 'usage') return { page: 'usage' };
+  if (parts[0] === 'usage') return { page: 'usage', builderRunId: parts[1] };
   if (parts[0] === 'data') return { page: 'data' };
   if (parts[0] === 'agent-studio') {
     if (isAgentStudioSection(parts[1])) {
@@ -190,7 +195,7 @@ function hrefForRoute(route: Route) {
   if (route.page === 'today') return '#/today';
   if (route.page === 'settings') return '#/settings';
   if (route.page === 'data') return '#/data';
-  if (route.page === 'usage') return '#/usage';
+  if (route.page === 'usage') return `#/usage${route.builderRunId ? `/${route.builderRunId}` : ''}`;
   if (route.page === 'agent-studio') {
     const section = route.section ?? 'refine';
     return `#/agent-studio/${section}${route.businessId ? `/${route.businessId}` : ''}`;
@@ -2543,9 +2548,16 @@ function SourcePreview({
 }) {
   const highlighted = new Set(highlightedLines);
   if (!highlighted.size)
-    return <pre className="builder-file-preview-dialog__source">{content}</pre>;
+    return (
+      <pre className="builder-file-preview-dialog__source" tabIndex={0}>
+        {content}
+      </pre>
+    );
   return (
-    <pre className="builder-file-preview-dialog__source builder-file-preview-dialog__source--diff">
+    <pre
+      className="builder-file-preview-dialog__source builder-file-preview-dialog__source--diff"
+      tabIndex={0}
+    >
       {content.split('\n').map((line, index) => (
         <span
           className={highlighted.has(index + startLine) ? 'is-changed' : undefined}
@@ -2559,6 +2571,585 @@ function SourcePreview({
         </span>
       ))}
     </pre>
+  );
+}
+
+type BuilderExplorerEntry = {
+  artifact: BuilderArtifact;
+  path: string;
+};
+
+type BuilderRunEvidenceState =
+  | { status: 'loading' }
+  | { status: 'ready'; evidence: BuilderRunEvidence }
+  | { status: 'error'; message: string };
+
+type BuilderExplorerFolder = {
+  name: string;
+  path: string;
+  folders: Map<string, BuilderExplorerFolder>;
+  files: BuilderExplorerEntry[];
+};
+
+function latestBuilderExplorerEntries(
+  artifacts: BuilderArtifact[],
+  pathFor: (artifact: BuilderArtifact) => string,
+) {
+  const latest = new Map<string, BuilderExplorerEntry>();
+  artifacts.forEach((artifact) => {
+    const path = pathFor(artifact).replace(/^\/+/, '');
+    const current = latest.get(path);
+    if (!current || current.artifact.createdAt < artifact.createdAt) {
+      latest.set(path, { artifact, path });
+    }
+  });
+  return [...latest.values()].sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function builderSourceExplorerEntries(artifacts: BuilderArtifact[]) {
+  const finalSource = artifacts.filter(
+    (artifact) => artifact.kind === 'draft_file' && artifact.metadata.state === 'final_source',
+  );
+  const sourceArtifacts = finalSource.length
+    ? finalSource
+    : artifacts.filter((artifact) => isWorkingSourceArtifact(artifact));
+  return latestBuilderExplorerEntries(sourceArtifacts, (artifact) =>
+    artifact.metadata.state === 'final_source' || artifact.label.startsWith('src/')
+      ? artifact.label
+      : `src/${artifact.label}`,
+  );
+}
+
+function builderOutputExplorerEntries(artifacts: BuilderArtifact[]) {
+  return latestBuilderExplorerEntries(
+    artifacts.filter((artifact) => artifact.kind === 'site_file'),
+    (artifact) => artifact.label,
+  );
+}
+
+function buildBuilderExplorerTree(entries: BuilderExplorerEntry[]): BuilderExplorerFolder {
+  const root: BuilderExplorerFolder = {
+    name: 'Project',
+    path: '',
+    folders: new Map(),
+    files: [],
+  };
+  entries.forEach((entry) => {
+    const segments = entry.path.split('/').filter(Boolean);
+    const fileName = segments.pop();
+    if (!fileName) return;
+    let folder = root;
+    segments.forEach((segment) => {
+      const childPath = [folder.path, segment].filter(Boolean).join('/');
+      const child = folder.folders.get(segment) ?? {
+        name: segment,
+        path: childPath,
+        folders: new Map(),
+        files: [],
+      };
+      folder.folders.set(segment, child);
+      folder = child;
+    });
+    folder.files.push(entry);
+  });
+  return root;
+}
+
+function builderExplorerFolderFileCount(folder: BuilderExplorerFolder): number {
+  return (
+    folder.files.length +
+    [...folder.folders.values()].reduce(
+      (total, child) => total + builderExplorerFolderFileCount(child),
+      0,
+    )
+  );
+}
+
+function BuilderExplorerTree({
+  folder,
+  selectedPath,
+  onSelect,
+  expandAll = false,
+  depth = 0,
+}: {
+  folder: BuilderExplorerFolder;
+  selectedPath?: string;
+  onSelect: (entry: BuilderExplorerEntry) => void;
+  expandAll?: boolean;
+  depth?: number;
+}) {
+  const [folderOpen, setFolderOpen] = useState(depth === 1);
+  const childFolders = [...folder.folders.values()].sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+  const files = [...folder.files].sort((left, right) => left.path.localeCompare(right.path));
+  const contents = (
+    <div className="builder-file-explorer__branch">
+      {childFolders.map((child) => (
+        <BuilderExplorerTree
+          depth={depth + 1}
+          folder={child}
+          key={child.path}
+          onSelect={onSelect}
+          expandAll={expandAll}
+          selectedPath={selectedPath}
+        />
+      ))}
+      {files.map((entry) => {
+        const fileName = entry.path.split('/').pop() ?? entry.path;
+        return (
+          <Button
+            aria-current={entry.path === selectedPath ? 'true' : undefined}
+            className={entry.path === selectedPath ? 'is-selected' : undefined}
+            key={entry.artifact.id}
+            onClick={() => onSelect(entry)}
+            title={entry.path}
+            variant="tree"
+          >
+            {isImagePreviewFile(entry.artifact) ? (
+              <FileImage aria-hidden="true" size={16} />
+            ) : isTextPreviewFile(entry.artifact) ? (
+              <FileCode2 aria-hidden="true" size={16} />
+            ) : (
+              <FileText aria-hidden="true" size={16} />
+            )}
+            <span>{fileName}</span>
+          </Button>
+        );
+      })}
+    </div>
+  );
+
+  if (depth === 0) return contents;
+  return (
+    <details
+      className="builder-file-explorer__folder"
+      onToggle={(event) => !expandAll && setFolderOpen(event.currentTarget.open)}
+      open={expandAll || folderOpen}
+    >
+      <summary>
+        <FolderTree aria-hidden="true" size={16} />
+        <span>{folder.name}</span>
+        <small>{builderExplorerFolderFileCount(folder)}</small>
+      </summary>
+      {contents}
+    </details>
+  );
+}
+
+function BuilderFileExplorer({
+  artifacts,
+  onViewWebsite,
+}: {
+  artifacts: BuilderArtifact[];
+  onViewWebsite?: () => Promise<void>;
+}) {
+  const sourceEntries = useMemo(() => builderSourceExplorerEntries(artifacts), [artifacts]);
+  const outputEntries = useMemo(() => builderOutputExplorerEntries(artifacts), [artifacts]);
+  const sourceBundle = artifacts.find((artifact) => artifact.kind === 'source_bundle');
+  const initialCollection = sourceEntries.length ? 'source' : 'output';
+  const [collection, setCollection] = useState<'source' | 'output'>(initialCollection);
+  const [query, setQuery] = useState('');
+  const sourceTabRef = useRef<HTMLButtonElement>(null);
+  const outputTabRef = useRef<HTMLButtonElement>(null);
+  const explorerId = useId();
+  const sourceTabId = `${explorerId}-source-tab`;
+  const outputTabId = `${explorerId}-output-tab`;
+  const panelId = `${explorerId}-panel`;
+  const [selectedEntry, setSelectedEntry] = useState<BuilderExplorerEntry | undefined>(
+    sourceEntries[0] ?? outputEntries[0],
+  );
+  const availableEntries = collection === 'source' ? sourceEntries : outputEntries;
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const visibleEntries = normalizedQuery
+    ? availableEntries.filter((entry) => entry.path.toLocaleLowerCase().includes(normalizedQuery))
+    : availableEntries;
+  const tree = useMemo(() => buildBuilderExplorerTree(visibleEntries), [visibleEntries]);
+  const signedArtifacts = [
+    ...(selectedEntry ? [selectedEntry.artifact] : []),
+    ...(sourceBundle ? [sourceBundle] : []),
+  ];
+  const { urls, loadError } = usePrivateArtifactUrls(
+    signedArtifacts,
+    'The selected private build file could not be loaded.',
+  );
+  const selectedUrl = selectedEntry ? urls[selectedEntry.artifact.id] : undefined;
+  const [content, setContent] = useState('');
+  const [contentError, setContentError] = useState('');
+  const [isOpeningWebsite, setIsOpeningWebsite] = useState(false);
+  const [websiteError, setWebsiteError] = useState('');
+  const selectedIsCompiledHtml =
+    collection === 'output' &&
+    Boolean(selectedEntry && /(?:^|\/)index\.html$/i.test(selectedEntry.path));
+
+  useEffect(() => {
+    const nextEntries = collection === 'source' ? sourceEntries : outputEntries;
+    if (selectedEntry && nextEntries.some((entry) => entry.path === selectedEntry.path)) return;
+    setSelectedEntry(nextEntries[0]);
+  }, [collection, outputEntries, selectedEntry, sourceEntries]);
+
+  useEffect(() => {
+    if (!selectedEntry || !selectedUrl || !isTextPreviewFile(selectedEntry.artifact)) {
+      setContent('');
+      setContentError('');
+      return;
+    }
+    const controller = new AbortController();
+    setContent('');
+    setContentError('');
+    void fetch(selectedUrl, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('The private file could not be loaded.');
+        const source = await response.text();
+        return source.length > 500_000
+          ? `${source.slice(0, 500_000)}\n\n… Preview truncated.`
+          : source;
+      })
+      .then(setContent)
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        setContentError(
+          error instanceof Error ? error.message : 'The private file could not be loaded.',
+        );
+      });
+    return () => controller.abort();
+  }, [selectedEntry, selectedUrl]);
+
+  function selectCollection(nextCollection: 'source' | 'output') {
+    setCollection(nextCollection);
+    setQuery('');
+    setSelectedEntry((nextCollection === 'source' ? sourceEntries : outputEntries)[0]);
+  }
+
+  function handleCollectionKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const nextCollection = collection === 'source' ? 'output' : 'source';
+    selectCollection(nextCollection);
+    window.requestAnimationFrame(() =>
+      (nextCollection === 'source' ? sourceTabRef.current : outputTabRef.current)?.focus(),
+    );
+  }
+
+  async function viewWebsite() {
+    if (!onViewWebsite || isOpeningWebsite) return;
+    setIsOpeningWebsite(true);
+    setWebsiteError('');
+    try {
+      await onViewWebsite();
+    } catch (error) {
+      setWebsiteError(
+        error instanceof Error ? error.message : 'The visitor preview could not be opened.',
+      );
+    } finally {
+      setIsOpeningWebsite(false);
+    }
+  }
+
+  return (
+    <div className="builder-file-explorer">
+      <div className="builder-file-explorer__toolbar">
+        <div
+          aria-label="Build file collection"
+          className="builder-file-explorer__tabs"
+          role="tablist"
+        >
+          <Button
+            aria-controls={panelId}
+            aria-selected={collection === 'source'}
+            id={sourceTabId}
+            onKeyDown={handleCollectionKeyDown}
+            onClick={() => selectCollection('source')}
+            ref={sourceTabRef}
+            role="tab"
+            variant="segmented"
+          >
+            Source
+            <span>{sourceEntries.length}</span>
+          </Button>
+          <Button
+            aria-controls={panelId}
+            aria-selected={collection === 'output'}
+            id={outputTabId}
+            onKeyDown={handleCollectionKeyDown}
+            onClick={() => selectCollection('output')}
+            ref={outputTabRef}
+            role="tab"
+            variant="segmented"
+          >
+            Compiled site
+            <span>{outputEntries.length}</span>
+          </Button>
+        </div>
+        <ButtonGroup>
+          {onViewWebsite && outputEntries.length ? (
+            <Button
+              disabled={isOpeningWebsite}
+              onClick={() => void viewWebsite()}
+              type="button"
+              variant="primary"
+            >
+              <ArrowUpRight aria-hidden="true" size={16} />
+              {isOpeningWebsite ? 'Opening preview' : 'Preview website'}
+            </Button>
+          ) : null}
+          {sourceBundle && urls[sourceBundle.id] ? (
+            <ButtonLink
+              className="builder-file-explorer__download"
+              href={urls[sourceBundle.id]}
+              rel="noreferrer"
+              target="_blank"
+              variant="secondary"
+            >
+              <Download aria-hidden="true" size={16} />
+              Download source
+            </ButtonLink>
+          ) : null}
+        </ButtonGroup>
+      </div>
+      {websiteError ? (
+        <p className="form-message form-message--error" role="alert">
+          {websiteError}
+        </p>
+      ) : null}
+      <label className="builder-file-explorer__search">
+        <span>{collection === 'source' ? 'Search source files' : 'Search compiled site'}</span>
+        <span>
+          <Search aria-hidden="true" size={17} />
+          <input
+            autoComplete="off"
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search folders and files"
+            type="search"
+            value={query}
+          />
+        </span>
+      </label>
+      {availableEntries.length ? (
+        <div className="builder-file-explorer__workspace">
+          <nav
+            aria-label={
+              collection === 'source' ? 'Generated source files' : 'Compiled website files'
+            }
+            className="builder-file-explorer__tree"
+          >
+            {visibleEntries.length ? (
+              <BuilderExplorerTree
+                expandAll={Boolean(normalizedQuery)}
+                folder={tree}
+                onSelect={setSelectedEntry}
+                selectedPath={selectedEntry?.path}
+              />
+            ) : (
+              <p>No files match “{query}”.</p>
+            )}
+          </nav>
+          <section
+            aria-live="polite"
+            aria-label="Selected build file"
+            className={`builder-file-explorer__preview${selectedIsCompiledHtml ? ' builder-file-explorer__preview--website' : ''}`}
+            id={panelId}
+            role="tabpanel"
+          >
+            {selectedEntry ? (
+              <>
+                <header>
+                  <div>
+                    <Eyebrow>
+                      {collection === 'source' ? 'Project source' : 'Compiled site file'}
+                    </Eyebrow>
+                    <h3>{selectedEntry.path.split('/').pop()}</h3>
+                    <p>{selectedEntry.path}</p>
+                  </div>
+                  {!selectedIsCompiledHtml && selectedUrl ? (
+                    <ButtonLink
+                      aria-label={`Open ${selectedEntry.path} in a new tab`}
+                      href={selectedUrl}
+                      rel="noreferrer"
+                      target="_blank"
+                      variant="quiet"
+                    >
+                      <ExternalLink aria-hidden="true" size={16} />
+                      <span>Open file</span>
+                    </ButtonLink>
+                  ) : null}
+                </header>
+                {selectedIsCompiledHtml ? (
+                  <p className="builder-file-explorer__website-note">
+                    This pane shows the saved HTML source. Use Preview website above—or the direct
+                    Preview website action on the Test card—to run navigation, animations, styles,
+                    and compiled JavaScript together.
+                  </p>
+                ) : null}
+                {loadError || contentError ? (
+                  <p className="form-message form-message--error" role="alert">
+                    {loadError || contentError}
+                  </p>
+                ) : !selectedUrl ? (
+                  <div className="builder-file-explorer__loading" role="status">
+                    <LoaderCircle aria-hidden="true" className="spin" size={20} />
+                    Loading private file…
+                  </div>
+                ) : isImagePreviewFile(selectedEntry.artifact) ? (
+                  <div className="builder-file-explorer__image">
+                    <img alt={selectedEntry.path} src={selectedUrl} />
+                  </div>
+                ) : isTextPreviewFile(selectedEntry.artifact) ? (
+                  content ? (
+                    <SourcePreview content={content} />
+                  ) : (
+                    <div className="builder-file-explorer__loading" role="status">
+                      <LoaderCircle aria-hidden="true" className="spin" size={20} />
+                      Reading file…
+                    </div>
+                  )
+                ) : (
+                  <div className="builder-file-explorer__binary">
+                    <FileText aria-hidden="true" size={28} />
+                    <strong>Preview unavailable</strong>
+                    <p>Open the private file to inspect or download it.</p>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="builder-file-explorer__binary">
+                <FolderTree aria-hidden="true" size={28} />
+                <strong>Select a file</strong>
+                <p>Choose a file from the project tree to inspect it.</p>
+              </div>
+            )}
+          </section>
+        </div>
+      ) : (
+        <div className="builder-file-explorer__empty">
+          <FolderTree aria-hidden="true" size={28} />
+          <strong>
+            {collection === 'source' ? 'No browsable source files' : 'No compiled website files'}
+          </strong>
+          <p>
+            {collection === 'source' && sourceBundle
+              ? 'This older build has a downloadable source archive but no individual source-file records.'
+              : 'Files appear here as the private builder saves them.'}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BuilderFileExplorerDialog({
+  artifacts,
+  label = 'Browse files',
+  loadStatus = 'ready',
+  loadError,
+  onLoad,
+  onViewWebsite,
+}: {
+  artifacts: BuilderArtifact[];
+  label?: string;
+  loadStatus?: 'idle' | BuilderRunEvidenceState['status'];
+  loadError?: string;
+  onLoad?: () => void;
+  onViewWebsite?: () => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const sourceCount = builderSourceExplorerEntries(artifacts).length;
+  const outputCount = builderOutputExplorerEntries(artifacts).length;
+  return (
+    <Dialog.Root
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen && onLoad && loadStatus !== 'loading' && loadStatus !== 'ready') {
+          onLoad();
+        }
+      }}
+      open={open}
+    >
+      <Dialog.Trigger asChild>
+        <Button type="button" variant="secondary">
+          <FolderTree aria-hidden="true" size={16} />
+          {label}
+          {loadStatus === 'ready' && sourceCount + outputCount > 0 ? (
+            <span className="builder-file-explorer__trigger-count">
+              {sourceCount + outputCount}
+            </span>
+          ) : null}
+        </Button>
+      </Dialog.Trigger>
+      <Dialog.Portal>
+        <Dialog.Overlay className="builder-file-preview-overlay" />
+        <Dialog.Content
+          aria-describedby="builder-file-explorer-dialog-description"
+          className="builder-file-explorer-dialog"
+        >
+          <div className="builder-file-preview-dialog__header">
+            <div>
+              <Eyebrow>Private build workspace</Eyebrow>
+              <Dialog.Title>Generated files</Dialog.Title>
+            </div>
+            <Dialog.Close asChild>
+              <IconButton label="Close generated files" variant="quiet">
+                <X aria-hidden="true" size={18} />
+              </IconButton>
+            </Dialog.Close>
+          </div>
+          <Dialog.Description className="muted-copy" id="builder-file-explorer-dialog-description">
+            Source is the editable Next.js project. Compiled site contains the browser-ready files
+            produced from that source. Preview website opens the complete interactive result;
+            selecting a file is only for inspection.
+          </Dialog.Description>
+          {loadStatus === 'error' ? (
+            <div className="builder-file-explorer__empty">
+              <CircleAlert aria-hidden="true" size={28} />
+              <strong>Build files could not be loaded</strong>
+              <p className="form-message form-message--error" role="alert">
+                {loadError || 'This test’s private files are temporarily unavailable.'}
+              </p>
+              {onLoad ? (
+                <Button onClick={onLoad} variant="secondary">
+                  <RotateCcw aria-hidden="true" size={16} />
+                  Try again
+                </Button>
+              ) : null}
+            </div>
+          ) : loadStatus === 'loading' || loadStatus === 'idle' ? (
+            <div className="builder-file-explorer__loading" role="status">
+              <LoaderCircle aria-hidden="true" className="spin" size={22} />
+              Loading this test’s private files…
+            </div>
+          ) : (
+            <BuilderFileExplorer artifacts={artifacts} onViewWebsite={onViewWebsite} />
+          )}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function BuilderRunFileExplorerDialog({
+  artifacts,
+  label = 'Browse files',
+  onLoad,
+  onViewWebsite,
+  state,
+}: {
+  artifacts: BuilderArtifact[];
+  label?: string;
+  onLoad: () => void;
+  onViewWebsite?: () => Promise<void>;
+  state?: BuilderRunEvidenceState;
+}) {
+  const loadedArtifacts = state?.status === 'ready' ? state.evidence.artifacts : artifacts;
+  const loadStatus = artifacts.length ? 'ready' : (state?.status ?? 'idle');
+  return (
+    <BuilderFileExplorerDialog
+      artifacts={loadedArtifacts}
+      label={label}
+      loadError={state?.status === 'error' ? state.message : undefined}
+      loadStatus={loadStatus}
+      onLoad={onLoad}
+      onViewWebsite={onViewWebsite}
+    />
   );
 }
 
@@ -6135,14 +6726,164 @@ function testBuildChangeSummary(run: BuilderRun, previousRun?: BuilderRun) {
     : `No agent-contract change from the previous test (${run.templateVersion}).`;
 }
 
+function buildManifestSelectedPages(manifest?: BuildManifest): BuildManifestPage[] {
+  return Array.isArray(manifest?.data.selectedPages)
+    ? manifest.data.selectedPages.filter(
+        (page): page is BuildManifestPage => Boolean(page) && typeof page === 'object',
+      )
+    : [];
+}
+
+function buildManifestPageOutputPath(page: BuildManifestPage) {
+  if (typeof page.outputPath === 'string' && page.outputPath.trim()) {
+    return page.outputPath.replace(/^\/+/, '');
+  }
+  let publicPath =
+    typeof page.publicPath === 'string' && page.publicPath.trim()
+      ? page.publicPath
+      : typeof page.routePath === 'string' && page.routePath.trim()
+        ? page.routePath
+        : '/';
+  if (publicPath === '/' && typeof page.url === 'string') {
+    try {
+      publicPath = new URL(page.url).pathname;
+    } catch {
+      publicPath = '/';
+    }
+  }
+  const normalized = publicPath.replace(/^\/+|\/+$/g, '');
+  return normalized ? `${normalized}/index.html` : 'index.html';
+}
+
 function builderRunPageCount(workspace: ProspectWorkspace, run: BuilderRun) {
   if (run.buildMode === 'homepage_test') return 1;
   if (run.buildMode === 'page_test') return run.targetSourceUrls?.length || 1;
   const manifest = workspace.buildManifests.find(
     (candidate) => candidate.id === run.buildManifestId,
   );
+  return buildManifestSelectedPages(manifest ?? workspace.buildManifest).length;
+}
+
+type BuilderRunPageSummary = {
+  name: string;
+  path: string;
+};
+
+function isVisitorPageOutput(path: string) {
+  const normalized = path.replace(/^\/+/, '');
   return (
-    manifest?.data.selectedPages.length ?? workspace.buildManifest?.data.selectedPages.length ?? 0
+    /\.html$/i.test(normalized) && !/(?:^|\/)(?:404|_not-found)(?:\/|\.html$)/i.test(normalized)
+  );
+}
+
+function builderRunPageSummaries(
+  workspace: ProspectWorkspace,
+  run: BuilderRun,
+  artifacts: BuilderArtifact[],
+): BuilderRunPageSummary[] {
+  const manifest =
+    workspace.buildManifests.find((candidate) => candidate.id === run.buildManifestId) ??
+    workspace.buildManifest;
+  const plannedPages = buildManifestSelectedPages(manifest);
+  const plannedByOutput = new Map(
+    plannedPages.map((page) => [buildManifestPageOutputPath(page), page]),
+  );
+  const actualOutputs = builderOutputExplorerEntries(artifacts)
+    .map((entry) => entry.path.replace(/^\/+/, ''))
+    .filter(
+      (path) => isVisitorPageOutput(path) && (!plannedByOutput.size || plannedByOutput.has(path)),
+    );
+  const targetedPageOutputs = plannedPages
+    .filter((page) =>
+      (run.targetSourceUrls?.length
+        ? run.targetSourceUrls
+        : run.targetSourceUrl
+          ? [run.targetSourceUrl]
+          : []
+      ).includes(page.url),
+    )
+    .map(buildManifestPageOutputPath);
+  const outputPaths = actualOutputs.length
+    ? actualOutputs
+    : run.buildMode === 'homepage_test'
+      ? ['index.html']
+      : run.buildMode === 'page_test'
+        ? targetedPageOutputs.length
+          ? targetedPageOutputs
+          : plannedPages.slice(0, 1).map(buildManifestPageOutputPath)
+        : plannedPages.map(buildManifestPageOutputPath);
+  return [...new Set(outputPaths)].map((outputPath) => {
+    const planned = plannedByOutput.get(outputPath);
+    const publicPath =
+      planned?.publicPath ??
+      (outputPath === 'index.html' ? '/' : `/${outputPath.replace(/\/index\.html$/i, '')}/`);
+    const fallbackName =
+      publicPath === '/'
+        ? 'Home'
+        : publicPath
+            .split('/')
+            .filter(Boolean)
+            .at(-1)
+            ?.replaceAll('-', ' ')
+            .replace(/\b\w/g, (letter) => letter.toUpperCase()) || 'Page';
+    return { name: planned?.title || fallbackName, path: publicPath };
+  });
+}
+
+function BuilderRunPageDisclosure({
+  workspace,
+  run,
+  artifacts,
+  state,
+  onLoad,
+}: {
+  workspace: ProspectWorkspace;
+  run: BuilderRun;
+  artifacts: BuilderArtifact[];
+  state?: BuilderRunEvidenceState;
+  onLoad: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const disclosureId = useId();
+  const pages = builderRunPageSummaries(workspace, run, artifacts);
+  const count = artifacts.length ? pages.length : builderRunPageCount(workspace, run);
+  function toggle() {
+    const nextOpen = !open;
+    setOpen(nextOpen);
+    if (nextOpen && !artifacts.length && !state) onLoad();
+  }
+  return (
+    <div className="builder-run-pages">
+      <Button
+        aria-controls={disclosureId}
+        aria-expanded={open}
+        onClick={toggle}
+        type="button"
+        variant="quiet"
+      >
+        <FileText aria-hidden="true" size={16} />
+        {count} {count === 1 ? 'page' : 'pages'} built
+        <ChevronDown aria-hidden="true" className={open ? 'is-open' : undefined} size={16} />
+      </Button>
+      {open ? (
+        <div className="builder-run-pages__content" id={disclosureId}>
+          {state?.status === 'loading' && !artifacts.length ? (
+            <small role="status">Loading page names…</small>
+          ) : state?.status === 'error' && !artifacts.length ? (
+            <small role="alert">{state.message}</small>
+          ) : (
+            <ul aria-label="Built pages">
+              {pages.map((page) => (
+                <li key={page.path}>
+                  <strong>{page.name}</strong>
+                  <code>{page.path}</code>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -6388,6 +7129,190 @@ function BuilderRunUsage({ records, run }: { records: AiUsageRecord[]; run: Buil
   );
 }
 
+function AgentPackageDetailsDialog({
+  agentPackages,
+  run,
+}: {
+  agentPackages: AgentPackage[];
+  run: BuilderRun;
+}) {
+  const agentPackage = agentPackages.find(
+    (candidate) =>
+      candidate.id === run.agentPackageId ||
+      (!run.agentPackageId && candidate.version === run.agentPackageVersion),
+  );
+  const basePackage = agentPackage?.basePackageId
+    ? agentPackages.find((candidate) => candidate.id === agentPackage.basePackageId)
+    : undefined;
+  const packageVersion = agentPackage?.version ?? run.agentPackageVersion;
+  const packageLabel = agentPackageVersionLabel(packageVersion);
+
+  return (
+    <Dialog.Root>
+      <Dialog.Trigger asChild>
+        <Button aria-label={`Open package ${packageLabel} details for this test`} variant="inline">
+          <PackageCheck aria-hidden="true" size={15} />
+          {packageVersion === undefined ? 'Package details' : `Package ${packageLabel}`}
+        </Button>
+      </Dialog.Trigger>
+      <Dialog.Portal>
+        <Dialog.Overlay className="confirmation-overlay" />
+        <Dialog.Content
+          aria-describedby={`agent-package-detail-description-${run.id}`}
+          className="agent-package-detail-dialog"
+        >
+          <header className="agent-package-detail-dialog__header">
+            <div>
+              <Eyebrow>Immutable test package</Eyebrow>
+              <Dialog.Title>
+                {packageVersion === undefined
+                  ? 'Legacy build package'
+                  : `Build package ${packageLabel}`}
+              </Dialog.Title>
+            </div>
+            <Dialog.Close asChild>
+              <IconButton label="Close package details" variant="quiet">
+                <X aria-hidden="true" size={18} />
+              </IconButton>
+            </Dialog.Close>
+          </header>
+          <Dialog.Description
+            className="muted-copy"
+            id={`agent-package-detail-description-${run.id}`}
+          >
+            The package and foundation pinned to this exact test run. Package versions and manifest
+            contract versions have separate release histories.
+          </Dialog.Description>
+
+          {agentPackage ? (
+            <>
+              <div className="agent-package-detail-dialog__summary">
+                <StatusBadge
+                  tone={
+                    agentPackage.status === 'published' ||
+                    agentPackage.status === 'production_ready'
+                      ? 'success'
+                      : agentPackage.status === 'superseded'
+                        ? 'neutral'
+                        : 'warning'
+                  }
+                >
+                  {agentPackage.status.replaceAll('_', ' ')}
+                </StatusBadge>
+                <p>{agentPackage.summary}</p>
+              </div>
+              <dl className="agent-package-detail-grid">
+                <div>
+                  <dt>Package version</dt>
+                  <dd>{agentPackageVersionLabel(agentPackage.version)}</dd>
+                </div>
+                <div>
+                  <dt>Package ID</dt>
+                  <dd>{agentPackage.id}</dd>
+                </div>
+                <div>
+                  <dt>Based on</dt>
+                  <dd>
+                    {basePackage
+                      ? `Package ${agentPackageVersionLabel(basePackage.version)}`
+                      : 'Original lineage'}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Builder contract</dt>
+                  <dd>{agentPackage.builderContractVersion}</dd>
+                </div>
+                <div>
+                  <dt>Builder foundation</dt>
+                  <dd>{agentPackage.foundationVersion}</dd>
+                </div>
+                <div>
+                  <dt>Run template</dt>
+                  <dd>{run.templateVersion}</dd>
+                </div>
+                <div>
+                  <dt>Capability assessment</dt>
+                  <dd>{agentPackage.capabilityAssessment.replaceAll('_', ' ')}</dd>
+                </div>
+                <div>
+                  <dt>Created</dt>
+                  <dd>{formatDateTime(agentPackage.createdAt)}</dd>
+                </div>
+                <div>
+                  <dt>Approved</dt>
+                  <dd>
+                    {agentPackage.approvedAt
+                      ? formatDateTime(agentPackage.approvedAt)
+                      : 'Not recorded'}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Published</dt>
+                  <dd>
+                    {agentPackage.publishedAt
+                      ? formatDateTime(agentPackage.publishedAt)
+                      : 'Not published'}
+                  </dd>
+                </div>
+              </dl>
+
+              <section className="agent-package-detail-dialog__section">
+                <h3>Included behaviours</h3>
+                {agentPackage.stagedBehaviourIds?.length ? (
+                  <ul className="agent-package-detail-dialog__behaviours">
+                    {agentPackage.stagedBehaviourIds.map((behaviourId) => (
+                      <li key={behaviourId}>
+                        <Check aria-hidden="true" size={15} />
+                        <span>{agentBehaviourTitle(behaviourId)}</span>
+                        <code>{behaviourId}</code>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="muted-copy">No staged behaviour identifiers were recorded.</p>
+                )}
+              </section>
+
+              {agentPackage.capabilityProposal ? (
+                <section className="agent-package-detail-dialog__section">
+                  <h3>Capability proposal</h3>
+                  <p>{agentPackage.capabilityProposal}</p>
+                </section>
+              ) : null}
+              <section className="agent-package-detail-dialog__section">
+                <h3>Contract addendum</h3>
+                <pre>
+                  {agentPackage.contractAddendum.trim() ||
+                    'No package-specific contract addendum. The base builder contract applied unchanged.'}
+                </pre>
+              </section>
+              <section className="agent-package-detail-dialog__section">
+                <h3>Implementation guidance</h3>
+                <pre>
+                  {agentPackage.instructionsAddendum.trim() ||
+                    'No package-specific implementation addendum. The base builder instructions applied unchanged.'}
+                </pre>
+              </section>
+            </>
+          ) : (
+            <div className="agent-package-detail-dialog__missing">
+              <CircleAlert aria-hidden="true" size={22} />
+              <div>
+                <strong>The package record is unavailable</strong>
+                <p>
+                  This run retained template <code>{run.templateVersion}</code>
+                  {packageLabel ? ` and package version v${packageLabel}` : ''}, but its complete
+                  package release record is not present in this workspace.
+                </p>
+              </div>
+            </div>
+          )}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 function BuilderTimelineItem({ event }: { event: BuilderEvent }) {
   const expandable = event.kind !== 'activity';
   const tone = event.kind === 'error' ? 'danger' : event.kind === 'quality' ? 'success' : 'neutral';
@@ -6474,23 +7399,20 @@ function BuilderNewActivityItem({ children, isNew }: { children: ReactNode; isNe
   );
 }
 
-type BuilderRunEvidenceState =
-  | { status: 'loading' }
-  | { status: 'ready'; evidence: BuilderRunEvidence }
-  | { status: 'error'; message: string };
-
 function BuilderHistoryEntry({
   run,
   state,
   previousState,
   onLoad,
   onLoadPrevious,
+  onViewWebsite,
 }: {
   run: BuilderRun;
   state?: BuilderRunEvidenceState;
   previousState?: BuilderRunEvidenceState;
   onLoad: (builderRunId: string) => Promise<void>;
   onLoadPrevious?: () => void;
+  onViewWebsite?: () => Promise<void>;
 }) {
   const screenshots =
     state?.status === 'ready'
@@ -6528,6 +7450,11 @@ function BuilderHistoryEntry({
           <p className="muted-copy">
             {state.evidence.events.length} log entries · {screenshots.length} responsive captures
           </p>
+          <BuilderFileExplorerDialog
+            artifacts={state.evidence.artifacts}
+            label="Browse this build’s files"
+            onViewWebsite={onViewWebsite}
+          />
           {state.evidence.events.length ? (
             <ol className="builder-history__logs">
               {[...state.evidence.events].reverse().map((event) => (
@@ -6589,6 +7516,7 @@ function BuilderRunPanel({
   onCancelBuild,
   onDeleteBuild,
   onOpenPreview,
+  onOpenUsageAnalysis,
   onLoadBuildEvidence,
   onMoveToAgentStudio,
   onRequestSiteTest,
@@ -6610,6 +7538,7 @@ function BuilderRunPanel({
   onCancelBuild: () => Promise<void>;
   onDeleteBuild: (businessId: string) => Promise<void>;
   onOpenPreview: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
+  onOpenUsageAnalysis?: (builderRunId: string) => void;
   onLoadBuildEvidence: (builderRunId: string) => Promise<BuilderRunEvidence>;
   onMoveToAgentStudio?: (builderRunId: string) => Promise<void>;
   onRequestSiteTest?: (
@@ -6626,6 +7555,12 @@ function BuilderRunPanel({
     isTestBuild ? candidate.buildMode !== 'full_site' : candidate.buildMode === 'full_site',
   );
   const run = runs[0];
+  const runHasUsage = Boolean(
+    run &&
+    workspace.aiUsageRecords.some(
+      (record) => record.builderRunId === run.id && record.source === 'codex_build',
+    ),
+  );
   const runIsLatest = run?.id === workspace.latestBuilderRun?.id;
   const [isRequesting, setIsRequesting] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
@@ -6644,9 +7579,10 @@ function BuilderRunPanel({
   const [sourceBuilderRunId, setSourceBuilderRunId] = useState('');
   const [studioSourceBuilderRunId, setStudioSourceBuilderRunId] = useState('');
   const [siteFeatureDirection, setSiteFeatureDirection] = useState(
-    'Repair the multi-page navigation architecture. Keep primary destinations consistent on every page, use the exact generated HTML output paths, organise deeper pages beneath meaningful parent routes, and ensure every generated page is reachable from the homepage. Preserve all unrelated content, styling, and interactions.',
+    'Repair the multi-page navigation architecture. Keep primary destinations consistent on every page, link them to real generated routes instead of homepage section shortcuts, use the exact generated HTML output paths, organise deeper pages beneath meaningful parent routes, and ensure every generated page is reachable from the homepage. Preserve all unrelated content, styling, and interactions.',
   );
   const [retainedTestContextId, setRetainedTestContextId] = useState<string>();
+  const [dismissedStoppedTestId, setDismissedStoppedTestId] = useState<string>();
   const [buildDirections, setBuildDirections] = useState<string[]>([]);
   const [selectedBehaviourIds, setSelectedBehaviourIds] = useState<string[]>([]);
   const [isStagingBehaviours, setIsStagingBehaviours] = useState(false);
@@ -6672,8 +7608,8 @@ function BuilderRunPanel({
     ? agentPackages.find((agentPackage) => agentPackage.id === selectedAgentPackage.basePackageId)
     : undefined;
   const inheritedPackageLabel = inheritedAgentPackage
-    ? `Inherited from package v${inheritedAgentPackage.version}`
-    : `Package v${selectedAgentPackage?.version ?? publishedPackage?.version ?? 4} baseline`;
+    ? `Inherited from package ${agentPackageVersionLabel(inheritedAgentPackage.version)}`
+    : `Package ${agentPackageVersionLabel(selectedAgentPackage?.version ?? publishedPackage?.version ?? 4)} baseline`;
   const includesBrandIntroduction = Boolean(
     selectedAgentPackage &&
     /brand[-\s]introduction/i.test(
@@ -6695,29 +7631,29 @@ function BuilderRunPanel({
               : includesResponsiveSidebar
                 ? 'responsive-sidebar'
                 : 'package-behaviour',
-            title: `Package v${selectedAgentPackage.version} testing behaviour`,
+            title: `Package ${agentPackageVersionLabel(selectedAgentPackage.version)} testing behaviour`,
             detail: selectedAgentPackage.capabilityProposal || selectedAgentPackage.summary,
-            revision: `v${selectedAgentPackage.version}.0.2`,
+            revision: `v${selectedAgentPackage.version}.0.10`,
             change:
-              'Latest edit: the package now builds a pinned Next.js, TypeScript, Tailwind, and Base UI project with generated site-specific components.',
+              'Latest edit: opening a non-homepage test now enters through its first selected generated route instead of the capability root’s framework not-found page.',
           },
           {
             id: 'hero-handoff',
             title: 'Visible hero entrance after the logo handoff',
             detail:
               'After the logo has reached the real navigation mark, the hero heading, supporting copy, and visual media reveal separately. The entrance no longer plays behind the loading overlay, so visitors can see it happen.',
-            revision: `v${selectedAgentPackage.version}.2`,
+            revision: `v${selectedAgentPackage.version}.38`,
             change:
-              'Latest edit: reveal, factual-counter, and approved-logo handoff behaviour now runs through the locked React SiteRuntime component.',
+              'Latest edit: the loading logo now uses top-left geometry against a visible settled header, preventing an offset endpoint or upward shot before the page reveal.',
           },
           {
             id: 'responsive-sidebar',
             title: 'Mobile & tablet sidebar navigation',
             detail:
               'Below desktop width, the header links become a leading-edge sidebar that reuses the real logo and header palette and opens from the trigger side. On motion-enabled visits, the header slides away after a downward scroll and returns on any upward scroll. It supports close, backdrop, Escape, keyboard focus, route selection, and reduced-motion users; desktop navigation stays visible.',
-            revision: `v${selectedAgentPackage.version}.13`,
+            revision: `v${selectedAgentPackage.version}.15`,
             change:
-              'Latest edit: compact navigation is now a generated React/Base UI component verified open and closed for leading position, focus entry and restoration, Escape, reduced motion, vertical routes, touch size, and overflow.',
+              'Latest edit: compact navigation now uses the slower smooth timing vocabulary while retaining full enter/exit travel and ordered logo, route, and action reveals.',
           },
           {
             id: 'contextual-logo-selection',
@@ -6732,28 +7668,28 @@ function BuilderRunPanel({
             id: 'visual-content-recovery',
             title: 'Semantic recovery from image-based content',
             detail:
-              'Human-approved text recovered from captured images keeps its source page and section provenance, while the builder chooses a new accessible component or section instead of copying the old image, carousel, gallery, or screenshot treatment.',
-            revision: `v${selectedAgentPackage.version}.14`,
+              'Human-approved text recovered from captured images keeps its source page and section provenance, while the source image is excluded from reuse and the builder creates a new accessible component or section.',
+            revision: `v${selectedAgentPackage.version}.15`,
             change:
-              'Latest edit: testimonial analysis now recognises short trailing role and organisation lines as visible attribution, keeping them out of the quotation so every feedback item receives consistent attribution formatting in the single build pass.',
+              'Latest edit: an image that has been converted into approved semantic content is now excluded from reusable manifest assets and the staged builder workspace, so only the reviewed structured information can appear in the redesign.',
           },
           {
             id: 'site-navigation-architecture',
             title: 'Multi-page navigation architecture',
             detail:
               'Every selected output remains a real page. Primary destinations stay consistent while deeper pages are organised through meaningful parent pages, nested navigation, breadcrumbs, cards, or contextual links, and every page remains reachable from the homepage.',
-            revision: `v${selectedAgentPackage.version}.23`,
+            revision: `v${selectedAgentPackage.version}.35`,
             change:
-              'Latest edit: Refine now searches approved pages by name, path, or URL while keeping every selected page pinned in a dedicated group above the filtered results.',
+              'Latest edit: metadata, H1s, navigation, breadcrumbs, cards, and contextual links must use consistent content-derived page names while immutable route paths stay unchanged.',
           },
           {
             id: 'next-component-architecture',
             title: 'Next.js generated component architecture',
             detail:
               'The agent creates each business’s visual tokens, UI primitives, patterns, sections, site components, layouts, and pages on a pinned strict TypeScript, Tailwind, Base UI, and Lucide foundation.',
-            revision: `v${selectedAgentPackage.version}.18`,
+            revision: `v${selectedAgentPackage.version}.39`,
             change:
-              'Latest edit: locked mechanics are now separated from generated appearance, so audited behaviour is reused without imposing a Bootstrap-style visual theme.',
+              'Latest edit: every route now uses gap-token text stacks that reveal direct children sequentially and includes a bounded scroll-depth composition without changing its spacing geometry.',
           },
           {
             id: 'runtime-profiles',
@@ -6769,9 +7705,9 @@ function BuilderRunPanel({
             title: 'Framework and responsive quality gates',
             detail:
               'Generated source must pass formatting, lint, strict typing, production build, route and provenance checks, browser interactions, accessibility, and exact responsive evidence.',
-            revision: `v${selectedAgentPackage.version}.22`,
+            revision: `v${selectedAgentPackage.version}.36`,
             change:
-              'Latest edit: page-set tests now compile, verify route provenance, and capture responsive and accessibility evidence for every selected output.',
+              'Latest edit: package v6.9 resolves the preview entry from the immutable selected-page mapping so every completed page-set test opens on built output.',
           },
         ]
       : [];
@@ -6830,7 +7766,7 @@ function BuilderRunPanel({
   const [historyEvidence, setHistoryEvidence] = useState<
     Record<string, BuilderRunEvidenceState | undefined>
   >({});
-  const allPageTestOptions = workspace.buildManifest?.data.selectedPages ?? [];
+  const allPageTestOptions = buildManifestSelectedPages(workspace.buildManifest);
   const homepageTestOption = allPageTestOptions.find((page) => {
     try {
       return new URL(page.url).pathname.replace(/\/+$/, '') === '';
@@ -7019,9 +7955,9 @@ function BuilderRunPanel({
   const homepageRequirementDetail = exactHomepageTestReady
     ? 'A homepage test for this Build Manifest is ready. The complete prospect build remains private until separately approved for sharing.'
     : compatibleHomepageTestReady
-      ? `A compatible homepage test is ready. The complete build will automatically rebase its design direction onto the current Build Manifest, production package v${publishedPackage?.version ?? '?'}, approved logos, and recovered content.`
+      ? `A compatible homepage test is ready. The complete build will automatically rebase its design direction onto the current Build Manifest, production package ${agentPackageVersionLabel(publishedPackage?.version)}, approved logos, and recovered content.`
       : homepageTestForDifferentPackage
-        ? `The homepage test for this Build Manifest used agent package v${homepageTestForDifferentPackage.agentPackageVersion ?? '?'}. Run and review the homepage test with the current production package v${publishedPackage?.version ?? '?'} before starting the complete website.`
+        ? `The homepage test for this Build Manifest used agent package ${agentPackageVersionLabel(homepageTestForDifferentPackage.agentPackageVersion)}. Run and review the homepage test with the current production package ${agentPackageVersionLabel(publishedPackage?.version)} before starting the complete website.`
         : 'Complete and review a homepage test in Agent Studio for this Build Manifest before starting the complete prospect build.';
   const loadedRunEvidence = run ? historyEvidence[run.id] : undefined;
   const currentRunEvidenceLoading = !runIsLatest && loadedRunEvidence?.status === 'loading';
@@ -7038,6 +7974,7 @@ function BuilderRunPanel({
       ? loadedRunEvidence.evidence.events
       : [];
   const previewFiles = currentArtifacts.filter((artifact) => artifact.kind === 'site_file');
+  const sourceFiles = builderSourceExplorerEntries(currentArtifacts);
   const screenshots = currentArtifacts.filter((artifact) => artifact.kind === 'screenshot');
   const progressMilestones = run ? buildProgressMilestones(run, screenshots) : [];
   const { urls: screenshotUrls, loadError } = usePrivateArtifactUrls(
@@ -7054,7 +7991,8 @@ function BuilderRunPanel({
   const showCurrentRunLogs = Boolean(!pendingBuild && run);
   const frozenDraft =
     run?.status === 'paused' || run?.status === 'failed' || run?.status === 'cancelled';
-  const retainedTestContext = isTestBuild && frozenDraft && Boolean(run);
+  const retainedTestContext =
+    isTestBuild && frozenDraft && Boolean(run) && dismissedStoppedTestId !== run?.id;
   useEffect(() => {
     if (!isTestBuild || !run || (!active && !frozenDraft) || retainedTestContextId === run.id)
       return;
@@ -7068,6 +8006,9 @@ function BuilderRunPanel({
     if (run.targetSourceUrls?.length) setTargetSourceUrls(run.targetSourceUrls);
     setRetainedTestContextId(run.id);
   }, [active, frozenDraft, isTestBuild, retainedTestContextId, run, testPackages]);
+  useEffect(() => {
+    if (active && dismissedStoppedTestId) setDismissedStoppedTestId(undefined);
+  }, [active, dismissedStoppedTestId]);
   const draftAvailable = currentArtifacts.some(
     (artifact) => artifact.kind === 'draft_file' && artifact.label === 'index.html',
   );
@@ -7081,7 +8022,7 @@ function BuilderRunPanel({
     targetSourceUrls.length === 1 && targetSourceUrls[0] === homepageTestOption?.url;
   const selectedPageCanBuild = targetSourceUrls.length > 0;
   const currentSelectedPageUrls = new Set(
-    (currentManifest?.data.selectedPages ?? []).map((page) => page.url),
+    buildManifestSelectedPages(currentManifest).map((page) => page.url),
   );
   const completedTestPages = workspace.builderRuns
     .filter(
@@ -7197,6 +8138,16 @@ function BuilderRunPanel({
         },
       }));
     }
+  }
+
+  function artifactsForCompletedRun(completedRun: BuilderRun) {
+    if (workspace.latestBuilderRun?.id === completedRun.id) {
+      return workspace.builderArtifacts.filter(
+        (artifact) => artifact.builderRunId === completedRun.id,
+      );
+    }
+    const evidenceState = historyEvidence[completedRun.id];
+    return evidenceState?.status === 'ready' ? evidenceState.evidence.artifacts : [];
   }
 
   useEffect(() => {
@@ -7362,8 +8313,8 @@ function BuilderRunPanel({
                 <Eyebrow>Current private test</Eyebrow>
                 <h4 id="builder-active-test-title">
                   {active
-                    ? `Test ${completedTestRuns.length + 1} is building`
-                    : `Test ${completedTestRuns.length + 1} needs attention`}
+                    ? `${run ? usageBuildLabel({ builderRunId: run.id }, workspace).split(' · ')[0] : 'Test'} is building`
+                    : `${run ? usageBuildLabel({ builderRunId: run.id }, workspace).split(' · ')[0] : 'Test'} needs attention`}
                 </h4>
               </div>
               <StatusBadge tone={active ? 'warning' : 'danger'}>
@@ -7373,7 +8324,13 @@ function BuilderRunPanel({
             <dl className="builder-active-test__context">
               <div>
                 <dt>Test package</dt>
-                <dd>v{run?.agentPackageVersion ?? '?'}</dd>
+                <dd>
+                  {run ? (
+                    <AgentPackageDetailsDialog agentPackages={agentPackages} run={run} />
+                  ) : (
+                    'Not assigned'
+                  )}
+                </dd>
               </div>
               <div>
                 <dt>Test approach</dt>
@@ -7407,19 +8364,31 @@ function BuilderRunPanel({
               <>
                 <p className="muted-copy">
                   This failed test remains selected with its original package and test approach.
-                  Continue it from the saved private source, or review its diagnostics below.
+                  Continue it from the saved private source, open its frozen draft below, or keep
+                  testing with a different package or page.
                 </p>
-                {onResumeBuild && savedSourceAvailable ? (
+                <ButtonGroup>
+                  {onResumeBuild && savedSourceAvailable ? (
+                    <Button
+                      disabled={isResuming}
+                      onClick={() => run && void resumeBuild(run.id)}
+                      type="button"
+                      variant="secondary"
+                    >
+                      <RotateCcw aria-hidden="true" size={16} />
+                      {isResuming ? 'Continuing test' : 'Continue this test'}
+                    </Button>
+                  ) : null}
                   <Button
                     disabled={isResuming}
-                    onClick={() => run && void resumeBuild(run.id)}
+                    onClick={() => run && setDismissedStoppedTestId(run.id)}
                     type="button"
-                    variant="secondary"
+                    variant="quiet"
                   >
-                    <RotateCcw aria-hidden="true" size={16} />
-                    {isResuming ? 'Continuing test' : 'Continue this test'}
+                    <Play aria-hidden="true" size={16} />
+                    Test something else
                   </Button>
-                ) : null}
+                </ButtonGroup>
               </>
             )}
           </section>
@@ -7439,7 +8408,7 @@ function BuilderRunPanel({
               >
                 {testPackages.map((agentPackage) => (
                   <option key={agentPackage.id} value={agentPackage.id}>
-                    v{agentPackage.version} ·{' '}
+                    {agentPackageVersionLabel(agentPackage.version)} ·{' '}
                     {agentPackage.status === 'published' ? 'Current production' : 'Approved test'}
                   </option>
                 ))}
@@ -7617,7 +8586,7 @@ function BuilderRunPanel({
                             Test {index + 1} —{' '}
                             {sourcePage?.title ??
                               (candidate.targetSourceUrl ? 'Selected page' : 'Homepage')}{' '}
-                            · package v{candidate.agentPackageVersion ?? 4}
+                            · package {agentPackageVersionLabel(candidate.agentPackageVersion ?? 4)}
                             {usesPriorManifest ? ' · apply current assets' : ''}
                             {sourceUnavailable ? ' · source checkpoint unavailable' : ''}
                           </option>
@@ -7693,8 +8662,8 @@ function BuilderRunPanel({
                               {' · '}
                               {builderRunPageCount(workspace, sourceRun)} page
                               {builderRunPageCount(workspace, sourceRun) === 1 ? '' : 's'}
-                              {' · v'}
-                              {sourceRun.agentPackageVersion ?? '?'}
+                              {' · '}
+                              {agentPackageVersionLabel(sourceRun.agentPackageVersion)}
                             </option>
                           ))}
                         </select>
@@ -8082,7 +9051,7 @@ function BuilderRunPanel({
                 <p className="builder-page-test__production-version">
                   <span>Production version</span>
                   <strong className="agent-production-version-value">
-                    v{publishedPackage.version}
+                    {agentPackageVersionLabel(publishedPackage.version)}
                     <AgentProductionNotification count={pendingProductionFeatureCount} />
                   </strong>
                   <small>This exact published version will be pinned to the build.</small>
@@ -8151,7 +9120,9 @@ function BuilderRunPanel({
           ) : null}
         </div>
 
-        {((run?.status === 'running' || frozenDraft) && draftAvailable) || (run && !active) ? (
+        {((run?.status === 'running' || frozenDraft) && draftAvailable) ||
+        (run && !active) ||
+        (run && runHasUsage && onOpenUsageAnalysis) ? (
           <div className="builder-run__utility-actions">
             {(run?.status === 'running' || frozenDraft) && draftAvailable ? (
               <Button
@@ -8166,6 +9137,12 @@ function BuilderRunPanel({
                   : frozenDraft
                     ? 'Open frozen draft'
                     : 'View working draft'}
+              </Button>
+            ) : null}
+            {run && runHasUsage && onOpenUsageAnalysis ? (
+              <Button onClick={() => onOpenUsageAnalysis(run.id)} type="button" variant="quiet">
+                <WalletCards aria-hidden="true" size={16} />
+                Open usage analysis
               </Button>
             ) : null}
             {run && !active && !isTestBuild ? (
@@ -8215,15 +9192,19 @@ function BuilderRunPanel({
                             : 'Original build'}
                         </strong>
                         {index === 0 ? <StatusBadge tone="success">Newest</StatusBadge> : null}
-                        <StatusBadge tone="neutral">
-                          {builderRunPageCount(workspace, sourceRun)} page
-                          {builderRunPageCount(workspace, sourceRun) === 1 ? '' : 's'}
-                        </StatusBadge>
                       </div>
                       <small>
                         {builderRunModeLabel(sourceRun.buildMode)} ·{' '}
                         {formatDateTime(sourceRun.createdAt)}
                       </small>
+                      <AgentPackageDetailsDialog agentPackages={agentPackages} run={sourceRun} />
+                      <BuilderRunPageDisclosure
+                        artifacts={artifactsForCompletedRun(sourceRun)}
+                        onLoad={() => void loadHistoryEvidence(sourceRun.id)}
+                        run={sourceRun}
+                        state={historyEvidence[sourceRun.id]}
+                        workspace={workspace}
+                      />
                       <p>
                         {sourceRun.agentStudioFeatureId
                           ? `Feature tested: ${agentBehaviourTitle(sourceRun.agentStudioFeatureId)}`
@@ -8236,11 +9217,32 @@ function BuilderRunPanel({
                         disabled={isOpeningPreview}
                         onClick={() => void openPreview(sourceRun.id, 'ready')}
                         type="button"
-                        variant="secondary"
+                        variant="primary"
                       >
                         <ArrowUpRight aria-hidden="true" size={16} />
-                        Open preview
+                        Preview website
                       </Button>
+                      <BuilderRunFileExplorerDialog
+                        artifacts={artifactsForCompletedRun(sourceRun)}
+                        label="Browse files"
+                        onLoad={() => void loadHistoryEvidence(sourceRun.id)}
+                        onViewWebsite={() => openPreview(sourceRun.id, 'ready')}
+                        state={historyEvidence[sourceRun.id]}
+                      />
+                      {onOpenUsageAnalysis &&
+                      workspace.aiUsageRecords.some(
+                        (record) =>
+                          record.builderRunId === sourceRun.id && record.source === 'codex_build',
+                      ) ? (
+                        <Button
+                          onClick={() => onOpenUsageAnalysis(sourceRun.id)}
+                          type="button"
+                          variant="quiet"
+                        >
+                          <WalletCards aria-hidden="true" size={16} />
+                          Open usage analysis
+                        </Button>
+                      ) : null}
                       <Button
                         onClick={() => setStudioSourceBuilderRunId(sourceRun.id)}
                         type="button"
@@ -8286,7 +9288,9 @@ function BuilderRunPanel({
                   <div className="test-build-versions__summary">
                     <div>
                       <div className="test-build-versions__labels">
-                        <strong>Test {completedTestRuns.length - index}</strong>
+                        <strong>
+                          {usageBuildLabel({ builderRunId: testRun.id }, workspace).split(' · ')[0]}
+                        </strong>
                         {index === 0 ? (
                           <StatusBadge tone="success">Newest build</StatusBadge>
                         ) : null}
@@ -8295,31 +9299,62 @@ function BuilderRunPanel({
                         {builderRunModeLabel(testRun.buildMode)} ·{' '}
                         {formatDateTime(testRun.createdAt)}
                       </small>
+                      <AgentPackageDetailsDialog agentPackages={agentPackages} run={testRun} />
+                      <BuilderRunPageDisclosure
+                        artifacts={artifactsForCompletedRun(testRun)}
+                        onLoad={() => void loadHistoryEvidence(testRun.id)}
+                        run={testRun}
+                        state={historyEvidence[testRun.id]}
+                        workspace={workspace}
+                      />
                       <p>{testBuildChangeSummary(testRun, completedTestRuns[index + 1])}</p>
                       <BuilderRunUsage records={workspace.aiUsageRecords} run={testRun} />
                     </div>
-                    <Button
-                      disabled={isOpeningPreview}
-                      onClick={() => void openPreview(testRun.id, 'ready')}
-                      type="button"
-                      variant="secondary"
-                    >
-                      <ArrowUpRight aria-hidden="true" size={16} />
-                      {isOpeningPreview ? 'Opening preview' : 'Open preview'}
-                    </Button>
-                    {onMoveToAgentStudio ? (
+                    <ButtonGroup>
                       <Button
-                        disabled={movingRunId === testRun.id}
-                        onClick={() => void moveToAgentStudio(testRun.id)}
+                        disabled={isOpeningPreview}
+                        onClick={() => void openPreview(testRun.id, 'ready')}
                         type="button"
-                        variant="quiet"
+                        variant="primary"
                       >
-                        <FolderTree aria-hidden="true" size={16} />
-                        {movingRunId === testRun.id
-                          ? 'Moving into Agent Studio'
-                          : 'Move to Agent Studio'}
+                        <ArrowUpRight aria-hidden="true" size={16} />
+                        {isOpeningPreview ? 'Opening preview' : 'Preview website'}
                       </Button>
-                    ) : null}
+                      <BuilderRunFileExplorerDialog
+                        artifacts={artifactsForCompletedRun(testRun)}
+                        label="Browse files"
+                        onLoad={() => void loadHistoryEvidence(testRun.id)}
+                        onViewWebsite={() => openPreview(testRun.id, 'ready')}
+                        state={historyEvidence[testRun.id]}
+                      />
+                      {onOpenUsageAnalysis &&
+                      workspace.aiUsageRecords.some(
+                        (record) =>
+                          record.builderRunId === testRun.id && record.source === 'codex_build',
+                      ) ? (
+                        <Button
+                          onClick={() => onOpenUsageAnalysis(testRun.id)}
+                          type="button"
+                          variant="quiet"
+                        >
+                          <WalletCards aria-hidden="true" size={16} />
+                          Open usage analysis
+                        </Button>
+                      ) : null}
+                      {onMoveToAgentStudio ? (
+                        <Button
+                          disabled={movingRunId === testRun.id}
+                          onClick={() => void moveToAgentStudio(testRun.id)}
+                          type="button"
+                          variant="quiet"
+                        >
+                          <FolderTree aria-hidden="true" size={16} />
+                          {movingRunId === testRun.id
+                            ? 'Moving into Agent Studio'
+                            : 'Move to Agent Studio'}
+                        </Button>
+                      ) : null}
+                    </ButtonGroup>
                   </div>
                 </li>
               ))}
@@ -8386,14 +9421,14 @@ function BuilderRunPanel({
                   <div>
                     <dt>Completed milestones</dt>
                     <dd>
-                      <button
+                      <Button
                         aria-label="Open build milestones"
                         className="builder-run-summary__action"
                         onClick={() => setInspector('steps')}
-                        type="button"
+                        variant="inline"
                       >
                         {run.totalItems > 0 ? `${run.completedItems}/${run.totalItems}` : '—'}
-                      </button>
+                      </Button>
                     </dd>
                   </div>
                   <div>
@@ -8404,7 +9439,7 @@ function BuilderRunPanel({
                     <div>
                       <dt>Production version</dt>
                       <dd className="agent-production-version-value">
-                        v{run.agentPackageVersion ?? '?'}
+                        {agentPackageVersionLabel(run.agentPackageVersion)}
                         {run.agentPackageVersion === publishedPackage?.version ? (
                           <AgentProductionNotification count={pendingProductionFeatureCount} />
                         ) : null}
@@ -8412,16 +9447,17 @@ function BuilderRunPanel({
                     </div>
                   ) : null}
                   <div>
-                    <dt>Preview files</dt>
+                    <dt>Build files</dt>
                     <dd>
-                      <button
-                        aria-label="Open preview files"
+                      <Button
+                        aria-label={`Browse ${sourceFiles.length + previewFiles.length} generated build files`}
                         className="builder-run-summary__action"
                         onClick={() => setInspector('files')}
-                        type="button"
+                        variant="inline"
                       >
-                        {previewFiles.length}
-                      </button>
+                        <FolderTree aria-hidden="true" size={16} />
+                        Browse files · {sourceFiles.length + previewFiles.length}
+                      </Button>
                     </dd>
                   </div>
                 </dl>
@@ -8741,13 +9777,15 @@ function BuilderRunPanel({
               <Dialog.Overlay className="builder-settings-overlay" />
               <Dialog.Content
                 aria-describedby="builder-run-inspector-description"
-                className="builder-settings-panel builder-run-inspector"
+                className={`builder-settings-panel builder-run-inspector${
+                  inspector === 'files' ? ' builder-run-inspector--files' : ''
+                }`}
               >
                 <div className="builder-settings-panel__header">
                   <div>
                     <Eyebrow>Current run</Eyebrow>
                     <Dialog.Title>
-                      {inspector === 'steps' ? 'Build milestones' : 'Preview files'}
+                      {inspector === 'steps' ? 'Build milestones' : 'Generated files'}
                     </Dialog.Title>
                   </div>
                   <Dialog.Close asChild>
@@ -8759,7 +9797,7 @@ function BuilderRunPanel({
                 <Dialog.Description className="muted-copy" id="builder-run-inspector-description">
                   {inspector === 'steps'
                     ? 'The same counted milestones shown in Build status. Detailed worker events remain in Build activity.'
-                    : 'Saved private website files from this build only.'}
+                    : 'Browse the saved project source and compiled website output from this build only.'}
                 </Dialog.Description>
                 {inspector === 'steps' ? (
                   progressMilestones.length ? (
@@ -8784,14 +9822,15 @@ function BuilderRunPanel({
                   ) : (
                     <p className="muted-copy">No build milestones have been recorded yet.</p>
                   )
-                ) : previewFiles.length ? (
-                  <ul className="builder-run-inspector__files">
-                    {previewFiles.map((file) => (
-                      <BuilderPreviewFileEntry file={file} key={file.id} />
-                    ))}
-                  </ul>
                 ) : (
-                  <p className="muted-copy">No private preview files have been saved yet.</p>
+                  <BuilderFileExplorer
+                    artifacts={currentArtifacts}
+                    onViewWebsite={
+                      run.status === 'ready' || run.status === 'review_required'
+                        ? () => openPreview(run.id, 'ready')
+                        : undefined
+                    }
+                  />
                 )}
               </Dialog.Content>
             </Dialog.Portal>
@@ -8823,6 +9862,11 @@ function BuilderRunPanel({
                   onLoad={loadHistoryEvidence}
                   onLoadPrevious={
                     previousRun ? () => void loadHistoryEvidence(previousRun.id) : undefined
+                  }
+                  onViewWebsite={
+                    earlierRun.status === 'ready' || earlierRun.status === 'review_required'
+                      ? () => openPreview(earlierRun.id, 'ready')
+                      : undefined
                   }
                   previousState={previousRun ? historyEvidence[previousRun.id] : undefined}
                   run={earlierRun}
@@ -9398,16 +10442,557 @@ function usageBuildLabel(
   return `${testNumber ? `Test ${testNumber} · ` : ''}${builderRunModeLabel(run.buildMode)}`;
 }
 
+function serializedByteSize(value: unknown) {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
+function formatByteSize(value: number) {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(value >= 100 * 1024 ? 0 : 1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function usagePercentage(value: number, total: number) {
+  return total > 0 ? Math.round((value / total) * 100) : 0;
+}
+
+type BuildUsageAnalysisRow = {
+  builderRunId: string;
+  workspace: ProspectWorkspace;
+  run?: BuilderRun;
+  manifest?: BuildManifest;
+  agentPackage?: AgentPackage;
+  records: AiUsageRecord[];
+  events: BuilderEvent[];
+  models: string[];
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+  recordedCost: number;
+  unpricedCount: number;
+  recordedAt: string;
+};
+
+function BuildUsageAnalysis({
+  row,
+  onOpenWorkspace,
+}: {
+  row: BuildUsageAnalysisRow;
+  onOpenWorkspace: (businessId: string) => void;
+}) {
+  const buildContext = [...row.records]
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .map((record) => record.metadata.buildContext)
+    .find(
+      (value): value is Record<string, unknown> =>
+        typeof value === 'object' && value !== null && !Array.isArray(value),
+    );
+  const contextNumber = (key: string) => {
+    const value = buildContext?.[key];
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  };
+  const contextStringList = (key: string) => {
+    const value = buildContext?.[key];
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === 'string')
+      : [];
+  };
+  const contextCountRecord = (key: string) => {
+    const value = buildContext?.[key];
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
+    return Object.fromEntries(
+      Object.entries(value).filter(
+        (entry): entry is [string, number] =>
+          typeof entry[1] === 'number' && Number.isFinite(entry[1]),
+      ),
+    );
+  };
+  const freshInputTokens = Math.max(row.inputTokens - row.cachedInputTokens, 0);
+  const cachedInputRate = usagePercentage(row.cachedInputTokens, row.inputTokens);
+  const outputRate = usagePercentage(row.outputTokens, row.totalTokens);
+  const manifestBytes = row.manifest ? serializedByteSize(row.manifest.data) : 0;
+  const manifestSections = row.manifest
+    ? Object.entries(row.manifest.data)
+        .map(([label, value]) => ({
+          label,
+          bytes: serializedByteSize(value),
+          items: Array.isArray(value) ? value.length : undefined,
+        }))
+        .sort((left, right) => right.bytes - left.bytes)
+        .slice(0, 6)
+    : [];
+  const selectedRouteCount =
+    row.run?.buildMode === 'homepage_test'
+      ? 1
+      : row.run?.targetSourceUrls?.length ||
+        (row.run?.targetSourceUrl ? 1 : buildManifestSelectedPages(row.manifest).length);
+  const stagedManifestBytes = contextNumber('stagedManifestBytes');
+  const fullManifestBytes = contextNumber('fullManifestBytes') ?? manifestBytes;
+  const contextReduction = contextNumber('reductionPercent');
+  const stagedAssetCount = contextNumber('stagedAssetCount');
+  const applicableContracts = contextStringList('applicableContracts');
+  const fullSectionCounts = contextCountRecord('fullSectionCounts');
+  const stagedSectionCounts = contextCountRecord('stagedSectionCounts');
+  const projectedSections = Object.keys(fullSectionCounts)
+    .map((label) => ({
+      label,
+      full: fullSectionCounts[label],
+      staged: stagedSectionCounts[label] ?? 0,
+    }))
+    .filter((section) => section.full !== section.staged)
+    .sort((left, right) => right.full - right.staged - (left.full - left.staged))
+    .slice(0, 6);
+  const reusedCheckpoint = row.events.some(
+    (event) =>
+      event.metadata.codexInvocationSkipped === true ||
+      /without another Codex pass/i.test(event.message),
+  );
+  const failedCodexToolEvents = row.events.filter(
+    (event) =>
+      event.kind === 'diagnostic' &&
+      event.metadata.status === 'failed' &&
+      event.metadata.scope === 'codex_tool',
+  );
+  const relevantEvents = row.events
+    .filter(
+      (event) =>
+        event.kind === 'error' ||
+        event.kind === 'diagnostic' ||
+        event.metadata.status === 'failed' ||
+        /retry|restart|resume|requeue|checkpoint|rejected|locked|foundation|storage|prettier|failed/i.test(
+          event.message,
+        ),
+    )
+    .sort((left, right) => left.sequence - right.sequence);
+  const findings = [
+    row.records.length > 1
+      ? {
+          title: `${row.records.length} separate Codex passes`,
+          detail:
+            'Repeated passes are the strongest usage multiplier because each pass reloads build context. Review the worker events below for retry or compatibility failures.',
+          tone: 'warning' as const,
+        }
+      : {
+          title: 'One Codex pass',
+          detail:
+            'This run did not multiply usage through a full model restart. Its token total came from context and tool activity within one pass.',
+          tone: 'success' as const,
+        },
+    failedCodexToolEvents.length
+      ? {
+          title: `${failedCodexToolEvents.length} failed agent tool ${failedCodexToolEvents.length === 1 ? 'call' : 'calls'}`,
+          detail:
+            'Failed inspections or verification commands add another model turn with the accumulated context. These are a direct sign of avoidable agent-loop usage.',
+          tone: 'warning' as const,
+        }
+      : {
+          title: 'No failed agent tool calls',
+          detail:
+            'The saved diagnostic stream does not show command failures that forced the model to inspect or verify the same work again.',
+          tone: 'success' as const,
+        },
+    stagedManifestBytes !== undefined && contextReduction !== undefined
+      ? {
+          title:
+            contextReduction > 0
+              ? `${contextReduction}% of unrelated manifest context removed`
+              : 'Full manifest intentionally retained',
+          detail:
+            contextReduction > 0
+              ? `${formatByteSize(fullManifestBytes)} was projected to ${formatByteSize(stagedManifestBytes)} for ${selectedRouteCount ?? 'the selected'} route scope before the agent ran.`
+              : `${formatByteSize(stagedManifestBytes)} was staged because this run needs whole-site context.`,
+          tone: contextReduction > 0 ? ('success' as const) : ('neutral' as const),
+        }
+      : manifestBytes >= 200 * 1024 && selectedRouteCount && selectedRouteCount <= 2
+        ? {
+            title: 'Large manifest for a narrow test',
+            detail: `${formatByteSize(manifestBytes)} of manifest data was available while the run targeted ${selectedRouteCount} ${selectedRouteCount === 1 ? 'route' : 'routes'}. Unselected pages, facts, and asset guidance can create avoidable context churn.`,
+            tone: 'warning' as const,
+          }
+        : {
+            title: 'Manifest and route scope',
+            detail: row.manifest
+              ? `${formatByteSize(manifestBytes)} of immutable manifest data supported ${selectedRouteCount ?? 'the selected'} route scope.`
+              : 'The immutable manifest is no longer available in this workspace, so its contribution cannot be measured.',
+            tone: 'neutral' as const,
+          },
+    reusedCheckpoint
+      ? {
+          title: 'Saved source reused without another model pass',
+          detail:
+            'The worker validated the post-Codex checkpoint, then continued compilation, storage, and quality checks without paying to regenerate the source.',
+          tone: 'success' as const,
+        }
+      : {
+          title: 'No post-Codex continuation recorded',
+          detail:
+            'If a safe storage or foundation handoff fails after generation, future runs can reuse validated saved source instead of invoking Codex again.',
+          tone: 'neutral' as const,
+        },
+    cachedInputRate >= 75
+      ? {
+          title: `${cachedInputRate}% of input was cached`,
+          detail:
+            'Most input was reused context rather than newly supplied text. Cached tokens still appear in the total and indicate repeated context processing.',
+          tone: 'neutral' as const,
+        }
+      : {
+          title: `${formatTokens(freshInputTokens)} fresh input tokens`,
+          detail: `${cachedInputRate}% of input was cached. The uncached portion is the clearest measure of newly introduced context.`,
+          tone: 'neutral' as const,
+        },
+    outputRate <= 5 && row.totalTokens >= 200_000
+      ? {
+          title: 'Context-heavy, not output-heavy',
+          detail: `Only ${outputRate}% of recorded tokens were model output. The large total was driven primarily by input context and repeated tool/model turns.`,
+          tone: 'warning' as const,
+        }
+      : {
+          title: `${outputRate}% model output`,
+          detail: `${formatTokens(row.outputTokens)} output tokens were recorded across the run.`,
+          tone: 'neutral' as const,
+        },
+  ];
+
+  return (
+    <div className="usage-build-analysis">
+      <section aria-label="Token composition" className="usage-build-analysis__section">
+        <div className="usage-build-analysis__heading">
+          <div>
+            <Eyebrow>Token composition</Eyebrow>
+            <h3>What the total contains</h3>
+          </div>
+          <span>
+            {row.records.length} model {row.records.length === 1 ? 'pass' : 'passes'}
+          </span>
+        </div>
+        <div
+          aria-label={`${formatTokens(freshInputTokens)} fresh input, ${formatTokens(row.cachedInputTokens)} cached input, and ${formatTokens(row.outputTokens)} output tokens`}
+          className="usage-token-bar"
+          role="img"
+        >
+          <span
+            className="usage-token-bar__fresh"
+            style={{ width: `${usagePercentage(freshInputTokens, row.totalTokens)}%` }}
+          />
+          <span
+            className="usage-token-bar__cached"
+            style={{ width: `${usagePercentage(row.cachedInputTokens, row.totalTokens)}%` }}
+          />
+          <span
+            className="usage-token-bar__output"
+            style={{ width: `${usagePercentage(row.outputTokens, row.totalTokens)}%` }}
+          />
+        </div>
+        <dl className="usage-token-breakdown">
+          <div>
+            <dt>
+              <span className="usage-token-key usage-token-key--fresh" />
+              Fresh input
+            </dt>
+            <dd>{formatTokens(freshInputTokens)}</dd>
+          </div>
+          <div>
+            <dt>
+              <span className="usage-token-key usage-token-key--cached" />
+              Cached input
+            </dt>
+            <dd>
+              {formatTokens(row.cachedInputTokens)} · {cachedInputRate}% of input
+            </dd>
+          </div>
+          <div>
+            <dt>
+              <span className="usage-token-key usage-token-key--output" />
+              Model output
+            </dt>
+            <dd>{formatTokens(row.outputTokens)}</dd>
+          </div>
+          <div>
+            <dt>Reasoning subset</dt>
+            <dd>{formatTokens(row.reasoningTokens)}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section
+        aria-labelledby={`usage-findings-${row.builderRunId}`}
+        className="usage-build-analysis__section"
+      >
+        <div className="usage-build-analysis__heading">
+          <div>
+            <Eyebrow>Interpretation</Eyebrow>
+            <h3 id={`usage-findings-${row.builderRunId}`}>What likely drove usage</h3>
+          </div>
+        </div>
+        <ul className="usage-findings">
+          {findings.map((finding) => (
+            <li className={`usage-finding usage-finding--${finding.tone}`} key={finding.title}>
+              <strong>{finding.title}</strong>
+              <p>{finding.detail}</p>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section
+        aria-labelledby={`usage-context-${row.builderRunId}`}
+        className="usage-build-analysis__section"
+      >
+        <div className="usage-build-analysis__heading">
+          <div>
+            <Eyebrow>Build context</Eyebrow>
+            <h3 id={`usage-context-${row.builderRunId}`}>Scope and version lineage</h3>
+          </div>
+        </div>
+        <dl className="usage-context-grid">
+          <div>
+            <dt>Test scope</dt>
+            <dd>{row.run ? builderRunModeLabel(row.run.buildMode) : 'Archived build'}</dd>
+          </div>
+          <div>
+            <dt>Selected routes</dt>
+            <dd>{selectedRouteCount ?? 'Not recorded'}</dd>
+          </div>
+          <div>
+            <dt>Stored immutable manifest</dt>
+            <dd>{fullManifestBytes ? formatByteSize(fullManifestBytes) : 'Unavailable'}</dd>
+          </div>
+          <div>
+            <dt>Staged agent manifest</dt>
+            <dd>
+              {stagedManifestBytes === undefined
+                ? 'Not recorded on this run'
+                : formatByteSize(stagedManifestBytes)}
+            </dd>
+          </div>
+          <div>
+            <dt>Context reduction</dt>
+            <dd>{contextReduction === undefined ? 'Legacy run' : `${contextReduction}%`}</dd>
+          </div>
+          <div>
+            <dt>Staged assets</dt>
+            <dd>{stagedAssetCount ?? 'Not recorded'}</dd>
+          </div>
+          <div>
+            <dt>Agent package</dt>
+            <dd>
+              {row.agentPackage
+                ? `${agentPackageVersionLabel(row.agentPackage.version)} · ${row.agentPackage.status.replaceAll('_', ' ')}`
+                : row.run?.agentPackageVersion
+                  ? agentPackageVersionLabel(row.run.agentPackageVersion)
+                  : 'Legacy or unrecorded'}
+            </dd>
+          </div>
+          <div>
+            <dt>Package contract</dt>
+            <dd>{row.agentPackage?.builderContractVersion ?? 'Not recorded'}</dd>
+          </div>
+          <div>
+            <dt>Manifest contract</dt>
+            <dd>
+              {row.manifest?.builderContractVersion ?? row.run?.templateVersion ?? 'Not recorded'}
+            </dd>
+          </div>
+          <div>
+            <dt>Foundation</dt>
+            <dd>
+              {row.agentPackage?.foundationVersion ?? row.run?.templateVersion ?? 'Not recorded'}
+            </dd>
+          </div>
+          <div>
+            <dt>Parent checkpoint</dt>
+            <dd>
+              {row.run?.parentBuilderRunId ? 'Restored scoped source' : 'Clean foundation build'}
+            </dd>
+          </div>
+        </dl>
+        {buildContext ? (
+          <div className="usage-context-projection">
+            <div className="usage-context-projection__heading">
+              <div>
+                <h4>What the agent actually received</h4>
+                <p>
+                  The immutable record stays complete. Narrow tests receive a route-scoped working
+                  copy so unrelated pages and assets do not consume the model window.
+                </p>
+              </div>
+              <strong>{contextReduction ?? 0}% smaller</strong>
+            </div>
+            <div
+              aria-label={`${formatByteSize(stagedManifestBytes ?? 0)} staged from ${formatByteSize(fullManifestBytes)}`}
+              className="usage-context-projection__bar"
+              role="img"
+            >
+              <span
+                style={{
+                  width: `${Math.max(
+                    usagePercentage(stagedManifestBytes ?? 0, fullManifestBytes),
+                    stagedManifestBytes ? 2 : 0,
+                  )}%`,
+                }}
+              />
+            </div>
+            {applicableContracts.length ? (
+              <div className="usage-context-contracts">
+                <span>Loaded contracts</span>
+                <ul>
+                  {applicableContracts.map((contract) => (
+                    <li key={contract}>{contract.replace(/\.md$/, '').replaceAll('-', ' ')}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {projectedSections.length ? (
+              <div className="usage-context-sections">
+                <span>Route-scoped sections</span>
+                <ul>
+                  {projectedSections.map((section) => (
+                    <li key={section.label}>
+                      <span>{section.label}</span>
+                      <strong>
+                        {section.full} → {section.staged}
+                      </strong>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {manifestSections.length ? (
+          <div className="usage-manifest-sections">
+            <h4>Largest manifest sections</h4>
+            <ol>
+              {manifestSections.map((section) => (
+                <li key={section.label}>
+                  <span>
+                    {section.label}
+                    {section.items === undefined ? '' : ` · ${section.items} items`}
+                  </span>
+                  <strong>{formatByteSize(section.bytes)}</strong>
+                </li>
+              ))}
+            </ol>
+          </div>
+        ) : null}
+        {row.run?.buildInstruction ? (
+          <div className="usage-build-direction">
+            <h4>Workspace test direction</h4>
+            <p>{row.run.buildInstruction}</p>
+          </div>
+        ) : null}
+      </section>
+
+      <section
+        aria-labelledby={`usage-passes-${row.builderRunId}`}
+        className="usage-build-analysis__section"
+      >
+        <div className="usage-build-analysis__heading">
+          <div>
+            <Eyebrow>Model passes</Eyebrow>
+            <h3 id={`usage-passes-${row.builderRunId}`}>Per-call breakdown</h3>
+          </div>
+        </div>
+        <div className="usage-table-wrap">
+          <table className="usage-table usage-table--passes">
+            <thead>
+              <tr>
+                <th scope="col">Pass</th>
+                <th scope="col">Recorded</th>
+                <th scope="col">Model</th>
+                <th scope="col">Events</th>
+                <th scope="col">Fresh input</th>
+                <th scope="col">Cached input</th>
+                <th scope="col">Output</th>
+                <th scope="col">Total</th>
+                <th scope="col">Cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...row.records]
+                .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+                .map((record, index) => (
+                  <tr key={record.id}>
+                    <th scope="row">Pass {index + 1}</th>
+                    <td>{formatDateTime(record.createdAt)}</td>
+                    <td>{record.model}</td>
+                    <td>
+                      {typeof record.metadata.eventCount === 'number'
+                        ? record.metadata.eventCount
+                        : 'Not recorded'}
+                    </td>
+                    <td>
+                      {formatTokens(Math.max(record.inputTokens - record.cachedInputTokens, 0))}
+                    </td>
+                    <td>{formatTokens(record.cachedInputTokens)}</td>
+                    <td>{formatTokens(record.outputTokens)}</td>
+                    <td>{formatTokens(record.totalTokens)}</td>
+                    <td>
+                      {typeof record.costUsd === 'number' ? formatUsd(record.costUsd) : 'Unpriced'}
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section
+        aria-labelledby={`usage-events-${row.builderRunId}`}
+        className="usage-build-analysis__section"
+      >
+        <div className="usage-build-analysis__heading">
+          <div>
+            <Eyebrow>Worker evidence</Eyebrow>
+            <h3 id={`usage-events-${row.builderRunId}`}>Retry and diagnostic signals</h3>
+          </div>
+        </div>
+        {relevantEvents.length ? (
+          <ol className="usage-diagnostic-events">
+            {relevantEvents.map((event) => (
+              <li key={event.id}>
+                <StatusBadge tone={event.kind === 'error' ? 'danger' : 'warning'}>
+                  {event.kind}
+                </StatusBadge>
+                <span>{event.message}</span>
+                <time dateTime={event.createdAt}>{formatDateTime(event.createdAt)}</time>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="muted-copy">
+            No retry, restart, or worker-error signal was saved for this test.
+          </p>
+        )}
+      </section>
+
+      <div className="usage-build-analysis__actions">
+        <Button onClick={() => onOpenWorkspace(row.workspace.business.id)} variant="secondary">
+          Open build workspace <ArrowUpRight aria-hidden="true" size={16} />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function UsagePage({
+  agentPackages,
+  initialBuildId,
   workspaces,
   onOpenWorkspace,
 }: {
+  agentPackages: AgentPackage[];
+  initialBuildId?: string;
   workspaces: ProspectWorkspace[];
   onOpenWorkspace: (businessId: string) => void;
 }) {
   const [usageView, setUsageView] = useState<'overview' | 'prospect' | 'build'>('overview');
   const [selectedProspectId, setSelectedProspectId] = useState('all');
   const [selectedBuildId, setSelectedBuildId] = useState('all');
+  const [openBuildId, setOpenBuildId] = useState<string>();
   const records = useMemo(
     () =>
       workspaces.flatMap((workspace) =>
@@ -9418,27 +11003,43 @@ function UsagePage({
   const prospectOptions = workspaces
     .filter((workspace) => workspace.aiUsageRecords.length)
     .sort((left, right) => left.business.name.localeCompare(right.business.name));
-  const buildOptions = records
-    .filter(
-      ({ record, workspace }) =>
-        record.builderRunId &&
-        (selectedProspectId === 'all' || workspace.business.id === selectedProspectId),
-    )
-    .reduce<Array<{ id: string; label: string; workspace: ProspectWorkspace }>>(
-      (options, { record, workspace }) => {
-        if (!record.builderRunId || options.some((option) => option.id === record.builderRunId)) {
-          return options;
-        }
-        options.push({
-          id: record.builderRunId,
-          label: `${workspace.business.name} · ${usageBuildLabel(record, workspace)}`,
-          workspace,
-        });
-        return options;
-      },
-      [],
-    )
-    .sort((left, right) => left.label.localeCompare(right.label));
+  const buildOptions = useMemo(
+    () =>
+      records
+        .filter(
+          ({ record, workspace }) =>
+            record.builderRunId &&
+            (selectedProspectId === 'all' || workspace.business.id === selectedProspectId),
+        )
+        .reduce<Array<{ id: string; label: string; workspace: ProspectWorkspace }>>(
+          (options, { record, workspace }) => {
+            if (
+              !record.builderRunId ||
+              options.some((option) => option.id === record.builderRunId)
+            ) {
+              return options;
+            }
+            options.push({
+              id: record.builderRunId,
+              label: `${workspace.business.name} · ${usageBuildLabel(record, workspace)}`,
+              workspace,
+            });
+            return options;
+          },
+          [],
+        )
+        .sort((left, right) => left.label.localeCompare(right.label)),
+    [records, selectedProspectId],
+  );
+  useEffect(() => {
+    if (!initialBuildId) return;
+    const selectedBuild = buildOptions.find((option) => option.id === initialBuildId);
+    if (!selectedBuild) return;
+    setUsageView('build');
+    setSelectedProspectId(selectedBuild.workspace.business.id);
+    setSelectedBuildId(initialBuildId);
+    setOpenBuildId(initialBuildId);
+  }, [buildOptions, initialBuildId]);
   const scopedRecords = records.filter(({ record, workspace }) => {
     if (usageView === 'overview') return true;
     if (usageView === 'prospect') return workspace.business.id === selectedProspectId;
@@ -9468,22 +11069,16 @@ function UsagePage({
     .sort((left, right) => right.cost - left.cost || right.totalTokens - left.totalTokens);
   const buildRows = [...scopedRecords]
     .filter(({ record }) => record.builderRunId && record.source === 'codex_build')
-    .reduce<
-      Array<{
-        builderRunId: string;
-        workspace: ProspectWorkspace;
-        run?: BuilderRun;
-        models: string[];
-        totalTokens: number;
-        recordedCost: number;
-        unpricedCount: number;
-        recordedAt: string;
-      }>
-    >((rows, { record, workspace }) => {
+    .reduce<BuildUsageAnalysisRow[]>((rows, { record, workspace }) => {
       const builderRunId = record.builderRunId;
       if (!builderRunId) return rows;
       const row = rows.find((candidate) => candidate.builderRunId === builderRunId);
       if (row) {
+        row.records.push(record);
+        row.inputTokens += record.inputTokens;
+        row.cachedInputTokens += record.cachedInputTokens;
+        row.outputTokens += record.outputTokens;
+        row.reasoningTokens += record.reasoningTokens;
         row.totalTokens += record.totalTokens;
         row.recordedCost += record.costUsd ?? 0;
         row.unpricedCount += typeof record.costUsd === 'number' ? 0 : 1;
@@ -9491,11 +11086,28 @@ function UsagePage({
         if (record.createdAt > row.recordedAt) row.recordedAt = record.createdAt;
         return rows;
       }
+      const run = workspace.builderRuns.find((candidate) => candidate.id === builderRunId);
       rows.push({
         builderRunId,
         workspace,
-        run: workspace.builderRuns.find((run) => run.id === builderRunId),
+        run,
+        manifest: run
+          ? workspace.buildManifests.find((manifest) => manifest.id === run.buildManifestId)
+          : undefined,
+        agentPackage: run
+          ? agentPackages.find(
+              (agentPackage) =>
+                agentPackage.id === run.agentPackageId ||
+                (!run.agentPackageId && agentPackage.version === run.agentPackageVersion),
+            )
+          : undefined,
+        records: [record],
+        events: workspace.builderEvents.filter((event) => event.builderRunId === builderRunId),
         models: [record.model],
+        inputTokens: record.inputTokens,
+        cachedInputTokens: record.cachedInputTokens,
+        outputTokens: record.outputTokens,
+        reasoningTokens: record.reasoningTokens,
         totalTokens: record.totalTokens,
         recordedCost: record.costUsd ?? 0,
         unpricedCount: typeof record.costUsd === 'number' ? 0 : 1,
@@ -9610,6 +11222,7 @@ function UsagePage({
                 if (nextBuildId !== 'all') {
                   const build = buildOptions.find((option) => option.id === nextBuildId);
                   if (build) setSelectedProspectId(build.workspace.business.id);
+                  setOpenBuildId(nextBuildId);
                   setUsageView('build');
                 }
               }}
@@ -9768,46 +11381,77 @@ function UsagePage({
           <Sparkles aria-hidden="true" size={19} />
         </div>
         {buildRows.length ? (
-          <div className="usage-table-wrap">
-            <table className="usage-table">
-              <thead>
-                <tr>
-                  <th scope="col">Prospect / build</th>
-                  <th scope="col">Model</th>
-                  <th scope="col">Tokens</th>
-                  <th scope="col">Spend</th>
-                  <th scope="col">Recorded</th>
-                </tr>
-              </thead>
-              <tbody>
-                {buildRows.map((row) => (
-                  <tr key={row.builderRunId}>
-                    <th scope="row">
-                      <button
-                        onClick={() => onOpenWorkspace(row.workspace.business.id)}
-                        type="button"
-                      >
-                        {row.workspace.business.name} ·{' '}
-                        {row.run
-                          ? usageBuildLabel({ builderRunId: row.run.id }, row.workspace)
-                          : 'Archived build'}
-                        <ArrowUpRight aria-hidden="true" size={14} />
-                      </button>
-                    </th>
-                    <td>{row.models.join(', ')}</td>
-                    <td>{formatTokens(row.totalTokens)}</td>
-                    <td>
-                      {row.unpricedCount
-                        ? row.recordedCost > 0
-                          ? `${formatUsd(row.recordedCost)} + ${row.unpricedCount} unpriced`
-                          : 'Unpriced'
-                        : formatUsd(row.recordedCost)}
-                    </td>
-                    <td>{formatDateTime(row.recordedAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="usage-build-list">
+            {buildRows.map((row) => {
+              const isOpen = openBuildId === row.builderRunId;
+              const analysisId = `usage-build-analysis-${row.builderRunId}`;
+              const freshInputTokens = Math.max(row.inputTokens - row.cachedInputTokens, 0);
+              return (
+                <article
+                  className={`usage-build${isOpen ? ' is-open' : ''}`}
+                  key={row.builderRunId}
+                >
+                  <Button
+                    aria-controls={analysisId}
+                    aria-expanded={isOpen}
+                    className="usage-build__trigger"
+                    onClick={() => setOpenBuildId(isOpen ? undefined : row.builderRunId)}
+                    variant="quiet"
+                  >
+                    <span className="usage-build__identity">
+                      <span>
+                        <strong>
+                          {row.run
+                            ? usageBuildLabel({ builderRunId: row.run.id }, row.workspace)
+                            : 'Archived build'}
+                        </strong>
+                        <small>{row.workspace.business.name}</small>
+                      </span>
+                      {row.run ? (
+                        <StatusBadge tone={builderRunTone(row.run.status)}>
+                          {builderRunLabel(row.run.status)}
+                        </StatusBadge>
+                      ) : null}
+                    </span>
+                    <span className="usage-build__summary">
+                      <span>
+                        <small>Total tokens</small>
+                        <strong>{formatTokens(row.totalTokens)}</strong>
+                      </span>
+                      <span>
+                        <small>Fresh / cached input</small>
+                        <strong>
+                          {formatTokens(freshInputTokens)} / {formatTokens(row.cachedInputTokens)}
+                        </strong>
+                      </span>
+                      <span>
+                        <small>Codex passes</small>
+                        <strong>{row.records.length}</strong>
+                      </span>
+                      <span>
+                        <small>Spend</small>
+                        <strong>
+                          {row.unpricedCount
+                            ? row.recordedCost > 0
+                              ? `${formatUsd(row.recordedCost)} + unpriced`
+                              : 'Unpriced'
+                            : formatUsd(row.recordedCost)}
+                        </strong>
+                      </span>
+                    </span>
+                    <span className="usage-build__open-label">
+                      {isOpen ? 'Close analysis' : 'Open analysis'}
+                      <ChevronDown aria-hidden="true" size={18} />
+                    </span>
+                  </Button>
+                  {isOpen ? (
+                    <div className="usage-build__content" id={analysisId}>
+                      <BuildUsageAnalysis onOpenWorkspace={onOpenWorkspace} row={row} />
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })}
           </div>
         ) : (
           <p className="muted-copy">No completed or stopped Codex build has reported usage yet.</p>
@@ -10018,7 +11662,8 @@ const currentAgentPackageFiles = [
     group: 'Builder foundation',
     path: 'worker/builder-template/src/components/foundation/site-runtime.tsx',
     label: 'Motion runtime',
-    detail: 'Locked React motion, factual counter, and approved-logo handoff behaviour.',
+    detail:
+      'Locked React word, staggered, directional, scale, fade, factual-counter, and approved-logo handoff behaviour.',
     content: motionRuntimeSource,
   },
   {
@@ -10074,13 +11719,19 @@ const agentPackageFeatures: AgentFeature[] = [
     id: 'next-component-architecture',
     title: 'Next.js generated component architecture',
     detail:
-      'Builds strict TypeScript App Router sites from clean routes while letting Codex create each business’s tokens, primitives, patterns, sections, site components, layouts, and pages.',
+      'Builds strict TypeScript App Router sites from clean routes while letting Codex create each business’s typography, spacing rhythm, tokens, primitives, patterns, content-led responsive compositions, distinctive service routes, site components, layouts, and pages.',
     files: [
       {
         label: 'Component architecture contract',
         detail:
-          'Defines the generated layers, creative ownership, native HTML boundary, Base UI behaviour boundary, and abstraction discipline.',
-        terms: ['The foundation locks dependencies', 'Creative ownership', 'Behaviour boundary'],
+          'Defines the generated layers, creative ownership, content-led composition repertoire, native HTML boundary, Base UI behaviour boundary, and abstraction discipline.',
+        terms: [
+          'The foundation locks dependencies',
+          'Creative ownership',
+          'Content-led composition',
+          'Mobile is a distinct composition opportunity',
+          'Behaviour boundary',
+        ],
       },
       {
         label: 'Template instructions',
@@ -10136,7 +11787,7 @@ const agentPackageFeatures: AgentFeature[] = [
     id: 'framework-quality-gates',
     title: 'Framework, interaction & responsive quality gates',
     detail:
-      'Runs formatting, ESLint, strict type checks, production compilation, route validation, exact responsive captures, compact-navigation interaction checks, overflow checks, browser errors, and axe.',
+      'Runs formatting, ESLint, strict type checks, production compilation, route validation, exact responsive captures, compact-navigation interaction and motion checks, image-loading checks, overflow checks, browser errors, and axe.',
     files: [
       {
         label: 'Template packages',
@@ -10146,12 +11797,19 @@ const agentPackageFeatures: AgentFeature[] = [
       {
         label: 'Builder worker',
         detail:
-          'Uses the required 320, 375, 768, and 1440 viewports and checks open/closed navigation, focus, reduced motion, touch targets, overflow, console errors, and screenshots.',
+          'Runs responsive quality checks, then saves a safe browsable source tree, compiled output, and downloadable source archive for every test.',
         terms: [
           'previewViewports',
           'responsiveInteractionEvidence',
+          'refreshLockedFoundation',
+          'meaningfulPageNamingProblems',
+          'Open frozen draft',
+          'Test something else',
           'responsive-interactions',
           'browser-console',
+          'collectBrowsableSourceFiles',
+          'source_bundle',
+          'final_source',
         ],
       },
       {
@@ -10205,23 +11863,30 @@ const agentPackageFeatures: AgentFeature[] = [
     id: 'motion-runtime',
     title: 'Entrance motion & factual counters',
     detail:
-      'Reveals content as it enters view, starts hero copy and media after the logo handoff, and animates only explicitly marked factual metrics.',
+      'Lets the agent compose slower eased word, stacked-text, staggered, directional, scale, fade, and reversible scroll-depth sequences after the route logo handoff, while animating only explicitly marked factual metrics.',
     files: [
       {
         label: 'Motion runtime',
         detail: 'The browser-side reveal and counter implementation.',
         terms: [
           'data-sf-reveal',
-          'data-sf-hero-media',
-          'siteforge:brand-intro-complete',
+          'data-reveal="words"',
+          'data-reveal="sequence"',
+          'data-reveal="stagger"',
+          'data-scroll-zoom',
+          'siteforge:route-transition-complete',
           'function animateCounter',
-          'function counterDetails',
+          'function prepareWordReveal',
         ],
       },
       {
         label: 'Builder contract',
-        detail: 'The rule that limits this behaviour to hierarchy and real metrics.',
-        terms: ['Motion is a built-in enhancement', 'Never invent a statistic'],
+        detail: 'The rule that asks for creative but restrained composition and real metrics.',
+        terms: [
+          'Use motion to support hierarchy',
+          'data-counter',
+          'at least two fitting treatments',
+        ],
       },
     ],
   },
@@ -10229,18 +11894,18 @@ const agentPackageFeatures: AgentFeature[] = [
     id: 'brand-introduction',
     title: 'Brand introduction',
     detail:
-      'The approved logo fades in at centre, rises and scales, then moves into the navigation.',
+      'On every route, the approved logo fades in at centre, rises and scales, then its live clone moves into the measured navigation-logo position before page motion begins.',
     files: [
       {
         label: 'Motion runtime',
         detail:
-          'Creates the centre logo, status message, navigation transfer, then starts the visible hero entrance.',
+          'Creates the route loading surface, centre logo, status message, measured navigation transfer, then starts the visible page entrance.',
         terms: [
           'sf-brand-intro',
-          'function runBrandIntro',
-          'siteforge:brand-intro-complete',
+          'function runRouteBrandTransition',
+          'siteforge:route-transition-complete',
           'Preparing your site',
-          'is-showcasing',
+          'is-handing-off',
         ],
       },
       {
@@ -10259,7 +11924,7 @@ const agentPackageFeatures: AgentFeature[] = [
     id: 'responsive-sidebar',
     title: 'Mobile & tablet sidebar navigation',
     detail:
-      'Keeps the logo and menu control together in the header, then turns the links into a branded, trigger-side sidebar below desktop width. The header also returns as soon as visitors scroll upward.',
+      'Keeps the logo and menu control together in the header, then animates the branded trigger-side surface fully in and out while sequencing its approved logo, primary routes, and actions below desktop width.',
     files: [
       {
         label: 'Mobile navigation contract',
@@ -10314,7 +11979,7 @@ const agentPackageFeatures: AgentFeature[] = [
     id: 'visual-content-recovery',
     title: 'Semantic recovery from image-based content',
     detail:
-      'Groups approved recovered information by source context and semantic role, requires complete traceable coverage, and leaves integration, composition, and styling to the builder.',
+      'Groups approved recovered information by source context and semantic role, excludes each source image from reuse, requires complete traceable coverage, and leaves integration, composition, and styling to the builder.',
     files: [
       {
         label: 'Semantic content grouping',
@@ -10325,6 +11990,7 @@ const agentPackageFeatures: AgentFeature[] = [
           'coverageInstruction',
           'integrationInstruction',
           'approvedVisualContentGroups',
+          'recoveredContentAssetIds',
         ],
       },
       {
@@ -10476,6 +12142,38 @@ function pendingProductionFeatureIds(packages: AgentPackage[]) {
   ];
 }
 
+const semanticRecoveryBehaviourRevision = 16;
+const semanticRecoveryLatestEdit =
+  'The current semantic-recovery safeguard and its production-release status now appear with the build package version they belong to on Package versions.';
+
+function SemanticRecoverySourceUpdate({
+  packageVersion,
+  pending,
+}: {
+  packageVersion: number;
+  pending: boolean;
+}) {
+  return (
+    <section
+      aria-labelledby="pending-semantic-recovery-title"
+      className="agent-studio__source-update"
+    >
+      <div>
+        <Eyebrow>Current source update</Eyebrow>
+        <h2 id="pending-semantic-recovery-title">
+          Semantic recovery safeguard · v{packageVersion}.{semanticRecoveryBehaviourRevision}
+        </h2>
+      </div>
+      <StatusBadge tone="success">Active in source</StatusBadge>
+      <p>{semanticRecoveryLatestEdit}</p>
+      <small>
+        Production feature status:{' '}
+        {pending ? 'awaiting package release.' : `included in package v${packageVersion}.`}
+      </small>
+    </section>
+  );
+}
+
 function AgentProductionNotification({ count }: { count: number }) {
   if (!count) return null;
   const label = `${count} new agent feature${count === 1 ? '' : 's'} awaiting production approval`;
@@ -10503,8 +12201,14 @@ function agentBehaviourTitle(behaviourId: string) {
 
 function agentPackageContractVersion(agentPackage?: AgentPackage) {
   return agentPackage
-    ? `made-solid-studio-builder-agent-v${agentPackage.version}`
+    ? `made-solid-studio-builder-agent-${agentPackageVersionLabel(agentPackage.version)}`
     : 'made-solid-studio-builder-agent';
+}
+
+function agentPackageVersionLabel(version?: number) {
+  return typeof version === 'number' && Number.isFinite(version)
+    ? `v${version.toFixed(1)}`
+    : 'Version unavailable';
 }
 
 function brandedFoundationVersion(version: string) {
@@ -10518,8 +12222,8 @@ function brandedBuilderContractVersion(version: string) {
 function AgentPackageFeatureList({
   behaviourIds,
   version,
-  heading = `Features included in v${version}`,
-  ariaLabel = `Features included in agent package v${version}`,
+  heading = `Features included in ${agentPackageVersionLabel(version)}`,
+  ariaLabel = `Features included in agent package ${agentPackageVersionLabel(version)}`,
 }: {
   behaviourIds: string[];
   version: number;
@@ -10841,11 +12545,149 @@ function AgentStudioSectionNavigation({
         <FolderTree aria-hidden="true" size={17} />
         Agent architecture
       </Button>
+      <Button
+        aria-current={section === 'versions' ? 'page' : undefined}
+        className={section === 'versions' ? 'agent-studio__section-link--active' : undefined}
+        onClick={() => onSelectSection('versions')}
+        type="button"
+        variant="secondary"
+      >
+        <PackageCheck aria-hidden="true" size={17} />
+        Package versions
+      </Button>
     </nav>
   );
 }
 
+function agentPackageStatusPresentation(status: AgentPackage['status']) {
+  if (status === 'published') {
+    return {
+      label: 'Current production',
+      note: 'Used by every new complete private prospect build.',
+      tone: 'success' as const,
+    };
+  }
+  if (status === 'superseded') {
+    return {
+      label: 'Previous production',
+      note: 'Kept as immutable history for builds that were pinned to this release.',
+      tone: 'neutral' as const,
+    };
+  }
+  if (status === 'production_ready') {
+    return {
+      label: 'Production draft',
+      note: 'An immutable release candidate. It does not reach new builds until it is published.',
+      tone: 'warning' as const,
+    };
+  }
+  if (status === 'test_ready') {
+    return {
+      label: 'Approved test',
+      note: 'Available only to private package tests; complete prospect builds cannot use it.',
+      tone: 'success' as const,
+    };
+  }
+  return {
+    label: 'Draft',
+    note: 'A working package proposal that must be reviewed before private testing.',
+    tone: 'warning' as const,
+  };
+}
+
+function AgentPackageVersionLedger({
+  packages,
+  pendingProductionFeatureCount,
+}: {
+  packages: AgentPackage[];
+  pendingProductionFeatureCount: number;
+}) {
+  const packageById = new Map(packages.map((agentPackage) => [agentPackage.id, agentPackage]));
+  const orderedPackages = [...packages].sort(
+    (left, right) => right.version - left.version || right.createdAt.localeCompare(left.createdAt),
+  );
+
+  return (
+    <section aria-labelledby="agent-package-ledger-title" className="agent-package-version-ledger">
+      <header>
+        <div>
+          <Eyebrow>Complete version register</Eyebrow>
+          <h2 id="agent-package-ledger-title">Every saved build package</h2>
+          <p>
+            Each package keeps its own release role, parent version, builder contract, foundation,
+            and recorded feature notes. Newest exact release first; earlier builds stay pinned to
+            the version they used.
+          </p>
+        </div>
+        <strong>
+          {orderedPackages.length} saved version{orderedPackages.length === 1 ? '' : 's'}
+        </strong>
+      </header>
+      {orderedPackages.length ? (
+        <div className="agent-package-version-ledger__list">
+          {orderedPackages.map((agentPackage) => {
+            const presentation = agentPackageStatusPresentation(agentPackage.status);
+            const basePackage = agentPackage.basePackageId
+              ? packageById.get(agentPackage.basePackageId)
+              : undefined;
+            const behaviourIds = agentPackage.stagedBehaviourIds ?? [];
+            return (
+              <article key={agentPackage.id}>
+                <div className="agent-package-version-ledger__title">
+                  <div>
+                    <span className="agent-production-version-label">
+                      Build package
+                      {agentPackage.status === 'published' ? (
+                        <AgentProductionNotification count={pendingProductionFeatureCount} />
+                      ) : null}
+                    </span>
+                    <h3>{agentPackageVersionLabel(agentPackage.version)}</h3>
+                  </div>
+                  <StatusBadge tone={presentation.tone}>{presentation.label}</StatusBadge>
+                </div>
+                <p>{agentPackage.summary}</p>
+                <p className="agent-package-version-ledger__system-note">
+                  <strong>System use:</strong> {presentation.note}
+                </p>
+                <dl>
+                  <div>
+                    <dt>Based on</dt>
+                    <dd>
+                      {basePackage ? agentPackageVersionLabel(basePackage.version) : 'Lineage root'}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Builder contract</dt>
+                    <dd>{agentPackageContractVersion(agentPackage)}</dd>
+                  </div>
+                  <div>
+                    <dt>Foundation</dt>
+                    <dd>{brandedFoundationVersion(agentPackage.foundationVersion)}</dd>
+                  </div>
+                </dl>
+                {behaviourIds.length ? (
+                  <AgentPackageFeatureList
+                    ariaLabel={`Recorded changes for build package ${agentPackageVersionLabel(agentPackage.version)}`}
+                    behaviourIds={behaviourIds}
+                    heading={`${behaviourIds.length} recorded change${behaviourIds.length === 1 ? '' : 's'} in this version`}
+                    version={agentPackage.version}
+                  />
+                ) : (
+                  <p className="muted-copy">No version-level feature changes were recorded.</p>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="muted-copy">No build package versions have been saved yet.</p>
+      )}
+    </section>
+  );
+}
+
 function AgentPackageConfiguration({
+  view,
   architectureMapOpen,
   packages,
   proposals,
@@ -10857,6 +12699,7 @@ function AgentPackageConfiguration({
   onApproveForProduction,
   onPromote,
 }: {
+  view: 'architecture' | 'versions';
   architectureMapOpen: boolean;
   packages: AgentPackage[];
   proposals: AgentPackageProposal[];
@@ -10917,6 +12760,13 @@ function AgentPackageConfiguration({
   const inspectedImplementationFeatures = inspectedImplementationFeatureIds
     .map((featureId) => agentPackageFeatures.find((feature) => feature.id === featureId))
     .filter((feature): feature is AgentFeature => Boolean(feature));
+  const publishedImplementationFeatures = publishedPackage
+    ? productionBehaviourInventory(publishedPackage, packages)
+        .map(implementationFeatureId)
+        .filter((featureId, index, featureIds) => featureIds.indexOf(featureId) === index)
+        .map((featureId) => agentPackageFeatures.find((feature) => feature.id === featureId))
+        .filter((feature): feature is AgentFeature => Boolean(feature))
+    : [];
 
   async function runPackageAction(packageId: string, action: 'approve' | 'ready' | 'promote') {
     setActionPackageId(packageId);
@@ -10957,717 +12807,785 @@ function AgentPackageConfiguration({
   }
 
   return (
-    <section className="agent-package-config" aria-labelledby="agent-package-config-title">
-      <div className="agent-package-config__header">
-        <div>
-          <div className="agent-package-config__published-row">
-            <Eyebrow>Published builder agent</Eyebrow>
-            <StatusBadge tone="success">Published</StatusBadge>
+    <div className={`agent-package-config agent-package-config--${view}`}>
+      {view === 'versions' ? (
+        <>
+          <AgentPackageVersionLedger
+            packages={packages}
+            pendingProductionFeatureCount={pendingProductionFeatureCount}
+          />
+          <div className="agent-package-config__header">
+            <div>
+              <div className="agent-package-config__published-row">
+                <Eyebrow>Published builder agent</Eyebrow>
+                <StatusBadge tone="success">Published</StatusBadge>
+              </div>
+              <h2 className="agent-production-version-value" id="agent-package-config-title">
+                <span>
+                  Builder agent package · {agentPackageVersionLabel(publishedPackage?.version ?? 4)}
+                </span>
+                <AgentProductionNotification count={pendingProductionFeatureCount} />
+              </h2>
+              <p className="muted-copy">
+                This is the source-controlled package used by every private prospect build. It
+                combines the agent policy with the tested builder foundation; it is not a single
+                test direction.
+              </p>
+              {publishedPackage?.stagedBehaviourIds?.length ? (
+                <AgentPackageFeatureList
+                  behaviourIds={publishedPackage.stagedBehaviourIds}
+                  version={publishedPackage.version}
+                />
+              ) : null}
+            </div>
           </div>
-          <h2 className="agent-production-version-value" id="agent-package-config-title">
-            <span>Builder agent package · v{publishedPackage?.version ?? 4}</span>
-            <AgentProductionNotification count={pendingProductionFeatureCount} />
-          </h2>
-          <p className="muted-copy">
-            This is the source-controlled package used by every private prospect build. It combines
-            the agent policy with the tested builder foundation; it is not a single test direction.
-          </p>
-          {publishedPackage?.stagedBehaviourIds?.length ? (
-            <AgentPackageFeatureList
-              behaviourIds={publishedPackage.stagedBehaviourIds}
-              version={publishedPackage.version}
-            />
-          ) : null}
-        </div>
-      </div>
 
-      {releaseCandidate ? (
-        <section
-          aria-labelledby="agent-production-release-title"
-          aria-busy={isCreatingReleaseDraft || isPublishingRelease}
-          className="agent-package-config__release-callout"
-        >
-          <div className="agent-package-config__release-icon" aria-hidden="true">
-            <PackageCheck size={24} />
-          </div>
-          <div>
-            <Eyebrow>Production release</Eyebrow>
-            <h3 id="agent-production-release-title">
-              {releaseIsProductionDraft
-                ? `Production draft v${releaseCandidate.version}`
-                : `Create production v${releaseCandidate.version}`}
-            </h3>
-            <p>
-              {releaseFeatureCount} tested feature{releaseFeatureCount === 1 ? '' : 's'}{' '}
-              {releaseIsProductionDraft
-                ? 'are saved in this immutable production draft. Publishing makes it the package used by future complete prospect builds.'
-                : releaseHasTestEvidence
-                  ? `are staged and ready. Create the immutable production draft from the current v${publishedPackage?.version ?? 4} package; publishing remains a separate confirmation.`
-                  : 'are staged. Complete a private homepage test with this package before creating its production draft.'}
-            </p>
-            <AgentPackageFeatureList
-              behaviourIds={releaseCandidate.stagedBehaviourIds ?? []}
-              version={releaseCandidate.version}
-            />
-          </div>
-          <div className="agent-package-config__release-action">
-            <StatusBadge
-              tone={releaseHasTestEvidence || releaseIsProductionDraft ? 'success' : 'warning'}
+          {releaseCandidate ? (
+            <section
+              aria-labelledby="agent-production-release-title"
+              aria-busy={isCreatingReleaseDraft || isPublishingRelease}
+              className="agent-package-config__release-callout"
             >
-              {releaseIsProductionDraft
-                ? 'Unpublished draft'
-                : releaseHasTestEvidence
-                  ? `${releaseFeatureCount} ready`
-                  : 'Test required'}
-            </StatusBadge>
-            <Button
-              disabled={
-                actionPackageId === releaseCandidate.id ||
-                (!releaseIsProductionDraft && !releaseHasTestEvidence)
-              }
-              onClick={() =>
-                void runPackageAction(
-                  releaseCandidate.id,
-                  releaseIsProductionDraft ? 'promote' : 'ready',
-                )
-              }
-              type="button"
-            >
-              <PackageCheck aria-hidden="true" size={17} />
-              {isCreatingReleaseDraft
-                ? `Creating production draft v${releaseCandidate.version}`
-                : isPublishingRelease
-                  ? `Publishing v${releaseCandidate.version}`
-                  : releaseIsProductionDraft
-                    ? `Publish v${releaseCandidate.version} to production`
+              <div className="agent-package-config__release-icon" aria-hidden="true">
+                <PackageCheck size={24} />
+              </div>
+              <div>
+                <Eyebrow>Production release</Eyebrow>
+                <h3 id="agent-production-release-title">
+                  {releaseIsProductionDraft
+                    ? `Production draft ${agentPackageVersionLabel(releaseCandidate.version)}`
+                    : `Create production ${agentPackageVersionLabel(releaseCandidate.version)}`}
+                </h3>
+                <p>
+                  {releaseFeatureCount} tested feature{releaseFeatureCount === 1 ? '' : 's'}{' '}
+                  {releaseIsProductionDraft
+                    ? 'are saved in this immutable production draft. Publishing makes it the package used by future complete prospect builds.'
                     : releaseHasTestEvidence
-                      ? `Create production v${releaseCandidate.version} draft`
-                      : 'Complete homepage test first'}
-            </Button>
-          </div>
-          {isCreatingReleaseDraft || isPublishingRelease ? (
-            <IndeterminateProgress
-              className="agent-package-config__release-progress"
-              detail={
-                isCreatingReleaseDraft
-                  ? `Saving v${releaseCandidate.version} as an unpublished production draft. This can take a few minutes; you can leave this page open.`
-                  : `Publishing v${releaseCandidate.version}. Future complete builds will use it after this finishes.`
-              }
-              label={
-                isCreatingReleaseDraft
-                  ? `Creating production draft v${releaseCandidate.version}`
-                  : `Publishing production package v${releaseCandidate.version}`
-              }
-            />
+                      ? `are staged and ready. Create the immutable production draft from the current ${agentPackageVersionLabel(publishedPackage?.version ?? 4)} package; publishing remains a separate confirmation.`
+                      : 'are staged. Complete a private homepage test with this package before creating its production draft.'}
+                </p>
+                <AgentPackageFeatureList
+                  behaviourIds={releaseCandidate.stagedBehaviourIds ?? []}
+                  version={releaseCandidate.version}
+                />
+              </div>
+              <div className="agent-package-config__release-action">
+                <StatusBadge
+                  tone={releaseHasTestEvidence || releaseIsProductionDraft ? 'success' : 'warning'}
+                >
+                  {releaseIsProductionDraft
+                    ? 'Unpublished draft'
+                    : releaseHasTestEvidence
+                      ? `${releaseFeatureCount} ready`
+                      : 'Test required'}
+                </StatusBadge>
+                <Button
+                  disabled={
+                    actionPackageId === releaseCandidate.id ||
+                    (!releaseIsProductionDraft && !releaseHasTestEvidence)
+                  }
+                  onClick={() =>
+                    void runPackageAction(
+                      releaseCandidate.id,
+                      releaseIsProductionDraft ? 'promote' : 'ready',
+                    )
+                  }
+                  type="button"
+                >
+                  <PackageCheck aria-hidden="true" size={17} />
+                  {isCreatingReleaseDraft
+                    ? `Creating production draft ${agentPackageVersionLabel(releaseCandidate.version)}`
+                    : isPublishingRelease
+                      ? `Publishing ${agentPackageVersionLabel(releaseCandidate.version)}`
+                      : releaseIsProductionDraft
+                        ? `Publish ${agentPackageVersionLabel(releaseCandidate.version)} to production`
+                        : releaseHasTestEvidence
+                          ? `Create production ${agentPackageVersionLabel(releaseCandidate.version)} draft`
+                          : 'Complete homepage test first'}
+                </Button>
+              </div>
+              {isCreatingReleaseDraft || isPublishingRelease ? (
+                <IndeterminateProgress
+                  className="agent-package-config__release-progress"
+                  detail={
+                    isCreatingReleaseDraft
+                      ? `Saving ${agentPackageVersionLabel(releaseCandidate.version)} as an unpublished production draft. This can take a few minutes; you can leave this page open.`
+                      : `Publishing ${agentPackageVersionLabel(releaseCandidate.version)}. Future complete builds will use it after this finishes.`
+                  }
+                  label={
+                    isCreatingReleaseDraft
+                      ? `Creating production draft ${agentPackageVersionLabel(releaseCandidate.version)}`
+                      : `Publishing production package ${agentPackageVersionLabel(releaseCandidate.version)}`
+                  }
+                />
+              ) : null}
+            </section>
           ) : null}
-        </section>
+
+          <dl className="agent-package-config__identity">
+            <div>
+              <dt>Published version</dt>
+              <dd>
+                <strong className="agent-production-version-value">
+                  {agentPackageVersionLabel(publishedPackage?.version ?? 4)} · Current production
+                  package
+                  <AgentProductionNotification count={pendingProductionFeatureCount} />
+                </strong>
+                <code>{agentPackageContractVersion(publishedPackage)}</code>
+              </dd>
+            </div>
+            <div>
+              <dt>Used by</dt>
+              <dd>Every complete private prospect website build.</dd>
+            </div>
+            <div>
+              <dt>Studio state</dt>
+              <dd>
+                {draftPackages.length
+                  ? `${draftPackages.length} unpublished package${draftPackages.length === 1 ? '' : 's'} derived from this production package.`
+                  : 'No unpublished package exists yet. Test directions are per-run input until you create a package proposal.'}
+              </dd>
+            </div>
+          </dl>
+        </>
       ) : null}
 
-      <dl className="agent-package-config__identity">
-        <div>
-          <dt>Published version</dt>
-          <dd>
-            <strong className="agent-production-version-value">
-              v{publishedPackage?.version ?? 4} · Current production package
-              <AgentProductionNotification count={pendingProductionFeatureCount} />
-            </strong>
-            <code>{agentPackageContractVersion(publishedPackage)}</code>
-          </dd>
-        </div>
-        <div>
-          <dt>Used by</dt>
-          <dd>Every complete private prospect website build.</dd>
-        </div>
-        <div>
-          <dt>Studio state</dt>
-          <dd>
-            {draftPackages.length
-              ? `${draftPackages.length} unpublished package${draftPackages.length === 1 ? '' : 's'} derived from this production package.`
-              : 'No unpublished package exists yet. Test directions are per-run input until you create a package proposal.'}
-          </dd>
-        </div>
-      </dl>
-
-      <AgentArchitectureOverview
-        contractVersion={agentPackageContractVersion(publishedPackage)}
-        foundationVersion={brandedFoundationVersion(
-          publishedPackage?.foundationVersion ?? 'made-solid-studio-next-builder-v2',
-        )}
-        onOpenSource={(label, trigger) => {
-          const file = currentAgentPackageFiles.find((candidate) => candidate.label === label);
-          if (file) {
-            selectedFileTriggerRef.current = trigger;
-            setSelectedFile(file);
-          }
-        }}
-        packageVersion={publishedPackage?.version ?? 6}
-      />
-
-      <Dialog.Root onOpenChange={onArchitectureMapOpenChange} open={architectureMapOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="builder-file-preview-overlay" />
-          <Dialog.Content
-            aria-describedby="agent-architecture-map-description"
-            className="agent-architecture-map-dialog"
-            onCloseAutoFocus={(event) => {
-              event.preventDefault();
-              onArchitectureMapCloseAutoFocus();
+      {view === 'architecture' ? (
+        <>
+          <h2 className="sr-only">Published builder architecture</h2>
+          <AgentArchitectureOverview
+            contractVersion={agentPackageContractVersion(publishedPackage)}
+            foundationVersion={brandedFoundationVersion(
+              publishedPackage?.foundationVersion ?? 'made-solid-studio-next-builder-v2',
+            )}
+            onOpenSource={(label, trigger) => {
+              const file = currentAgentPackageFiles.find((candidate) => candidate.label === label);
+              if (file) {
+                selectedFileTriggerRef.current = trigger;
+                setSelectedFile(file);
+              }
             }}
-          >
-            <header className="agent-architecture-map-dialog__header">
-              <div>
-                <Eyebrow>Architecture map</Eyebrow>
-                <Dialog.Title>How a website build is assembled</Dialog.Title>
-              </div>
-              <Dialog.Close asChild>
-                <IconButton label="Close architecture map" variant="quiet">
-                  <X aria-hidden="true" size={20} />
-                </IconButton>
-              </Dialog.Close>
-            </header>
-            <Dialog.Description className="muted-copy" id="agent-architecture-map-description">
-              These layers have different jobs. A build direction uses a package; a package uses
-              tested capabilities and its foundation.
-            </Dialog.Description>
-            <ol className="agent-package-config__architecture-map">
-              {agentArchitectureLayers.map((layer, index) => (
-                <li key={layer.name}>
-                  <span aria-hidden="true" className="agent-package-config__architecture-number">
-                    {index + 1}
-                  </span>
-                  <div>
-                    <strong>{layer.name}</strong>
-                    <p>{layer.purpose}</p>
-                    <small>{layer.behaviour}</small>
-                    {layer.files.length ? (
-                      <div className="agent-package-config__layer-files">
-                        {layer.files.map((label) => {
-                          const file = currentAgentPackageFiles.find(
-                            (item) => item.label === label,
-                          );
-                          return file ? (
-                            <button
-                              key={file.path}
-                              onClick={() => {
-                                onArchitectureMapOpenChange(false);
-                                setSelectedFile(file);
-                              }}
-                              type="button"
-                            >
-                              <FileText aria-hidden="true" size={14} />
-                              View {file.label}
-                            </button>
-                          ) : null;
-                        })}
-                      </div>
-                    ) : (
-                      <span className="agent-package-config__run-scoped">Stored with each run</span>
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ol>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+            packageVersion={publishedPackage?.version ?? 6}
+          />
+          <FeatureImplementationFiles
+            detail="These source-controlled files implement the capabilities and quality boundaries shown in the architecture above."
+            features={publishedImplementationFeatures}
+            heading="Built-in feature implementation"
+          />
 
-      <section
-        aria-labelledby="production-feature-versions-title"
-        className="production-feature-versions"
-      >
-        <div className="production-feature-versions__overview">
-          <header className="production-feature-versions__header">
+          <Dialog.Root onOpenChange={onArchitectureMapOpenChange} open={architectureMapOpen}>
+            <Dialog.Portal>
+              <Dialog.Overlay className="builder-file-preview-overlay" />
+              <Dialog.Content
+                aria-describedby="agent-architecture-map-description"
+                className="agent-architecture-map-dialog"
+                onCloseAutoFocus={(event) => {
+                  event.preventDefault();
+                  onArchitectureMapCloseAutoFocus();
+                }}
+              >
+                <header className="agent-architecture-map-dialog__header">
+                  <div>
+                    <Eyebrow>Architecture map</Eyebrow>
+                    <Dialog.Title>How a website build is assembled</Dialog.Title>
+                  </div>
+                  <Dialog.Close asChild>
+                    <IconButton label="Close architecture map" variant="quiet">
+                      <X aria-hidden="true" size={20} />
+                    </IconButton>
+                  </Dialog.Close>
+                </header>
+                <Dialog.Description className="muted-copy" id="agent-architecture-map-description">
+                  These layers have different jobs. A build direction uses a package; a package uses
+                  tested capabilities and its foundation.
+                </Dialog.Description>
+                <ol className="agent-package-config__architecture-map">
+                  {agentArchitectureLayers.map((layer, index) => (
+                    <li key={layer.name}>
+                      <span
+                        aria-hidden="true"
+                        className="agent-package-config__architecture-number"
+                      >
+                        {index + 1}
+                      </span>
+                      <div>
+                        <strong>{layer.name}</strong>
+                        <p>{layer.purpose}</p>
+                        <small>{layer.behaviour}</small>
+                        {layer.files.length ? (
+                          <div className="agent-package-config__layer-files">
+                            {layer.files.map((label) => {
+                              const file = currentAgentPackageFiles.find(
+                                (item) => item.label === label,
+                              );
+                              return file ? (
+                                <button
+                                  key={file.path}
+                                  onClick={() => {
+                                    onArchitectureMapOpenChange(false);
+                                    setSelectedFile(file);
+                                  }}
+                                  type="button"
+                                >
+                                  <FileText aria-hidden="true" size={14} />
+                                  View {file.label}
+                                </button>
+                              ) : null;
+                            })}
+                          </div>
+                        ) : (
+                          <span className="agent-package-config__run-scoped">
+                            Stored with each run
+                          </span>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              </Dialog.Content>
+            </Dialog.Portal>
+          </Dialog.Root>
+        </>
+      ) : null}
+
+      {view === 'versions' ? (
+        <>
+          <section
+            aria-labelledby="production-feature-versions-title"
+            className="production-feature-versions"
+          >
+            <div className="production-feature-versions__overview">
+              <header className="production-feature-versions__header">
+                <div>
+                  <Eyebrow>Production feature history</Eyebrow>
+                  <h3 id="production-feature-versions-title">Built-in features by version</h3>
+                  <p>
+                    Select a production release or unpublished production draft to inspect its
+                    complete feature inventory and the changes recorded against its base version.
+                  </p>
+                </div>
+                <label>
+                  <span className="agent-production-version-label">
+                    Production version
+                    <AgentProductionNotification count={pendingProductionFeatureCount} />
+                  </span>
+                  <select
+                    onChange={(event) => setInspectedProductionPackageId(event.currentTarget.value)}
+                    value={inspectedProductionPackage?.id ?? ''}
+                  >
+                    {productionVersions.map((agentPackage) => (
+                      <option key={agentPackage.id} value={agentPackage.id}>
+                        {agentPackageVersionLabel(agentPackage.version)} ·{' '}
+                        {agentPackage.status === 'published'
+                          ? `Published${
+                              pendingProductionFeatureCount
+                                ? ` · ${pendingProductionFeatureCount} awaiting approval`
+                                : ''
+                            }`
+                          : agentPackage.status === 'production_ready'
+                            ? 'Unpublished production draft'
+                            : 'Previous production'}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </header>
+
+              {inspectedProductionPackage ? (
+                <>
+                  <div className="production-feature-versions__summary">
+                    <div>
+                      <StatusBadge
+                        tone={
+                          inspectedProductionPackage.status === 'published' ? 'success' : 'neutral'
+                        }
+                      >
+                        {inspectedProductionPackage.status === 'published'
+                          ? 'Current production'
+                          : inspectedProductionPackage.status === 'production_ready'
+                            ? 'Unpublished draft'
+                            : 'Previous production'}
+                      </StatusBadge>
+                      <h4 className="agent-production-version-value">
+                        Agent package {agentPackageVersionLabel(inspectedProductionPackage.version)}
+                        {inspectedProductionPackage.status === 'published' ? (
+                          <AgentProductionNotification count={pendingProductionFeatureCount} />
+                        ) : null}
+                      </h4>
+                      <p>{inspectedProductionPackage.summary}</p>
+                    </div>
+                    <dl>
+                      <div>
+                        <dt>Based on</dt>
+                        <dd>
+                          {inspectedProductionBase
+                            ? `Production ${agentPackageVersionLabel(inspectedProductionBase.version)}`
+                            : `Published ${agentPackageVersionLabel(inspectedProductionPackage.version)} lineage root`}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Builder contract</dt>
+                        <dd>{agentPackageContractVersion(inspectedProductionPackage)}</dd>
+                      </div>
+                      <div>
+                        <dt>Foundation</dt>
+                        <dd>
+                          {brandedFoundationVersion(inspectedProductionPackage.foundationVersion)}
+                        </dd>
+                      </div>
+                    </dl>
+                  </div>
+
+                  <div className="production-feature-versions__comparison">
+                    <section aria-labelledby="production-version-changes-title">
+                      <Eyebrow>Version difference</Eyebrow>
+                      <h4 id="production-version-changes-title">
+                        {inspectedProductionBase
+                          ? `Changes from ${agentPackageVersionLabel(inspectedProductionBase.version)}`
+                          : `Published ${agentPackageVersionLabel(inspectedProductionPackage.version)} baseline`}
+                      </h4>
+                      {inspectedProductionPackage.stagedBehaviourIds?.length ? (
+                        <AgentPackageFeatureList
+                          ariaLabel={`Changes introduced in agent package ${agentPackageVersionLabel(inspectedProductionPackage.version)}`}
+                          behaviourIds={inspectedProductionPackage.stagedBehaviourIds}
+                          heading={`${inspectedProductionPackage.stagedBehaviourIds.length} recorded feature change${inspectedProductionPackage.stagedBehaviourIds.length === 1 ? '' : 's'}`}
+                          version={inspectedProductionPackage.version}
+                        />
+                      ) : (
+                        <p className="muted-copy">
+                          This published lineage root has no version-level feature additions
+                          recorded.
+                        </p>
+                      )}
+                    </section>
+                    <section aria-labelledby="production-version-inventory-title">
+                      <Eyebrow>Complete inventory</Eyebrow>
+                      <h4 id="production-version-inventory-title">
+                        Built into production{' '}
+                        {agentPackageVersionLabel(inspectedProductionPackage.version)}
+                      </h4>
+                      <AgentPackageFeatureList
+                        ariaLabel={`Complete feature inventory for agent package ${agentPackageVersionLabel(inspectedProductionPackage.version)}`}
+                        behaviourIds={inspectedBehaviourIds}
+                        heading={`${inspectedBehaviourIds.length} built-in feature${inspectedBehaviourIds.length === 1 ? '' : 's'}`}
+                        version={inspectedProductionPackage.version}
+                      />
+                    </section>
+                  </div>
+
+                  {inspectedProductionPackage.version <= 4 ? (
+                    <p className="production-feature-versions__legacy-note">
+                      <strong>Historical source boundary.</strong> v4 predates immutable per-feature
+                      file snapshots. The inventory shows its recorded baseline only; current source
+                      files are not presented as an exact v4 snapshot.
+                    </p>
+                  ) : null}
+                </>
+              ) : (
+                <p className="muted-copy">No production package versions are available yet.</p>
+              )}
+            </div>
+
+            {inspectedProductionPackage && inspectedProductionPackage.version > 4 ? (
+              <FeatureImplementationFiles
+                detail={`These are the implementation files associated with the recorded features in production ${agentPackageVersionLabel(inspectedProductionPackage.version)}. Open a file to inspect its enabling lines.`}
+                features={inspectedImplementationFeatures}
+                heading={`Built-in feature implementation · ${agentPackageVersionLabel(inspectedProductionPackage.version)}`}
+                onOpenWorkshop={
+                  inspectedProductionPackage.status === 'published' ? setWorkshopFeature : undefined
+                }
+              />
+            ) : null}
+          </section>
+
+          <Dialog.Root
+            onOpenChange={(open) => {
+              if (!open) {
+                setWorkshopFeature(undefined);
+                setWorkshopDirection('');
+              }
+            }}
+            open={Boolean(workshopFeature)}
+          >
+            <Dialog.Portal>
+              <Dialog.Overlay className="builder-file-preview-overlay" />
+              <Dialog.Content className="foundation-workshop-dialog">
+                <div className="foundation-workshop-dialog__header">
+                  <div>
+                    <Eyebrow>Foundation workshop</Eyebrow>
+                    <Dialog.Title>{workshopFeature?.title}</Dialog.Title>
+                    <p>
+                      Workshop revision {agentPackageVersionLabel(publishedPackage?.version ?? 4)}.2
+                    </p>
+                  </div>
+                  <StatusBadge tone="success">
+                    <Wrench aria-hidden="true" size={14} /> Workshoped
+                  </StatusBadge>
+                  <Dialog.Close asChild>
+                    <IconButton label="Close foundation workshop" variant="quiet">
+                      <X aria-hidden="true" size={18} />
+                    </IconButton>
+                  </Dialog.Close>
+                </div>
+                <p className="muted-copy">
+                  This is the protected source-feature workspace: refine the JavaScript
+                  implementation here with Codex, then send the agreed behaviour to a private test
+                  package. It does not make the page-building agent recreate the hard-coded feature.
+                </p>
+                <label className="foundation-workshop-dialog__direction">
+                  <span>Workshop change for the next test behaviour</span>
+                  <textarea
+                    maxLength={4000}
+                    onChange={(event) => setWorkshopDirection(event.target.value)}
+                    placeholder="For example: make the mobile menu icon morph more slowly and stagger each navigation link by 80ms."
+                    rows={5}
+                    value={workshopDirection}
+                  />
+                </label>
+                <ButtonGroup className="foundation-workshop-dialog__actions">
+                  <Button
+                    disabled={!workshopDirection.trim() || isSendingWorkshop}
+                    onClick={() => void sendWorkshopToTesting()}
+                    type="button"
+                  >
+                    <CheckCheck aria-hidden="true" size={16} />
+                    {isSendingWorkshop ? 'Sending to test' : 'Approve & send to test feature'}
+                  </Button>
+                  <small>
+                    Sending creates a versioned test-package proposal. The current production
+                    package remains unchanged.
+                  </small>
+                </ButtonGroup>
+              </Dialog.Content>
+            </Dialog.Portal>
+          </Dialog.Root>
+        </>
+      ) : null}
+
+      {view === 'architecture' ? (
+        <>
+          <section
+            className="agent-package-config__delivery"
+            aria-labelledby="agent-delivery-title"
+          >
             <div>
-              <Eyebrow>Production feature history</Eyebrow>
-              <h3 id="production-feature-versions-title">Built-in features by version</h3>
+              <Eyebrow>Protected delivery system</Eyebrow>
+              <h3 id="agent-delivery-title">How the package reaches a private preview</h3>
+            </div>
+            <p>
+              The server-side builder worker creates a disposable workspace from the locked
+              foundation, supplies the selected package and build direction to Codex, then saves
+              source, logs, screenshots, and quality results against that run. It never publishes a
+              prospect site.
+            </p>
+          </section>
+
+          <section
+            aria-labelledby="agent-capability-decision-title"
+            className="agent-package-config__decision"
+          >
+            <div>
+              <Eyebrow>Refinement boundary</Eyebrow>
+              <h3 id="agent-capability-decision-title">
+                Directions can propose a capability, not create one
+              </h3>
               <p>
-                Select a production release or unpublished production draft to inspect its complete
-                feature inventory and the changes recorded against its base version.
+                A test direction can change how the current package is used, or reveal that a new
+                capability would be useful. It must not silently write a shared runtime for future
+                builds.
               </p>
             </div>
-            <label>
-              <span className="agent-production-version-label">
-                Production version
-                <AgentProductionNotification count={pendingProductionFeatureCount} />
-              </span>
-              <select
-                onChange={(event) => setInspectedProductionPackageId(event.currentTarget.value)}
-                value={inspectedProductionPackage?.id ?? ''}
-              >
-                {productionVersions.map((agentPackage) => (
-                  <option key={agentPackage.id} value={agentPackage.id}>
-                    v{agentPackage.version} ·{' '}
-                    {agentPackage.status === 'published'
-                      ? `Published${
-                          pendingProductionFeatureCount
-                            ? ` · ${pendingProductionFeatureCount} awaiting approval`
-                            : ''
-                        }`
-                      : agentPackage.status === 'production_ready'
-                        ? 'Unpublished production draft'
-                        : 'Previous production'}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </header>
+            <ol>
+              <li>
+                <strong>Test direction</strong>
+                <span>Scoped to one private build and stored with that run.</span>
+              </li>
+              <li>
+                <strong>Capability proposal</strong>
+                <span>Review whether the idea needs policy only or new tested source code.</span>
+              </li>
+              <li>
+                <strong>Package release</strong>
+                <span>
+                  Test, document, version, and publish the approved change for future builds.
+                </span>
+              </li>
+            </ol>
+          </section>
+        </>
+      ) : null}
 
-          {inspectedProductionPackage ? (
-            <>
-              <div className="production-feature-versions__summary">
-                <div>
-                  <StatusBadge
-                    tone={inspectedProductionPackage.status === 'published' ? 'success' : 'neutral'}
-                  >
-                    {inspectedProductionPackage.status === 'published'
-                      ? 'Current production'
-                      : inspectedProductionPackage.status === 'production_ready'
-                        ? 'Unpublished draft'
-                        : 'Previous production'}
-                  </StatusBadge>
-                  <h4 className="agent-production-version-value">
-                    Agent package v{inspectedProductionPackage.version}
-                    {inspectedProductionPackage.status === 'published' ? (
-                      <AgentProductionNotification count={pendingProductionFeatureCount} />
-                    ) : null}
-                  </h4>
-                  <p>{inspectedProductionPackage.summary}</p>
-                </div>
-                <dl>
-                  <div>
-                    <dt>Based on</dt>
-                    <dd>
-                      {inspectedProductionBase
-                        ? `Production v${inspectedProductionBase.version}`
-                        : `Published v${inspectedProductionPackage.version} lineage root`}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Builder contract</dt>
-                    <dd>{agentPackageContractVersion(inspectedProductionPackage)}</dd>
-                  </div>
-                  <div>
-                    <dt>Foundation</dt>
-                    <dd>
-                      {brandedFoundationVersion(inspectedProductionPackage.foundationVersion)}
-                    </dd>
-                  </div>
-                </dl>
-              </div>
-
-              <div className="production-feature-versions__comparison">
-                <section aria-labelledby="production-version-changes-title">
-                  <Eyebrow>Version difference</Eyebrow>
-                  <h4 id="production-version-changes-title">
-                    {inspectedProductionBase
-                      ? `Changes from v${inspectedProductionBase.version}`
-                      : `Published v${inspectedProductionPackage.version} baseline`}
-                  </h4>
-                  {inspectedProductionPackage.stagedBehaviourIds?.length ? (
-                    <AgentPackageFeatureList
-                      ariaLabel={`Changes introduced in agent package v${inspectedProductionPackage.version}`}
-                      behaviourIds={inspectedProductionPackage.stagedBehaviourIds}
-                      heading={`${inspectedProductionPackage.stagedBehaviourIds.length} recorded feature change${inspectedProductionPackage.stagedBehaviourIds.length === 1 ? '' : 's'}`}
-                      version={inspectedProductionPackage.version}
-                    />
-                  ) : (
-                    <p className="muted-copy">
-                      This published lineage root has no version-level feature additions recorded.
-                    </p>
-                  )}
-                </section>
-                <section aria-labelledby="production-version-inventory-title">
-                  <Eyebrow>Complete inventory</Eyebrow>
-                  <h4 id="production-version-inventory-title">
-                    Built into production v{inspectedProductionPackage.version}
-                  </h4>
-                  <AgentPackageFeatureList
-                    ariaLabel={`Complete feature inventory for agent package v${inspectedProductionPackage.version}`}
-                    behaviourIds={inspectedBehaviourIds}
-                    heading={`${inspectedBehaviourIds.length} built-in feature${inspectedBehaviourIds.length === 1 ? '' : 's'}`}
-                    version={inspectedProductionPackage.version}
-                  />
-                </section>
-              </div>
-
-              {inspectedProductionPackage.version <= 4 ? (
-                <p className="production-feature-versions__legacy-note">
-                  <strong>Historical source boundary.</strong> v4 predates immutable per-feature
-                  file snapshots. The inventory shows its recorded baseline only; current source
-                  files are not presented as an exact v4 snapshot.
-                </p>
-              ) : null}
-            </>
-          ) : (
-            <p className="muted-copy">No production package versions are available yet.</p>
-          )}
-        </div>
-
-        {inspectedProductionPackage && inspectedProductionPackage.version > 4 ? (
-          <FeatureImplementationFiles
-            detail={`These are the implementation files associated with the recorded features in production v${inspectedProductionPackage.version}. Open a file to inspect its enabling lines.`}
-            features={inspectedImplementationFeatures}
-            heading={`Built-in feature implementation · v${inspectedProductionPackage.version}`}
-            onOpenWorkshop={
-              inspectedProductionPackage.status === 'published' ? setWorkshopFeature : undefined
-            }
-          />
-        ) : null}
-      </section>
-
-      <Dialog.Root
-        onOpenChange={(open) => {
-          if (!open) {
-            setWorkshopFeature(undefined);
-            setWorkshopDirection('');
-          }
-        }}
-        open={Boolean(workshopFeature)}
-      >
-        <Dialog.Portal>
-          <Dialog.Overlay className="builder-file-preview-overlay" />
-          <Dialog.Content className="foundation-workshop-dialog">
-            <div className="foundation-workshop-dialog__header">
-              <div>
-                <Eyebrow>Foundation workshop</Eyebrow>
-                <Dialog.Title>{workshopFeature?.title}</Dialog.Title>
-                <p>Workshop revision v{publishedPackage?.version ?? 4}.2</p>
-              </div>
-              <StatusBadge tone="success">
-                <Wrench aria-hidden="true" size={14} /> Workshoped
-              </StatusBadge>
-              <Dialog.Close asChild>
-                <IconButton label="Close foundation workshop" variant="quiet">
-                  <X aria-hidden="true" size={18} />
-                </IconButton>
-              </Dialog.Close>
+      {view === 'versions' ? (
+        <>
+          <section
+            aria-labelledby="agent-package-versions-title"
+            className="agent-package-config__versions"
+          >
+            <div>
+              <Eyebrow>Package versions</Eyebrow>
+              <h3 id="agent-package-versions-title">Published baseline</h3>
+              <p>
+                Published and test-ready packages are immutable. A test package is always derived
+                from a published base; a complete prospect build uses only the currently published
+                package.
+              </p>
             </div>
-            <p className="muted-copy">
-              This is the protected source-feature workspace: refine the JavaScript implementation
-              here with Codex, then send the agreed behaviour to a private test package. It does not
-              make the page-building agent recreate the hard-coded feature.
-            </p>
-            <label className="foundation-workshop-dialog__direction">
-              <span>Workshop change for the next test behaviour</span>
-              <textarea
-                maxLength={4000}
-                onChange={(event) => setWorkshopDirection(event.target.value)}
-                placeholder="For example: make the mobile menu icon morph more slowly and stagger each navigation link by 80ms."
-                rows={5}
-                value={workshopDirection}
-              />
-            </label>
-            <ButtonGroup className="foundation-workshop-dialog__actions">
-              <Button
-                disabled={!workshopDirection.trim() || isSendingWorkshop}
-                onClick={() => void sendWorkshopToTesting()}
-                type="button"
-              >
-                <CheckCheck aria-hidden="true" size={16} />
-                {isSendingWorkshop ? 'Sending to test' : 'Approve & send to test feature'}
-              </Button>
-              <small>
-                Sending creates a versioned test-package proposal. The current production package
-                remains unchanged.
-              </small>
-            </ButtonGroup>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+            <div className="agent-package-config__version-row">
+              <StatusBadge tone="success">Published</StatusBadge>
+              <strong className="agent-production-version-value">
+                {agentPackageVersionLabel(publishedPackage?.version ?? 4)} · Current production
+                package
+                <AgentProductionNotification count={pendingProductionFeatureCount} />
+              </strong>
+              <span>Prospect builds use this package today.</span>
+            </div>
+          </section>
 
-      <section className="agent-package-config__delivery" aria-labelledby="agent-delivery-title">
-        <div>
-          <Eyebrow>Protected delivery system</Eyebrow>
-          <h3 id="agent-delivery-title">How the package reaches a private preview</h3>
-        </div>
-        <p>
-          The server-side builder worker creates a disposable workspace from the locked foundation,
-          supplies the selected package and build direction to Codex, then saves source, logs,
-          screenshots, and quality results against that run. It never publishes a prospect site.
-        </p>
-      </section>
-
-      <section
-        aria-labelledby="agent-capability-decision-title"
-        className="agent-package-config__decision"
-      >
-        <div>
-          <Eyebrow>Refinement boundary</Eyebrow>
-          <h3 id="agent-capability-decision-title">
-            Directions can propose a capability, not create one
-          </h3>
-          <p>
-            A test direction can change how the current package is used, or reveal that a new
-            capability would be useful. It must not silently write a shared runtime for future
-            builds.
-          </p>
-        </div>
-        <ol>
-          <li>
-            <strong>Test direction</strong>
-            <span>Scoped to one private build and stored with that run.</span>
-          </li>
-          <li>
-            <strong>Capability proposal</strong>
-            <span>Review whether the idea needs policy only or new tested source code.</span>
-          </li>
-          <li>
-            <strong>Package release</strong>
-            <span>Test, document, version, and publish the approved change for future builds.</span>
-          </li>
-        </ol>
-      </section>
-
-      <section
-        aria-labelledby="agent-package-versions-title"
-        className="agent-package-config__versions"
-      >
-        <div>
-          <Eyebrow>Package versions</Eyebrow>
-          <h3 id="agent-package-versions-title">Published baseline</h3>
-          <p>
-            Published and test-ready packages are immutable. A test package is always derived from a
-            published base; a complete prospect build uses only the currently published package.
-          </p>
-        </div>
-        <div className="agent-package-config__version-row">
-          <StatusBadge tone="success">Published</StatusBadge>
-          <strong className="agent-production-version-value">
-            v{publishedPackage?.version ?? 4} · Current production package
-            <AgentProductionNotification count={pendingProductionFeatureCount} />
-          </strong>
-          <span>Prospect builds use this package today.</span>
-        </div>
-      </section>
-
-      {proposals.length || draftPackages.length ? (
-        <section
-          className="agent-package-config__drafts"
-          aria-labelledby="agent-package-drafts-title"
-        >
-          <div>
-            <Eyebrow>Derived test versions</Eyebrow>
-            <h3 id="agent-package-drafts-title">Review, test, then promote</h3>
-            <p>
-              Test versions are pinned to their derived package. Once a tested behaviour is approved
-              as a production draft, it is removed from future test choices until a later explicit
-              publish action. Neither action rewrites an earlier build.
-            </p>
-          </div>
-          <div className="agent-package-config__draft-list">
-            {proposals.map((proposal) => {
-              const draft = packages.find((item) => item.id === proposal.draftPackageId);
-              const basePackage = packages.find((item) => item.id === proposal.basePackageId);
-              return (
-                <article key={proposal.id}>
-                  <div>
-                    <strong>
-                      {draft
-                        ? `v${draft.version} test package · derived from v${basePackage?.version ?? '?'}`
-                        : 'Package proposal'}
-                    </strong>
-                    <StatusBadge
-                      tone={
-                        proposal.status === 'failed' || proposal.status === 'rejected'
-                          ? 'danger'
-                          : proposal.status === 'ready' || proposal.status === 'accepted'
-                            ? 'success'
-                            : 'warning'
-                      }
-                    >
-                      {proposal.status.replace('_', ' ')}
-                    </StatusBadge>
-                  </div>
-                  <p>{proposal.summary ?? proposal.direction}</p>
-                  {draft?.stagedBehaviourIds?.length ? (
-                    <AgentPackageFeatureList
-                      behaviourIds={draft.stagedBehaviourIds}
-                      version={draft.version}
-                    />
-                  ) : null}
-                  {proposal.capabilityAssessment === 'foundation_change_required' ? (
-                    <p className="agent-package-config__foundation-note">
-                      <strong>Foundation change required.</strong> {proposal.capabilityProposal}
-                    </p>
-                  ) : null}
-                  {proposal.errorSummary ? (
-                    <p className="error-copy">{proposal.errorSummary}</p>
-                  ) : null}
-                  {draft ? (
-                    <details className="agent-package-config__draft-diff">
-                      <summary>Review v{draft.version} package addenda</summary>
-                      {draft.contractAddendum ? (
-                        <div>
-                          <strong>Builder contract addendum</strong>
-                          <pre>{draft.contractAddendum}</pre>
-                        </div>
+          {proposals.length || draftPackages.length ? (
+            <section
+              className="agent-package-config__drafts"
+              aria-labelledby="agent-package-drafts-title"
+            >
+              <div>
+                <Eyebrow>Derived test versions</Eyebrow>
+                <h3 id="agent-package-drafts-title">Review, test, then promote</h3>
+                <p>
+                  Test versions are pinned to their derived package. Once a tested behaviour is
+                  approved as a production draft, it is removed from future test choices until a
+                  later explicit publish action. Neither action rewrites an earlier build.
+                </p>
+              </div>
+              <div className="agent-package-config__draft-list">
+                {proposals.map((proposal) => {
+                  const draft = packages.find((item) => item.id === proposal.draftPackageId);
+                  const basePackage = packages.find((item) => item.id === proposal.basePackageId);
+                  return (
+                    <article key={proposal.id}>
+                      <div>
+                        <strong>
+                          {draft
+                            ? `${agentPackageVersionLabel(draft.version)} test package · derived from ${agentPackageVersionLabel(basePackage?.version)}`
+                            : 'Package proposal'}
+                        </strong>
+                        <StatusBadge
+                          tone={
+                            proposal.status === 'failed' || proposal.status === 'rejected'
+                              ? 'danger'
+                              : proposal.status === 'ready' || proposal.status === 'accepted'
+                                ? 'success'
+                                : 'warning'
+                          }
+                        >
+                          {proposal.status.replace('_', ' ')}
+                        </StatusBadge>
+                      </div>
+                      <p>{proposal.summary ?? proposal.direction}</p>
+                      {draft?.stagedBehaviourIds?.length ? (
+                        <AgentPackageFeatureList
+                          behaviourIds={draft.stagedBehaviourIds}
+                          version={draft.version}
+                        />
                       ) : null}
-                      {draft.instructionsAddendum ? (
-                        <div>
-                          <strong>Template instructions addendum</strong>
-                          <pre>{draft.instructionsAddendum}</pre>
-                        </div>
-                      ) : null}
-                      {!draft.contractAddendum && !draft.instructionsAddendum ? (
-                        <p>
-                          No Markdown addendum was generated for this foundation-change proposal.
+                      {proposal.capabilityAssessment === 'foundation_change_required' ? (
+                        <p className="agent-package-config__foundation-note">
+                          <strong>Foundation change required.</strong> {proposal.capabilityProposal}
                         </p>
                       ) : null}
-                    </details>
-                  ) : null}
-                  {draft?.status === 'draft' && proposal.capabilityAssessment === 'policy_only' ? (
-                    <Button
-                      disabled={actionPackageId === draft.id}
-                      onClick={() => void runPackageAction(draft.id, 'approve')}
-                      type="button"
-                      variant="secondary"
-                    >
-                      <Check aria-hidden="true" size={16} />
-                      {actionPackageId === draft.id
-                        ? 'Approving package'
-                        : `Approve v${draft.version} for testing`}
-                    </Button>
-                  ) : null}
-                  {draft?.status === 'test_ready' ? (
-                    <>
-                      <Button
-                        disabled={actionPackageId === draft.id || !testedPackageIds.has(draft.id)}
-                        onClick={() => void runPackageAction(draft.id, 'ready')}
-                        type="button"
-                      >
-                        <CheckCheck aria-hidden="true" size={16} />
-                        {actionPackageId === draft.id
-                          ? 'Saving production draft'
-                          : `Approve v${draft.version} as production draft`}
-                      </Button>
-                      {!testedPackageIds.has(draft.id) ? (
-                        <p>Complete a private homepage test before saving this production draft.</p>
+                      {proposal.errorSummary ? (
+                        <p className="error-copy">{proposal.errorSummary}</p>
                       ) : null}
-                    </>
-                  ) : null}
-                  {draft?.status === 'production_ready' ? (
-                    <>
-                      <p className="agent-package-config__foundation-note">
-                        <strong>Production draft saved.</strong> This behaviour is preserved for a
-                        future release and is no longer selectable for new test builds.
-                      </p>
-                      <Button
-                        disabled={actionPackageId === draft.id}
-                        onClick={() => void runPackageAction(draft.id, 'promote')}
-                        type="button"
-                      >
-                        <CheckCheck aria-hidden="true" size={16} />
-                        {actionPackageId === draft.id
-                          ? 'Publishing package'
-                          : `Publish v${draft.version} to production`}
-                      </Button>
-                    </>
-                  ) : null}
-                </article>
-              );
-            })}
+                      {draft ? (
+                        <details className="agent-package-config__draft-diff">
+                          <summary>
+                            Review {agentPackageVersionLabel(draft.version)} package addenda
+                          </summary>
+                          {draft.contractAddendum ? (
+                            <div>
+                              <strong>Builder contract addendum</strong>
+                              <pre>{draft.contractAddendum}</pre>
+                            </div>
+                          ) : null}
+                          {draft.instructionsAddendum ? (
+                            <div>
+                              <strong>Template instructions addendum</strong>
+                              <pre>{draft.instructionsAddendum}</pre>
+                            </div>
+                          ) : null}
+                          {!draft.contractAddendum && !draft.instructionsAddendum ? (
+                            <p>
+                              No Markdown addendum was generated for this foundation-change
+                              proposal.
+                            </p>
+                          ) : null}
+                        </details>
+                      ) : null}
+                      {draft?.status === 'draft' &&
+                      proposal.capabilityAssessment === 'policy_only' ? (
+                        <Button
+                          disabled={actionPackageId === draft.id}
+                          onClick={() => void runPackageAction(draft.id, 'approve')}
+                          type="button"
+                          variant="secondary"
+                        >
+                          <Check aria-hidden="true" size={16} />
+                          {actionPackageId === draft.id
+                            ? 'Approving package'
+                            : `Approve ${agentPackageVersionLabel(draft.version)} for testing`}
+                        </Button>
+                      ) : null}
+                      {draft?.status === 'test_ready' ? (
+                        <>
+                          <Button
+                            disabled={
+                              actionPackageId === draft.id || !testedPackageIds.has(draft.id)
+                            }
+                            onClick={() => void runPackageAction(draft.id, 'ready')}
+                            type="button"
+                          >
+                            <CheckCheck aria-hidden="true" size={16} />
+                            {actionPackageId === draft.id
+                              ? 'Saving production draft'
+                              : `Approve ${agentPackageVersionLabel(draft.version)} as production draft`}
+                          </Button>
+                          {!testedPackageIds.has(draft.id) ? (
+                            <p>
+                              Complete a private homepage test before saving this production draft.
+                            </p>
+                          ) : null}
+                        </>
+                      ) : null}
+                      {draft?.status === 'production_ready' ? (
+                        <>
+                          <p className="agent-package-config__foundation-note">
+                            <strong>Production draft saved.</strong> This behaviour is preserved for
+                            a future release and is no longer selectable for new test builds.
+                          </p>
+                          <Button
+                            disabled={actionPackageId === draft.id}
+                            onClick={() => void runPackageAction(draft.id, 'promote')}
+                            type="button"
+                          >
+                            <CheckCheck aria-hidden="true" size={16} />
+                            {actionPackageId === draft.id
+                              ? 'Publishing package'
+                              : `Publish ${agentPackageVersionLabel(draft.version)} to production`}
+                          </Button>
+                        </>
+                      ) : null}
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
+
+          {message ? (
+            <p className="error-copy" role="alert">
+              {message}
+            </p>
+          ) : null}
+        </>
+      ) : null}
+
+      {view === 'architecture' ? (
+        <section
+          className="agent-package-config__details"
+          aria-labelledby="agent-package-files-title"
+        >
+          <div className="agent-package-config__details-header">
+            <div>
+              <Eyebrow>Inspectable files</Eyebrow>
+              <h3 id="agent-package-files-title">Open the package source</h3>
+              <p>
+                These are the source-controlled files behind the current package. Select one to read
+                it in a focused, scrollable viewer.
+              </p>
+            </div>
+            <small>{currentAgentPackageFiles.length} protected policy and foundation files</small>
+          </div>
+          <div className="agent-package-config__file-list">
+            {currentAgentPackageFiles.map((file) => (
+              <button key={file.path} onClick={() => setSelectedFile(file)} type="button">
+                <FileText aria-hidden="true" size={18} />
+                <span>
+                  <small>{file.group}</small>
+                  <strong>{file.label}</strong>
+                  <small>{file.detail}</small>
+                  <code>{file.path}</code>
+                </span>
+                <ArrowUpRight aria-hidden="true" size={16} />
+              </button>
+            ))}
           </div>
         </section>
       ) : null}
 
-      {message ? (
-        <p className="error-copy" role="alert">
-          {message}
-        </p>
-      ) : null}
-
-      <section
-        className="agent-package-config__details"
-        aria-labelledby="agent-package-files-title"
-      >
-        <div className="agent-package-config__details-header">
+      {view === 'versions' ? (
+        <section
+          aria-labelledby="agent-package-baseline-title"
+          className="agent-package-config__baseline"
+        >
           <div>
-            <Eyebrow>Inspectable files</Eyebrow>
-            <h3 id="agent-package-files-title">Open the package source</h3>
+            <Eyebrow>Current baseline changes</Eyebrow>
+            <h3 id="agent-package-baseline-title">What is in the package and Studio now</h3>
             <p>
-              These are the source-controlled files behind the current package. Select one to read
-              it in a focused, scrollable viewer.
+              This is a current-state record, not an invented historical changelog. Future package
+              releases save an immutable policy diff and promotion record here.
             </p>
           </div>
-          <small>{currentAgentPackageFiles.length} protected policy and foundation files</small>
-        </div>
-        <div className="agent-package-config__file-list">
-          {currentAgentPackageFiles.map((file) => (
-            <button key={file.path} onClick={() => setSelectedFile(file)} type="button">
-              <FileText aria-hidden="true" size={18} />
-              <span>
-                <small>{file.group}</small>
-                <strong>{file.label}</strong>
-                <small>{file.detail}</small>
-                <code>{file.path}</code>
-              </span>
-              <ArrowUpRight aria-hidden="true" size={16} />
-            </button>
-          ))}
-        </div>
-      </section>
+          <ul>
+            {agentPackageBaseline.map((item) => (
+              <li key={item.label}>
+                <strong>{item.label}</strong>
+                <span>{item.detail}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
-      <section
-        aria-labelledby="agent-package-baseline-title"
-        className="agent-package-config__baseline"
-      >
-        <div>
-          <Eyebrow>Current baseline changes</Eyebrow>
-          <h3 id="agent-package-baseline-title">What is in the package and Studio now</h3>
-          <p>
-            This is a current-state record, not an invented historical changelog. Future package
-            releases save an immutable policy diff and promotion record here.
-          </p>
-        </div>
-        <ul>
-          {agentPackageBaseline.map((item) => (
-            <li key={item.label}>
-              <strong>{item.label}</strong>
-              <span>{item.detail}</span>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <Dialog.Root
-        onOpenChange={(open) => !open && setSelectedFile(undefined)}
-        open={Boolean(selectedFile)}
-      >
-        <Dialog.Portal>
-          <Dialog.Overlay className="builder-file-preview-overlay" />
-          <Dialog.Content
-            className="builder-file-preview-dialog agent-package-config__dialog"
-            onCloseAutoFocus={(event) => {
-              if (!selectedFileTriggerRef.current) return;
-              event.preventDefault();
-              selectedFileTriggerRef.current.focus();
-              selectedFileTriggerRef.current = null;
-            }}
-          >
-            <div className="builder-file-preview-dialog__header">
-              <div>
-                <div className="agent-production-version-label">
-                  <Eyebrow>
-                    {selectedFile?.group ?? 'Agent package'} · v{publishedPackage?.version ?? 4}
-                  </Eyebrow>
-                  <AgentProductionNotification count={pendingProductionFeatureCount} />
+      {view === 'architecture' ? (
+        <Dialog.Root
+          onOpenChange={(open) => !open && setSelectedFile(undefined)}
+          open={Boolean(selectedFile)}
+        >
+          <Dialog.Portal>
+            <Dialog.Overlay className="builder-file-preview-overlay" />
+            <Dialog.Content
+              className="builder-file-preview-dialog agent-package-config__dialog"
+              onCloseAutoFocus={(event) => {
+                if (!selectedFileTriggerRef.current) return;
+                event.preventDefault();
+                selectedFileTriggerRef.current.focus();
+                selectedFileTriggerRef.current = null;
+              }}
+            >
+              <div className="builder-file-preview-dialog__header">
+                <div>
+                  <div className="agent-production-version-label">
+                    <Eyebrow>
+                      {selectedFile?.group ?? 'Agent package'} ·{' '}
+                      {agentPackageVersionLabel(publishedPackage?.version ?? 4)}
+                    </Eyebrow>
+                    <AgentProductionNotification count={pendingProductionFeatureCount} />
+                  </div>
+                  <Dialog.Title>{selectedFile?.label}</Dialog.Title>
                 </div>
-                <Dialog.Title>{selectedFile?.label}</Dialog.Title>
+                <Dialog.Close asChild>
+                  <IconButton label="Close agent file" variant="quiet">
+                    <X aria-hidden="true" size={18} />
+                  </IconButton>
+                </Dialog.Close>
               </div>
-              <Dialog.Close asChild>
-                <IconButton label="Close agent file" variant="quiet">
-                  <X aria-hidden="true" size={18} />
-                </IconButton>
-              </Dialog.Close>
-            </div>
-            <Dialog.Description className="muted-copy">
-              <code>{selectedFile?.path}</code>
-            </Dialog.Description>
-            <pre className="builder-file-preview-dialog__source">{selectedFile?.content}</pre>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
-    </section>
+              <Dialog.Description className="muted-copy">
+                <code>{selectedFile?.path}</code>
+              </Dialog.Description>
+              <pre className="builder-file-preview-dialog__source">{selectedFile?.content}</pre>
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
+      ) : null}
+    </div>
   );
 }
 
@@ -11680,6 +13598,7 @@ function AgentStudioPage({
   onSelectSection,
   onSelectWorkspace,
   onOpenProspect,
+  onOpenUsageAnalysis,
   onRequestBuild,
   onResumeBuild,
   onCancelBuild,
@@ -11702,6 +13621,7 @@ function AgentStudioPage({
   onSelectSection: (section: AgentStudioSection) => void;
   onSelectWorkspace: (businessId: string) => void;
   onOpenProspect: (businessId: string) => void;
+  onOpenUsageAnalysis: (builderRunId: string) => void;
   onRequestBuild: (
     businessId: string,
     mode: BuilderRunMode,
@@ -11758,6 +13678,10 @@ function AgentStudioPage({
       )
     : undefined;
   const isArchitecturePage = section === 'agent';
+  const isVersionsPage = section === 'versions';
+  const publishedAgentPackage = agentPackages.find((item) => item.status === 'published');
+  const semanticRecoveryUpdatePending =
+    pendingProductionFeatureIds(agentPackages).includes('visual-content-recovery');
   const testedPackageIds = new Set(
     workspaces.flatMap((workspace) =>
       workspace.builderRuns
@@ -11779,12 +13703,16 @@ function AgentStudioPage({
           <h1 id="agent-studio-title">
             {isArchitecturePage
               ? 'Builder agent architecture'
-              : 'Refine the builder, not a prospect'}
+              : isVersionsPage
+                ? 'Build package versions'
+                : 'Refine the builder, not a prospect'}
           </h1>
           <p className="muted-copy">
             {isArchitecturePage
-              ? 'See the published agent package, its policy, built-in capabilities, protected delivery system, and the boundary between a test direction and a production release.'
-              : 'Use a prepared prospect only as a private test harness. Directions refine one test run; the published package remains unchanged until a reviewed release exists.'}
+              ? 'See how the builder foundation, built-in capabilities, package contract, build direction, and protected delivery worker fit together.'
+              : isVersionsPage
+                ? 'Review every saved build package, the system that can use it, its release notes, complete feature inventory, and its path from test version to production.'
+                : 'Use a prepared prospect only as a private test harness. Directions refine one test run; the published package remains unchanged until a reviewed release exists.'}
           </p>
         </div>
         <div className="agent-studio__header-actions">
@@ -11804,7 +13732,14 @@ function AgentStudioPage({
         </div>
       </div>
 
-      {isArchitecturePage ? (
+      {isVersionsPage ? (
+        <SemanticRecoverySourceUpdate
+          packageVersion={publishedAgentPackage?.version ?? 6}
+          pending={semanticRecoveryUpdatePending}
+        />
+      ) : null}
+
+      {isArchitecturePage || isVersionsPage ? (
         <AgentPackageConfiguration
           architectureMapOpen={architectureMapOpen}
           onApproveForTesting={onApproveAgentPackageForTesting}
@@ -11816,6 +13751,7 @@ function AgentStudioPage({
           packages={agentPackages}
           proposals={agentPackageProposals}
           testedPackageIds={testedPackageIds}
+          view={isArchitecturePage ? 'architecture' : 'versions'}
         />
       ) : testWorkspaces.length ? (
         <section className="agent-studio__test" aria-labelledby="agent-studio-test-title">
@@ -11935,6 +13871,7 @@ function AgentStudioPage({
               onLoadBuildEvidence={onLoadBuildEvidence}
               onMoveToAgentStudio={onMoveToAgentStudio}
               onOpenPreview={onOpenPreview}
+              onOpenUsageAnalysis={onOpenUsageAnalysis}
               onRequestProposal={onRequestAgentPackageProposal}
               onResumeBuild={onResumeBuild}
               onRequestSiteTest={onRequestSiteTest}
@@ -11975,6 +13912,56 @@ function AgentStudioPage({
       )}
     </section>
   );
+}
+
+class AgentStudioErrorBoundary extends Component<
+  { children: ReactNode; onOpenSafeTesting: () => void; routeKey: string },
+  { error?: Error }
+> {
+  state: { error?: Error } = {};
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, details: ErrorInfo) {
+    console.error('Agent Studio could not render.', error, details);
+  }
+
+  componentDidUpdate(
+    previousProps: Readonly<{
+      children: ReactNode;
+      onOpenSafeTesting: () => void;
+      routeKey: string;
+    }>,
+  ) {
+    if (previousProps.routeKey !== this.props.routeKey && this.state.error) {
+      this.setState({ error: undefined });
+    }
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <section className="agent-studio agent-studio--error" role="alert">
+        <Eyebrow>Agent Studio</Eyebrow>
+        <h1>Testing could not be displayed</h1>
+        <p>
+          A saved Testing record could not be rendered. You can open Testing without that saved
+          selection, then choose another prepared prospect or retry this one.
+        </p>
+        <p className="agent-studio__error-detail">
+          <strong>Error detail:</strong> {this.state.error.message}
+        </p>
+        <ButtonGroup>
+          <Button onClick={this.props.onOpenSafeTesting}>Open Testing safely</Button>
+          <Button onClick={() => window.location.reload()} variant="secondary">
+            Retry saved selection
+          </Button>
+        </ButtonGroup>
+      </section>
+    );
+  }
 }
 
 function BuildManifestPanel({
@@ -13372,11 +15359,14 @@ function WorkspaceApp({
   const [agentPackageProposals, setAgentPackageProposals] = useState<AgentPackageProposal[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingPresentation, setLoadingPresentation] = useState(true);
+  const [isHydrating, setIsHydrating] = useState(false);
   const [storageError, setStorageError] = useState('');
   const [notice, setNotice] = useState<ToastNotice>();
   const dataFingerprintRef = useRef('');
   const lastBackgroundRefreshAtRef = useRef(0);
   const refreshInFlightRef = useRef(false);
+  const hydrationTimerRef = useRef<number>();
+  const loadingPresentationRef = useRef(true);
   const assetAnalysisStatusRef = useRef(new Map<string, string>());
   const pendingLogoDeletionsRef = useRef(
     new Map<string, { onUndo: () => void; timeout: ReturnType<typeof setTimeout> }>(),
@@ -13384,12 +15374,17 @@ function WorkspaceApp({
 
   useEffect(
     () => () => {
+      if (hydrationTimerRef.current) window.clearTimeout(hydrationTimerRef.current);
       for (const pending of pendingLogoDeletionsRef.current.values()) {
         window.clearTimeout(pending.timeout);
       }
     },
     [],
   );
+
+  useEffect(() => {
+    loadingPresentationRef.current = loadingPresentation;
+  }, [loadingPresentation]);
 
   useEffect(() => {
     if (!notice) return;
@@ -13422,6 +15417,11 @@ function WorkspaceApp({
     async ({ announce = false }: { announce?: boolean } = {}) => {
       if (refreshInFlightRef.current) return false;
       refreshInFlightRef.current = true;
+      const presentHydration = !loadingPresentationRef.current;
+      if (presentHydration) {
+        if (hydrationTimerRef.current) window.clearTimeout(hydrationTimerRef.current);
+        setIsHydrating(true);
+      }
       try {
         const [nextBusinesses, nextWorkspaces, nextAgentPackages, nextAgentPackageProposals] =
           await Promise.all([
@@ -13463,6 +15463,14 @@ function WorkspaceApp({
             workspace.audit?.progressDetail,
             workspace.audit?.completedItems,
             workspace.audit?.cancelRequestedAt,
+            workspace.assetAnalysis?.id,
+            workspace.assetAnalysis?.status,
+            workspace.assetAnalysis?.updatedAt,
+            workspace.assetAnalysis?.progressPhase,
+            workspace.assetAnalysis?.progressDetail,
+            workspace.assetAnalysis?.completedItems,
+            workspace.assetAnalysis?.cancelRequestedAt,
+            workspace.assetAnnotations.length,
             workspace.latestBuilderRun?.id,
             workspace.latestBuilderRun?.status,
             workspace.latestBuilderRun?.updatedAt,
@@ -13492,6 +15500,12 @@ function WorkspaceApp({
         return changed;
       } finally {
         refreshInFlightRef.current = false;
+        if (presentHydration) {
+          hydrationTimerRef.current = window.setTimeout(() => {
+            setIsHydrating(false);
+            hydrationTimerRef.current = undefined;
+          }, 1_200);
+        }
       }
     },
     [repository],
@@ -14236,7 +16250,7 @@ function WorkspaceApp({
     await refreshData();
     setNotice({
       id: crypto.randomUUID(),
-      title: `Package v${agentPackage.version} ready for testing`,
+      title: `Package ${agentPackageVersionLabel(agentPackage.version)} ready for testing`,
       detail: 'Select it in Refine to pin a private homepage or page test to this package.',
       tone: 'success',
     });
@@ -14266,7 +16280,7 @@ function WorkspaceApp({
     await refreshData();
     setNotice({
       id: crypto.randomUUID(),
-      title: `Package v${agentPackage.version} saved as a production draft`,
+      title: `Package ${agentPackageVersionLabel(agentPackage.version)} saved as a production draft`,
       detail:
         'This tested behaviour is no longer offered to new test builds. The published production package is unchanged until you explicitly publish this draft.',
       tone: 'success',
@@ -14288,7 +16302,7 @@ function WorkspaceApp({
     await refreshData();
     setNotice({
       id: crypto.randomUUID(),
-      title: `Package v${agentPackage.version} published`,
+      title: `Package ${agentPackageVersionLabel(agentPackage.version)} published`,
       detail:
         'Future complete prospect builds now pin this package. Earlier tests and prospect builds remain unchanged.',
       tone: 'success',
@@ -14309,52 +16323,30 @@ function WorkspaceApp({
     await prepareCurrentBuildHandoff(businessId);
     const targetWorkspace = (await repository.getWorkspace(businessId)) ?? listedWorkspace;
     const requestedInstruction = buildInstruction?.trim() || undefined;
-    const resumeRun =
-      !sourceBuilderRunId &&
-      (targetWorkspace.latestBuilderRun?.status === 'failed' ||
-        targetWorkspace.latestBuilderRun?.status === 'cancelled') &&
-      targetWorkspace.latestBuilderRun?.buildMode === mode &&
-      targetWorkspace.latestBuilderRun?.targetSourceUrl === targetSourceUrl &&
-      JSON.stringify(targetWorkspace.latestBuilderRun?.targetSourceUrls ?? []) ===
-        JSON.stringify(targetSourceUrls ?? []) &&
-      targetWorkspace.latestBuilderRun?.buildInstruction === requestedInstruction &&
-      targetWorkspace.latestBuilderRun?.agentPackageId === agentPackageId &&
-      targetWorkspace.builderArtifacts.some(
-        (artifact) =>
-          (artifact.kind === 'checkpoint' &&
-            artifact.label === 'Latest private source checkpoint') ||
-          isWorkingSourceArtifact(artifact),
-      )
-        ? targetWorkspace.latestBuilderRun
-        : undefined;
-    const run = resumeRun
-      ? await repository.resumeWebsiteBuild(resumeRun.id)
-      : await repository.requestWebsiteBuild(
-          targetWorkspace.business.id,
-          mode,
-          targetSourceUrl,
-          requestedInstruction,
-          agentPackageId,
-          sourceBuilderRunId,
-          targetSourceUrls,
-        );
+    const run = await repository.requestWebsiteBuild(
+      targetWorkspace.business.id,
+      mode,
+      targetSourceUrl,
+      requestedInstruction,
+      agentPackageId,
+      sourceBuilderRunId,
+      targetSourceUrls,
+    );
     if (!run) throw new Error('The private preview could not be queued.');
     await refreshData();
     setNotice({
       id: crypto.randomUUID(),
-      title: resumeRun
-        ? 'Private preview resuming'
-        : mode === 'homepage_test'
+      title:
+        mode === 'homepage_test'
           ? 'Homepage test queued'
           : mode === 'page_test'
             ? 'Selected page test queued'
             : 'Prospect build queued',
-      detail: resumeRun
-        ? 'The protected builder will restore the saved private source, then Codex will continue the private website build. The prospect’s public website is unchanged.'
-        : mode === 'homepage_test'
-          ? 'The protected builder will create a private homepage test. When a saved homepage checkpoint exists, it will refine that private draft; the prospect’s public website is unchanged.'
+      detail:
+        mode === 'homepage_test'
+          ? 'The protected builder will create a new private homepage test from the selected package and approved manifest. It will not resume a stopped test; the prospect’s public website is unchanged.'
           : mode === 'page_test'
-            ? 'The protected builder will use the approved homepage direction, then create only the selected private test page. The prospect’s public website is unchanged.'
+            ? 'The protected builder will create a new selected-page test. It will not resume a stopped test; the prospect’s public website is unchanged.'
             : 'The protected builder will create this prospect’s complete private website from the approved homepage direction and Build Manifest. The prospect’s public website is unchanged.',
       tone: 'success',
     });
@@ -14532,6 +16524,7 @@ function WorkspaceApp({
             : hrefForRoute(route)
         }
         isLoading={loadingPresentation}
+        isHydrating={!loadingPresentation && isHydrating}
         onNavigate={(page) =>
           navigate(
             page === 'today'
@@ -14571,47 +16564,58 @@ function WorkspaceApp({
             workspaces={workspaces}
           />
         ) : route.page === 'usage' ? (
-          <UsagePage onOpenWorkspace={openWorkspace} workspaces={workspaces} />
+          <UsagePage
+            agentPackages={agentPackages}
+            initialBuildId={route.builderRunId}
+            onOpenWorkspace={openWorkspace}
+            workspaces={workspaces}
+          />
         ) : route.page === 'settings' ? (
           <BuilderSettingsPage />
         ) : route.page === 'agent-studio' ? (
-          <AgentStudioPage
-            agentPackageProposals={agentPackageProposals}
-            agentPackages={agentPackages}
-            onApproveAgentPackageForTesting={approveAgentPackageForTesting}
-            onApproveAgentPackageForProduction={approveAgentPackageForProduction}
-            onStageAgentPackageBehaviours={stageAgentPackageBehaviours}
-            onCancelBuild={cancelWebsiteBuildForBusiness}
-            onDeleteBuild={deleteWebsiteBuild}
-            onLoadBuildEvidence={(builderRunId) => repository.getBuilderRunEvidence(builderRunId)}
-            onMoveToAgentStudio={moveBuilderRunToAgentStudio}
-            onOpenPreview={createBuilderPreviewUrl}
-            onOpenProspect={(businessId) =>
-              navigate({ page: 'prospects', businessId, tab: 'redesign' })
-            }
-            onRequestBuild={requestWebsiteBuildForBusiness}
-            onRequestSiteTest={requestAgentStudioSiteTest}
-            onResumeBuild={resumeWebsiteBuildForBusiness}
-            onRequestAgentPackageProposal={requestAgentPackageProposal}
-            onPromoteAgentPackage={promoteAgentPackage}
-            onSelectSection={(section) =>
-              navigate({
-                page: 'agent-studio',
-                section,
-                businessId: route.businessId,
-              })
-            }
-            onSelectWorkspace={(businessId) =>
-              navigate({
-                page: 'agent-studio',
-                section: 'refine',
-                businessId: businessId || undefined,
-              })
-            }
-            section={route.section ?? 'refine'}
-            selectedBusinessId={route.businessId}
-            workspaces={workspaces}
-          />
+          <AgentStudioErrorBoundary
+            onOpenSafeTesting={() => navigate({ page: 'agent-studio', section: 'refine' })}
+            routeKey={`${route.section ?? 'refine'}:${route.businessId ?? ''}`}
+          >
+            <AgentStudioPage
+              agentPackageProposals={agentPackageProposals}
+              agentPackages={agentPackages}
+              onApproveAgentPackageForTesting={approveAgentPackageForTesting}
+              onApproveAgentPackageForProduction={approveAgentPackageForProduction}
+              onStageAgentPackageBehaviours={stageAgentPackageBehaviours}
+              onCancelBuild={cancelWebsiteBuildForBusiness}
+              onDeleteBuild={deleteWebsiteBuild}
+              onLoadBuildEvidence={(builderRunId) => repository.getBuilderRunEvidence(builderRunId)}
+              onMoveToAgentStudio={moveBuilderRunToAgentStudio}
+              onOpenPreview={createBuilderPreviewUrl}
+              onOpenProspect={(businessId) =>
+                navigate({ page: 'prospects', businessId, tab: 'redesign' })
+              }
+              onOpenUsageAnalysis={(builderRunId) => navigate({ page: 'usage', builderRunId })}
+              onRequestBuild={requestWebsiteBuildForBusiness}
+              onRequestSiteTest={requestAgentStudioSiteTest}
+              onResumeBuild={resumeWebsiteBuildForBusiness}
+              onRequestAgentPackageProposal={requestAgentPackageProposal}
+              onPromoteAgentPackage={promoteAgentPackage}
+              onSelectSection={(section) =>
+                navigate({
+                  page: 'agent-studio',
+                  section,
+                  businessId: route.businessId,
+                })
+              }
+              onSelectWorkspace={(businessId) =>
+                navigate({
+                  page: 'agent-studio',
+                  section: 'refine',
+                  businessId: businessId || undefined,
+                })
+              }
+              section={route.section ?? 'refine'}
+              selectedBusinessId={route.businessId}
+              workspaces={workspaces}
+            />
+          </AgentStudioErrorBoundary>
         ) : route.businessId && workspace ? (
           <WorkspacePage
             agentPackages={agentPackages}

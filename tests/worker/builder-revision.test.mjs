@@ -1,20 +1,32 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 import ts from 'typescript';
 import {
+  activateCompactNavigationTrigger,
   approvedAssetDescriptor,
+  applicableFeatureContracts,
+  assetMatchesSelectedPages,
+  buildContextSummary,
   buildPrompt,
+  canContinueWithoutCodex,
   checkpointSourceBody,
+  collectBrowsableSourceFiles,
   contentTypeFor,
   contextualLogoProblems,
   inconsistentHeaderNavigationProblems,
   lockedFoundationPaths,
+  meaningfulPageNamingProblems,
   mobileNavigationTriggerProblems,
   missingInternalNavigationTargets,
+  motionCompositionProblems,
+  responsiveImageProblems,
+  multiPageHeaderRouteNavigationProblems,
+  projectManifestData,
+  refreshLockedFoundation,
   revisionManifestCompatible,
   selectedSourcePages,
   stageRevisionScope,
@@ -22,6 +34,20 @@ import {
 } from '../../worker/builder-worker.mjs';
 
 const appUrl = new URL('../../src/App.tsx', import.meta.url);
+const cloudRepositoryUrl = new URL('../../src/lib/cloud-repository.ts', import.meta.url);
+const agentsInstructionsUrl = new URL('../../AGENTS.md', import.meta.url);
+const componentArchitectureContractUrl = new URL(
+  '../../worker/builder-template/feature-contracts/component-architecture.md',
+  import.meta.url,
+);
+const mobileNavigationContractUrl = new URL(
+  '../../worker/builder-template/feature-contracts/mobile-navigation.md',
+  import.meta.url,
+);
+const motionRuntimeUrl = new URL(
+  '../../worker/builder-template/src/components/foundation/site-runtime.tsx',
+  import.meta.url,
+);
 const compatibleFullBuildMigrationUrl = new URL(
   '../../supabase/migrations/20260728140000_compatible_homepage_for_full_build.sql',
   import.meta.url,
@@ -40,6 +66,54 @@ const pageSetTestMigrationUrl = new URL(
 );
 const builderSourceTextMigrationUrl = new URL(
   '../../supabase/migrations/20260729150000_allow_builder_source_text.sql',
+  import.meta.url,
+);
+const postCodexResumeMigrationUrl = new URL(
+  '../../supabase/migrations/20260731120000_resume_builder_post_codex_checkpoint.sql',
+  import.meta.url,
+);
+const decimalPackageVersionMigrationUrl = new URL(
+  '../../supabase/migrations/20260731130000_agent_package_decimal_versions.sql',
+  import.meta.url,
+);
+const creativeCompositionPackageMigrationUrl = new URL(
+  '../../supabase/migrations/20260801120000_creative_composition_test_package.sql',
+  import.meta.url,
+);
+const expressiveCraftPackageMigrationUrl = new URL(
+  '../../supabase/migrations/20260802120000_expressive_craft_test_package.sql',
+  import.meta.url,
+);
+const resilientQualityPackageMigrationUrl = new URL(
+  '../../supabase/migrations/20260802130000_resilient_browser_quality_test_package.sql',
+  import.meta.url,
+);
+const immersiveMotionPackageMigrationUrl = new URL(
+  '../../supabase/migrations/20260802140000_immersive_motion_test_package.sql',
+  import.meta.url,
+);
+const resilientResumePackageMigrationUrl = new URL(
+  '../../supabase/migrations/20260802150000_resilient_resume_test_package.sql',
+  import.meta.url,
+);
+const meaningfulPageNamesPackageMigrationUrl = new URL(
+  '../../supabase/migrations/20260802160000_meaningful_page_names_test_package.sql',
+  import.meta.url,
+);
+const cleanTestStartPackageMigrationUrl = new URL(
+  '../../supabase/migrations/20260802170000_clean_test_start_package.sql',
+  import.meta.url,
+);
+const preciseLogoHandoffPackageMigrationUrl = new URL(
+  '../../supabase/migrations/20260802180000_precise_logo_handoff_package.sql',
+  import.meta.url,
+);
+const validPreviewEntryPackageMigrationUrl = new URL(
+  '../../supabase/migrations/20260802190000_valid_preview_entry_package.sql',
+  import.meta.url,
+);
+const preserveResumeContextMigrationUrl = new URL(
+  '../../supabase/migrations/20260731123000_preserve_builder_resume_context.sql',
   import.meta.url,
 );
 const previewFrameUrl = new URL('../../src/PreviewFrame.tsx', import.meta.url);
@@ -121,6 +195,39 @@ function checkpointFallbackClient({ generatedBody }) {
   };
 }
 
+test('keeps a browsable project tree without dependencies or compiled output', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'siteforge-browsable-source-'));
+  try {
+    await Promise.all([
+      mkdir(join(directory, 'src', 'app'), { recursive: true }),
+      mkdir(join(directory, 'public', 'assets'), { recursive: true }),
+      mkdir(join(directory, '.next', 'static'), { recursive: true }),
+      mkdir(join(directory, 'out'), { recursive: true }),
+      mkdir(join(directory, 'node_modules', 'example'), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(directory, 'package.json'), '{}'),
+      writeFile(join(directory, '.env'), 'PRIVATE_TOKEN=do-not-save'),
+      writeFile(join(directory, 'build.log'), 'private diagnostics'),
+      writeFile(join(directory, 'tsconfig.tsbuildinfo'), 'generated type cache'),
+      writeFile(join(directory, 'src', 'app', 'page.tsx'), 'export default function Page() {}'),
+      writeFile(join(directory, 'public', 'robots.txt'), 'User-agent: *'),
+      writeFile(join(directory, 'public', 'assets', 'private-logo.avif'), 'asset'),
+      writeFile(join(directory, '.next', 'static', 'chunk.js'), 'compiled'),
+      writeFile(join(directory, 'out', 'index.html'), '<main />'),
+      writeFile(join(directory, 'node_modules', 'example', 'index.js'), 'dependency'),
+    ]);
+
+    const files = (await collectBrowsableSourceFiles(directory))
+      .map((file) => file.slice(directory.length + 1))
+      .sort();
+
+    assert.deepEqual(files, ['package.json', 'public/robots.txt', 'src/app/page.tsx']);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('restores an immutable generated file when a legacy draft object is stale', async () => {
   const generatedBody = Buffer.from('<main><h1>Current private homepage</h1></main>');
   const body = await checkpointSourceBody(
@@ -172,10 +279,7 @@ test('resolves clean preview links without changing the preview capability root'
   assert.match(previewFunction, /siteforge-preview:navigated/);
   assert.match(previewFunction, /function rewritePreviewRootReferences/);
   assert.match(previewFunction, /rawHref\.startsWith\('\/'\)/);
-  assert.match(previewFunction, /data-siteforge-preview-navigation/);
-  assert.match(previewFunction, /trigger\.setAttribute\('aria-expanded', 'true'\)/);
-  assert.match(previewFunction, /event\.key === 'Escape'/);
-  assert.match(previewFunction, /trigger\.focus\(\)/);
+  assert.doesNotMatch(previewFunction, /sf-preview-navigation__panel/);
   assert.match(previewFunction, /data-siteforge-preview-loading/);
   assert.match(previewFunction, /window\.addEventListener\('load', revealDocument/);
   assert.match(previewFrame, /message\.type === 'siteforge-preview:navigated'/);
@@ -203,26 +307,13 @@ test('keeps HTML, CSS, and Next hydration assets inside the private preview capa
   assert.match(rewritten, /href="https:\/\/example\.com\/services"/);
 });
 
-test('keeps the static export visible without running Next hydration in the opaque sandbox', async () => {
+test('keeps the generated Next runtime available in the sandboxed fallback preview', async () => {
   const previewFunction = await readFile(previewFunctionUrl, 'utf8');
-  const removeHydration = compiledPreviewFunction(previewFunction, 'removeNextHydrationRuntime');
-  const source = [
-    '<link rel="preload" as="script" href="/_next/static/chunks/runtime.js">',
-    '<script src="/_next/static/chunks/runtime.js" async=""></script>',
-    '<script>(self.__next_f=self.__next_f||[]).push([0])</script>',
-    '<script>self.__next_f.push([1,"page payload"])</script>',
-    '<link rel="stylesheet" href="/_next/static/site.css">',
-    '<main><h1>Generated website</h1></main>',
-    '<script src="/site-runtime.js"></script>',
-  ].join('');
-  const staticDocument = removeHydration(source);
-
-  assert.doesNotMatch(staticDocument, /as="script"/);
-  assert.doesNotMatch(staticDocument, /_next\/static\/chunks/);
-  assert.doesNotMatch(staticDocument, /self\.__next_f/);
-  assert.match(staticDocument, /href="\/_next\/static\/site\.css"/);
-  assert.match(staticDocument, /<main><h1>Generated website<\/h1><\/main>/);
-  assert.match(staticDocument, /src="\/site-runtime\.js"/);
+  assert.doesNotMatch(previewFunction, /function removeNextHydrationRuntime/);
+  assert.match(
+    previewFunction,
+    /const rootedSource = rewritePreviewRootReferences\(source, base\)/,
+  );
 });
 
 test('accepts clean generated routes and rejects unresolved navigation links', () => {
@@ -259,6 +350,31 @@ test('accepts clean generated routes and rejects unresolved navigation links', (
   assert.match(invalid[0], /does not resolve to a generated route/);
 });
 
+test('rejects unnamed pages and raw-path internal link labels', () => {
+  const problems = meaningfulPageNamingProblems([
+    {
+      relativePath: 'blank/index.html',
+      contents:
+        '<html><head><title>Unnamed page | Acme</title></head><body><h1>Blank</h1><a href="/blank/">/blank</a></body></html>',
+    },
+  ]);
+  assert.equal(problems.length, 3);
+  assert.match(problems.join(' '), /placeholder page title/);
+  assert.match(problems.join(' '), /placeholder H1/);
+  assert.match(problems.join(' '), /placeholder text/);
+
+  assert.deepEqual(
+    meaningfulPageNamingProblems([
+      {
+        relativePath: 'blank/index.html',
+        contents:
+          '<html><head><title>Commercial maintenance | Acme</title></head><body><h1>Commercial maintenance</h1><a href="/blank/"><span>Maintenance services</span></a></body></html>',
+      },
+    ]),
+    [],
+  );
+});
+
 test('rejects a homepage header that replaces site pages with section anchors', () => {
   const sharedHeader = '<header><a href="/">Home</a><a href="/our-services/">Services</a></header>';
   const problems = inconsistentHeaderNavigationProblems([
@@ -274,6 +390,162 @@ test('rejects a homepage header that replaces site pages with section anchors', 
   assert.deepEqual(problems, [
     'index.html uses different primary header destinations from the rest of the generated site.',
   ]);
+});
+
+test('requires every multi-page header to use generated page routes instead of section shortcuts', () => {
+  const validHeader = '<header><a href="/">Home</a><a href="/services/">Services</a></header>';
+  const valid = multiPageHeaderRouteNavigationProblems([
+    { relativePath: 'index.html', contents: `${validHeader}<main></main>` },
+    { relativePath: 'services/index.html', contents: `${validHeader}<main></main>` },
+  ]);
+  const invalid = multiPageHeaderRouteNavigationProblems([
+    {
+      relativePath: 'index.html',
+      contents: '<header><a href="#top">Home</a><a href="#services">Services</a></header>',
+    },
+    {
+      relativePath: 'services/index.html',
+      contents: '<header><a href="/">Home</a></header>',
+    },
+  ]);
+
+  assert.deepEqual(valid, []);
+  assert.equal(invalid.length, 3);
+  assert.match(invalid.join(' '), /section shortcuts/);
+  assert.match(invalid.join(' '), /does not link to any generated non-home page/);
+});
+
+test('requires intentional motion variety while accepting supported creative treatments', () => {
+  assert.deepEqual(
+    motionCompositionProblems([
+      {
+        relativePath: 'index.html',
+        contents:
+          '<h1 data-reveal="words">Heading</h1><div data-reveal="stagger"><article>One</article></div>',
+      },
+    ]),
+    [],
+  );
+  const problems = motionCompositionProblems([
+    { relativePath: 'index.html', contents: '<h1 data-reveal="spin">Heading</h1>' },
+  ]);
+  assert.match(problems.join(' '), /unsupported motion spin/);
+  assert.match(problems.join(' '), /intentional element-motion choice/);
+  assert.match(problems.join(' '), /at least two restrained motion treatments/);
+});
+
+test('requires expressive packages to animate beyond a single hero title', () => {
+  const problems = motionCompositionProblems(
+    [
+      {
+        relativePath: 'index.html',
+        contents:
+          '<h1 data-reveal="words">Heading</h1><p data-reveal="fade-up">Copy</p><div data-reveal="stagger"><a>One</a><a>Two</a></div>',
+      },
+    ],
+    true,
+  );
+  assert.match(problems.join(' '), /at least four explicit elements or groups/);
+
+  assert.deepEqual(
+    motionCompositionProblems(
+      [
+        {
+          relativePath: 'index.html',
+          contents:
+            '<h1 data-reveal="words">Heading</h1><p data-reveal="fade-up">Copy</p><div data-reveal="stagger"><a>One</a><a>Two</a></div><img data-reveal="scale" alt="Work">',
+        },
+      ],
+      true,
+    ),
+    [],
+  );
+});
+
+test('requires immersive packages to sequence text and reverse scroll depth on every route', () => {
+  const base =
+    '<h1 data-reveal="words">Heading</h1><p data-reveal="fade-up">Copy</p><div data-reveal="stagger"><a>One</a><a>Two</a></div><img data-reveal="scale" alt="Work">';
+  const problems = motionCompositionProblems(
+    [{ relativePath: 'index.html', contents: base }],
+    true,
+    true,
+  );
+  assert.match(problems.join(' '), /stacked text group sequentially/);
+  assert.match(problems.join(' '), /reversible scroll-responsive depth container/);
+
+  assert.deepEqual(
+    motionCompositionProblems(
+      [
+        {
+          relativePath: 'index.html',
+          contents: `${base}<div data-reveal="sequence"><p>First</p><p>Second</p></div><figure data-scroll-zoom><img alt="Work"></figure>`,
+        },
+      ],
+      true,
+      true,
+    ),
+    [],
+  );
+});
+
+test('checks stable asynchronous and lazy raster image loading', () => {
+  assert.deepEqual(
+    responsiveImageProblems([
+      {
+        relativePath: 'index.html',
+        contents:
+          '<img src="/hero.jpg" width="1200" height="800" decoding="async"><img src="/detail.webp" width="800" height="600" decoding="async" loading="lazy">',
+      },
+    ]),
+    [],
+  );
+  const problems = responsiveImageProblems([
+    { relativePath: 'services/index.html', contents: '<img src="/tiny.jpg">' },
+  ]);
+  assert.match(problems.join(' '), /without stable dimensions/);
+  assert.match(problems.join(' '), /without asynchronous decoding/);
+});
+
+test('keeps creative composition content-led without prescribing a testimonial template', async () => {
+  const contract = await readFile(componentArchitectureContractUrl, 'utf8');
+  assert.match(contract, /identify its actual content shape/i);
+  assert.match(contract, /Do not add ordinal numbers unless sequence, rank, chronology/i);
+  assert.match(contract, /Mobile is a distinct composition opportunity/i);
+  assert.match(contract, /horizontal scroll-snap rails, accessible carousels/i);
+  assert.match(contract, /oversized decorative quote glyph/i);
+  assert.match(contract, /possibilities, not required templates/i);
+  assert.match(contract, /avoid automatic rotation/i);
+});
+
+test('defines immersive motion, typography, service-page, and image craft requirements', async () => {
+  const [componentContract, navigationContract, runtime] = await Promise.all([
+    readFile(componentArchitectureContractUrl, 'utf8'),
+    readFile(mobileNavigationContractUrl, 'utf8'),
+    readFile(motionRuntimeUrl, 'utf8'),
+  ]);
+  assert.match(componentContract, /Typography and vertical rhythm/);
+  assert.match(componentContract, /service page must have a route-specific hierarchy/i);
+  assert.match(componentContract, /Choreograph the hero as a sequence/i);
+  assert.match(componentContract, /data-reveal="sequence"/);
+  assert.match(componentContract, /data-scroll-zoom/);
+  assert.match(componentContract, /loading surface appears for every route/i);
+  assert.match(componentContract, /Never stretch a thumbnail/i);
+  assert.match(componentContract, /Lazy-load below-the-fold images/i);
+  assert.match(navigationContract, /Animate both opening and closing/i);
+  assert.match(navigationContract, /data-sf-navigation-motion/);
+  assert.match(navigationContract, /data-sf-navigation-item/);
+  assert.match(runtime, /transform 1100ms cubic-bezier\(\.16,1,\.3,1\)/);
+  assert.match(runtime, /function startNavigationMotion/);
+  assert.match(runtime, /function startScrollZoom/);
+  assert.match(runtime, /function prepareSequenceReveal/);
+  assert.match(runtime, /function runRouteBrandTransition/);
+  assert.match(runtime, /siteforge:route-transition-complete/);
+  assert.match(runtime, /transformOrigin = 'top left'/);
+  assert.match(runtime, /window\.scrollTo\(\{ top: 0, left: 0, behavior: 'auto' \}\)/);
+  assert.match(runtime, /requestAnimationFrame\(\(\) => requestAnimationFrame/);
+  assert.match(runtime, /header:has\(\[data-siteforge-brand-logo\]\)/);
+  assert.match(runtime, /index \* 85/);
+  assert.match(runtime, /1_500/);
 });
 
 test('requires every generated page to be reachable through nested internal links', () => {
@@ -318,6 +590,13 @@ test('creates a feature-only whole-site Agent Studio prompt', () => {
       stagedSourcePages: selectedSourcePages(manifest, 'site_test'),
       allowedSourcePaths: [],
       agentPackage: { id: 'package-test', version: 8 },
+      contextSummary: {
+        applicableContracts: [
+          'component-architecture.md',
+          'mobile-navigation.md',
+          'site-navigation-architecture.md',
+        ],
+      },
     },
     'Repair nested navigation without redesigning the site.',
   );
@@ -380,6 +659,13 @@ test('scopes a revised homepage to its route and generated component layers', ()
       allowedSourcePaths: ['app/page.tsx', 'app/globals.css', 'app/layout.tsx'],
       allowedSourcePrefixes: ['components/ui/', 'components/sections/'],
       agentPackage: { id: 'package-test', version: 8 },
+      contextSummary: {
+        applicableContracts: [
+          'component-architecture.md',
+          'mobile-navigation.md',
+          'semantic-content-recovery.md',
+        ],
+      },
     },
     'Add the approved behaviour to the header.',
   );
@@ -416,6 +702,49 @@ test('requires an icon-only compact navigation trigger with a programmatic name'
     (await mobileNavigationTriggerProblems([visibleMenu], [])).join(' '),
     /renders text inside the compact navigation trigger/,
   );
+});
+
+test('retries a transient compact-navigation pointer timeout without bypassing hit testing', async () => {
+  let clickAttempts = 0;
+  let scrollAttempts = 0;
+  let settledFrames = 0;
+  const result = await activateCompactNavigationTrigger({
+    async click(options) {
+      clickAttempts += 1;
+      assert.deepEqual(options, { timeout: 5_000 });
+      if (clickAttempts === 1) throw new Error('Element was temporarily not stable.');
+    },
+    async scrollIntoViewIfNeeded(options) {
+      scrollAttempts += 1;
+      assert.deepEqual(options, { timeout: 2_000 });
+    },
+    async evaluate(callback) {
+      settledFrames += 1;
+      await callback({
+        ownerDocument: { defaultView: { requestAnimationFrame: (next) => next() } },
+        scrollIntoView() {},
+      });
+    },
+  });
+
+  assert.deepEqual(result, { activated: true, attempts: 2 });
+  assert.equal(clickAttempts, 2);
+  assert.equal(scrollAttempts, 1);
+  assert.equal(settledFrames, 1);
+});
+
+test('returns a reviewable navigation finding after both pointer attempts fail', async () => {
+  const result = await activateCompactNavigationTrigger({
+    async click() {
+      throw new Error('Another element intercepts pointer events.');
+    },
+    async scrollIntoViewIfNeeded() {},
+    async evaluate() {},
+  });
+
+  assert.equal(result.activated, false);
+  assert.equal(result.attempts, 2);
+  assert.match(result.detail, /intercepts pointer events/);
 });
 
 test('stages current page semantic groups when rebasing an earlier private page', async () => {
@@ -516,8 +845,352 @@ test('keeps the Next-generated environment declaration outside the immutable fou
   assert.ok(!lockedFoundationPaths.includes('next-env.d.ts'));
 });
 
+test('refreshes a stale locked runtime before resumed verification', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'siteforge-resume-foundation-'));
+  try {
+    for (const relativePath of lockedFoundationPaths) {
+      const destination = join(directory, relativePath);
+      await mkdir(dirname(destination), { recursive: true });
+      await writeFile(destination, `stale ${relativePath}`);
+    }
+    const generatedPage = join(directory, 'src/app/page.tsx');
+    await mkdir(dirname(generatedPage), { recursive: true });
+    await writeFile(generatedPage, 'export default function Page() { return null; }');
+
+    await refreshLockedFoundation(directory);
+
+    const restoredRuntime = await readFile(
+      join(directory, 'src/components/foundation/site-runtime.tsx'),
+      'utf8',
+    );
+    assert.doesNotMatch(restoredRuntime, /^stale /);
+    assert.match(restoredRuntime, /function SiteRuntime/);
+    assert.equal(
+      await readFile(generatedPage, 'utf8'),
+      'export default function Page() { return null; }',
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('stores Next static-export payload files as allowed plain text', () => {
   assert.equal(contentTypeFor('__next._tree.txt'), 'text/plain');
+});
+
+test('keeps route-scoped assets plus the complete approved logo family', () => {
+  const selectedPageUrls = new Set(['https://example.com/services']);
+  assert.equal(
+    assetMatchesSelectedPages(
+      { id: 'services-photo', metadata: { pageUrl: 'https://example.com/services' } },
+      selectedPageUrls,
+      'primary-logo',
+    ),
+    true,
+  );
+  assert.equal(
+    assetMatchesSelectedPages(
+      { id: 'about-photo', metadata: { pageUrl: 'https://example.com/about' } },
+      selectedPageUrls,
+      'primary-logo',
+    ),
+    false,
+  );
+  assert.equal(
+    assetMatchesSelectedPages(
+      {
+        id: 'white-logo',
+        metadata: { derivedFromAssetId: 'primary-logo', pageUrl: 'https://example.com/about' },
+      },
+      selectedPageUrls,
+      'primary-logo',
+    ),
+    true,
+  );
+});
+
+test('projects a narrow test manifest without mutating its immutable source', () => {
+  const fullData = {
+    brandKit: { approvedAssetIds: ['home-image', 'services-image'] },
+    selectedPages: [
+      { url: 'https://example.com/', sourcePageUrl: 'https://example.com/' },
+      { url: 'https://example.com/services', sourcePageUrl: 'https://example.com/services' },
+    ],
+    permittedFacts: [
+      { sourcePageUrl: 'https://example.com/', value: 'Home fact' },
+      { sourcePageUrl: 'https://example.com/services', value: 'Service fact' },
+    ],
+    selectedAssets: [{ artifactId: 'home-image' }, { artifactId: 'services-image' }],
+    approvedAssetGuidance: [{ assetId: 'home-image' }, { assetId: 'services-image' }],
+    pagePlans: [
+      { sourcePageUrl: 'https://example.com/' },
+      { sourcePageUrl: 'https://example.com/services' },
+    ],
+  };
+  const projected = projectManifestData(
+    fullData,
+    [{ sourceUrl: 'https://example.com/services' }],
+    [{ assetId: 'services-image' }],
+    'page_test',
+  );
+
+  assert.equal(projected.selectedPages.length, 1);
+  assert.equal(projected.permittedFacts[0].value, 'Service fact');
+  assert.deepEqual(projected.selectedAssets, [{ artifactId: 'services-image' }]);
+  assert.deepEqual(projected.brandKit.approvedAssetIds, ['services-image']);
+  assert.equal(projected.pagePlans.length, 1);
+  assert.equal(fullData.selectedPages.length, 2);
+});
+
+test('routes only applicable feature contracts into narrow agent context', () => {
+  const selectedPages = [{ sourceUrl: 'https://example.com/' }];
+  assert.deepEqual(applicableFeatureContracts({}, selectedPages, 'homepage_test'), [
+    'component-architecture.md',
+    'mobile-navigation.md',
+  ]);
+  assert.deepEqual(
+    applicableFeatureContracts(
+      {
+        brandKit: { primaryLogoAssetId: 'logo' },
+        approvedCapabilities: [{ id: 'forms' }],
+        approvedVisualContentGroups: [{ id: 'group' }],
+      },
+      selectedPages,
+      'homepage_test',
+    ),
+    [
+      'component-architecture.md',
+      'mobile-navigation.md',
+      'contextual-logo-selection.md',
+      'runtime-profiles.md',
+      'semantic-content-recovery.md',
+    ],
+  );
+});
+
+test('summarises projected context for usage evidence', () => {
+  const fullData = { selectedPages: [{}, {}], permittedFacts: [{}, {}, {}] };
+  const projectedData = { selectedPages: [{}], permittedFacts: [{}] };
+  const summary = buildContextSummary({
+    fullData,
+    projectedData,
+    selectedPages: [{ sourceUrl: 'https://example.com/' }],
+    stagedAssets: [{ assetId: 'logo' }],
+    buildMode: 'homepage_test',
+    scopedRevision: false,
+  });
+
+  assert.equal(summary.scope, 'selected_routes');
+  assert.equal(summary.selectedRouteCount, 1);
+  assert.equal(summary.stagedAssetCount, 1);
+  assert.ok(summary.stagedManifestBytes < summary.fullManifestBytes);
+  assert.deepEqual(summary.stagedSectionCounts, { selectedPages: 1, permittedFacts: 1 });
+  assert.deepEqual(summary.sectionCounts, summary.stagedSectionCounts);
+  assert.equal(summary.inputFiles.manifest, '../input/manifest.json');
+  assert.equal(summary.manifestSignals.hasStructuredArchitecture, false);
+  assert.match(summary.inspectionPolicy, /never print an entire manifest/i);
+});
+
+test('keeps legacy manifests from causing missing-architecture inspection turns', () => {
+  const [homepage] = selectedSourcePages(manifest, 'homepage_test');
+  const prompt = buildPrompt(
+    {
+      scopedRevision: false,
+      restoredCheckpoint: false,
+      buildMode: 'homepage_test',
+      stagedSourcePages: [homepage],
+      allowedSourcePaths: [],
+      agentPackage: { id: 'package-test', version: 8 },
+      contextSummary: {
+        applicableContracts: ['component-architecture.md', 'mobile-navigation.md'],
+        manifestSignals: { hasStructuredArchitecture: false },
+      },
+    },
+    undefined,
+  );
+
+  assert.match(prompt, /legacy manifest does not contain a structured architecture object/i);
+  assert.match(prompt, /Do not search for one/);
+});
+
+test('continues safe post-Codex failures from a restored checkpoint', () => {
+  assert.equal(
+    canContinueWithoutCodex(
+      { failure_context: { resumeFromFailureCode: 'private_storage_rejected' } },
+      { restoredCheckpoint: true, checkpointState: 'post_codex_validated' },
+    ),
+    true,
+  );
+  assert.equal(
+    canContinueWithoutCodex(
+      { failure_context: { resumeFromFailureCode: 'compile_failed' } },
+      { restoredCheckpoint: true, checkpointState: 'post_codex_validated' },
+    ),
+    false,
+  );
+  assert.equal(
+    canContinueWithoutCodex(
+      { failure_context: { resumeFromFailureCode: 'private_storage_rejected' } },
+      { restoredCheckpoint: false, checkpointState: 'post_codex_validated' },
+    ),
+    false,
+  );
+  assert.equal(
+    canContinueWithoutCodex(
+      { failure_context: { resumeFromFailureCode: 'private_storage_rejected' } },
+      { restoredCheckpoint: true, checkpointState: 'resume_checkpoint' },
+    ),
+    false,
+  );
+});
+
+test('preserves prior failure classification when a saved build is resumed', async () => {
+  const [resumeMigration, claimMigration] = await Promise.all([
+    readFile(postCodexResumeMigrationUrl, 'utf8'),
+    readFile(preserveResumeContextMigrationUrl, 'utf8'),
+  ]);
+  assert.match(resumeMigration, /'resumeFromFailureCode', target_run\.failure_code/);
+  assert.match(resumeMigration, /'resumeFromFailureStage', target_run\.failure_stage/);
+  assert.match(claimMigration, /runs\.failure_context ->> 'resumeFromFailureCode'/);
+  assert.match(claimMigration, /coalesce\(\s*runs\.failure_context/);
+});
+
+test('allocates immutable package releases in decimal version order', async () => {
+  const migration = await readFile(decimalPackageVersionMigrationUrl, 'utf8');
+  assert.match(migration, /drop trigger if exists set_agent_package_contract_version/);
+  assert.match(migration, /alter column version type numeric\(10, 1\)/);
+  assert.match(migration, /create trigger set_agent_package_contract_version/);
+  assert.match(migration, /next_version numeric\(10, 1\)/);
+  assert.match(migration, /coalesce\(max\(version\), 0\) \+ 0\.1 into next_version/);
+});
+
+test('registers creative composition as a visible immutable test package', async () => {
+  const migration = await readFile(creativeCompositionPackageMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /published\.id/);
+  assert.match(migration, /Creative composition test package:/);
+  assert.match(migration, /"next-component-architecture"/);
+  assert.match(migration, /"motion-runtime"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers expressive craft above the retained creative-composition package', async () => {
+  const migration = await readFile(expressiveCraftPackageMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /base\.id/);
+  assert.match(migration, /Expressive craft test package:/);
+  assert.match(migration, /"responsive-sidebar"/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers resilient browser quality above the retained expressive package', async () => {
+  const migration = await readFile(resilientQualityPackageMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /base\.id/);
+  assert.match(migration, /Resilient quality test package:/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers immersive motion above the retained resilient-quality package', async () => {
+  const migration = await readFile(immersiveMotionPackageMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /base\.id/);
+  assert.match(migration, /Immersive motion test package:/);
+  assert.match(migration, /"brand-introduction"/);
+  assert.match(migration, /"motion-runtime"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers resilient resume above the retained immersive-motion package', async () => {
+  const migration = await readFile(resilientResumePackageMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /base\.id/);
+  assert.match(migration, /Resilient resume test package:/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers meaningful page names above the retained resilient-resume package', async () => {
+  const migration = await readFile(meaningfulPageNamesPackageMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /base\.id/);
+  assert.match(migration, /Meaningful page names test package:/);
+  assert.match(migration, /"site-navigation-architecture"/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers clean test starts above the retained meaningful-page-names package', async () => {
+  const migration = await readFile(cleanTestStartPackageMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /base\.id/);
+  assert.match(migration, /Clean test start package:/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers the precise logo handoff above the retained clean-test package', async () => {
+  const migration = await readFile(preciseLogoHandoffPackageMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /base\.id/);
+  assert.match(migration, /Precise logo handoff test package:/);
+  assert.match(migration, /"brand-introduction"/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers valid preview entry above the retained precise-logo package', async () => {
+  const migration = await readFile(validPreviewEntryPackageMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /base\.id/);
+  assert.match(migration, /Valid preview entry test package:/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('opens page-set previews on their first selected generated route', async () => {
+  const repository = await readFile(cloudRepositoryUrl, 'utf8');
+  const previewStart = repository.indexOf('async createBuilderPreviewUrl');
+  const previewEnd = repository.indexOf('async setTaskState', previewStart);
+  const previewSource = repository.slice(previewStart, previewEnd);
+  assert.match(previewSource, /target_source_urls/);
+  assert.match(previewSource, /manifestData\.selectedPages/);
+  assert.match(previewSource, /canonicalWebsiteUrl\(page\.url\)/);
+  assert.match(previewSource, /publicPath\.replace/);
+  assert.match(previewSource, /\$\{draftPath\}\$\{entryPath\}/);
+});
+
+test('queues chooser requests as new tests and reserves resume for the explicit action', async () => {
+  const app = await readFile(appUrl, 'utf8');
+  const requestStart = app.indexOf('async function requestWebsiteBuildForBusiness');
+  const requestEnd = app.indexOf('async function moveBuilderRunToAgentStudio', requestStart);
+  const requestSource = app.slice(requestStart, requestEnd);
+  assert.match(requestSource, /repository\.requestWebsiteBuild\(/);
+  assert.doesNotMatch(requestSource, /resumeRun|repository\.resumeWebsiteBuild/);
+
+  const resumeStart = app.indexOf('async function resumeWebsiteBuildForBusiness');
+  const resumeEnd = app.indexOf('async function deleteWebsiteBuild', resumeStart);
+  assert.match(app.slice(resumeStart, resumeEnd), /repository\.resumeWebsiteBuild\(builderRunId\)/);
+});
+
+test('requires every future builder-package change to register a visible version', async () => {
+  const instructions = await readFile(agentsInstructionsUrl, 'utf8');
+  assert.match(instructions, /Builder-package version registration/);
+  assert.match(instructions, /must create the next immutable decimal agent-package version/);
+  assert.match(instructions, /Supabase workspaces and the local IndexedDB repository/);
+  assert.match(instructions, /appears in Agent Studio's Test package selector/);
+  assert.match(instructions, /Display every saved version in Package Versions/);
 });
 
 test('describes a compatible prior-manifest revision as a current-asset rebase', () => {

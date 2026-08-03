@@ -121,108 +121,6 @@ const previewNavigationScript = `
         );
       }
     }, true);
-
-    const trigger = document.querySelector('[data-siteforge-menu-trigger]');
-    const primaryNavigation = document.querySelector('nav[aria-label="Primary"]');
-    if (trigger instanceof HTMLButtonElement && primaryNavigation) {
-      const surface = document.createElement('div');
-      surface.hidden = true;
-      surface.setAttribute('data-siteforge-preview-navigation', 'true');
-      surface.innerHTML = \`
-        <div class="sf-preview-navigation__backdrop"></div>
-        <div aria-label="Site navigation" aria-modal="true" class="sf-preview-navigation__panel" role="dialog">
-          <button aria-label="Close navigation" class="sf-preview-navigation__close" type="button">×</button>
-          <nav aria-label="Mobile primary navigation"></nav>
-        </div>
-      \`;
-      const style = document.createElement('style');
-      style.textContent = \`
-        [data-siteforge-preview-navigation] {
-          position: fixed;
-          z-index: 2147482000;
-          inset: 0;
-        }
-        .sf-preview-navigation__backdrop {
-          position: absolute;
-          inset: 0;
-          background: rgb(0 0 0 / .52);
-        }
-        .sf-preview-navigation__panel {
-          position: relative;
-          display: grid;
-          width: min(21rem, calc(100% - 3rem));
-          min-height: 100%;
-          align-content: start;
-          gap: 1.5rem;
-          padding: 1rem;
-          color: #111;
-          background: #fff;
-          box-shadow: 1rem 0 3rem rgb(0 0 0 / .24);
-        }
-        .sf-preview-navigation__close {
-          display: inline-grid;
-          width: 2.75rem;
-          min-height: 2.75rem;
-          place-items: center;
-          justify-self: end;
-          border: 1px solid #bbb;
-          border-radius: .25rem;
-          color: inherit;
-          background: transparent;
-          font: 700 1.5rem/1 system-ui, sans-serif;
-          cursor: pointer;
-        }
-        .sf-preview-navigation__panel ul {
-          display: grid;
-          gap: .25rem;
-          margin: 0;
-          padding: 0;
-          list-style: none;
-        }
-        .sf-preview-navigation__panel a {
-          display: flex;
-          min-height: 2.75rem;
-          align-items: center;
-          padding: .75rem;
-          color: inherit;
-          font: 700 1rem/1.3 system-ui, sans-serif;
-          text-decoration: none;
-        }
-        .sf-preview-navigation__panel a:hover,
-        .sf-preview-navigation__panel a:focus-visible,
-        .sf-preview-navigation__close:hover,
-        .sf-preview-navigation__close:focus-visible {
-          outline: 3px solid #155eef;
-          outline-offset: 2px;
-        }
-      \`;
-      const mobileNavigation = surface.querySelector('nav');
-      const closeButton = surface.querySelector('.sf-preview-navigation__close');
-      const backdrop = surface.querySelector('.sf-preview-navigation__backdrop');
-      mobileNavigation?.append(primaryNavigation.querySelector('ul')?.cloneNode(true) ?? '');
-      document.head.append(style);
-      document.body.append(surface);
-
-      const closeNavigation = () => {
-        surface.hidden = true;
-        trigger.setAttribute('aria-expanded', 'false');
-        trigger.focus();
-      };
-      const openNavigation = () => {
-        surface.hidden = false;
-        trigger.setAttribute('aria-expanded', 'true');
-        if (closeButton instanceof HTMLButtonElement) closeButton.focus();
-      };
-      trigger.addEventListener('click', openNavigation);
-      closeButton?.addEventListener('click', closeNavigation);
-      backdrop?.addEventListener('click', closeNavigation);
-      mobileNavigation?.addEventListener('click', (event) => {
-        if (event.target instanceof Element && event.target.closest('a[href]')) closeNavigation();
-      });
-      document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape' && !surface.hidden) closeNavigation();
-      });
-    }
   })();
 `;
 
@@ -275,16 +173,6 @@ function rewritePreviewRootReferences(source: string, base: string) {
       (_match, escapedQuote: string) => `${escapedQuote}${base}`,
     )
     .replace(/url\(\s*(["']?)\/(?!\/)/gi, (_match, quote: string) => `url(${quote}${base}`);
-}
-
-function removeNextHydrationRuntime(source: string) {
-  return source
-    .replace(
-      /<link\b(?=[^>]*\brel=["']preload["'])(?=[^>]*\bas=["']script["'])(?=[^>]*\bhref=["'][^"']*\/_next\/static\/)[^>]*>/gi,
-      '',
-    )
-    .replace(/<script\b[^>]*\bsrc=["'][^"']*\/_next\/static\/[^"']*["'][^>]*>\s*<\/script>/gi, '')
-    .replace(/<script\b[^>]*>\s*(?:\(self\.__next_f|self\.__next_f)[\s\S]*?<\/script>/gi, '');
 }
 
 Deno.serve(async (request) => {
@@ -392,7 +280,7 @@ Deno.serve(async (request) => {
         'This test saved the locked starter document instead of generated website output. Run a fresh test build before opening its private preview.',
       );
     }
-    const rootedSource = rewritePreviewRootReferences(removeNextHydrationRuntime(source), base);
+    const rootedSource = rewritePreviewRootReferences(source, base);
     const htmlWithHead = rootedSource.replace(
       /<head(\s[^>]*)?>/i,
       (match) => `${match}${loadingStyle}<base href="${base}">${navigationScript}`,

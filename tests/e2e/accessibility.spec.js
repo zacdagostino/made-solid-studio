@@ -37,7 +37,10 @@ test('keeps the Builder agent architecture accessible', async ({ page }) => {
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
-    const publishedPackage = JSON.parse(packageRecord.value);
+    const storedPackages = JSON.parse(packageRecord.value);
+    const publishedPackage = Array.isArray(storedPackages)
+      ? storedPackages.find((agentPackage) => agentPackage.status === 'published')
+      : storedPackages;
     store.put({
       id: 'agent-package-v6',
       value: JSON.stringify([
@@ -70,7 +73,7 @@ test('keeps the Builder agent architecture accessible', async ({ page }) => {
   await page.reload();
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
   await expect(page.getByRole('heading', { name: 'Builder agent architecture' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Production draft v7' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Production draft v7' })).toHaveCount(0);
   await expect(
     page.getByRole('heading', {
       name: 'One click. A complete, controlled website build.',
@@ -79,9 +82,17 @@ test('keeps the Builder agent architecture accessible', async ({ page }) => {
   await page.getByRole('button', { name: 'Next runtime' }).click();
   await expect(page.locator('.agent-architecture-runtime__detail')).toContainText('Authentication');
 
+  const architectureResults = await new AxeBuilder({ page }).analyze();
+  expect(architectureResults.violations).toEqual([]);
+
+  await page.getByRole('button', { name: 'Package versions' }).click();
+  await expect(page.getByRole('heading', { name: 'Build package versions' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Production draft v7' })).toBeVisible();
+
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
 
+  await page.getByRole('button', { name: 'Agent architecture' }).click();
   await page.getByRole('button', { name: 'Open architecture map' }).click();
   await expect(
     page.getByRole('dialog', { name: 'How a website build is assembled' }),

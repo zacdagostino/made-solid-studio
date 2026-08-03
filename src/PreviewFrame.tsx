@@ -31,6 +31,43 @@ function previewDocumentFromResponse(payload: unknown) {
   return typeof html === 'string' && html.length ? html : undefined;
 }
 
+export function preparePreviewFrameDocument(html: string, source: URL) {
+  const sourceHref = JSON.stringify(source.href).replaceAll('<', '\\u003c');
+  const runtimeBootstrap = `<script data-siteforge-preview-runtime-bootstrap>
+    (() => {
+      if (window.__siteforgePreviewNativeUrl) return;
+      const NativeUrl = window.URL;
+      window.__siteforgePreviewNativeUrl = NativeUrl;
+      window.URL = new Proxy(NativeUrl, {
+        construct(Target, argumentsList) {
+          const [input, base] = argumentsList;
+          const resolvedBase =
+            typeof base === 'string' && base.startsWith('about:srcdoc') ? ${sourceHref} : base;
+          return Reflect.construct(
+            Target,
+            resolvedBase === undefined ? [input] : [input, resolvedBase],
+          );
+        },
+      });
+      for (const method of ['pushState', 'replaceState']) {
+        const nativeMethod = window.history[method].bind(window.history);
+        window.history[method] = (state, unused, url) => {
+          try {
+            return nativeMethod(state, unused, url);
+          } catch (error) {
+            if (!window.location.href.startsWith('about:srcdoc')) throw error;
+            return nativeMethod(state, unused);
+          }
+        };
+      }
+    })();
+  </script>`;
+  if (/<head(\s[^>]*)?>/i.test(html)) {
+    return html.replace(/<head(\s[^>]*)?>/i, (head) => `${head}${runtimeBootstrap}`);
+  }
+  return `${runtimeBootstrap}${html}`;
+}
+
 function previewCapabilityRoot(source: URL) {
   const parts = source.pathname.split('/').filter(Boolean);
   const previewIndex = parts.indexOf('siteforge-preview');
@@ -69,7 +106,7 @@ export function PreviewFrame() {
         return payload;
       })
       .then((html) => {
-        if (!controller.signal.aborted) setDocument(html);
+        if (!controller.signal.aborted) setDocument(preparePreviewFrameDocument(html, source));
       })
       .catch((cause: unknown) => {
         if (controller.signal.aborted) return;

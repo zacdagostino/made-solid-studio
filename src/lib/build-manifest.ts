@@ -11,7 +11,7 @@ import type {
   ResearchArtifact,
 } from './domain';
 
-export const buildManifestSchemaVersion = 4;
+export const buildManifestSchemaVersion = 5;
 export const codexBuilderContractVersion = 'made-solid-studio-codex-builder-v8';
 
 const builderRules = [
@@ -19,6 +19,7 @@ const builderRules = [
   'Use only permitted facts and source-bound content. Do not invent reviews, qualifications, prices, guarantees, locations, services, contact details, or performance claims.',
   'Treat selected pages and selected assets as research context. Only approved asset guidance authorises visual reuse in the redesign.',
   'Treat approved visual-content groups as required semantic source material, not layout instructions. Account for every item on its source page, while deciding whether to integrate the group into an existing section or create a new composition and owning its responsive design and styling.',
+  'Never reuse or render an image that supplied approved recovered semantic content. Its asset ID is retained only as private provenance and the source image is excluded from selected assets, approved asset guidance, and the staged builder workspace.',
   'When a Brand Kit is present, use its staged approved logo family in the header and footer, choose a contrast-safe approved logo appearance for each direct background surface, prefer its approved editable SVG logo version only where its original colours remain legible, use its reviewed primary and accent colours as brand tokens, and derive accessible neutral, background, surface, muted, and border tokens rather than copying a weak legacy palette or substituting a generic identity.',
   'Use semantic HTML, labelled forms, keyboard-accessible controls, accessible colour contrast, and a clear focus order.',
   'Create a clear visual hierarchy with purposeful typography, spacing, navigation, calls to action, trust presentation, and restrained motion. Viewport reveals for headings and containers, plus counters for real metrics, are built-in defaults: apply them where they support scanning without waiting for a separate motion prompt.',
@@ -258,6 +259,9 @@ export function createBuildManifestData(
 ): BuildManifestData {
   const selectedPageUrls = new Set(brief.sourceSelections.pageUrls);
   const approvedVisualContent = brief.draft.approvedVisualContent ?? [];
+  const recoveredContentAssetIds = new Set(
+    approvedVisualContent.map((item) => item.assetId).filter(Boolean),
+  );
   const approvedCapabilities = (brief.draft.capabilityInventory ?? []).filter(
     (capability) => capability.decision === 'include',
   );
@@ -282,8 +286,13 @@ export function createBuildManifestData(
     },
     permittedFacts: permittedFacts(workspace.facts),
     selectedPages,
-    selectedAssets: selectedArtifacts(workspace.artifacts, brief.sourceSelections.assetIds),
-    approvedAssetGuidance: brief.draft.assetGuidance,
+    selectedAssets: selectedArtifacts(
+      workspace.artifacts,
+      brief.sourceSelections.assetIds.filter((assetId) => !recoveredContentAssetIds.has(assetId)),
+    ),
+    approvedAssetGuidance: brief.draft.assetGuidance.filter(
+      (guidance) => !recoveredContentAssetIds.has(guidance.assetId),
+    ),
     approvedCapabilities,
     approvedVisualContent,
     approvedVisualContentGroups: groupApprovedVisualContent(approvedVisualContent),

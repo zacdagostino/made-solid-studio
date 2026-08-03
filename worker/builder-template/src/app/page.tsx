@@ -20,8 +20,19 @@ export default function StarterPage() {
         />
       </header>
       <main className="starter" data-siteforge-starter>
-        <h1>Private preview</h1>
-        <p>This route is replaced by the Made Solid Studio builder.</p>
+        <h1 data-reveal="words">Private preview</h1>
+        <div data-reveal="sequence">
+          <p>This route is replaced by the Made Solid Studio builder.</p>
+          <p>
+            <strong data-counter="24">24</strong> quality checks ready
+          </p>
+        </div>
+        <div data-scroll-zoom>
+          <div data-reveal="stagger">
+            <span>Responsive</span>
+            <span>Accessible</span>
+          </div>
+        </div>
       </main>
     </>
   );

@@ -522,6 +522,38 @@ async function collectFiles(directory) {
   return files;
 }
 
+async function collectBrowsableSourceFiles(directory, relativeDirectory = '') {
+  const entries = await readdir(join(directory, relativeDirectory), { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const relativePath = [relativeDirectory, entry.name].filter(Boolean).join('/');
+    if (
+      entry.name === '.env' ||
+      entry.name.startsWith('.env.') ||
+      entry.name === '.npmrc' ||
+      entry.name.endsWith('.log') ||
+      entry.name.endsWith('.tsbuildinfo')
+    ) {
+      continue;
+    }
+    if (
+      entry.isDirectory() &&
+      (entry.name === '.git' ||
+        entry.name === '.next' ||
+        entry.name === 'node_modules' ||
+        relativePath === 'out' ||
+        relativePath === 'public/assets')
+    ) {
+      continue;
+    }
+    if (entry.isDirectory()) {
+      files.push(...(await collectBrowsableSourceFiles(directory, relativePath)));
+    }
+    if (entry.isFile()) files.push(join(directory, relativePath));
+  }
+  return files;
+}
+
 function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -866,8 +898,21 @@ async function restoreSourceCheckpoint(client, run, sourceDirectory, sourceRun =
     restoredFromLegacyDrafts: false,
     draftHashes,
     checkpointHash: sha256(JSON.stringify({ version: payload.version, files })),
+    checkpointState: recordValue(checkpoint.metadata).state,
     fileCount: expectedFiles.size,
   };
+}
+
+async function refreshLockedFoundation(siteDirectory) {
+  await Promise.all(
+    lockedFoundationPaths.map(async (relativePath) => {
+      const source = join(templateDirectory, relativePath);
+      const destination = join(siteDirectory, relativePath);
+      await mkdir(dirname(destination), { recursive: true });
+      await chmod(destination, 0o644).catch(() => undefined);
+      await cp(source, destination, { force: true });
+    }),
+  );
 }
 
 async function restoreLegacyDraftFiles(client, run, sourceDirectory) {
@@ -935,11 +980,18 @@ async function restoreLegacyDraftFiles(client, run, sourceDirectory) {
   };
 }
 
-async function saveSourceCheckpoint(client, run, workspace, currentFiles, event) {
+async function saveSourceCheckpoint(client, run, workspace, currentFiles, event, options = {}) {
   const payload = sourceCheckpointPayload(currentFiles, workspace.initialSourceHashes);
   const body = Buffer.from(JSON.stringify(payload));
   const hash = sha256(JSON.stringify({ version: payload.version, files: payload.files }));
-  if (workspace.checkpointHash === hash) return true;
+  const checkpointState = options.state ?? 'resume_checkpoint';
+  if (
+    workspace.checkpointHash === hash &&
+    (workspace.checkpointState === checkpointState ||
+      workspace.checkpointState === 'post_codex_validated')
+  ) {
+    return true;
+  }
   try {
     await uploadArtifact(client, run, {
       kind: 'checkpoint',
@@ -950,16 +1002,20 @@ async function saveSourceCheckpoint(client, run, workspace, currentFiles, event)
       metadata: {
         version: payload.version,
         fileCount: payload.files.length,
-        state: 'resume_checkpoint',
+        state: checkpointState,
       },
     });
     workspace.checkpointHash = hash;
+    workspace.checkpointState = checkpointState;
     workspace.checkpointFailure = undefined;
     await event(
       'stage',
-      `Private source checkpoint saved with ${payload.files.length} file${payload.files.length === 1 ? '' : 's'}.`,
+      options.validated
+        ? `Validated post-Codex source checkpoint saved with ${payload.files.length} file${payload.files.length === 1 ? '' : 's'}.`
+        : `Private source checkpoint saved with ${payload.files.length} file${payload.files.length === 1 ? '' : 's'}.`,
       {
         fileCount: payload.files.length,
+        checkpointState,
       },
     );
     return true;
@@ -1036,7 +1092,10 @@ async function syncDraftFiles(client, run, workspace, event, options = {}) {
       workspace.draftHashes.get(current.relativePath) !== current.hash,
   );
   if (!hasUnsavedSourceFiles && sourceChanged) {
-    await saveSourceCheckpoint(client, run, workspace, currentFiles, event);
+    await saveSourceCheckpoint(client, run, workspace, currentFiles, event, {
+      state: options.checkpointState,
+      validated: options.checkpointState === 'post_codex_validated',
+    });
   }
   return workspace.draftPublished;
 }
@@ -1080,9 +1139,55 @@ async function syncDraftOutputFiles(client, run, workspace, event) {
   return workspace.draftPublished;
 }
 
-async function stageApprovedAssets(client, manifest, siteDirectory) {
+function sourceUrlSet(pages) {
+  return new Set(
+    pages
+      .map((page) => page?.sourceUrl ?? page?.url)
+      .filter((value) => typeof value === 'string')
+      .map((value) => {
+        try {
+          return normaliseSourceUrl(value);
+        } catch {
+          return undefined;
+        }
+      })
+      .filter(Boolean),
+  );
+}
+
+function assetMatchesSelectedPages(asset, selectedPageUrls, primaryLogoAssetId) {
+  if (!selectedPageUrls.size) return true;
+  const metadata = recordValue(asset.metadata);
+  if (
+    asset.id === primaryLogoAssetId ||
+    metadata.derivedFromAssetId === primaryLogoAssetId ||
+    metadata.logoVariant === 'appearance' ||
+    metadata.logoVariant === 'editable'
+  ) {
+    return true;
+  }
+  const pageUrls = [
+    metadata.pageUrl,
+    ...(Array.isArray(metadata.pageUrls) ? metadata.pageUrls : []),
+  ].filter((value) => typeof value === 'string');
+  if (!pageUrls.length) return true;
+  return pageUrls.some((value) => {
+    try {
+      return selectedPageUrls.has(normaliseSourceUrl(value));
+    } catch {
+      return false;
+    }
+  });
+}
+
+async function stageApprovedAssets(client, manifest, siteDirectory, selectedPages = []) {
   const data = recordValue(manifest.data);
   const brandKit = recordValue(data.brandKit);
+  const recoveredContentAssetIds = new Set(
+    (Array.isArray(data.approvedVisualContent) ? data.approvedVisualContent : [])
+      .map((item) => recordValue(item).assetId)
+      .filter((id) => typeof id === 'string'),
+  );
   const primaryLogoAssetId =
     typeof brandKit.primaryLogoAssetId === 'string' ? brandKit.primaryLogoAssetId : '';
   const assetIds = new Set(
@@ -1098,6 +1203,9 @@ async function stageApprovedAssets(client, manifest, siteDirectory) {
       if (typeof assetId === 'string') assetIds.add(assetId);
     }
   }
+  for (const recoveredAssetId of recoveredContentAssetIds) {
+    assetIds.delete(recoveredAssetId);
+  }
   const assetsDirectory = join(siteDirectory, 'public', 'assets');
   await rm(assetsDirectory, { recursive: true, force: true });
   if (!assetIds.size) return [];
@@ -1112,7 +1220,10 @@ async function stageApprovedAssets(client, manifest, siteDirectory) {
   const staged = [];
   const stagedFileNames = new Set();
   let index = 0;
-  for (const asset of assets ?? []) {
+  const selectedPageUrls = sourceUrlSet(selectedPages);
+  for (const asset of (assets ?? []).filter((candidate) =>
+    assetMatchesSelectedPages(candidate, selectedPageUrls, primaryLogoAssetId),
+  )) {
     const { data: blob, error: downloadError } = await client.storage
       .from(asset.storage_bucket || artifactBucket)
       .download(asset.storage_path);
@@ -1316,6 +1427,145 @@ function selectedSourcePages(manifest, buildMode, targetSourceUrl, targetSourceU
   return pages;
 }
 
+function sourceBoundItemMatches(item, selectedPageUrls) {
+  const value = recordValue(item);
+  const candidate = value.sourcePageUrl ?? value.sourceUrl ?? value.url;
+  if (typeof candidate !== 'string' || !candidate) return true;
+  try {
+    return selectedPageUrls.has(normaliseSourceUrl(candidate));
+  } catch {
+    return false;
+  }
+}
+
+function manifestSectionCounts(data) {
+  return Object.fromEntries(
+    Object.entries(recordValue(data))
+      .filter(([, value]) => Array.isArray(value))
+      .map(([key, value]) => [key, value.length]),
+  );
+}
+
+function applicableFeatureContracts(data, selectedPages, buildMode) {
+  const contracts = ['component-architecture.md', 'mobile-navigation.md'];
+  if (recordValue(data.brandKit).primaryLogoAssetId) {
+    contracts.push('contextual-logo-selection.md');
+  }
+  if (Array.isArray(data.approvedCapabilities) && data.approvedCapabilities.length) {
+    contracts.push('runtime-profiles.md');
+  }
+  if (Array.isArray(data.approvedVisualContentGroups) && data.approvedVisualContentGroups.length) {
+    contracts.push('semantic-content-recovery.md');
+  }
+  if (selectedPages.length > 1 || buildMode === 'full_site' || buildMode === 'site_test') {
+    contracts.push('site-navigation-architecture.md');
+  }
+  return contracts;
+}
+
+function projectManifestData(data, selectedPages, stagedAssets, buildMode) {
+  const fullData = recordValue(data);
+  if (buildMode === 'full_site' || buildMode === 'site_test') return fullData;
+  const selectedPageUrls = sourceUrlSet(selectedPages);
+  const stagedAssetIds = new Set(
+    stagedAssets
+      .map((asset) => recordValue(asset).assetId)
+      .filter((assetId) => typeof assetId === 'string'),
+  );
+  return {
+    ...fullData,
+    brandKit: {
+      ...recordValue(fullData.brandKit),
+      approvedAssetIds: (Array.isArray(recordValue(fullData.brandKit).approvedAssetIds)
+        ? recordValue(fullData.brandKit).approvedAssetIds
+        : []
+      ).filter((assetId) => stagedAssetIds.has(assetId)),
+    },
+    permittedFacts: (Array.isArray(fullData.permittedFacts) ? fullData.permittedFacts : []).filter(
+      (fact) => sourceBoundItemMatches(fact, selectedPageUrls),
+    ),
+    selectedPages: (Array.isArray(fullData.selectedPages) ? fullData.selectedPages : []).filter(
+      (page) => sourceBoundItemMatches(page, selectedPageUrls),
+    ),
+    selectedAssets: (Array.isArray(fullData.selectedAssets) ? fullData.selectedAssets : []).filter(
+      (asset) => stagedAssetIds.has(recordValue(asset).artifactId),
+    ),
+    approvedAssetGuidance: (Array.isArray(fullData.approvedAssetGuidance)
+      ? fullData.approvedAssetGuidance
+      : []
+    ).filter((guidance) => stagedAssetIds.has(recordValue(guidance).assetId)),
+    approvedVisualContent: (Array.isArray(fullData.approvedVisualContent)
+      ? fullData.approvedVisualContent
+      : []
+    ).filter((item) => sourceBoundItemMatches(item, selectedPageUrls)),
+    approvedVisualContentGroups: (Array.isArray(fullData.approvedVisualContentGroups)
+      ? fullData.approvedVisualContentGroups
+      : []
+    ).filter((group) => sourceBoundItemMatches(group, selectedPageUrls)),
+    proposedSitemap: (Array.isArray(fullData.proposedSitemap)
+      ? fullData.proposedSitemap
+      : []
+    ).filter((entry) => sourceBoundItemMatches(entry, selectedPageUrls)),
+    pagePlans: (Array.isArray(fullData.pagePlans) ? fullData.pagePlans : []).filter((plan) =>
+      sourceBoundItemMatches(plan, selectedPageUrls),
+    ),
+  };
+}
+
+function buildContextSummary({
+  fullData,
+  projectedData,
+  selectedPages,
+  stagedAssets,
+  buildMode,
+  scopedRevision,
+}) {
+  const fullBytes = Buffer.byteLength(JSON.stringify(fullData));
+  const projectedBytes = Buffer.byteLength(JSON.stringify(projectedData));
+  const contracts = applicableFeatureContracts(projectedData, selectedPages, buildMode);
+  return {
+    version: 1,
+    mode: buildMode,
+    scope: scopedRevision
+      ? 'scoped_revision'
+      : buildMode === 'full_site' || buildMode === 'site_test'
+        ? 'whole_site'
+        : 'selected_routes',
+    selectedRouteCount: selectedPages.length,
+    stagedAssetCount: stagedAssets.length,
+    fullManifestBytes: fullBytes,
+    stagedManifestBytes: projectedBytes,
+    bytesRemoved: Math.max(fullBytes - projectedBytes, 0),
+    reductionPercent: fullBytes > 0 ? Math.round((1 - projectedBytes / fullBytes) * 100) : 0,
+    fullSectionCounts: manifestSectionCounts(fullData),
+    stagedSectionCounts: manifestSectionCounts(projectedData),
+    sectionCounts: manifestSectionCounts(projectedData),
+    applicableContracts: contracts,
+    inputFiles: scopedRevision
+      ? {
+          context: '../input/build-context.json',
+          revisionScope: '../input/revision-scope.json',
+          approvedAssets: '../input/approved-assets.json',
+        }
+      : {
+          context: '../input/build-context.json',
+          manifest: '../input/manifest.json',
+          approvedAssets: '../input/approved-assets.json',
+          sourcePageIndex: '../input/source-pages/index.json',
+        },
+    manifestSignals: {
+      hasStructuredArchitecture: Boolean(
+        Object.keys(recordValue(projectedData.architecture)).length,
+      ),
+      approvedVisualContentGroupCount: Array.isArray(projectedData.approvedVisualContentGroups)
+        ? projectedData.approvedVisualContentGroups.length
+        : 0,
+    },
+    inspectionPolicy:
+      'Read build-context.json first. Use targeted JSON queries and bounded output; never print an entire manifest, source dossier, or asset index.',
+  };
+}
+
 async function stageRevisionScope(manifest, inputDirectory, buildMode, targetSourceUrl, sourceRun) {
   const selectedPage = selectedSourcePages(manifest, buildMode, targetSourceUrl)[0];
   const data = recordValue(manifest.data);
@@ -1516,6 +1766,8 @@ async function prepareWorkspace(client, run, manifest, workerId, diagnostics) {
   let manifestPath;
   let stagedSourcePages;
   let revisionScope;
+  let stagedAssets;
+  let projectedManifestData = recordValue(manifest.data);
   if (scopedRevision) {
     revisionScope = await stageRevisionScope(
       manifest,
@@ -1527,11 +1779,9 @@ async function prepareWorkspace(client, run, manifest, workerId, diagnostics) {
     manifestText = revisionScope.scopeText;
     manifestPath = revisionScope.scopePath;
     stagedSourcePages = [revisionScope.selectedPage];
+    stagedAssets = await stageApprovedAssets(client, manifest, siteDirectory, stagedSourcePages);
   } else {
     manifestPath = join(inputDirectory, 'manifest.json');
-    manifestText = JSON.stringify(manifest.data, null, 2);
-    await writeFile(manifestPath, manifestText);
-    await chmod(manifestPath, 0o444);
     stagedSourcePages = await stageSelectedPageContent(
       client,
       manifest,
@@ -1540,14 +1790,40 @@ async function prepareWorkspace(client, run, manifest, workerId, diagnostics) {
       targetSourceUrl,
       targetSourceUrls,
     );
+    stagedAssets = await stageApprovedAssets(client, manifest, siteDirectory, stagedSourcePages);
+    projectedManifestData = projectManifestData(
+      manifest.data,
+      stagedSourcePages,
+      stagedAssets,
+      buildMode,
+    );
+    manifestText = JSON.stringify(projectedManifestData, null, 2);
+    await writeFile(manifestPath, manifestText);
+    await chmod(manifestPath, 0o444);
   }
+  const contextSummary = buildContextSummary({
+    fullData: manifest.data,
+    projectedData: scopedRevision ? recordValue(JSON.parse(manifestText)) : projectedManifestData,
+    selectedPages: stagedSourcePages,
+    stagedAssets,
+    buildMode,
+    scopedRevision,
+  });
+  const contextSummaryPath = join(inputDirectory, 'build-context.json');
+  await writeFile(contextSummaryPath, JSON.stringify(contextSummary, null, 2));
+  await chmod(contextSummaryPath, 0o444);
   const checkpoint = await restoreSourceCheckpoint(
     client,
     run,
     join(siteDirectory, 'src'),
     sourceRun,
   );
-  const stagedAssets = await stageApprovedAssets(client, manifest, siteDirectory);
+  // A checkpoint records generated source, not an immutable copy of the worker
+  // foundation. Older checkpoints may contain a formerly locked runtime file,
+  // so always reapply the current protected foundation before hashing or
+  // verification. This keeps resume useful without allowing saved source to
+  // pin a stale or broken runtime.
+  await refreshLockedFoundation(siteDirectory);
   await writeFile(
     join(inputDirectory, 'approved-assets.json'),
     JSON.stringify(stagedAssets, null, 2),
@@ -1589,6 +1865,7 @@ async function prepareWorkspace(client, run, manifest, workerId, diagnostics) {
     draftHashes: checkpoint.draftHashes,
     draftFailures: new Map(),
     checkpointHash: checkpoint.checkpointHash,
+    checkpointState: checkpoint.checkpointState,
     checkpointFailure: undefined,
     draftOutputHashes: new Map(),
     draftPublished: false,
@@ -1599,6 +1876,8 @@ async function prepareWorkspace(client, run, manifest, workerId, diagnostics) {
     scopedRevision,
     rebasedToCurrentManifest,
     revisionScopePath: revisionScope?.scopePath,
+    contextSummaryPath,
+    contextSummary,
     allowedSourcePaths: revisionScope?.allowedSourcePaths ?? [],
     allowedSourcePrefixes: revisionScope?.allowedSourcePrefixes ?? [],
     agentPackage,
@@ -1645,12 +1924,16 @@ function buildPrompt(workspace, buildInstruction) {
     targetSourceUrls = [],
     allowedSourcePaths = [],
     allowedSourcePrefixes = [],
+    contextSummary,
   } = workspace;
   const homepageTest = buildMode === 'homepage_test';
   const pageTest = buildMode === 'page_test';
   const pageSetTest = pageTest && targetSourceUrls.length > 0;
   const siteTest = buildMode === 'site_test';
   const selectedPage = stagedSourcePages[0];
+  const usesContract = (fileName) => contextSummary?.applicableContracts?.includes(fileName);
+  const hasStructuredArchitecture =
+    contextSummary?.manifestSignals?.hasStructuredArchitecture === true;
   const safeInstruction =
     typeof buildInstruction === 'string' && buildInstruction.trim()
       ? buildInstruction.trim()
@@ -1660,16 +1943,25 @@ function buildPrompt(workspace, buildInstruction) {
       rebasedToCurrentManifest
         ? `You are the Made Solid Studio Next.js website builder rebasing the completed private ${selectedPage?.publicPath ?? 'selected route'} onto the current immutable manifest and approved assets.`
         : `You are the Made Solid Studio Next.js website builder performing a narrowly scoped private refinement of ${selectedPage?.publicPath ?? 'the selected route'}.`,
-      'Read ../input/revision-scope.json and ../input/approved-assets.json before changing source. Do not read ../input/manifest.json or ../input/source-pages/: they are intentionally excluded because the restored private route is the approved baseline for this refinement.',
+      'Read ../input/build-context.json first, then ../input/revision-scope.json and ../input/approved-assets.json before changing source. Do not read ../input/manifest.json or ../input/source-pages/: they are intentionally excluded because the restored private route is the approved baseline for this refinement.',
+      'Follow the build-context inspection policy: use targeted JSON queries and bounded output. Never print an entire input JSON file, source dossier, or asset index into the conversation.',
       'Follow AGENTS.md, the revision scope, and the locked-file boundary exactly. The revision scope is the factual and file-scope boundary for this run.',
       `This run is pinned to builder agent package v${agentPackage.version} (${agentPackage.id}). Its builder foundation is locked and may not be edited.`,
       `Change only these exact source files: ${allowedSourcePaths.map((path) => `src/${path}`).join(', ')}; and files beneath these generated component prefixes: ${allowedSourcePrefixes.map((path) => `src/${path}`).join(', ')}. Preserve every other restored route and source file byte-for-byte.`,
       `Preserve ${selectedPage?.sourcePath ?? 'the selected route source'} and its exact siteforge-source-url metadata, approved local assets, page content, and navigation unless the workspace direction requires a change. Do not add or strengthen business claims.`,
       'The assets staged in public/assets/ belong to the current manifest and replace the prior run’s asset set. Reference only the publicPath values in approved-assets.json.',
       'Read feature-contracts/component-architecture.md. Preserve the typed component architecture while allowing the selected route and genuinely shared generated components to be refined.',
-      'Read approvedVisualContentGroups in revision-scope.json. When it is not empty, implement feature-contracts/semantic-content-recovery.md: account for every group and item in the selected route, preserve reviewed semantic information, add exact provenance annotations, and decide how it integrates into the restored design. Do not leave a stale generic substitute.',
-      'When approved recovered groups are present, create or update src/SEMANTIC_DESIGN_DECISIONS.json exactly as defined by the semantic recovery contract before implementation. Record the real content shape, a concrete approved-brand connection, page-specific integration, hierarchy, responsive transformation, and signature detail for every group, then implement that plan in this single build.',
-      'If this refinement changes a logo placement or its direct background, read feature-contracts/contextual-logo-selection.md and preserve a contrast-safe approved logo-family choice with the required context annotations.',
+      ...(usesContract('semantic-content-recovery.md')
+        ? [
+            'Implement feature-contracts/semantic-content-recovery.md for the approvedVisualContentGroups in revision-scope.json. Account for every group and item in the selected route, preserve reviewed semantic information, add exact provenance annotations, and decide how it integrates into the restored design. Do not leave a stale generic substitute.',
+            'Create or update src/SEMANTIC_DESIGN_DECISIONS.json exactly as defined by the semantic recovery contract before implementation. Record the real content shape, a concrete approved-brand connection, page-specific integration, hierarchy, responsive transformation, and signature detail for every group, then implement that plan in this single build.',
+          ]
+        : []),
+      ...(usesContract('contextual-logo-selection.md')
+        ? [
+            'If this refinement changes a logo placement or its direct background, read feature-contracts/contextual-logo-selection.md and preserve a contrast-safe approved logo-family choice with the required context annotations.',
+          ]
+        : []),
       'Do not search for unrelated routes, recreate the site, add dependencies, alter build configuration, edit the locked SiteRuntime, or modify public/assets/.',
       ...(agentPackage.contract_addendum
         ? [
@@ -1702,11 +1994,14 @@ function buildPrompt(workspace, buildInstruction) {
           : siteTest
             ? 'You are the Made Solid Studio Next.js website builder performing a feature-only whole-site Agent Studio revision. Preserve all existing routes, content, tokens, components, visual decisions, and unrelated behaviour while implementing only the workspace direction.'
             : 'You are the Made Solid Studio Next.js website builder. Build the complete private redesign now.',
-    'Read ../input/manifest.json, ../input/approved-assets.json, and ../input/source-pages/index.json before writing any website files.',
-    'Follow AGENTS.md and every applicable feature contract. The manifest is the factual, route, architecture, capability, and permission boundary.',
+    'Read ../input/build-context.json first, then ../input/manifest.json, ../input/approved-assets.json, and ../input/source-pages/index.json before writing any website files.',
+    'Follow the build-context inspection policy: use targeted JSON queries and bounded output. Never print an entire input JSON file, source dossier, or asset index into the conversation.',
+    `Follow AGENTS.md and only the applicable feature contracts listed in build-context.json: ${contextSummary?.applicableContracts?.join(', ') || 'none'}. The projected manifest is the factual, route, architecture, capability, and permission boundary for this run.`,
     `This run is pinned to builder agent package v${agentPackage.version} (${agentPackage.id}). Its builder foundation is locked and may not be edited.`,
-    'Read architecture in manifest.json. Use the locked Next.js App Router, strict TypeScript, Tailwind, semantic CSS tokens, native HTML, Base UI, and Lucide foundation. Do not install packages or change build configuration.',
-    'Read feature-contracts/component-architecture.md. Create a business-specific component system in tokens, UI, patterns, sections, site components, layouts, and pages. The foundation locks behaviour, not appearance: own the typography, spacing, variants, composition, responsive transformation, and brand expression.',
+    hasStructuredArchitecture
+      ? 'Read the structured architecture in manifest.json. Use the locked Next.js App Router, strict TypeScript, Tailwind, semantic CSS tokens, native HTML, Base UI, and Lucide foundation. Do not install packages or change build configuration.'
+      : 'This legacy manifest does not contain a structured architecture object. Do not search for one. Use the pinned package, applicable contracts, and locked Next.js App Router foundation as the architecture boundary; do not install packages or change build configuration.',
+    'Read feature-contracts/component-architecture.md. Create a business-specific component system in tokens, UI, patterns, sections, site components, layouts, and pages. The foundation locks behaviour, not appearance: own the typography, spacing, variants, composition, responsive transformation, and brand expression. For each prominent repeated group, first distinguish real order, item count and length, comparison needs, and browsing needs; then choose a content-led desktop and mobile composition instead of defaulting to numbered cards or vertical stacks.',
     homepageTest
       ? 'source-pages/index.json contains the homepage. Implement only its exact sourcePath, link using its publicPath, and export its exact outputPath.'
       : pageSetTest
@@ -1715,15 +2010,32 @@ function buildPrompt(workspace, buildInstruction) {
           ? `source-pages/index.json contains the selected route. Implement only ${selectedPage?.sourcePath ?? 'its exact sourcePath'} and preserve the restored routes.`
           : 'Every source-page entry is required. Read its linked content file, implement its exact sourcePath, link to its publicPath, and verify its outputPath exists after export. The sitemap summary does not permit omitting selected routes.',
     'For each route export Next.js metadata with other: { "siteforge-source-url": "<exact sourceUrl>" }. Keep sourcePath, publicPath, and outputPath exactly as assigned.',
-    'Read feature-contracts/site-navigation-architecture.md for multi-page builds. Use clean publicPath values, stable primary destinations, meaningful parent/child navigation, and make every selected route reachable from the homepage.',
+    ...(usesContract('site-navigation-architecture.md')
+      ? [
+          'Read feature-contracts/site-navigation-architecture.md. Use clean publicPath values and a page-based primary header with real generated routes, never homepage section shortcuts when multiple pages exist. Keep meaningful parent/child navigation and make every selected route reachable from the homepage.',
+          'Give every visitor-facing route and internal link a meaningful content-derived name. Replace source placeholders such as Blank, Unnamed page, Untitled, or raw path labels like /blank with concise page titles, H1s, and navigation labels supported by that page dossier. Do not change the assigned publicPath, sourcePath, outputPath, or provenance marker.',
+        ]
+      : []),
     'Replace the starter route and starter metadata. Never leave “Private preview”, data-siteforge-starter, or the starter message in generated output.',
     "Use the captured text, headings, forms, navigation, and content blocks as source material. Rewrite, condense, group, and improve the wording where it helps clarity, scanning, hierarchy, and conversion, but preserve each page's necessary services, operational details, calls to action, forms or tools, legal content, and resource content. Do not silently drop material facts or make captured claims stronger.",
-    'Read feature-contracts/runtime-profiles.md, approvedCapabilities, and architecture.capabilityAdapters. Build the complete honest visitor interface and applicable states. For managed production modes, write src/BUILD_NOTES.md with the typed adapter, service, data, validation, security, secrets, abuse, failure, and human-configuration boundary. Never fabricate live behaviour.',
-    'When approvedVisualContentGroups is present, read and implement feature-contracts/semantic-content-recovery.md. Account for every approved group and item whose sourcePageUrl matches the selected page, preserving structuredContent and uncertainty boundaries. Decide whether each group belongs in an existing section or a new composition, then own its heading, placement, layout, interaction, responsive behaviour, and styling. Annotate the composition with its exact data-siteforge-recovered-group-id and every semantic item with its exact data-siteforge-recovered-content-id. sourcePresentations is provenance, not a layout request; generic substitute copy or silent omission does not satisfy coverage.',
-    'When approved recovered groups are present, create src/SEMANTIC_DESIGN_DECISIONS.json exactly as defined by the semantic recovery contract before implementing them. Give every selected group its real content shape, a concrete approved-brand connection, page-specific integration, hierarchy, responsive transformation, and signature detail; interchangeable component labels are not a design decision. Implement and check that plan in this single build.',
+    ...(usesContract('runtime-profiles.md')
+      ? [
+          'Read feature-contracts/runtime-profiles.md, approvedCapabilities, and architecture.capabilityAdapters. Build the complete honest visitor interface and applicable states. For managed production modes, write src/BUILD_NOTES.md with the typed adapter, service, data, validation, security, secrets, abuse, failure, and human-configuration boundary. Never fabricate live behaviour.',
+        ]
+      : []),
+    ...(usesContract('semantic-content-recovery.md')
+      ? [
+          'Read and implement feature-contracts/semantic-content-recovery.md. Account for every approved group and item in the projected manifest, preserving structuredContent and uncertainty boundaries. Decide whether each group belongs in an existing section or a new composition, then own its heading, placement, layout, interaction, responsive behaviour, and styling. Annotate the composition with its exact data-siteforge-recovered-group-id and every semantic item with its exact data-siteforge-recovered-content-id. sourcePresentations is provenance, not a layout request; generic substitute copy or silent omission does not satisfy coverage.',
+          'Create src/SEMANTIC_DESIGN_DECISIONS.json exactly as defined by the semantic recovery contract before implementing recovered groups. Give every selected group its real content shape, a concrete approved-brand connection, page-specific integration, hierarchy, responsive transformation, and signature detail; interchangeable component labels are not a design decision. Implement and check that plan in this single build.',
+        ]
+      : []),
     'Do not invent or imply unsupported business facts. Preserve unresolved items for the human reviewer rather than guessing.',
     'Use only approved assets in public/assets/ through their staged publicPath. Do not make network requests, import remote resources, or add dependencies.',
-    'Read and implement feature-contracts/contextual-logo-selection.md. When manifest.json contains a Brand Kit, its approved primary logo family is mandatory in the header and footer. Use the explicit logoFamilyPrimaryAssetId and logoAppearance fields in approved-assets.json to choose a contrast-safe approved version for each direct background surface, and annotate every logo image as required by the contract. Use the reviewed primary and accent colours as brand tokens, then design coherent accessible neutrals, surfaces, and backgrounds yourself; do not copy a weak legacy colour system or replace the identity with a generic one.',
+    ...(usesContract('contextual-logo-selection.md')
+      ? [
+          'Read and implement feature-contracts/contextual-logo-selection.md. The approved primary logo family is mandatory in the header and footer. Use the explicit logoFamilyPrimaryAssetId and logoAppearance fields in approved-assets.json to choose a contrast-safe approved version for each direct background surface, and annotate every logo image as required by the contract. Use the reviewed primary and accent colours as brand tokens, then design coherent accessible neutrals, surfaces, and backgrounds yourself; do not copy a weak legacy colour system or replace the identity with a generic one.',
+        ]
+      : []),
     'Keep the locked SiteRuntime mounted in the root layout. It supplies safe reveal, factual counters, and the approved-logo introduction without determining visual design. Mark the real header logo or wrapper with data-siteforge-brand-logo. Do not add a second loader, fake progress, generic wordmark, or invented metric.',
     'Read and implement feature-contracts/mobile-navigation.md as generated React site components. Use native HTML and Base UI where focus-managed dialog behaviour is needed. Own the icon, composition, tokens, layout, and motion while preserving every required hook and state.',
     ...(agentPackage.contract_addendum
@@ -1885,6 +2197,119 @@ function motionRuntimeProblems(htmlFiles, allFiles) {
   return problems;
 }
 
+function motionCompositionProblems(htmlFiles, expressive = false, immersive = false) {
+  const supportedVariants = new Set([
+    'fade-up',
+    'fade-left',
+    'fade-right',
+    'scale',
+    'words',
+    'stagger',
+    'sequence',
+  ]);
+  const problems = [];
+  const siteVariants = new Set();
+  for (const file of htmlFiles) {
+    const variants = [...file.contents.matchAll(/\bdata-reveal\s*=\s*["']([^"']+)["']/gi)].map(
+      (match) => match[1].trim().toLowerCase(),
+    );
+    const accepted = variants.filter((variant) => supportedVariants.has(variant));
+    accepted.forEach((variant) => siteVariants.add(variant));
+    const unsupported = variants.filter((variant) => !supportedVariants.has(variant));
+    if (unsupported.length) {
+      problems.push(
+        `${file.relativePath} uses unsupported motion ${[...new Set(unsupported)].join(', ')}.`,
+      );
+    }
+    if (!accepted.length) {
+      problems.push(
+        `${file.relativePath} does not make an intentional element-motion choice with data-reveal.`,
+      );
+    }
+    if (expressive && accepted.length < 4) {
+      problems.push(
+        `${file.relativePath} must choreograph at least four explicit elements or groups; animating only a title is not sufficient.`,
+      );
+    }
+    if (expressive && new Set(accepted).size < 3) {
+      problems.push(
+        `${file.relativePath} must combine at least three fitting motion treatments for its hero and subsequent content.`,
+      );
+    }
+    if (expressive && !accepted.includes('stagger')) {
+      problems.push(
+        `${file.relativePath} does not sequence a genuinely related group with stagger.`,
+      );
+    }
+    if (immersive && !accepted.includes('sequence')) {
+      problems.push(
+        `${file.relativePath} does not reveal a meaningful stacked text group sequentially.`,
+      );
+    }
+    if (immersive && !/\bdata-scroll-zoom(?:\s*=\s*["'][^"']*["'])?/i.test(file.contents)) {
+      problems.push(
+        `${file.relativePath} does not include a reversible scroll-responsive depth container.`,
+      );
+    }
+  }
+  if (htmlFiles.length && siteVariants.size < 2) {
+    problems.push(
+      'The generated site must combine at least two restrained motion treatments instead of applying one generic reveal everywhere.',
+    );
+  }
+  return problems;
+}
+
+async function expressiveNavigationMotionProblems(allFiles) {
+  const authoredFiles = allFiles.filter((file) => {
+    const normalized = file.split(sep).join('/');
+    return (
+      /\.(?:css|jsx?|tsx?)$/i.test(normalized) &&
+      !normalized.endsWith('/components/foundation/site-runtime.tsx')
+    );
+  });
+  const source = (await Promise.all(authoredFiles.map((file) => readFile(file, 'utf8')))).join(
+    '\n',
+  );
+  const problems = [];
+  if (!/data-sf-navigation-motion/i.test(source)) {
+    problems.push('The compact navigation surface does not opt into enter/exit motion.');
+  }
+  const sequencedItems = source.match(/data-sf-navigation-item/g)?.length ?? 0;
+  if (sequencedItems < 3) {
+    problems.push(
+      'Compact navigation must sequence its approved logo, primary routes, and secondary controls.',
+    );
+  }
+  return problems;
+}
+
+function responsiveImageProblems(htmlFiles) {
+  const problems = [];
+  for (const file of htmlFiles) {
+    const rasterImages = (file.contents.match(/<img\b[^>]*>/gi) ?? []).filter(
+      (tag) => !/\bsrc=["'][^"']+\.svg(?:[?#][^"']*)?["']/i.test(tag),
+    );
+    for (const tag of rasterImages) {
+      if (!/\bwidth=["']\d+["']/i.test(tag) || !/\bheight=["']\d+["']/i.test(tag)) {
+        problems.push(`${file.relativePath} contains a raster image without stable dimensions.`);
+      }
+      if (!/\bdecoding=["']async["']/i.test(tag)) {
+        problems.push(
+          `${file.relativePath} contains a raster image without asynchronous decoding.`,
+        );
+      }
+    }
+    if (
+      rasterImages.length > 1 &&
+      !rasterImages.some((tag) => /\bloading=["']lazy["']/i.test(tag))
+    ) {
+      problems.push(`${file.relativePath} does not lazy-load any below-fold raster imagery.`);
+    }
+  }
+  return [...new Set(problems)];
+}
+
 function brandIntroProblems(manifest, htmlFiles, allFiles) {
   const brandKit = recordValue(recordValue(manifest.data).brandKit);
   if (!brandKit.primaryLogoAssetId) return [];
@@ -1961,6 +2386,8 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
   }
   const codexArguments = [
     'exec',
+    '--cd',
+    workspace.siteDirectory,
     '--json',
     '--ephemeral',
     '--sandbox',
@@ -2125,6 +2552,7 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
       exitCode: exit.code,
       signal: exit.signal ?? null,
       eventCount: events.length,
+      buildContext: workspace.contextSummary,
     },
   });
   if (cancelled) throw new BuilderCancelledError();
@@ -2136,7 +2564,10 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
   }
   await assertLockedFiles(workspace.siteDirectory, workspace.lockedFiles);
   await assertScopedRevisionFiles(workspace);
-  await syncDraftFiles(client, run, workspace, eventWriter);
+  await syncDraftFiles(client, run, workspace, eventWriter, {
+    force: true,
+    checkpointState: 'post_codex_validated',
+  });
   await syncDraftOutputFiles(client, run, workspace, eventWriter);
   await eventWriter(
     'stage',
@@ -2235,6 +2666,60 @@ function structuralCheck(htmlFiles) {
       /<link\b[^>]*\brel=["']stylesheet["'][^>]*\bhref=["']https?:\/\//i.test(html)
     ) {
       problems.push(`${file.relativePath} references a remote file.`);
+    }
+  }
+  return problems;
+}
+
+function readableHtmlText(value) {
+  return value
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&(?:quot|ldquo|rdquo);|&#(?:34|8220|8221);/gi, '"')
+    .replace(/&(?:apos|lsquo|rsquo);|&#(?:39|8216|8217);/gi, "'")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function placeholderFacingName(value) {
+  const name = readableHtmlText(value);
+  if (!name) return false;
+  if (/^\/[a-z0-9]+(?:[/-][a-z0-9]+)*\/?$/i.test(name)) return true;
+  return name
+    .split(/\s*[|–—]\s*/)
+    .some((part) =>
+      /^(?:blank|blank page|unnamed|unnamed page|untitled|untitled page|new page|placeholder|placeholder page|page)$/i.test(
+        part.trim(),
+      ),
+    );
+}
+
+function meaningfulPageNamingProblems(htmlFiles) {
+  const problems = [];
+  for (const file of htmlFiles) {
+    const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(file.contents)?.[1] ?? '';
+    const heading = /<h1\b[^>]*>([\s\S]*?)<\/h1>/i.exec(file.contents)?.[1] ?? '';
+    if (placeholderFacingName(title)) {
+      problems.push(
+        `${file.relativePath} uses placeholder page title “${readableHtmlText(title)}”.`,
+      );
+    }
+    if (placeholderFacingName(heading)) {
+      problems.push(`${file.relativePath} uses placeholder H1 “${readableHtmlText(heading)}”.`);
+    }
+    const anchors =
+      file.contents.match(/<a\b[^>]*\bhref\s*=\s*["'][^"']+["'][^>]*>[\s\S]*?<\/a>/gi) ?? [];
+    for (const anchor of anchors) {
+      const reference = /\bhref\s*=\s*["']([^"']+)["']/i.exec(anchor)?.[1];
+      if (!reference || /^(?:[a-z]+:|\/\/|#)/i.test(reference)) continue;
+      const label = readableHtmlText(anchor);
+      if (label && placeholderFacingName(label)) {
+        problems.push(
+          `${file.relativePath} labels internal link ${reference} as placeholder text “${label}”.`,
+        );
+      }
     }
   }
   return problems;
@@ -2445,6 +2930,36 @@ function inconsistentHeaderNavigationProblems(htmlFiles) {
       (entry) =>
         `${entry.relativePath} uses different primary header destinations from the rest of the generated site.`,
     );
+}
+
+function multiPageHeaderRouteNavigationProblems(htmlFiles) {
+  const generatedPaths = new Set(htmlFiles.map((file) => file.relativePath));
+  if (!generatedPaths.has('index.html') || generatedPaths.size <= 1) return [];
+  const problems = [];
+  for (const file of htmlFiles) {
+    const header = /<header\b[\s\S]*?<\/header>/i.exec(file.contents)?.[0] ?? '';
+    const references = [...header.matchAll(/<a\b[^>]*\bhref\s*=\s*["']([^"']+)["'][^>]*>/gi)].map(
+      (match) => match[1],
+    );
+    const fragmentLinks = references.filter((reference) => /^(?:#|\/#)/.test(reference));
+    if (fragmentLinks.length) {
+      problems.push(
+        `${file.relativePath} uses homepage section shortcuts in its primary header instead of generated page routes.`,
+      );
+    }
+    const hasNonHomeRoute = references.some((reference) => {
+      if (/^(?:[a-z]+:|\/\/|#)/i.test(reference)) return false;
+      return generatedReferenceCandidates(reference, file.relativePath).some(
+        (candidate) => candidate !== 'index.html' && generatedPaths.has(candidate),
+      );
+    });
+    if (!hasNonHomeRoute) {
+      problems.push(
+        `${file.relativePath} primary header does not link to any generated non-home page.`,
+      );
+    }
+  }
+  return problems;
 }
 
 function sourceUrlMarker(html) {
@@ -2770,6 +3285,42 @@ function previewUrlForPage(serverUrl, relativePath) {
   return new URL(encodedPath, serverUrl).toString();
 }
 
+async function activateCompactNavigationTrigger(trigger) {
+  let lastError;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      if (attempt > 1) {
+        await trigger.scrollIntoViewIfNeeded({ timeout: 2_000 });
+        await trigger.evaluate(
+          (element) =>
+            new Promise((resolve) => {
+              element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+              const view = element.ownerDocument.defaultView;
+              if (!view) {
+                resolve();
+                return;
+              }
+              view.requestAnimationFrame(() => view.requestAnimationFrame(resolve));
+            }),
+        );
+      }
+      await trigger.click({ timeout: 5_000 });
+      return { activated: true, attempts: attempt };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  return {
+    activated: false,
+    attempts: 2,
+    detail: safeDiagnosticDetail(
+      lastError instanceof Error
+        ? lastError.message
+        : 'The compact navigation trigger could not be activated.',
+    ),
+  };
+}
+
 async function responsiveInteractionEvidence(page, viewport, htmlFile, captureOpenNavigation) {
   const problems = [];
   const overflow = await page.evaluate(() => ({
@@ -2813,7 +3364,13 @@ async function responsiveInteractionEvidence(page, viewport, htmlFile, captureOp
     );
   }
 
-  await trigger.click();
+  const openAttempt = await activateCompactNavigationTrigger(trigger);
+  if (!openAttempt.activated) {
+    problems.push(
+      `${htmlFile.relativePath} compact navigation trigger could not be activated with a pointer after ${openAttempt.attempts} attempts at ${viewport.width}px: ${openAttempt.detail}`,
+    );
+    return { problems };
+  }
   await page.waitForFunction(
     () =>
       document.querySelector('[data-siteforge-menu-trigger]')?.getAttribute('aria-expanded') ===
@@ -2896,7 +3453,14 @@ async function responsiveInteractionEvidence(page, viewport, htmlFile, captureOp
     );
   }
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await openTrigger.click();
+  const reducedMotionAttempt = await activateCompactNavigationTrigger(openTrigger);
+  if (!reducedMotionAttempt.activated) {
+    problems.push(
+      `${htmlFile.relativePath} compact navigation trigger could not be activated with reduced motion after ${reducedMotionAttempt.attempts} attempts at ${viewport.width}px: ${reducedMotionAttempt.detail}`,
+    );
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    return { problems, openNavigationBody };
+  }
   await page.waitForFunction(
     () =>
       document.querySelector('[data-siteforge-menu-trigger]')?.getAttribute('aria-expanded') ===
@@ -2958,6 +3522,10 @@ async function runQualityChecks(
     scopedHtmlFiles.length * previewViewports.length + expectedOpenNavigationCaptures;
   const totalItems = 8 + totalPreviewCaptures;
   const structuralProblems = structuralCheck(scopedHtmlFiles);
+  const meaningfulNamingPackage = Number(workspace.agentPackage.version) >= 6.6;
+  const pageNamingProblems = meaningfulNamingPackage
+    ? meaningfulPageNamingProblems(scopedHtmlFiles)
+    : [];
   const navigationTriggerProblems = await mobileNavigationTriggerProblems(
     scopedHtmlFiles,
     allFiles,
@@ -2970,6 +3538,7 @@ async function runQualityChecks(
     outputDirectory,
   );
   const inconsistentHeaderNavigation = inconsistentHeaderNavigationProblems(scopedHtmlFiles);
+  const multiPageHeaderNavigation = multiPageHeaderRouteNavigationProblems(scopedHtmlFiles);
   const unreachableSelectedPages = unreachableSelectedPageProblems(scopedHtmlFiles);
   const selectedPageCoverage = selectedPageCoverageCheck(
     manifest,
@@ -2986,6 +3555,17 @@ async function runQualityChecks(
   );
   const brandCheckProblems = await brandProblems(manifest, workspace.stagedAssets, allFiles);
   const motionProblems = motionRuntimeProblems(scopedHtmlFiles, allFiles);
+  const expressivePackage = Number(workspace.agentPackage.version) >= 6.2;
+  const immersiveMotionPackage = Number(workspace.agentPackage.version) >= 6.4;
+  const motionComposition = motionCompositionProblems(
+    scopedHtmlFiles,
+    expressivePackage,
+    immersiveMotionPackage,
+  );
+  const navigationMotion = expressivePackage
+    ? await expressiveNavigationMotionProblems(allFiles)
+    : [];
+  const responsiveImages = expressivePackage ? responsiveImageProblems(scopedHtmlFiles) : [];
   const brandIntroCheckProblems = brandIntroProblems(manifest, scopedHtmlFiles, allFiles);
   const checks = [
     {
@@ -3003,6 +3583,16 @@ async function runQualityChecks(
       detail: starterTemplateProblems.length
         ? starterTemplateProblems.join(' ')
         : 'The locked starter document was replaced by generated website output.',
+    },
+    {
+      id: 'meaningful-page-and-link-names',
+      label: 'Meaningful page and link names',
+      status: pageNamingProblems.length ? 'failed' : 'passed',
+      detail: pageNamingProblems.length
+        ? pageNamingProblems.join(' ')
+        : meaningfulNamingPackage
+          ? 'Every page title, H1, and internal link label uses a meaningful visitor-facing name rather than placeholder text or a raw path.'
+          : 'The selected package does not require the meaningful page-naming evidence.',
     },
     {
       id: 'icon-only-navigation-trigger',
@@ -3037,6 +3627,14 @@ async function runQualityChecks(
         : 'Every generated page uses the same primary header destinations.',
     },
     {
+      id: 'multi-page-header-routes',
+      label: 'Page-based primary navigation',
+      status: multiPageHeaderNavigation.length ? 'failed' : 'passed',
+      detail: multiPageHeaderNavigation.length
+        ? multiPageHeaderNavigation.join(' ')
+        : 'Multi-page headers use generated page routes rather than homepage section shortcuts.',
+    },
+    {
       id: 'nested-page-reachability',
       label: 'Nested page reachability',
       status: unreachableSelectedPages.length ? 'failed' : 'passed',
@@ -3061,12 +3659,40 @@ async function runQualityChecks(
         : 'Every generated page loads the local viewport-motion runtime with reduced-motion support.',
     },
     {
+      id: 'motion-composition',
+      label: 'Intentional motion composition',
+      status: motionComposition.length ? 'failed' : 'passed',
+      detail: motionComposition.length
+        ? motionComposition.join(' ')
+        : immersiveMotionPackage
+          ? 'Generated pages combine sequential text, reversible scroll depth, staggered groups, and fitting word, directional, scale, or fade treatments.'
+          : 'Generated pages combine intentional word, staggered, directional, scale, or fade motion treatments.',
+    },
+    {
+      id: 'navigation-motion-composition',
+      label: 'Compact navigation motion composition',
+      status: navigationMotion.length ? 'failed' : 'passed',
+      detail: navigationMotion.length
+        ? navigationMotion.join(' ')
+        : expressivePackage
+          ? 'The compact surface animates in and out while its logo, routes, and actions sequence in reading order.'
+          : 'The selected package does not require the expanded navigation-motion evidence.',
+    },
+    {
+      id: 'responsive-image-loading',
+      label: 'Responsive image loading',
+      status: responsiveImages.length ? 'failed' : 'passed',
+      detail: responsiveImages.length
+        ? responsiveImages.join(' ')
+        : 'Raster images use stable dimensions, asynchronous decoding, and lazy loading where applicable.',
+    },
+    {
       id: 'brand-introduction',
       label: 'Built-in brand introduction',
       status: brandIntroCheckProblems.length ? 'failed' : 'passed',
       detail: brandIntroCheckProblems.length
         ? brandIntroCheckProblems.join(' ')
-        : 'The approved header logo is ready for the short first-visit introduction.',
+        : 'The approved header logo is ready for the loading transition and measured navigation handoff on every route.',
     },
     {
       id: 'selected-page-coverage',
@@ -3422,6 +4048,21 @@ async function saveOutputs(
       assetHandling: 'Approved assets are already persisted as individual private draft files.',
     },
   });
+  const sourceFiles = await collectBrowsableSourceFiles(workspace.siteDirectory);
+  for (const file of sourceFiles) {
+    const relativePath = relative(workspace.siteDirectory, file).split(sep).join('/');
+    await uploadArtifact(client, run, {
+      kind: 'draft_file',
+      label: relativePath,
+      relativePath: `source-files/${relativePath}`,
+      body: await readFile(file),
+      contentType: contentTypeFor(file),
+      metadata: {
+        sourcePath: relativePath,
+        state: 'final_source',
+      },
+    });
+  }
   for (const file of quality.allFiles) {
     if (isPlaceholderOutputFile(file)) continue;
     const outputDirectory = join(workspace.siteDirectory, compiledOutputDirectoryName);
@@ -3446,24 +4087,46 @@ async function saveOutputs(
     contentType: 'application/json',
     metadata: { status: quality.summary.status },
   });
-  await uploadArtifact(client, run, {
-    kind: 'log',
-    label: 'Codex builder log',
-    relativePath: 'logs/codex-events.json',
-    body: Buffer.from(
-      JSON.stringify(
-        { events: codexOutput.events, finalMessage: codexOutput.finalMessage },
-        null,
-        2,
+  if (!codexOutput.reusedCheckpoint) {
+    await uploadArtifact(client, run, {
+      kind: 'log',
+      label: 'Codex builder log',
+      relativePath: 'logs/codex-events.json',
+      body: Buffer.from(
+        JSON.stringify(
+          { events: codexOutput.events, finalMessage: codexOutput.finalMessage },
+          null,
+          2,
+        ),
       ),
-    ),
-    contentType: 'application/json',
-    metadata: { eventCount: codexOutput.events.length },
-  });
+      contentType: 'application/json',
+      metadata: { eventCount: codexOutput.events.length },
+    });
+  }
   await eventWriter(
     'stage',
     'Private source, generated files, and quality results have been saved.',
   );
+}
+
+function resumeFailureCode(run) {
+  const context = recordValue(run.failure_context);
+  return (
+    (typeof context.resumeFromFailureCode === 'string' && context.resumeFromFailureCode) ||
+    (typeof run.failure_code === 'string' && run.failure_code) ||
+    undefined
+  );
+}
+
+function canContinueWithoutCodex(run, workspace) {
+  if (!workspace.restoredCheckpoint || workspace.checkpointState !== 'post_codex_validated') {
+    return false;
+  }
+  return [
+    'builder_foundation_changed',
+    'private_storage_rejected',
+    'private_storage_temporary_failure',
+  ].includes(resumeFailureCode(run));
 }
 
 async function processBuild(client, run, workerId, apiKey) {
@@ -3508,7 +4171,17 @@ async function processBuild(client, run, workerId, apiKey) {
             ? `Saved draft source restored with ${workspace.restoredCheckpointFileCount} file${workspace.restoredCheckpointFileCount === 1 ? '' : 's'}; Codex will continue from it and create a full checkpoint.`
             : `Private source checkpoint restored with ${workspace.restoredCheckpointFileCount} file${workspace.restoredCheckpointFileCount === 1 ? '' : 's'}; Codex will continue from it.`
           : `Manifest, ${workspace.stagedSourcePages.length} selected page source${workspace.stagedSourcePages.length === 1 ? '' : 's'}, and ${workspace.stagedAssets.length} approved asset${workspace.stagedAssets.length === 1 ? '' : 's'} staged for Codex.`,
-      { scope: workspace.scopedRevision ? 'scoped_revision' : 'website_build' },
+      {
+        scope: workspace.scopedRevision ? 'scoped_revision' : 'website_build',
+        buildContext: workspace.contextSummary,
+      },
+    );
+    await eventWriter(
+      'stage',
+      workspace.contextSummary.reductionPercent
+        ? `Codex context projected to ${workspace.contextSummary.selectedRouteCount} selected route${workspace.contextSummary.selectedRouteCount === 1 ? '' : 's'} with ${workspace.contextSummary.reductionPercent}% of unrelated manifest bytes removed.`
+        : `Codex context retained the complete manifest for this ${workspace.contextSummary.scope.replaceAll('_', ' ')} build.`,
+      { buildContext: workspace.contextSummary },
     );
     await eventWriter(
       'stage',
@@ -3518,15 +4191,41 @@ async function processBuild(client, run, workerId, apiKey) {
         agentPackageVersion: workspace.agentPackage.version,
       },
     );
-    const codexOutput = await runCodex(
-      client,
-      run,
-      workerId,
-      workspace,
-      apiKey,
-      eventWriter,
-      diagnostics,
-    );
+    const continueFromCheckpoint = canContinueWithoutCodex(run, workspace);
+    let codexOutput;
+    if (continueFromCheckpoint) {
+      await assertLockedFiles(workspace.siteDirectory, workspace.lockedFiles);
+      await assertScopedRevisionFiles(workspace);
+      await eventWriter(
+        'stage',
+        'Validated saved generated source. Continuing compile, storage, and quality work without another Codex pass.',
+        {
+          continuation: 'post_codex_checkpoint',
+          resumedFromFailureCode: resumeFailureCode(run),
+          codexInvocationSkipped: true,
+        },
+      );
+      codexOutput = {
+        events: [],
+        finalMessage: 'Reused the validated post-Codex source checkpoint.',
+        reusedCheckpoint: true,
+      };
+    } else {
+      if (!apiKey) {
+        throw new Error(
+          'SITEFORGE_CODEX_API_KEY or OPENAI_API_KEY is required for the Codex builder worker.',
+        );
+      }
+      codexOutput = await runCodex(
+        client,
+        run,
+        workerId,
+        workspace,
+        apiKey,
+        eventWriter,
+        diagnostics,
+      );
+    }
     await buildWebsite(client, run, workerId, workspace, eventWriter, diagnostics);
     const quality = await runQualityChecks(
       client,
@@ -3642,11 +4341,6 @@ async function processNextBuild(client, workerId, apiKey) {
   const run = Array.isArray(data) ? data[0] : undefined;
   if (!run) return false;
   try {
-    if (!apiKey) {
-      throw new Error(
-        'SITEFORGE_CODEX_API_KEY or OPENAI_API_KEY is required for the Codex builder worker.',
-      );
-    }
     const quality = await processBuild(client, run, workerId, apiKey);
     const reviewRequired = quality.summary.status !== 'passed';
     const { error: completionError } = await client
@@ -3734,15 +4428,27 @@ async function main() {
 }
 
 export {
+  activateCompactNavigationTrigger,
   approvedAssetDescriptor,
+  applicableFeatureContracts,
+  assetMatchesSelectedPages,
+  buildContextSummary,
   buildPrompt,
+  canContinueWithoutCodex,
   checkpointSourceBody,
+  collectBrowsableSourceFiles,
   contentTypeFor,
   contextualLogoProblems,
   inconsistentHeaderNavigationProblems,
   lockedFoundationPaths,
+  meaningfulPageNamingProblems,
   mobileNavigationTriggerProblems,
   missingInternalNavigationTargets,
+  motionCompositionProblems,
+  responsiveImageProblems,
+  multiPageHeaderRouteNavigationProblems,
+  projectManifestData,
+  refreshLockedFoundation,
   revisionManifestCompatible,
   selectedSourcePages,
   semanticCompositionDecisionCheck,

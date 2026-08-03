@@ -153,6 +153,15 @@ const databaseName = 'siteforge-os';
 const databaseVersion = 5;
 const legacyStorageKey = 'siteforge-os.records.v2';
 const localAgentPackageKey = 'agent-package-v6';
+const localCreativePackageId = 'agent-package-local-v6-1-creative-composition';
+const localExpressivePackageId = 'agent-package-local-v6-2-expressive-craft';
+const localResilientQualityPackageId = 'agent-package-local-v6-3-resilient-quality';
+const localImmersiveMotionPackageId = 'agent-package-local-v6-4-immersive-motion';
+const localResilientResumePackageId = 'agent-package-local-v6-5-resilient-resume';
+const localMeaningfulPageNamesPackageId = 'agent-package-local-v6-6-meaningful-page-names';
+const localCleanTestStartPackageId = 'agent-package-local-v6-7-clean-test-start';
+const localPreciseLogoHandoffPackageId = 'agent-package-local-v6-8-precise-logo-handoff';
+const localValidPreviewEntryPackageId = 'agent-package-local-v6-9-valid-preview-entry';
 
 type StoreName =
   | 'activities'
@@ -337,39 +346,260 @@ export class SiteforgeRepository {
     if ((await this.listBusinesses()).length === 0) {
       await this.seedDemoWorkspace();
     }
-    if (!(await this.get<MetaRecord>('meta', localAgentPackageKey))) {
+    const localPackageRecord = await this.get<MetaRecord>('meta', localAgentPackageKey);
+    const packageCreatedAt = new Date().toISOString();
+    const localPublishedPackage: AgentPackage = {
+      id: 'agent-package-local-v6',
+      version: 6,
+      status: 'published',
+      builderContractVersion: 'made-solid-studio-builder-agent-v6.0',
+      foundationVersion: 'made-solid-studio-next-builder-v2',
+      foundationChecksum: 'local-source-controlled-foundation',
+      contractAddendum: '',
+      instructionsAddendum: '',
+      summary:
+        'Next.js App Router production builder with generated design systems, typed components, runtime profiles, and enforced framework quality gates.',
+      capabilityAssessment: 'foundation_change_required',
+      stagedBehaviourIds: [
+        'motion-runtime',
+        'scoped-revision',
+        'brand-introduction',
+        'hero-handoff',
+        'responsive-sidebar',
+        'contextual-logo-selection',
+        'visual-content-recovery',
+        'site-navigation-architecture',
+        'next-component-architecture',
+        'runtime-profiles',
+        'framework-quality-gates',
+      ],
+      createdAt: packageCreatedAt,
+      updatedAt: packageCreatedAt,
+      publishedAt: packageCreatedAt,
+    };
+    const localCreativePackage: AgentPackage = {
+      ...localPublishedPackage,
+      id: localCreativePackageId,
+      version: 6.1,
+      status: 'test_ready',
+      basePackageId: localPublishedPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v6.1',
+      contractAddendum:
+        'Use content-led responsive composition for prominent repeated groups. Number only genuine sequences, and treat editorial layouts, grids, horizontal rails, accessible non-rotating carousels, disclosure, and expressive typography as choices driven by the content and approved brand.',
+      instructionsAddendum:
+        'Before implementing a prominent repeated group, distinguish real order, item count and length, comparison needs, and browsing needs. Do not default to numbered cards or mobile vertical stacks. Use the locked word, stagger, directional, scale, fade, and factual-counter motion vocabulary where it supports the chosen composition.',
+      summary:
+        'Creative composition test package: content-led responsive layouts, intentional motion, page-based navigation, and accessible browsing treatments without testimonial-specific templates.',
+      capabilityAssessment: 'policy_only',
+      stagedBehaviourIds: [
+        'next-component-architecture',
+        'motion-runtime',
+        'site-navigation-architecture',
+      ],
+      createdAt: packageCreatedAt,
+      updatedAt: packageCreatedAt,
+      publishedAt: undefined,
+    };
+    const localExpressivePackage: AgentPackage = {
+      ...localCreativePackage,
+      id: localExpressivePackageId,
+      version: 6.2,
+      basePackageId: localCreativePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v6.2',
+      contractAddendum:
+        'Choreograph readable enter and exit motion for compact navigation, sequence its approved logo, routes, and actions, and compose heroes and later sections from multiple related motion beats. Establish deliberate display/body typography and consistent relationship spacing. Use only suitably resolved approved images with stable responsive dimensions and correct eager or lazy loading.',
+      instructionsAddendum:
+        'Animate the compact surface fully out and in with smooth decelerating easing and sequential navigation items. Do not animate only the hero title: stage its supporting copy, actions, media, later section content, and a related group. Give service routes a page-specific composition, document typography and spacing choices, never upscale low-resolution assets, and implement stable responsive image loading.',
+      summary:
+        'Expressive craft test package: readable navigation choreography, multi-element page motion, deliberate typography and spacing rhythm, distinctive service routes, and quality-aware responsive imagery.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Turns the Test 25 review into enforceable motion, typography, route-composition, and image-loading evidence while preserving accessibility and reduced-motion behaviour.',
+      stagedBehaviourIds: [
+        'responsive-sidebar',
+        'motion-runtime',
+        'next-component-architecture',
+        'framework-quality-gates',
+      ],
+    };
+    const localResilientQualityPackage: AgentPackage = {
+      ...localExpressivePackage,
+      id: localResilientQualityPackageId,
+      version: 6.3,
+      basePackageId: localExpressivePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v6.3',
+      contractAddendum:
+        'Treat a transient compact-navigation pointer timeout as a quality-verification retry, not an immediate build failure. Retry the real pointer interaction once after restoring stable viewport geometry; if it still cannot be activated, retain the generated preview and record a quality-review finding.',
+      instructionsAddendum:
+        'Responsive verification must distinguish a broken generated interaction from a transient browser actionability timeout. Preserve mouse-based coverage, retry once without bypassing hit testing, and continue the remaining evidence capture when the interaction becomes a review finding.',
+      summary:
+        'Resilient quality test package: retries transient mobile-navigation pointer checks and preserves valid generated previews as reviewable output instead of misclassifying them as failed builds.',
+      capabilityAssessment: 'policy_only',
+      capabilityProposal:
+        'Corrects the browser-quality failure boundary while retaining genuine pointer interaction coverage and all existing responsive checks.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localImmersiveMotionPackage: AgentPackage = {
+      ...localResilientQualityPackage,
+      id: localImmersiveMotionPackageId,
+      version: 6.4,
+      basePackageId: localResilientQualityPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v6.4',
+      contractAddendum:
+        'Use slower smooth decelerating motion, sequentially reveal meaningful stacked text, and add reversible scroll-responsive depth where a bounded container supports it. On every route, introduce the approved logo on the loading surface, transfer its clone to the measured header-logo position, remove the loading surface, and only then release the first page reveal.',
+      instructionsAddendum:
+        'Build text stacks with stable semantic gap tokens and data-reveal="sequence" in reading order. Use data-scroll-zoom on at least one bounded container per route so the surface expands in view, shrinks away from view, and its direct children counter-scale. Keep the locked route transition as the only loader and never animate page content behind it.',
+      summary:
+        'Immersive motion test package: slower sequential reveals, reversible container depth, consistent stack spacing, and an every-route approved-logo loading handoff into the navigation.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Coordinates route loading, logo transfer, page-reveal timing, sequential text rhythm, and reversible scroll depth while preserving reduced-motion behaviour.',
+      stagedBehaviourIds: [
+        'brand-introduction',
+        'motion-runtime',
+        'next-component-architecture',
+        'framework-quality-gates',
+      ],
+    };
+    const localResilientResumePackage: AgentPackage = {
+      ...localImmersiveMotionPackage,
+      id: localResilientResumePackageId,
+      version: 6.5,
+      basePackageId: localImmersiveMotionPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v6.5',
+      contractAddendum:
+        'Treat saved checkpoints as generated source only. On every resumed test, reapply the current protected foundation before verification. A stopped test keeps its frozen diagnostic draft openable and must not prevent the tester from starting a different package or page test.',
+      instructionsAddendum:
+        'Resume useful generated components and pages, but never restore a checkpoint copy over the locked foundation. Preserve failed and cancelled output as private diagnostic history while allowing independent tests to continue.',
+      summary:
+        'Resilient resume test package: refreshes the protected foundation before resumed verification and keeps stopped drafts available without blocking other tests.',
+      capabilityAssessment: 'policy_only',
+      capabilityProposal:
+        'Separates recoverable generated source from the current locked runtime and makes failure recovery non-blocking in Agent Studio Testing.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localMeaningfulPageNamesPackage: AgentPackage = {
+      ...localResilientResumePackage,
+      id: localMeaningfulPageNamesPackageId,
+      version: 6.6,
+      basePackageId: localResilientResumePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v6.6',
+      contractAddendum:
+        'Give every generated route and internal link a concise visitor-facing name derived from approved page content. Replace placeholders such as Blank, Unnamed page, Untitled, New page, Placeholder, and raw path labels such as /blank without changing assigned route or evidence paths.',
+      instructionsAddendum:
+        'Use the page dossier to name metadata, the H1, navigation links, breadcrumbs, cards, and contextual links consistently. A weak source label may be rewritten, but the new name cannot invent a service, location, qualification, or promise.',
+      summary:
+        'Meaningful page names test package: replaces unnamed, blank, placeholder, and raw-path visitor labels with supported content-derived page and link names.',
+      capabilityAssessment: 'policy_only',
+      capabilityProposal:
+        'Makes generated information architecture readable even when captured CMS page names are missing or malformed, while preserving immutable route evidence.',
+      stagedBehaviourIds: ['site-navigation-architecture', 'framework-quality-gates'],
+    };
+    const localCleanTestStartPackage: AgentPackage = {
+      ...localMeaningfulPageNamesPackage,
+      id: localCleanTestStartPackageId,
+      version: 6.7,
+      basePackageId: localMeaningfulPageNamesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v6.7',
+      contractAddendum:
+        'Starting a test from the package and page chooser always creates a clean new worker run. A failed or cancelled run may be resumed only through its explicit Continue this test action.',
+      instructionsAddendum:
+        'Do not infer resume intent from matching package, page, direction, or manifest values. Preserve the stopped run and frozen draft as history while the newly requested test receives its own run identifier.',
+      summary:
+        'Clean test start package: Test something else always creates a new run, while only Continue this test resumes stopped source.',
+      capabilityAssessment: 'policy_only',
+      capabilityProposal:
+        'Separates explicit continuation from new-test intent so a failed run cannot silently capture the next test request.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localPreciseLogoHandoffPackage: AgentPackage = {
+      ...localCleanTestStartPackage,
+      id: localPreciseLogoHandoffPackageId,
+      version: 6.8,
+      basePackageId: localCleanTestStartPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v6.8',
+      contractAddendum:
+        'Every route loading transition must stabilise the destination header at the top of the incoming page before measuring its approved logo. Animate the cloned loading mark from a top-left transform origin to that exact measured box, then reveal the real navigation logo without a visible jump.',
+      instructionsAddendum:
+        'Reset retained route scroll before the handoff, allow header scroll state to settle for two animation frames, and keep the destination header visible and undisplaced during measurement. Restore normal scrolling only after the loading mark has landed and the transition is complete.',
+      summary:
+        'Precise logo handoff test package: resets retained route scroll, exposes the final navigation position before measurement, and lands the loading logo exactly on its real navigation mark.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Corrects route-loading logo geometry so the mark cannot shoot toward a scroll-hidden header or finish offset from the navigation logo.',
+      stagedBehaviourIds: ['brand-introduction', 'framework-quality-gates'],
+    };
+    const localValidPreviewEntryPackage: AgentPackage = {
+      ...localPreciseLogoHandoffPackage,
+      id: localValidPreviewEntryPackageId,
+      version: 6.9,
+      basePackageId: localPreciseLogoHandoffPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v6.9',
+      contractAddendum:
+        'Opening a completed page or page-set test must enter through the first selected generated route. Do not assume that index.html is a valid landing page when the homepage was outside the test scope.',
+      instructionsAddendum:
+        'Resolve the first target source URL through the immutable Build Manifest publicPath and append that route to both deployed-host and edge-function preview capabilities. Retain the capability root for assets and internal navigation.',
+      summary:
+        'Valid preview entry test package: opens non-homepage tests on their first generated page instead of an unrelated framework not-found document at the capability root.',
+      capabilityAssessment: 'policy_only',
+      capabilityProposal:
+        'Makes every completed test directly viewable even when its selected page set intentionally excludes the homepage.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
-        value: JSON.stringify({
-          id: 'agent-package-local-v6',
-          version: 6,
-          status: 'published',
-          builderContractVersion: 'made-solid-studio-builder-agent-v6',
-          foundationVersion: 'made-solid-studio-next-builder-v2',
-          foundationChecksum: 'local-source-controlled-foundation',
-          contractAddendum: '',
-          instructionsAddendum: '',
-          summary:
-            'Next.js App Router production builder with generated design systems, typed components, runtime profiles, and enforced framework quality gates.',
-          capabilityAssessment: 'foundation_change_required',
-          stagedBehaviourIds: [
-            'motion-runtime',
-            'scoped-revision',
-            'brand-introduction',
-            'hero-handoff',
-            'responsive-sidebar',
-            'contextual-logo-selection',
-            'visual-content-recovery',
-            'site-navigation-architecture',
-            'next-component-architecture',
-            'runtime-profiles',
-            'framework-quality-gates',
-          ],
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          publishedAt: new Date().toISOString(),
-        } satisfies AgentPackage),
+        value: JSON.stringify([
+          localValidPreviewEntryPackage,
+          localPreciseLogoHandoffPackage,
+          localCleanTestStartPackage,
+          localMeaningfulPageNamesPackage,
+          localResilientResumePackage,
+          localImmersiveMotionPackage,
+          localResilientQualityPackage,
+          localExpressivePackage,
+          localCreativePackage,
+          localPublishedPackage,
+        ]),
       } satisfies MetaRecord);
+    } else {
+      try {
+        const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
+        const packages = Array.isArray(stored) ? stored : [stored];
+        const missingPackages = [
+          localValidPreviewEntryPackage,
+          localPreciseLogoHandoffPackage,
+          localCleanTestStartPackage,
+          localMeaningfulPageNamesPackage,
+          localResilientResumePackage,
+          localImmersiveMotionPackage,
+          localResilientQualityPackage,
+          localExpressivePackage,
+          localCreativePackage,
+        ].filter((candidate) => !packages.some((agentPackage) => agentPackage.id === candidate.id));
+        if (missingPackages.length) {
+          await this.put('meta', {
+            id: localAgentPackageKey,
+            value: JSON.stringify([...missingPackages, ...packages]),
+          } satisfies MetaRecord);
+        }
+      } catch {
+        await this.put('meta', {
+          id: localAgentPackageKey,
+          value: JSON.stringify([
+            localValidPreviewEntryPackage,
+            localPreciseLogoHandoffPackage,
+            localCleanTestStartPackage,
+            localMeaningfulPageNamesPackage,
+            localResilientResumePackage,
+            localImmersiveMotionPackage,
+            localResilientQualityPackage,
+            localExpressivePackage,
+            localCreativePackage,
+            localPublishedPackage,
+          ]),
+        } satisfies MetaRecord);
+      }
     }
   }
 
@@ -378,8 +608,19 @@ export class SiteforgeRepository {
     if (!packageRecord) return [];
     try {
       const parsed = JSON.parse(packageRecord.value) as AgentPackage | AgentPackage[];
-      if (Array.isArray(parsed)) return parsed.filter((agentPackage) => Boolean(agentPackage?.id));
-      return parsed?.id ? [parsed] : [];
+      const packages = Array.isArray(parsed) ? parsed : parsed?.id ? [parsed] : [];
+      return packages
+        .filter((agentPackage) => Boolean(agentPackage?.id))
+        .map((agentPackage) => {
+          const version = Number(agentPackage.version);
+          return {
+            ...agentPackage,
+            version: Number.isFinite(version) ? version : 0,
+            builderContractVersion: `made-solid-studio-builder-agent-v${
+              Number.isFinite(version) ? version.toFixed(1) : '0.0'
+            }`,
+          };
+        });
     } catch {
       return [];
     }

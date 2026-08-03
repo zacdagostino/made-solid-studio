@@ -18,6 +18,9 @@ const buttonVariants = cva('button', {
       secondary: 'button--secondary',
       danger: 'button--danger',
       quiet: 'button--quiet',
+      segmented: 'button--segmented',
+      tree: 'button--tree',
+      inline: 'button--inline',
     },
     size: {
       default: 'button--default',

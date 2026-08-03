@@ -56,6 +56,31 @@ test('approved image content leaves presentation to the builder', async () => {
   assert.doesNotMatch(featureContract, /Testimonials and feedback|Customer feedback/);
 });
 
+test('images converted to approved semantic content are never reusable build assets', async () => {
+  const [manifest, contract, featureContract, worker] = await Promise.all([
+    readFile(manifestUrl, 'utf8'),
+    readFile(contractUrl, 'utf8'),
+    readFile(featureContractUrl, 'utf8'),
+    readFile(builderWorkerUrl, 'utf8'),
+  ]);
+
+  assert.match(manifest, /const recoveredContentAssetIds = new Set/);
+  assert.match(
+    manifest,
+    /brief\.sourceSelections\.assetIds\.filter\(\(assetId\) => !recoveredContentAssetIds\.has\(assetId\)\)/,
+  );
+  assert.match(
+    manifest,
+    /brief\.draft\.assetGuidance\.filter\([\s\S]*?!recoveredContentAssetIds\.has\(guidance\.assetId\)/,
+  );
+  assert.match(
+    worker,
+    /for \(const recoveredAssetId of recoveredContentAssetIds\) \{\s*assetIds\.delete\(recoveredAssetId\)/,
+  );
+  assert.match(contract, /must never be staged, rendered, copied, or reused anywhere/);
+  assert.match(featureContract, /Never render, copy, stage, or reuse an\s+image after/);
+});
+
 test('semantic design quality stays inside the original build run', async () => {
   const worker = await readFile(builderWorkerUrl, 'utf8');
 
@@ -93,10 +118,17 @@ test('builder quality fails when selected-page recovered content is omitted', as
     scopedRevision: false,
     rebasedToCurrentManifest: false,
     allowedSourcePaths: [],
+    contextSummary: {
+      applicableContracts: [
+        'component-architecture.md',
+        'mobile-navigation.md',
+        'semantic-content-recovery.md',
+      ],
+    },
   };
   for (const buildMode of ['homepage_test', 'complete']) {
     const prompt = buildPrompt({ ...promptWorkspace, buildMode });
-    assert.match(prompt, /approvedVisualContentGroups/);
+    assert.match(prompt, /every approved group and item in the projected manifest/);
     assert.match(prompt, /Account for every approved group and item/);
     assert.match(prompt, /own its heading, placement, layout, interaction/);
   }

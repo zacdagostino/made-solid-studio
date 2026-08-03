@@ -161,6 +161,14 @@ Every user-facing change must be designed and verified at these viewport sizes:
 - The summary must state the user-visible or functional change plainly; do not leave a stale generic summary after changing the behaviour's source, feature contract, or test-package implementation.
 - If a behaviour moves from hard-coded source to a generated Markdown contract (or the reverse), update its linked implementation files and remove or add its Workshop affordance to match the new source of truth.
 
+## Builder-package version registration
+
+- Any change to the builder contract, template instructions, feature contracts, locked foundation/runtime, or package-visible behaviour must create the next immutable decimal agent-package version in the same change. A Testing behaviour revision suffix is not a substitute for a package release.
+- Register the new package for both protected Supabase workspaces and the local IndexedDB repository. Keep the preceding package immutable and linked as the new version's base.
+- Make a non-production package `test_ready` so it appears in Agent Studio's Test package selector without silently changing the published production package. Promotion remains a separate reviewed action.
+- Display every saved version in Package Versions, newest exact version first, with its status, base version, summary, recorded behaviour IDs, contract version, and foundation version.
+- Add or update tests proving the new version is created once, appears in the Test package selector and Package Versions ledger, and retains older versions below it.
+
 - Keep ESLint, Prettier, Playwright, and axe-core installed and configured. Do not remove or bypass their checks to make a change pass.
 - Run Playwright's responsive and accessibility suites before handing off UI work. Update visual snapshots only after reviewing the new mobile, tablet, and desktop rendering.
 - Treat visual snapshots as a change detector, not proof of design quality. Review the screenshots for hierarchy, spacing rhythm, alignment, state clarity, and responsive intent before accepting a snapshot update.

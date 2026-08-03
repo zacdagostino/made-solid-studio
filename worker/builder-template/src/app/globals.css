@@ -84,6 +84,22 @@ a {
   margin: 0;
 }
 
+.starter [data-reveal='sequence'] {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.starter [data-reveal='sequence'] > *,
+.starter [data-reveal='stagger'] > * {
+  margin: 0;
+}
+
+.starter [data-reveal='stagger'] {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-3);
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;

@@ -20,6 +20,10 @@ the restored design baseline.
   footnotes, and uncertainty boundaries. Plain text is fallback context.
 - `sourcePresentations` records how the captured site displayed the information.
   It is provenance only, never a design instruction.
+- The source `assetId` is provenance only. Never render, copy, stage, or reuse an
+  image after its information has been approved as recovered semantic content,
+  including as decoration or elsewhere on the site. Build only from the reviewed
+  structured information.
 
 ## Builder design decision
 

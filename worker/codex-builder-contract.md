@@ -8,6 +8,10 @@ Every new build uses the locked Next.js App Router foundation with strict TypeSc
 
 The foundation locks mechanics, not appearance. Codex creates the business-specific visual system and component architecture: tokens, UI primitives, patterns, sections, site-wide navigation, layouts, and pages. It owns typography, spacing, variants, composition, responsive transformation, and brand expression. It must not preserve the starter appearance, assemble a generic block catalogue, or produce repetitive AI-style cards and decorative effects.
 
+Composition begins with content shape, not a preferred component. Distinguish ordered information from unordered collections, short items from long editorial material, simultaneous comparison from optional browsing, and dense desktop content from a deliberate mobile transformation. Do not add numbers where no sequence exists or turn every mobile group into a vertical stack. The agent may choose asymmetric grids, editorial features, horizontal scroll-snap rails, accessible non-rotating carousels, disclosure, typographic treatments, or quieter unframed layouts when those choices serve the content. Expressive details—such as a designed quote glyph for quotation-shaped content—must connect to the content and approved brand rather than become a repeated template.
+
+Choose and document a deliberate display/body typography system, readable measures, and consistent relationship-based vertical rhythm. Give every selected route a purposeful page composition; service pages are not allowed to collapse into a generic heading and stacked copy. Use local or bundled font resources only.
+
 Use native semantic HTML whenever it supplies the required behaviour. Use Base UI for patterns that require coordinated keyboard navigation, focus management, modal behaviour, or collision positioning. Base UI is an unstyled behavioural foundation; generated components own all visual design.
 
 ## Factual and asset boundary
@@ -17,6 +21,8 @@ The builder must not imitate the captured website, invent or strengthen business
 When a Brand Kit exists, use its approved primary logo family in the header and footer, choose a contrast-safe approved appearance for each direct surface, and use the reviewed primary and accent values as brand tokens. Derive accessible ink, background, surface, muted, border, and state tokens. Never replace the identity with a generic mark or use third-party/client marks as the organisation logo.
 
 Every selected source page is required. The source-page index assigns an exact clean `publicPath`, App Router `sourcePath`, and static-export `outputPath`. Export page-specific metadata containing the exact `siteforge-source-url`. Rewrite and condense copy for clarity while retaining material services, operational details, calls to action, forms/tools, legal content, and resources without strengthening claims.
+
+Give every route and internal link a meaningful visitor-facing name derived from approved page content. Replace weak source placeholders such as Blank, Unnamed page, Untitled, or raw path labels like `/blank` in metadata titles, H1s, navigation, breadcrumbs, cards, and contextual links. Keep the assigned route and evidence paths unchanged.
 
 ## Capabilities and runtime profiles
 
@@ -30,13 +36,17 @@ For approved server-backed capabilities, implement the complete visitor-facing i
 
 Groups are grouped deterministically by source page, section context, and semantic role. Each group keeps `integrationInstruction: "builder_decides"` and `presentationInstruction: "builder_decides"` so the builder owns its new accessible composition.
 
-Every matching group and item must appear once on its selected route with exact provenance annotations. Before implementation, create `SEMANTIC_DESIGN_DECISIONS.json` with the actual content shape, brand connection, hierarchy, responsive transformation, and a purposeful signature detail. Codex decides whether each group joins an existing composition or creates a new one and owns its accessible design. It must not rebuild a captured screenshot, image table, carousel, slider, or gallery merely because the source used one.
+Every matching group and item must appear once on its selected route with exact provenance annotations. The originating `assetId` remains private provenance only: an image that supplied approved recovered content must never be staged, rendered, copied, or reused anywhere in the generated site. Before implementation, create `SEMANTIC_DESIGN_DECISIONS.json` with the actual content shape, brand connection, hierarchy, responsive transformation, and a purposeful signature detail. Codex decides whether each group joins an existing composition or creates a new one and owns its accessible design. It must not rebuild a captured screenshot, image table, carousel, slider, or gallery merely because the source used one.
 
 ## Built-in runtime behaviour
 
-The locked React `SiteRuntime` provides progressive viewport reveals, counters for explicitly marked factual metrics, and a short first-visit introduction using the real approved header logo. Keep it mounted in the root layout and mark the real header logo or wrapper with `data-siteforge-brand-logo`.
+The locked React `SiteRuntime` provides a slower motion vocabulary and an every-route transition using the real approved header logo. Keep it mounted in the root layout and mark the real, stably sized header logo or wrapper with `data-siteforge-brand-logo`. Compose motion intentionally with `data-reveal="words"` for a short important heading, `data-reveal="sequence"` on a stacked text group, `data-reveal="stagger"` on a repeated-item parent, `data-scroll-zoom` on a bounded depth composition, or `data-reveal="fade-up"`, `fade-left`, `fade-right`, or `scale` on individual elements. Use at least three fitting treatments across the generated site; do not apply one generic effect to everything. Mark only verified factual metrics with `data-counter`, preserving their visible prefix, suffix, and final value.
 
-Use motion to support hierarchy and scanning. Do not invent statistics, animate arbitrary numbers, add a second loader, show fake progress, or hide essential content. All generated motion and interaction must respect `prefers-reduced-motion`.
+Use motion to support hierarchy, sequence, and scanning. Let content determine the treatment: words may enter in reading order, related cards or process steps may stagger, and directional or scale motion may reinforce composition without becoming decorative noise. Do not split long body copy, animate every element, invent statistics, animate arbitrary numbers, add a second loader, show fake progress, or hide essential content. All generated motion and interaction must respect `prefers-reduced-motion`.
+
+The hero must choreograph its title, supporting copy, actions, and meaningful media as separate related beats rather than animating only the H1. Subsequent section headings/content, at least one sequential text stack, one scroll-responsive depth container, and one related repeated group also need intentional motion. Use the slower locked easing/delay vocabulary. Compact navigation must animate its surface both in and out, then sequence its approved logo, primary links, and secondary controls in reading order. The first hero beat cannot begin until `siteforge:route-transition-complete` has fired and the loading surface is gone.
+
+Choose the highest-resolution approved image appropriate to each slot and never upscale a thumbnail or preview derivative. Give images stable dimensions, responsive source sizing where available, useful alt text, asynchronous decoding, eager/high-priority loading only for the genuine above-fold primary visual, and lazy loading below the fold.
 
 ## Navigation
 
