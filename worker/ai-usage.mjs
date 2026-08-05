@@ -11,6 +11,12 @@ const PUBLISHED_OPENAI_PRICING = Object.freeze({
   // Older runs recorded the CLI label when no explicit model was supplied.
   'codex cli': { inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 30 },
 });
+const PUBLISHED_CODEX_CREDITS_VERSION = 'ChatGPT Codex token credits 2026-08-04';
+const PUBLISHED_CODEX_CREDITS = Object.freeze({
+  'gpt-5.6-sol': { inputPerMillion: 125, cachedInputPerMillion: 12.5, outputPerMillion: 750 },
+  'gpt-5.6-terra': { inputPerMillion: 50, cachedInputPerMillion: 5, outputPerMillion: 300 },
+  'gpt-5.6-luna': { inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 30 },
+});
 function number(value) {
   return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
 }
@@ -90,8 +96,25 @@ export function pricedUsage({ model, usage }) {
   };
 }
 
+export function creditedUsage({ model, usage }) {
+  const normalized = responseUsage(usage);
+  const rate = PUBLISHED_CODEX_CREDITS[model.trim().toLowerCase()];
+  if (!rate) return { credits: null, creditPricingVersion: null };
+  const nonCachedInput = Math.max(0, normalized.inputTokens - normalized.cachedInputTokens);
+  const credits =
+    (nonCachedInput * rate.inputPerMillion +
+      normalized.cachedInputTokens * rate.cachedInputPerMillion +
+      normalized.outputTokens * rate.outputPerMillion) /
+    1_000_000;
+  return {
+    credits: Number(credits.toFixed(4)),
+    creditPricingVersion: PUBLISHED_CODEX_CREDITS_VERSION,
+  };
+}
+
 export async function recordAiUsage(client, payload) {
   const priced = pricedUsage(payload);
+  const credited = creditedUsage(payload);
   const { error } = await client.from('ai_usage_records').insert({
     organization_id: payload.organizationId,
     business_id: payload.businessId,
@@ -107,7 +130,7 @@ export async function recordAiUsage(client, payload) {
     cost_usd: priced.costUsd,
     cost_source: priced.costSource,
     pricing_version: priced.pricingVersion,
-    metadata: payload.metadata ?? {},
+    metadata: { ...(payload.metadata ?? {}), ...credited },
   });
   if (error) throw new Error('The worker could not save AI usage for this operation.');
 }

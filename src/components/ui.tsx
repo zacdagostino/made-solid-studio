@@ -4,6 +4,7 @@ import type {
   ButtonHTMLAttributes,
   HTMLAttributes,
   PropsWithChildren,
+  RefObject,
   ReactNode,
 } from 'react';
 import { forwardRef } from 'react';
@@ -148,6 +149,7 @@ export function ConfirmationDialog({
   onConfirm,
   isConfirming = false,
   error,
+  returnFocusRef,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -157,12 +159,20 @@ export function ConfirmationDialog({
   onConfirm: () => void;
   isConfirming?: boolean;
   error?: string;
+  returnFocusRef?: RefObject<HTMLButtonElement>;
 }) {
   return (
     <Dialog.Root onOpenChange={onOpenChange} open={open}>
       <Dialog.Portal>
         <Dialog.Overlay className="confirmation-overlay" />
-        <Dialog.Content className="confirmation-dialog">
+        <Dialog.Content
+          className="confirmation-dialog"
+          onCloseAutoFocus={(event) => {
+            if (!returnFocusRef?.current) return;
+            event.preventDefault();
+            returnFocusRef.current.focus();
+          }}
+        >
           <Dialog.Title>{title}</Dialog.Title>
           <Dialog.Description>{detail}</Dialog.Description>
           {error ? (

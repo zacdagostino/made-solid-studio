@@ -9,14 +9,17 @@ import {
   activateCompactNavigationTrigger,
   approvedAssetDescriptor,
   applicableFeatureContracts,
+  assertRequiredCompiledOutputs,
   assetMatchesSelectedPages,
   buildContextSummary,
   buildPrompt,
+  builderExecutionProfile,
   canContinueWithoutCodex,
   checkpointSourceBody,
   collectBrowsableSourceFiles,
   contentTypeFor,
   contextualLogoProblems,
+  creativeAutonomyProblems,
   inconsistentHeaderNavigationProblems,
   lockedFoundationPaths,
   meaningfulPageNamingProblems,
@@ -27,6 +30,7 @@ import {
   multiPageHeaderRouteNavigationProblems,
   projectManifestData,
   refreshLockedFoundation,
+  restoreCheckpointFile,
   revisionManifestCompatible,
   selectedSourcePages,
   stageRevisionScope,
@@ -112,6 +116,34 @@ const validPreviewEntryPackageMigrationUrl = new URL(
   '../../supabase/migrations/20260802190000_valid_preview_entry_package.sql',
   import.meta.url,
 );
+const responsiveIntroCraftPackageMigrationUrl = new URL(
+  '../../supabase/migrations/20260804150000_responsive_intro_craft_test_package.sql',
+  import.meta.url,
+);
+const immediateBrandIntroductionPackageMigrationUrl = new URL(
+  '../../supabase/migrations/20260804170000_immediate_brand_introduction_test_package.sql',
+  import.meta.url,
+);
+const efficientBuilderExecutionPackageMigrationUrl = new URL(
+  '../../supabase/migrations/20260804190000_efficient_builder_execution_test_package.sql',
+  import.meta.url,
+);
+const decodedNavigationLogoPackageMigrationUrl = new URL(
+  '../../supabase/migrations/20260804210000_decoded_navigation_logo_test_package.sql',
+  import.meta.url,
+);
+const creativeAutonomyPackageMigrationUrl = new URL(
+  '../../supabase/migrations/20260804230000_creative_autonomy_test_package.sql',
+  import.meta.url,
+);
+const selectedRouteCompilePackageMigrationUrl = new URL(
+  '../../supabase/migrations/20260805010000_selected_route_compile_test_package.sql',
+  import.meta.url,
+);
+const completeCheckpointRestorePackageMigrationUrl = new URL(
+  '../../supabase/migrations/20260805030000_complete_checkpoint_restore_test_package.sql',
+  import.meta.url,
+);
 const preserveResumeContextMigrationUrl = new URL(
   '../../supabase/migrations/20260731123000_preserve_builder_resume_context.sql',
   import.meta.url,
@@ -135,10 +167,12 @@ function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function compiledPreviewFunction(source, name) {
-  const start = source.indexOf(`function ${name}`);
-  const end = source.indexOf('\n}\n', start);
+function compiledPreviewFunction(source, name, firstName = name) {
+  const start = source.indexOf(`function ${firstName}`);
+  const targetStart = source.indexOf(`function ${name}`, start);
+  const end = source.indexOf('\n}\n', targetStart);
   assert.notEqual(start, -1);
+  assert.notEqual(targetStart, -1);
   assert.notEqual(end, -1);
   const compiled = ts.transpileModule(source.slice(start, end + 2), {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
@@ -253,6 +287,42 @@ test('does not accept a generated-file fallback that fails checkpoint integrity'
   );
 });
 
+test('restores a missing template-inherited checkpoint file from its exact saved body', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'siteforge-template-checkpoint-'));
+  const expectedBody = Buffer.from('export const inherited = true;');
+  const client = {
+    storage: {
+      from() {
+        return {
+          async download() {
+            return { data: new Blob([expectedBody]), error: null };
+          },
+        };
+      },
+    },
+    from() {
+      throw new Error('The hash-addressed checkpoint body should resolve before fallback lookup.');
+    },
+  };
+  try {
+    const restored = await restoreCheckpointFile(
+      client,
+      { id: 'run-template', organization_id: 'organisation' },
+      directory,
+      'components/site/site-footer.tsx',
+      { hash: sha256(expectedBody), source: 'template' },
+    );
+
+    assert.equal(restored, true);
+    assert.deepEqual(
+      await readFile(join(directory, 'components', 'site', 'site-footer.tsx')),
+      expectedBody,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('resolves clean preview links without changing the preview capability root', async () => {
   const [previewFrame, previewFunction] = await Promise.all([
     readFile(previewFrameUrl, 'utf8'),
@@ -309,11 +379,24 @@ test('keeps HTML, CSS, and Next hydration assets inside the private preview capa
 
 test('keeps the generated Next runtime available in the sandboxed fallback preview', async () => {
   const previewFunction = await readFile(previewFunctionUrl, 'utf8');
+  const rewriteRuntime = compiledPreviewFunction(
+    previewFunction,
+    'rewritePreviewRuntimeReferences',
+    'rewritePreviewRootReferences',
+  );
+  const base = 'https://preview.example/functions/v1/siteforge-preview/run/token/';
+  const runtime = rewriteRuntime(
+    'self.webpackChunk_N_E=[];s.p="/_next/";const logo="/assets/logo.png";',
+    base,
+  );
   assert.doesNotMatch(previewFunction, /function removeNextHydrationRuntime/);
   assert.match(
     previewFunction,
     /const rootedSource = rewritePreviewRootReferences\(source, base\)/,
   );
+  assert.match(runtime, new RegExp(`s\\.p="${base}_next/"`));
+  assert.match(runtime, new RegExp(`logo="${base}assets/logo\\.png"`));
+  assert.match(previewFunction, /rewritePreviewRuntimeReferences\(await file\.text\(\), base\)/);
 });
 
 test('accepts clean generated routes and rejects unresolved navigation links', () => {
@@ -488,6 +571,34 @@ test('requires immersive packages to sequence text and reverse scroll depth on e
   );
 });
 
+test('requires creative-autonomy builds to author coordinated effects and reduced motion', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'siteforge-creative-autonomy-'));
+  try {
+    await mkdir(join(directory, 'src', 'app'), { recursive: true });
+    await writeFile(
+      join(directory, 'src', 'app', 'page.tsx'),
+      `export function ArtDirection() { return <main onPointerMove={() => undefined} data-scroll-depth><h1>About</h1></main>; }`,
+    );
+    await writeFile(
+      join(directory, 'src', 'app', 'globals.css'),
+      `:root { --font-display: ui-serif; } .story { position: sticky; clip-path: inset(0); } @media (prefers-reduced-motion: reduce) { .story { transform: none; } }`,
+    );
+    assert.deepEqual(await creativeAutonomyProblems(directory), []);
+    await writeFile(
+      join(directory, 'src', 'app', 'page.tsx'),
+      `export function GenericPage() { return <main><h1>About</h1></main>; }`,
+    );
+    await writeFile(join(directory, 'src', 'app', 'globals.css'), `.story { color: black; }`);
+    const problems = await creativeAutonomyProblems(directory);
+    assert.equal(problems.length, 3);
+    assert.match(problems.join(' '), /two coordinated authored effect families/i);
+    assert.match(problems.join(' '), /typography system/i);
+    assert.match(problems.join(' '), /prefers-reduced-motion/i);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('checks stable asynchronous and lazy raster image loading', () => {
   assert.deepEqual(
     responsiveImageProblems([
@@ -515,6 +626,10 @@ test('keeps creative composition content-led without prescribing a testimonial t
   assert.match(contract, /oversized decorative quote glyph/i);
   assert.match(contract, /possibilities, not required templates/i);
   assert.match(contract, /avoid automatic rotation/i);
+  assert.match(contract, /short subjective request as an outcome-level creative brief/i);
+  assert.match(contract, /page-owned client components/i);
+  assert.match(contract, /pointer-responsive light fields/i);
+  assert.match(contract, /required runtime markers.*baseline vocabulary/i);
 });
 
 test('defines immersive motion, typography, service-page, and image craft requirements', async () => {
@@ -610,6 +725,43 @@ test('creates a feature-only whole-site Agent Studio prompt', () => {
   assert.match(prompt, /Implement only this Agent Studio feature direction/);
   assert.match(prompt, /Repair nested navigation without redesigning the site/);
   assert.match(prompt, /complete change scope/);
+  assert.match(prompt, /first data-sf-navigation-item/);
+  assert.match(prompt, /holds drawer items until that mounted logo is decoded/);
+  assert.match(prompt, /outcome-level creative brief/);
+  assert.match(prompt, /Required runtime hooks are the baseline, not the creative ceiling/);
+  assert.match(prompt, /pointer-responsive ambient light/);
+  assert.match(prompt, /jq and ImageMagick commands are not/);
+  assert.match(prompt, /Run full verify at most twice/);
+});
+
+test('uses an economical explicit profile for private route tests', () => {
+  const originalModel = process.env.SITEFORGE_CODEX_MODEL;
+  const originalEffort = process.env.SITEFORGE_CODEX_REASONING_EFFORT;
+  delete process.env.SITEFORGE_CODEX_MODEL;
+  delete process.env.SITEFORGE_CODEX_REASONING_EFFORT;
+  try {
+    assert.deepEqual(builderExecutionProfile({ build_mode: 'page_test' }, { version: 7.2 }), {
+      model: 'gpt-5.6-terra',
+      reasoningEffort: 'medium',
+    });
+    assert.deepEqual(builderExecutionProfile({ build_mode: 'homepage_test' }, { version: 7.2 }), {
+      model: 'gpt-5.6-terra',
+      reasoningEffort: 'medium',
+    });
+    assert.deepEqual(builderExecutionProfile({ build_mode: 'full_site' }, { version: 7.2 }), {
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'high',
+    });
+    assert.deepEqual(builderExecutionProfile({ build_mode: 'page_test' }, { version: 7.1 }), {
+      model: undefined,
+      reasoningEffort: undefined,
+    });
+  } finally {
+    if (originalModel === undefined) delete process.env.SITEFORGE_CODEX_MODEL;
+    else process.env.SITEFORGE_CODEX_MODEL = originalModel;
+    if (originalEffort === undefined) delete process.env.SITEFORGE_CODEX_REASONING_EFFORT;
+    else process.env.SITEFORGE_CODEX_REASONING_EFFORT = originalEffort;
+  }
 });
 
 test('keeps prospect-build prerequisites and activity tied to the current package', async () => {
@@ -825,6 +977,46 @@ test('keeps an exact multi-page scratch selection in manifest route order', () =
   assert.match(prompt, /Do not create unselected routes/);
 });
 
+test('accepts a compiled page-set test whose selected routes exclude the homepage', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'siteforge-page-set-output-'));
+  try {
+    await mkdir(join(directory, 'out', 'contact-us'), { recursive: true });
+    await mkdir(join(directory, 'out', 'landing-pages', 'industrial'), { recursive: true });
+    await writeFile(join(directory, 'out', 'contact-us', 'index.html'), '<main>Contact</main>');
+    await writeFile(
+      join(directory, 'out', 'landing-pages', 'industrial', 'index.html'),
+      '<main>Industrial</main>',
+    );
+
+    const outputPaths = await assertRequiredCompiledOutputs({
+      siteDirectory: directory,
+      stagedSourcePages: [
+        { outputPath: 'contact-us/index.html' },
+        { outputPath: 'landing-pages/industrial/index.html' },
+      ],
+    });
+
+    assert.deepEqual(outputPaths, ['contact-us/index.html', 'landing-pages/industrial/index.html']);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('reports the exact selected route missing from compiled output', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'siteforge-missing-page-set-output-'));
+  try {
+    await assert.rejects(
+      assertRequiredCompiledOutputs({
+        siteDirectory: directory,
+        stagedSourcePages: [{ outputPath: 'contact-us/index.html' }],
+      }),
+      /required compiled route: contact-us\/index\.html/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('persists page-set tests without a parent source checkpoint', async () => {
   const migration = await readFile(pageSetTestMigrationUrl, 'utf8');
   assert.match(migration, /target_source_urls text\[\]/);
@@ -1016,6 +1208,13 @@ test('keeps legacy manifests from causing missing-architecture inspection turns'
 test('continues safe post-Codex failures from a restored checkpoint', () => {
   assert.equal(
     canContinueWithoutCodex(
+      { failure_context: { resumeFromFailureCode: 'compiled_homepage_missing' } },
+      { restoredCheckpoint: true, checkpointState: 'post_codex_validated' },
+    ),
+    true,
+  );
+  assert.equal(
+    canContinueWithoutCodex(
       { failure_context: { resumeFromFailureCode: 'private_storage_rejected' } },
       { restoredCheckpoint: true, checkpointState: 'post_codex_validated' },
     ),
@@ -1155,6 +1354,105 @@ test('registers valid preview entry above the retained precise-logo package', as
   assert.match(migration, /'test_ready'/);
   assert.match(migration, /base\.id/);
   assert.match(migration, /Valid preview entry test package:/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers responsive intro craft above the retained valid-preview package', async () => {
+  const migration = await readFile(responsiveIntroCraftPackageMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /base\.id/);
+  assert.match(migration, /Responsive intro craft test package:/);
+  assert.match(migration, /data-siteforge-compact-logo-alignment/);
+  assert.match(migration, /scrollbar-color/);
+  assert.match(migration, /"brand-introduction"/);
+  assert.match(migration, /"responsive-sidebar"/);
+  assert.match(migration, /"next-component-architecture"/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers immediate brand introduction above the retained responsive-craft package', async () => {
+  const migration = await readFile(immediateBrandIntroductionPackageMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /base\.id/);
+  assert.match(migration, /Immediate brand introduction test package:/);
+  assert.match(migration, /data-siteforge-intro-copy/);
+  assert.match(migration, /data-siteforge-intro-ink/);
+  assert.match(migration, /data-siteforge-navigation-logo/);
+  assert.match(migration, /fetch priority/i);
+  assert.match(migration, /"brand-introduction"/);
+  assert.match(migration, /"responsive-sidebar"/);
+  assert.match(migration, /"contextual-logo-selection"/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers efficient builder execution above the retained immediate-brand package', async () => {
+  const migration = await readFile(efficientBuilderExecutionPackageMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /base\.id/);
+  assert.match(migration, /Efficient builder execution test package:/);
+  assert.match(migration, /GPT-5\.6 Terra/);
+  assert.match(migration, /GPT-5\.6 Sol/);
+  assert.match(migration, /no more than ten inspection commands/i);
+  assert.match(migration, /full verification at most twice/i);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers decoded navigation logo above the retained efficient-execution package', async () => {
+  const migration = await readFile(decodedNavigationLogoPackageMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /base\.id/);
+  assert.match(migration, /Decoded navigation logo test package:/);
+  assert.match(migration, /data-siteforge-navigation-logo/);
+  assert.match(migration, /first data-sf-navigation-item/);
+  assert.match(migration, /mounted image to decode/i);
+  assert.match(migration, /"responsive-sidebar"/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers creative autonomy above the retained decoded-navigation package', async () => {
+  const migration = await readFile(creativeAutonomyPackageMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /base\.id/);
+  assert.match(migration, /Creative autonomy test package:/);
+  assert.match(migration, /outcome-level creative briefs/);
+  assert.match(migration, /pointer-responsive ambient light/);
+  assert.match(migration, /reduced-motion fallbacks/);
+  assert.match(migration, /"motion-runtime"/);
+  assert.match(migration, /"next-component-architecture"/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers selected-route compilation above the retained creative package', async () => {
+  const migration = await readFile(selectedRouteCompilePackageMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /base\.id/);
+  assert.match(migration, /Selected-route compile test package:/);
+  assert.match(migration, /every selected manifest output path/);
+  assert.match(migration, /must not require a root index\.html/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers complete checkpoint restore above selected-route compilation', async () => {
+  const migration = await readFile(completeCheckpointRestorePackageMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /base\.id/);
+  assert.match(migration, /Complete checkpoint restore test package:/);
+  assert.match(migration, /every recorded source file at its recorded hash/);
+  assert.match(migration, /hash-addressed private source object/);
   assert.match(migration, /"framework-quality-gates"/);
   assert.match(migration, /not exists/i);
 });

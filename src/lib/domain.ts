@@ -703,6 +703,37 @@ export type AiUsageRecord = {
   createdAt: string;
 };
 
+export type TaxExpenseCategory =
+  | 'software_subscriptions'
+  | 'hosting_domains'
+  | 'professional_services'
+  | 'advertising_marketing'
+  | 'equipment'
+  | 'office_supplies'
+  | 'travel_transport'
+  | 'education_training'
+  | 'insurance_fees'
+  | 'phone_internet'
+  | 'other';
+
+export type TaxExpense = {
+  id: string;
+  incurredOn: string;
+  supplier: string;
+  description: string;
+  category: TaxExpenseCategory;
+  amountCents: number;
+  gstCents: number;
+  deductiblePercent: number;
+  paymentMethod: string;
+  receiptReference: string;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TaxExpenseInput = Omit<TaxExpense, 'id' | 'createdAt' | 'updatedAt'>;
+
 export type AuditFinding = {
   id: string;
   area:

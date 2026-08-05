@@ -777,6 +777,103 @@ test('renders without unintended horizontal overflow', async ({ page }) => {
   expect(hasHorizontalOverflow).toBe(false);
 });
 
+test('records, edits, and downloads a responsive tax expense ledger', async ({
+  page,
+}, testInfo) => {
+  await page.goto('/#/tax');
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+  await expect(page.getByRole('heading', { name: 'Tax expenses' })).toBeVisible();
+
+  const downloadButton = page.getByRole('button', { name: 'Download CSV' });
+  await expect(downloadButton).toBeDisabled();
+  const subscriptionButton = page.getByRole('button', { name: 'Record subscription' });
+  await subscriptionButton.click();
+  let expensePanel = page.getByRole('dialog', { name: 'Add an expense' });
+  await expect(expensePanel.getByLabel('Supplier')).toHaveValue('Supabase');
+  await expect(expensePanel.getByLabel('What was it for?')).toHaveValue(
+    'Supabase Pro subscription',
+  );
+  await expect(expensePanel.getByLabel('Total amount (AUD)')).toHaveValue('');
+  await page.keyboard.press('Escape');
+  await expect(expensePanel).toBeHidden();
+  await expect(subscriptionButton).toBeFocused();
+
+  const addExpenseButton = page.getByRole('button', { name: 'Add expense' });
+  await addExpenseButton.click();
+  expensePanel = page.getByRole('dialog', { name: 'Add an expense' });
+  await expect(expensePanel).toBeVisible();
+  await expensePanel.getByLabel('Date').fill('2026-08-04');
+  await expensePanel.getByLabel('Supplier').fill('Supabase');
+  await expensePanel.getByLabel('What was it for?').fill('Pro hosting plan – August');
+  await expensePanel.getByLabel('Category').selectOption('hosting_domains');
+  await expensePanel.getByLabel('Total amount (AUD)').fill('29.00');
+  await expensePanel.getByLabel('GST included (AUD)').fill('2.64');
+  await expensePanel.getByLabel('Payment method').fill('Business card');
+  await expensePanel.getByLabel('Receipt or invoice reference').fill('INV-SUPA-2026-08');
+  await expensePanel
+    .getByLabel('Notes')
+    .fill('Monthly database and authentication infrastructure.');
+  await expensePanel.getByRole('button', { name: 'Add expense' }).click();
+  await expect(expensePanel).toBeHidden();
+
+  const row = page.locator('.tax-expense-row', { hasText: 'Pro hosting plan – August' });
+  await expect(row).toContainText('Supabase');
+  await expect(row).toContainText('$29.00');
+  await expect(page.locator('.tax-summary article').first()).toContainText('$29.00');
+  await expect(downloadButton).toBeEnabled();
+
+  await row.getByRole('button', { name: /Edit Pro hosting plan/ }).click();
+  expensePanel = page.getByRole('dialog', { name: 'Edit expense' });
+  await expect(expensePanel).toBeVisible();
+  await expensePanel.getByLabel('Total amount (AUD)').fill('30.00');
+  await expensePanel.getByRole('button', { name: 'Save changes' }).click();
+  await expect(row).toContainText('$30.00');
+
+  const deleteButton = row.getByRole('button', { name: /Delete Pro hosting plan/ });
+  await deleteButton.click();
+  await expect(page.getByRole('dialog', { name: 'Delete this expense?' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Delete this expense?' })).toBeHidden();
+  await expect(deleteButton).toBeFocused();
+
+  const downloadPromise = page.waitForEvent('download');
+  await downloadButton.click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe('made-solid-tax-expenses-2026-2027.csv');
+
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await addExpenseButton.click();
+    await expect(page.getByRole('dialog', { name: 'Add an expense' })).toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    await expect
+      .poll(async () => (await page.locator('.tax-expense-panel').boundingBox())?.width ?? 0)
+      .toBeLessThanOrEqual(304);
+    await page.keyboard.press('Escape');
+    await expect(addExpenseButton).toBeFocused();
+    await page.setViewportSize(expectedViewports.mobile);
+  }
+  const main = page.locator('main');
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  });
+  await page.mouse.move(0, 0);
+  await main.evaluate((element) => element.scrollTo({ top: 0 }));
+  await expect(main).toHaveScreenshot('tax-expenses.png');
+  await addExpenseButton.click();
+  await expect(page).toHaveScreenshot('tax-expense-form.png');
+  await page.keyboard.press('Escape');
+  await page
+    .locator('.tax-ledger')
+    .evaluate((element) => element.scrollIntoView({ block: 'start' }));
+  await expect(main).toHaveScreenshot('tax-expense-ledger.png');
+});
+
 test('keeps dense live build and diagnostic output readable and scrollable', async ({
   page,
 }, testInfo) => {
@@ -1637,6 +1734,36 @@ test('keeps native trackpad scrolling available in Agent Studio', async ({ page 
   await expect(page.locator('main')).toHaveCSS('touch-action', 'pan-y');
 });
 
+test('starts routed pages and prospect sections at the top', async ({ page }, testInfo) => {
+  await page.goto('/#/agent-studio/agent');
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+  const main = page.locator('main');
+
+  await main.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+
+  if (testInfo.project.name === 'desktop') {
+    await page.locator('.sidebar').getByRole('button', { name: 'Prospects' }).click();
+  } else {
+    await page.getByRole('button', { name: 'Open navigation menu' }).click();
+    await page
+      .getByRole('dialog', { name: 'Navigation' })
+      .getByRole('button', { name: 'Prospects' })
+      .click();
+  }
+  await expect(page).toHaveURL(/#\/prospects$/);
+  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBe(0);
+
+  await page.goto('/#/prospects/business-demo-local-services/assets');
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+  await main.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+
+  await selectWorkspaceSection(page, 'Overview');
+  await expect(page).toHaveURL(/\/prospects\/business-demo-local-services\/overview$/);
+  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBe(0);
+});
+
 test('uses a compact navigation drawer on mobile and tablet', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name === 'desktop', 'This behavior is specific to compact layouts.');
   await page.goto('/');
@@ -1863,7 +1990,11 @@ test('keeps the build manifest package separate from the Agent Studio test contr
   expect(
     await page.getByLabel('Test agent package').locator('option').allTextContents(),
   ).not.toContain('v8.0 · Production draft');
-  await expect(page.getByRole('button', { name: 'Build test page' })).toBeVisible();
+  const buildTestPageButton = page.getByRole('button', { name: 'Build test page' });
+  await expect(buildTestPageButton).toBeVisible();
+  await expect(buildTestPageButton).toHaveClass(/button--primary/);
+  await expect(buildTestPageButton).toHaveCSS('background-color', 'rgb(231, 255, 31)');
+  await expect(buildTestPageButton).toHaveScreenshot('build-test-page-accent.png');
   await expect(page.locator('.builder-run__action-label')).toHaveText('Test');
   await expect(page.getByRole('radio', { name: 'Create page from scratch' })).toBeChecked();
   await expect(page.getByRole('radio', { name: 'Revise a website' })).toBeVisible();
@@ -1935,27 +2066,28 @@ test('keeps the build manifest package separate from the Agent Studio test contr
   await expect(testingBehaviour).toBeVisible();
   await expect(testingBehaviour).toContainText('Testing behaviour');
   await expect(testingBehaviour).toContainText('Package v7.0 testing behaviour');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.0.10');
-  await expect(testingBehaviour).toContainText('first selected generated route');
-  await expect(testingBehaviour).toContainText('top-left geometry');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.0.15');
+  await expect(testingBehaviour).toContainText('every validated source module');
+  await expect(testingBehaviour).toContainText('foundation-inherited files');
   await expect(testingBehaviour).toContainText('Visible hero entrance after the logo handoff');
+  await expect(testingBehaviour).toContainText('creative ceiling');
   await expect(testingBehaviour).toContainText('Mobile & tablet sidebar navigation');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.15');
-  await expect(testingBehaviour).toContainText('full enter/exit travel');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.18');
+  await expect(testingBehaviour).toContainText('drawer surface may enter immediately');
   await expect(testingBehaviour).toContainText('Context-aware logo selection');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.5');
-  await expect(testingBehaviour).toContainText('framework-safe public asset paths');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.7');
+  await expect(testingBehaviour).toContainText('distinct preloaded drawer appearance');
   await expect(testingBehaviour).toContainText('Semantic recovery from image-based content');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.15');
   await expect(testingBehaviour).toContainText('excluded from reusable manifest assets');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.35');
   await expect(testingBehaviour).toContainText('consistent content-derived page names');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.39');
-  await expect(testingBehaviour).toContainText('bounded scroll-depth composition');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.41');
+  await expect(testingBehaviour).toContainText('decisive visual concept');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.19');
   await expect(testingBehaviour).toContainText('explicit preview, production service');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.36');
-  await expect(testingBehaviour).toContainText('immutable selected-page mapping');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.43');
+  await expect(testingBehaviour).toContainText('foundation-inherited checkpoint files');
   await expect(testingBehaviour).toContainText(
     'Select behaviours to stage for the next production draft',
   );
@@ -2202,7 +2334,7 @@ test('keeps the active semantic recovery safeguard with its package version', as
     .toBe(true);
 });
 
-test('displays the valid preview entry package above retained package versions', async ({
+test('displays the complete checkpoint package above retained package versions', async ({
   page,
 }, testInfo) => {
   await openReadyBuildManifest(page);
@@ -2210,7 +2342,14 @@ test('displays the valid preview entry package above retained package versions',
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const packagePicker = page.getByLabel('Test agent package');
-  await expect(packagePicker).toHaveValue('agent-package-local-v6-9-valid-preview-entry');
+  await expect(packagePicker).toHaveValue('agent-package-local-v7-6-complete-checkpoint-restore');
+  await expect(packagePicker).toContainText('v7.6 · Approved test');
+  await expect(packagePicker).toContainText('v7.5 · Approved test');
+  await expect(packagePicker).toContainText('v7.4 · Approved test');
+  await expect(packagePicker).toContainText('v7.3 · Approved test');
+  await expect(packagePicker).toContainText('v7.2 · Approved test');
+  await expect(packagePicker).toContainText('v7.1 · Approved test');
+  await expect(packagePicker).toContainText('v7.0 · Approved test');
   await expect(packagePicker).toContainText('v6.9 · Approved test');
   await expect(packagePicker).toContainText('v6.8 · Approved test');
   await expect(packagePicker).toContainText('v6.7 · Approved test');
@@ -2225,30 +2364,44 @@ test('displays the valid preview entry package above retained package versions',
   await page.getByRole('button', { name: 'Package versions' }).click();
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
-  await expect(versions).toHaveCount(10);
-  await expect(versions.nth(0)).toContainText('v6.9');
+  await expect(versions).toHaveCount(17);
+  await expect(versions.nth(0)).toContainText('v7.6');
   await expect(versions.nth(0)).toContainText('Approved test');
-  await expect(versions.nth(0)).toContainText('Valid preview entry test package');
-  await expect(versions.nth(1)).toContainText('v6.8');
-  await expect(versions.nth(1)).toContainText('Precise logo handoff test package');
-  await expect(versions.nth(2)).toContainText('v6.7');
-  await expect(versions.nth(2)).toContainText('Clean test start package');
-  await expect(versions.nth(3)).toContainText('v6.6');
-  await expect(versions.nth(3)).toContainText('Meaningful page names test package');
-  await expect(versions.nth(4)).toContainText('v6.5');
-  await expect(versions.nth(4)).toContainText('Resilient resume test package');
-  await expect(versions.nth(5)).toContainText('v6.4');
-  await expect(versions.nth(5)).toContainText('Immersive motion test package');
-  await expect(versions.nth(6)).toContainText('v6.3');
-  await expect(versions.nth(6)).toContainText('Resilient quality test package');
-  await expect(versions.nth(7)).toContainText('v6.2');
-  await expect(versions.nth(7)).toContainText('Expressive craft test package');
-  await expect(versions.nth(8)).toContainText('v6.1');
-  await expect(versions.nth(8)).toContainText('Creative composition test package');
-  await expect(versions.nth(9)).toContainText('v6.0');
-  await expect(versions.nth(9)).toContainText('Current production');
+  await expect(versions.nth(0)).toContainText('Complete checkpoint restore test package');
+  await expect(versions.nth(1)).toContainText('v7.5');
+  await expect(versions.nth(1)).toContainText('Selected-route compile test package');
+  await expect(versions.nth(2)).toContainText('v7.4');
+  await expect(versions.nth(2)).toContainText('Creative autonomy test package');
+  await expect(versions.nth(3)).toContainText('v7.3');
+  await expect(versions.nth(3)).toContainText('Decoded navigation logo test package');
+  await expect(versions.nth(4)).toContainText('v7.2');
+  await expect(versions.nth(4)).toContainText('Efficient builder execution test package');
+  await expect(versions.nth(5)).toContainText('v7.1');
+  await expect(versions.nth(5)).toContainText('Immediate brand introduction test package');
+  await expect(versions.nth(6)).toContainText('v7.0');
+  await expect(versions.nth(6)).toContainText('Responsive intro craft test package');
+  await expect(versions.nth(7)).toContainText('v6.9');
+  await expect(versions.nth(7)).toContainText('Valid preview entry test package');
+  await expect(versions.nth(8)).toContainText('v6.8');
+  await expect(versions.nth(8)).toContainText('Precise logo handoff test package');
+  await expect(versions.nth(9)).toContainText('v6.7');
+  await expect(versions.nth(9)).toContainText('Clean test start package');
+  await expect(versions.nth(10)).toContainText('v6.6');
+  await expect(versions.nth(10)).toContainText('Meaningful page names test package');
+  await expect(versions.nth(11)).toContainText('v6.5');
+  await expect(versions.nth(11)).toContainText('Resilient resume test package');
+  await expect(versions.nth(12)).toContainText('v6.4');
+  await expect(versions.nth(12)).toContainText('Immersive motion test package');
+  await expect(versions.nth(13)).toContainText('v6.3');
+  await expect(versions.nth(13)).toContainText('Resilient quality test package');
+  await expect(versions.nth(14)).toContainText('v6.2');
+  await expect(versions.nth(14)).toContainText('Expressive craft test package');
+  await expect(versions.nth(15)).toContainText('v6.1');
+  await expect(versions.nth(15)).toContainText('Creative composition test package');
+  await expect(versions.nth(16)).toContainText('v6.0');
+  await expect(versions.nth(16)).toContainText('Current production');
   await expect(testInfo.project.name === 'mobile' ? versions.nth(0) : register).toHaveScreenshot(
-    'valid-preview-entry-package-register.png',
+    'complete-checkpoint-restore-package-register.png',
   );
 
   const accessibility = await new AxeBuilder({ page })
@@ -2315,7 +2468,7 @@ test('keeps a failed test available without blocking another test', async ({ pag
   const chooser = page.locator('.builder-run__tests');
   await expect(chooser).toBeVisible();
   await expect(page.getByLabel('Test agent package')).toHaveValue(
-    'agent-package-local-v6-9-valid-preview-entry',
+    'agent-package-local-v7-4-creative-autonomy',
   );
   await expect(chooser).toHaveScreenshot('failed-test-alternate-test-chooser.png');
 

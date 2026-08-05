@@ -73,6 +73,7 @@ test('verifies and exports the isolated Next.js component foundation', async () 
     assert.equal(output.isFile(), true);
     const html = await readFile(join(directory, 'out', 'index.html'), 'utf8');
     assert.match(html, /data-siteforge-runtime="next-component-v2"/);
+    assert.match(html, /data-siteforge-brand-intro/);
     assert.match(html, /data-siteforge-starter="true"/);
 
     const runtime = await readFile(
@@ -85,11 +86,20 @@ test('verifies and exports the isolated Next.js component foundation', async () 
     assert.match(runtime, /prepareWordReveal/);
     assert.match(runtime, /prepareStaggerReveal/);
     assert.match(runtime, /data-siteforge-brand-logo/);
+    assert.match(runtime, /dataset\.siteforgeIntroCopy/);
+    assert.match(runtime, /dataset\.siteforgeIntroInk/);
+    assert.match(runtime, /function enforceIntroTextContrast/);
+    assert.match(runtime, /function prioritiseBrandLogos/);
+    assert.doesNotMatch(runtime, /Preparing your site/);
     assert.match(runtime, /usePathname/);
     assert.match(runtime, /sf-route-transitioning/);
     assert.match(runtime, /transformOrigin = 'top left'/);
     assert.match(runtime, /window\.scrollTo\(\{ top: 0, left: 0, behavior: 'auto' \}\)/);
     assert.match(runtime, /header:has\(\[data-siteforge-brand-logo\]\)/);
+    assert.match(runtime, /siteforgeIntroSurface/);
+    assert.match(runtime, /duration: 1_250/);
+    assert.match(runtime, /}, 1_500\)/);
+    assert.match(runtime, /const revealElements = prepareReveals\(\)/);
 
     const nextAssets = await stat(join(directory, 'out', '_next', 'static'));
     assert.equal(nextAssets.isDirectory(), true);
@@ -105,10 +115,26 @@ test('verifies and exports the isolated Next.js component foundation', async () 
       const page = await context.newPage();
       await page.goto(preview.url);
       await page.locator('.sf-brand-intro').waitFor({ state: 'visible' });
+      await page.locator('.sf-brand-intro.is-entered .sf-brand-intro__mark').waitFor();
       assert.equal(await page.locator('h1.is-visible').count(), 0);
       assert.equal(
-        await page.locator('.sf-brand-intro__status').innerText(),
-        'Preparing your site',
+        await page
+          .locator('.sf-brand-intro')
+          .evaluate((intro) => globalThis.getComputedStyle(intro).backgroundColor),
+        'rgb(255, 255, 255)',
+      );
+      assert.equal(await page.locator('.sf-brand-intro__status').innerText(), 'Made Solid Studio');
+      assert.equal(
+        await page
+          .locator('.sf-brand-intro')
+          .evaluate((intro) => globalThis.getComputedStyle(intro).color),
+        'rgb(23, 32, 29)',
+      );
+      assert.equal(
+        await page
+          .locator('[data-siteforge-brand-logo]')
+          .evaluate((logo) => logo instanceof globalThis.HTMLImageElement && logo.complete),
+        true,
       );
       await page.evaluate(() => {
         const zoom = globalThis.document.createElement('section');
@@ -123,6 +149,7 @@ test('verifies and exports the isolated Next.js component foundation', async () 
       });
       assert.ok((await page.evaluate(() => globalThis.scrollY)) > 0);
       await page.locator('.sf-brand-intro.is-handing-off').waitFor({ state: 'visible' });
+      assert.equal(await page.locator('h1.is-visible').count(), 0);
       assert.equal(await page.evaluate(() => globalThis.scrollY), 0);
       const handoffGeometry = await page.evaluate(() => {
         const mark = globalThis.document.querySelector('.sf-brand-intro__mark');
@@ -130,7 +157,10 @@ test('verifies and exports the isolated Next.js component foundation', async () 
         const logo = markedLogo?.matches('img') ? markedLogo : markedLogo?.querySelector('img');
         if (!(mark instanceof globalThis.HTMLElement) || !(logo instanceof globalThis.HTMLElement))
           return undefined;
-        const animation = mark.getAnimations()[0];
+        const animations = mark.getAnimations();
+        const animation =
+          animations.find((candidate) => candidate.effect?.getTiming().duration === 1_250) ??
+          animations.at(-1);
         const finalFrame = animation?.effect?.getKeyframes().at(-1);
         if (!finalFrame?.transform) return undefined;
         const matrix = new globalThis.DOMMatrix(String(finalFrame.transform));
@@ -163,7 +193,7 @@ test('verifies and exports the isolated Next.js component foundation', async () 
       for (const edge of ['left', 'top', 'width', 'height']) {
         assert.ok(
           Math.abs(handoffGeometry.endpoint[edge] - handoffGeometry.target[edge]) < 0.5,
-          `${edge} endpoint did not match the navigation logo`,
+          `${edge} endpoint did not match the navigation logo: ${JSON.stringify(handoffGeometry)}`,
         );
       }
       assert.equal(
@@ -171,6 +201,7 @@ test('verifies and exports the isolated Next.js component foundation', async () 
         '0',
       );
       await page.locator('.sf-brand-intro').waitFor({ state: 'detached', timeout: 4_000 });
+      await page.locator('h1.is-visible').waitFor();
       assert.equal(await page.locator('h1').getAttribute('data-sf-reveal'), 'true');
       assert.equal(await page.locator('h1').getAttribute('data-sf-reveal-variant'), 'words');
       assert.equal(await page.locator('h1 .sf-reveal-word').count(), 2);
@@ -213,6 +244,13 @@ test('verifies and exports the isolated Next.js component foundation', async () 
         ),
         true,
       );
+      await page.route('**/delayed-navigation-logo.svg', async (route) => {
+        await new Promise((resolve) => setTimeout(resolve, 1_600));
+        await route.fulfill({
+          body: `<svg xmlns="http://www.w3.org/2000/svg" width="124" height="40"><rect width="124" height="40" fill="#173f35"/></svg>`,
+          contentType: 'image/svg+xml',
+        });
+      });
       await page.evaluate(() => {
         const trigger = globalThis.document.createElement('button');
         trigger.dataset.siteforgeMenuTrigger = '';
@@ -220,6 +258,11 @@ test('verifies and exports the isolated Next.js component foundation', async () 
         const dialog = globalThis.document.createElement('aside');
         dialog.dataset.siteforgeNavigationDialog = '';
         dialog.dataset.sfNavigationMotion = '';
+        const logo = globalThis.document.createElement('img');
+        logo.dataset.siteforgeNavigationLogo = '';
+        logo.alt = '';
+        logo.src = '/delayed-navigation-logo.svg';
+        dialog.append(logo);
         ['Logo', 'Services', 'Contact'].forEach((label) => {
           const item = globalThis.document.createElement('a');
           item.dataset.sfNavigationItem = '';
@@ -243,13 +286,36 @@ test('verifies and exports the isolated Next.js component foundation', async () 
             globalThis.document.querySelector('[data-siteforge-navigation-dialog]'),
           ).opacity === '1',
       );
+      assert.equal(
+        await page
+          .locator('[data-siteforge-navigation-dialog]')
+          .evaluate((dialog) => dialog.classList.contains('is-sf-navigation-ready')),
+        false,
+      );
+      assert.equal(
+        await page
+          .locator('[data-siteforge-navigation-logo]')
+          .evaluate((logo) => globalThis.getComputedStyle(logo).opacity),
+        '0',
+      );
+      await page.waitForFunction(() =>
+        globalThis.document
+          .querySelector('[data-siteforge-navigation-dialog]')
+          .classList.contains('is-sf-navigation-ready'),
+      );
       assert.deepEqual(
         await page
           .locator('[data-sf-navigation-item]')
           .evaluateAll((items) =>
             items.map((item) => item.style.getPropertyValue('--sf-navigation-item-delay')),
           ),
-        ['140ms', '225ms', '310ms'],
+        ['140ms', '225ms', '310ms', '395ms'],
+      );
+      assert.equal(
+        await page
+          .locator('[data-siteforge-navigation-logo]')
+          .evaluate((logo) => logo.complete && logo.naturalWidth > 0),
+        true,
       );
       await page
         .locator('[data-siteforge-menu-trigger]')
@@ -266,14 +332,11 @@ test('verifies and exports the isolated Next.js component foundation', async () 
           .evaluateAll((items) =>
             items.map((item) => item.style.getPropertyValue('--sf-navigation-item-delay')),
           ),
-        ['90ms', '45ms', '0ms'],
+        ['135ms', '90ms', '45ms', '0ms'],
       );
       await page.evaluate(() => globalThis.history.pushState(null, '', '/next-route'));
       await page.locator('.sf-brand-intro').waitFor({ state: 'visible' });
-      assert.equal(
-        await page.locator('.sf-brand-intro__status').innerText(),
-        'Preparing your site',
-      );
+      assert.equal(await page.locator('.sf-brand-intro__status').innerText(), 'Made Solid Studio');
       await page.locator('.sf-brand-intro').waitFor({ state: 'detached', timeout: 4_000 });
       await context.close();
 

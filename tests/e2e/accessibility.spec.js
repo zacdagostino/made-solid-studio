@@ -21,6 +21,20 @@ test('keeps the Agent Studio accessible before a test prospect is selected', asy
   expect(results.violations).toEqual([]);
 });
 
+test('keeps the tax expense ledger accessible', async ({ page }) => {
+  await page.goto('/#/tax');
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+  await expect(page.getByRole('heading', { name: 'Tax expenses' })).toBeVisible();
+
+  const results = await new AxeBuilder({ page }).include('.tax-page').analyze();
+  expect(results.violations).toEqual([]);
+
+  await page.getByRole('button', { name: 'Add expense' }).click();
+  await expect(page.getByRole('dialog', { name: 'Add an expense' })).toBeVisible();
+  const panelResults = await new AxeBuilder({ page }).include('.tax-expense-panel').analyze();
+  expect(panelResults.violations).toEqual([]);
+});
+
 test('keeps the Builder agent architecture accessible', async ({ page }) => {
   await page.goto('/#/agent-studio/agent');
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();

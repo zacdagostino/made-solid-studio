@@ -33,6 +33,8 @@ import type {
   RedesignBrief,
   RedesignConcept,
   Task,
+  TaxExpense,
+  TaxExpenseInput,
   Website,
 } from './domain';
 import {
@@ -137,6 +139,39 @@ function readNumber(row: DatabaseRow, key: string) {
     return Number.isFinite(parsed) ? parsed : 0;
   }
   return 0;
+}
+
+function taxExpenseFromRow(row: DatabaseRow): TaxExpense {
+  return {
+    id: readString(row, 'id'),
+    incurredOn: readString(row, 'incurred_on'),
+    supplier: readString(row, 'supplier'),
+    description: readString(row, 'description'),
+    category: readString(row, 'category') as TaxExpense['category'],
+    amountCents: readNumber(row, 'amount_cents'),
+    gstCents: readNumber(row, 'gst_cents'),
+    deductiblePercent: readNumber(row, 'deductible_percent'),
+    paymentMethod: readString(row, 'payment_method'),
+    receiptReference: readString(row, 'receipt_reference'),
+    notes: readString(row, 'notes'),
+    createdAt: readString(row, 'created_at'),
+    updatedAt: readString(row, 'updated_at'),
+  };
+}
+
+function taxExpenseRecord(input: TaxExpenseInput) {
+  return {
+    incurred_on: input.incurredOn,
+    supplier: input.supplier.trim(),
+    description: input.description.trim(),
+    category: input.category,
+    amount_cents: input.amountCents,
+    gst_cents: input.gstCents,
+    deductible_percent: input.deductiblePercent,
+    payment_method: input.paymentMethod.trim(),
+    receipt_reference: input.receiptReference.trim(),
+    notes: input.notes.trim(),
+  };
 }
 
 function readOptionalNumber(row: DatabaseRow, key: string) {
@@ -964,6 +999,48 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
 
   async bootstrap() {
     // Authentication and organization membership are established before this adapter is created.
+  }
+
+  async listTaxExpenses() {
+    const { data, error } = await this.client
+      .from('tax_expenses')
+      .select('*')
+      .eq('organization_id', this.organizationId)
+      .order('incurred_on', { ascending: false })
+      .order('created_at', { ascending: false });
+    throwIfError(error);
+    return ((data ?? []) as DatabaseRow[]).map(taxExpenseFromRow);
+  }
+
+  async createTaxExpense(input: TaxExpenseInput) {
+    const { data, error } = await this.client
+      .from('tax_expenses')
+      .insert({ organization_id: this.organizationId, ...taxExpenseRecord(input) })
+      .select('*')
+      .single();
+    throwIfError(error);
+    return taxExpenseFromRow(data as DatabaseRow);
+  }
+
+  async updateTaxExpense(expenseId: string, input: TaxExpenseInput) {
+    const { data, error } = await this.client
+      .from('tax_expenses')
+      .update(taxExpenseRecord(input))
+      .eq('id', expenseId)
+      .eq('organization_id', this.organizationId)
+      .select('*')
+      .single();
+    throwIfError(error);
+    return taxExpenseFromRow(data as DatabaseRow);
+  }
+
+  async deleteTaxExpense(expenseId: string) {
+    const { error } = await this.client
+      .from('tax_expenses')
+      .delete()
+      .eq('id', expenseId)
+      .eq('organization_id', this.organizationId);
+    throwIfError(error);
   }
 
   async listBusinesses() {

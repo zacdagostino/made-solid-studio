@@ -56,6 +56,10 @@ const lockedFoundationPaths = [
 ];
 const maxLogEvents = 400;
 const maxSourceContentBytes = 512 * 1024;
+const efficientExecutionInstruction =
+  'Work within an efficiency budget. Node.js, rg, sed, and the installed sharp package are available; jq and ImageMagick commands are not. Read each applicable contract once. Use no more than ten bounded inspection commands before the first source edit, combine related reads, and never print a whole asset inventory or unchanged source tree. Run npm run format once immediately before the first npm run verify. Run full verify at most twice: once after implementation and once after fixing concrete failures. Never repeat a passing full verify without intervening source changes; use the narrowest relevant check while diagnosing.';
+const creativeAutonomyInstruction =
+  'Treat the workspace direction as an outcome-level creative brief. If it is short or subjective, independently form a page-specific art direction from the approved brand, content, and assets, then execute it decisively through typography, composition, depth, responsive transformation, motion, and interaction. The member does not need to enumerate effects. Choose a coherent subset of custom React/CSS techniques—such as scroll-linked depth, parallax, sticky narrative, layered or masked media, and pointer-responsive ambient light—when they strengthen the concept. Required runtime hooks are the baseline, not the creative ceiling. Do not settle for a conventional hero followed by interchangeable stacked sections. Preserve performance, accessibility, factual boundaries, and a static prefers-reduced-motion result.';
 const previewViewports = [
   { id: 'mobile-small', label: 'Small mobile', width: 320, height: 568, isMobile: true },
   { id: 'mobile', label: 'Mobile', width: 375, height: 812, isMobile: true },
@@ -92,6 +96,23 @@ class BuilderStorageError extends Error {
       providerCode,
     };
   }
+}
+
+function builderExecutionProfile(run, agentPackage) {
+  const configuredModel = process.env.SITEFORGE_CODEX_MODEL?.trim();
+  const configuredEffort = process.env.SITEFORGE_CODEX_REASONING_EFFORT?.trim();
+  const efficientPackage = Number(agentPackage?.version) >= 7.2;
+  if (!efficientPackage) {
+    return {
+      model: configuredModel || undefined,
+      reasoningEffort: configuredEffort || undefined,
+    };
+  }
+  const economicalTest = ['homepage_test', 'page_test'].includes(run?.build_mode);
+  return {
+    model: configuredModel || (economicalTest ? 'gpt-5.6-terra' : 'gpt-5.6-sol'),
+    reasoningEffort: configuredEffort || (economicalTest ? 'medium' : 'high'),
+  };
 }
 
 class BuilderCheckpointError extends Error {
@@ -362,12 +383,12 @@ function failureDetails(error) {
         'Install the locked builder foundation with npm ci --prefix worker/builder-template, then retry.',
     };
   }
-  if (/did not produce out\/index.html/.test(message)) {
+  if (/did not produce (?:out\/index\.html|required compiled route)/.test(message)) {
     return {
       ...base,
-      code: 'compiled_homepage_missing',
+      code: 'compiled_route_missing',
       stage: 'compile',
-      summary: 'The generated website did not compile to a usable homepage.',
+      summary: 'The generated website did not compile every selected route.',
       action:
         'Review the saved frozen draft, then start a clean rebuild from the approved manifest.',
     };
@@ -794,6 +815,18 @@ async function checkpointSourceBody(client, sourceRun, path, entry) {
   );
 }
 
+async function restoreCheckpointFile(client, sourceRun, sourceDirectory, path, entry) {
+  const destination = join(sourceDirectory, path);
+  if (entry.source === 'template') {
+    const existingBody = await readFile(destination).catch(() => undefined);
+    if (existingBody && sha256(existingBody) === entry.hash) return false;
+  }
+  const body = await checkpointSourceBody(client, sourceRun, path, entry);
+  await mkdir(dirname(destination), { recursive: true });
+  await writeFile(destination, body);
+  return true;
+}
+
 async function restoreSourceCheckpoint(client, run, sourceDirectory, sourceRun = run) {
   const { data: checkpoints, error: checkpointError } = await client
     .from('builder_artifacts')
@@ -885,12 +918,8 @@ async function restoreSourceCheckpoint(client, run, sourceDirectory, sourceRun =
 
   const draftHashes = new Map();
   for (const [path, entry] of expectedFiles) {
-    if (entry.source === 'template') continue;
-    const body = await checkpointSourceBody(client, sourceRun, path, entry);
-    const destination = join(sourceDirectory, path);
-    await mkdir(dirname(destination), { recursive: true });
-    await writeFile(destination, body);
-    draftHashes.set(path, entry.hash);
+    const restored = await restoreCheckpointFile(client, sourceRun, sourceDirectory, path, entry);
+    if (restored) draftHashes.set(path, entry.hash);
   }
 
   return {
@@ -1051,7 +1080,9 @@ async function syncDraftFiles(client, run, workspace, event, options = {}) {
     const initialHash = workspace.initialSourceHashes.get(current.relativePath);
     const needsDraftArtifact =
       checkpointableSourcePath(current.relativePath) &&
-      (initialHash !== current.hash || workspace.draftHashes.has(current.relativePath));
+      (options.force ||
+        initialHash !== current.hash ||
+        workspace.draftHashes.has(current.relativePath));
     if (!needsDraftArtifact) continue;
     if (workspace.draftHashes.get(current.relativePath) === current.hash) continue;
     try {
@@ -1088,7 +1119,7 @@ async function syncDraftFiles(client, run, workspace, event, options = {}) {
   const hasUnsavedSourceFiles = currentFiles.some(
     (current) =>
       checkpointableSourcePath(current.relativePath) &&
-      workspace.initialSourceHashes.get(current.relativePath) !== current.hash &&
+      (options.force || workspace.initialSourceHashes.get(current.relativePath) !== current.hash) &&
       workspace.draftHashes.get(current.relativePath) !== current.hash,
   );
   if (!hasUnsavedSourceFiles && sourceChanged) {
@@ -1102,14 +1133,15 @@ async function syncDraftFiles(client, run, workspace, event, options = {}) {
 
 async function syncDraftOutputFiles(client, run, workspace, event) {
   const outputDirectory = join(workspace.siteDirectory, compiledOutputDirectoryName);
-  const indexPath = join(outputDirectory, 'index.html');
-  let index;
+  const requiredOutputPaths = requiredCompiledOutputPaths(workspace);
+  const entryOutputPath = requiredOutputPaths[0];
+  let entryDocument;
   try {
-    index = await readFile(indexPath, 'utf8');
+    entryDocument = await readFile(join(outputDirectory, entryOutputPath), 'utf8');
   } catch {
     return false;
   }
-  if (isLockedStarterDocument(index)) return false;
+  if (isLockedStarterDocument(entryDocument)) return false;
   const files = await collectFiles(outputDirectory).catch(() => []);
   for (const file of files) {
     if (isPlaceholderOutputFile(file)) continue;
@@ -1130,7 +1162,9 @@ async function syncDraftOutputFiles(client, run, workspace, event) {
     });
     workspace.draftOutputHashes.set(relativePath, hash);
   }
-  workspace.draftPublished = workspace.draftOutputHashes.has('index.html');
+  workspace.draftPublished = requiredOutputPaths.every((outputPath) =>
+    workspace.draftOutputHashes.has(outputPath),
+  );
   if (workspace.draftPublished) {
     await event('activity', 'Compiled private working draft updated.', {
       fileCount: workspace.draftOutputHashes.size,
@@ -1932,6 +1966,8 @@ function buildPrompt(workspace, buildInstruction) {
   const siteTest = buildMode === 'site_test';
   const selectedPage = stagedSourcePages[0];
   const usesContract = (fileName) => contextSummary?.applicableContracts?.includes(fileName);
+  const efficientPackage = Number(agentPackage.version) >= 7.2;
+  const creativeAutonomyPackage = Number(agentPackage.version) >= 7.4;
   const hasStructuredArchitecture =
     contextSummary?.manifestSignals?.hasStructuredArchitecture === true;
   const safeInstruction =
@@ -1945,6 +1981,8 @@ function buildPrompt(workspace, buildInstruction) {
         : `You are the Made Solid Studio Next.js website builder performing a narrowly scoped private refinement of ${selectedPage?.publicPath ?? 'the selected route'}.`,
       'Read ../input/build-context.json first, then ../input/revision-scope.json and ../input/approved-assets.json before changing source. Do not read ../input/manifest.json or ../input/source-pages/: they are intentionally excluded because the restored private route is the approved baseline for this refinement.',
       'Follow the build-context inspection policy: use targeted JSON queries and bounded output. Never print an entire input JSON file, source dossier, or asset index into the conversation.',
+      ...(efficientPackage ? [efficientExecutionInstruction] : []),
+      ...(creativeAutonomyPackage ? [creativeAutonomyInstruction] : []),
       'Follow AGENTS.md, the revision scope, and the locked-file boundary exactly. The revision scope is the factual and file-scope boundary for this run.',
       `This run is pinned to builder agent package v${agentPackage.version} (${agentPackage.id}). Its builder foundation is locked and may not be edited.`,
       `Change only these exact source files: ${allowedSourcePaths.map((path) => `src/${path}`).join(', ')}; and files beneath these generated component prefixes: ${allowedSourcePrefixes.map((path) => `src/${path}`).join(', ')}. Preserve every other restored route and source file byte-for-byte.`,
@@ -1996,12 +2034,14 @@ function buildPrompt(workspace, buildInstruction) {
             : 'You are the Made Solid Studio Next.js website builder. Build the complete private redesign now.',
     'Read ../input/build-context.json first, then ../input/manifest.json, ../input/approved-assets.json, and ../input/source-pages/index.json before writing any website files.',
     'Follow the build-context inspection policy: use targeted JSON queries and bounded output. Never print an entire input JSON file, source dossier, or asset index into the conversation.',
+    ...(efficientPackage ? [efficientExecutionInstruction] : []),
+    ...(creativeAutonomyPackage ? [creativeAutonomyInstruction] : []),
     `Follow AGENTS.md and only the applicable feature contracts listed in build-context.json: ${contextSummary?.applicableContracts?.join(', ') || 'none'}. The projected manifest is the factual, route, architecture, capability, and permission boundary for this run.`,
     `This run is pinned to builder agent package v${agentPackage.version} (${agentPackage.id}). Its builder foundation is locked and may not be edited.`,
     hasStructuredArchitecture
       ? 'Read the structured architecture in manifest.json. Use the locked Next.js App Router, strict TypeScript, Tailwind, semantic CSS tokens, native HTML, Base UI, and Lucide foundation. Do not install packages or change build configuration.'
       : 'This legacy manifest does not contain a structured architecture object. Do not search for one. Use the pinned package, applicable contracts, and locked Next.js App Router foundation as the architecture boundary; do not install packages or change build configuration.',
-    'Read feature-contracts/component-architecture.md. Create a business-specific component system in tokens, UI, patterns, sections, site components, layouts, and pages. The foundation locks behaviour, not appearance: own the typography, spacing, variants, composition, responsive transformation, and brand expression. For each prominent repeated group, first distinguish real order, item count and length, comparison needs, and browsing needs; then choose a content-led desktop and mobile composition instead of defaulting to numbered cards or vertical stacks.',
+    'Read feature-contracts/component-architecture.md. Create a business-specific component system in tokens, UI, patterns, sections, site components, layouts, and pages. The foundation locks behaviour, not appearance: own the typography, spacing, variants, composition, responsive transformation, scrollbar craft, and brand expression. For each prominent repeated group, first distinguish real order, item count and length, comparison needs, and browsing needs; then choose a content-led desktop and mobile composition instead of defaulting to numbered cards, vertical stacks, or horizontal rails. Fit concise two-to-four-item mobile groups when smaller readable containers expose the content better than swiping.',
     homepageTest
       ? 'source-pages/index.json contains the homepage. Implement only its exact sourcePath, link using its publicPath, and export its exact outputPath.'
       : pageSetTest
@@ -2036,7 +2076,7 @@ function buildPrompt(workspace, buildInstruction) {
           'Read and implement feature-contracts/contextual-logo-selection.md. The approved primary logo family is mandatory in the header and footer. Use the explicit logoFamilyPrimaryAssetId and logoAppearance fields in approved-assets.json to choose a contrast-safe approved version for each direct background surface, and annotate every logo image as required by the contract. Use the reviewed primary and accent colours as brand tokens, then design coherent accessible neutrals, surfaces, and backgrounds yourself; do not copy a weak legacy colour system or replace the identity with a generic one.',
         ]
       : []),
-    'Keep the locked SiteRuntime mounted in the root layout. It supplies safe reveal, factual counters, and the approved-logo introduction without determining visual design. Mark the real header logo or wrapper with data-siteforge-brand-logo. Do not add a second loader, fake progress, generic wordmark, or invented metric.',
+    'Keep the locked SiteRuntime mounted in the root layout. It supplies the server-rendered loading cover, post-handoff hero reveal, factual counters, and approved-logo introduction without determining visual design. Mark the real header logo or wrapper with data-siteforge-brand-logo, its exact data-siteforge-intro-surface and 4.5:1-contrasting data-siteforge-intro-ink colours, builder-chosen data-siteforge-intro-copy, and an honest data-siteforge-compact-logo-alignment of center or flow. Prefer an approved slogan for the intro copy, otherwise choose a concise evidence-grounded line without inventing a claim. Load the intrinsically sized header logo eagerly with high fetch priority. Mark the drawer logo with both data-siteforge-navigation-logo and the first data-sf-navigation-item, and preload any distinct drawer appearance in the initial document through data-siteforge-navigation-logo-src. The runtime holds drawer items until that mounted logo is decoded, so do not override its readiness visibility or animate routes independently. If center is chosen, align to the viewport rather than an unequal middle grid cell. Do not add a second loader, fake progress, generic wordmark, or invented metric.',
     'Read and implement feature-contracts/mobile-navigation.md as generated React site components. Use native HTML and Base UI where focus-managed dialog behaviour is needed. Own the icon, composition, tokens, layout, and motion while preserving every required hook and state.',
     ...(agentPackage.contract_addendum
       ? [
@@ -2260,7 +2300,7 @@ function motionCompositionProblems(htmlFiles, expressive = false, immersive = fa
   return problems;
 }
 
-async function expressiveNavigationMotionProblems(allFiles) {
+async function expressiveNavigationMotionProblems(allFiles, requireReadyLogo = false) {
   const authoredFiles = allFiles.filter((file) => {
     const normalized = file.split(sep).join('/');
     return (
@@ -2279,6 +2319,50 @@ async function expressiveNavigationMotionProblems(allFiles) {
   if (sequencedItems < 3) {
     problems.push(
       'Compact navigation must sequence its approved logo, primary routes, and secondary controls.',
+    );
+  }
+  if (requireReadyLogo) {
+    const navigationLogoTags = source.match(/<[^>]*data-siteforge-navigation-logo[^>]*>/gi) ?? [];
+    if (!navigationLogoTags.some((tag) => /data-sf-navigation-item/i.test(tag))) {
+      problems.push(
+        'The compact-navigation logo must be the first sequenced item so routes cannot animate ahead of an empty mark.',
+      );
+    }
+  }
+  return problems;
+}
+
+async function creativeAutonomyProblems(siteDirectory) {
+  const sourceDirectory = join(siteDirectory, 'src');
+  const authoredFiles = (await collectFiles(sourceDirectory)).filter((file) => {
+    const normalized = file.split(sep).join('/');
+    return (
+      /\.(?:css|jsx?|tsx?)$/i.test(normalized) &&
+      !normalized.endsWith('/components/foundation/site-runtime.tsx')
+    );
+  });
+  const source = (await Promise.all(authoredFiles.map((file) => readFile(file, 'utf8')))).join(
+    '\n',
+  );
+  const effectFamilies = [
+    /onPointerMove|pointermove|mousemove|--(?:pointer|mouse)-[\w-]+/i,
+    /requestAnimationFrame|IntersectionObserver|scrollY|scrollProgress|data-(?:parallax|scroll)/i,
+    /position\s*:\s*sticky|perspective\s*:|clip-path\s*:|mask(?:-image)?\s*:|mix-blend-mode\s*:|backdrop-filter\s*:/i,
+  ].filter((pattern) => pattern.test(source)).length;
+  const problems = [];
+  if (effectFamilies < 2) {
+    problems.push(
+      'The creative-autonomy package needs at least two coordinated authored effect families—pointer response, scroll/depth behaviour, or layered visual treatment—rather than only locked reveal markers.',
+    );
+  }
+  if (!/font-family\s*:|--(?:font|type)-(?:display|heading|body)/i.test(source)) {
+    problems.push(
+      'The creative-autonomy package does not establish an authored display/body typography system.',
+    );
+  }
+  if (!/@media\s*\(prefers-reduced-motion:\s*reduce\)/i.test(source)) {
+    problems.push(
+      'Custom creative effects need an authored prefers-reduced-motion fallback outside the locked runtime.',
     );
   }
   return problems;
@@ -2310,7 +2394,13 @@ function responsiveImageProblems(htmlFiles) {
   return [...new Set(problems)];
 }
 
-function brandIntroProblems(manifest, htmlFiles, allFiles) {
+function brandIntroProblems(
+  manifest,
+  htmlFiles,
+  allFiles,
+  requireSurface = false,
+  requireImmediateBrand = false,
+) {
   const brandKit = recordValue(recordValue(manifest.data).brandKit);
   if (!brandKit.primaryLogoAssetId) return [];
   const problems = [];
@@ -2323,6 +2413,47 @@ function brandIntroProblems(manifest, htmlFiles, allFiles) {
         `${file.relativePath} does not mark its header logo for the brand introduction.`,
       );
     }
+    if (requireSurface && !/data-siteforge-intro-surface=["'][^"']+["']/i.test(file.contents)) {
+      problems.push(
+        `${file.relativePath} does not declare a contrasting loading surface for its header logo.`,
+      );
+    }
+    if (requireImmediateBrand && !/data-siteforge-intro-ink=["'][^"']+["']/i.test(file.contents)) {
+      problems.push(`${file.relativePath} does not declare accessible loading-message ink.`);
+    }
+    if (
+      requireImmediateBrand &&
+      !/data-siteforge-intro-copy=["'][^"']{2,100}["']/i.test(file.contents)
+    ) {
+      problems.push(
+        `${file.relativePath} does not provide builder-chosen brand introduction copy.`,
+      );
+    }
+    if (
+      requireImmediateBrand &&
+      (!/\bloading=["']eager["']/i.test(file.contents) ||
+        !/\bfetchpriority=["']high["']/i.test(file.contents))
+    ) {
+      problems.push(
+        `${file.relativePath} does not prioritise its header logo in the initial page.`,
+      );
+    }
+  }
+  return problems;
+}
+
+async function scrollbarStylingProblems(allFiles) {
+  const cssFiles = allFiles.filter((file) => /\.css$/i.test(file.split(sep).join('/')));
+  const source = (await Promise.all(cssFiles.map((file) => readFile(file, 'utf8')))).join('\n');
+  const problems = [];
+  if (!/\bscrollbar-color\s*:/i.test(source) || !/\bscrollbar-width\s*:/i.test(source)) {
+    problems.push('Generated styles do not define standards-based scrollbar colour and width.');
+  }
+  if (
+    !/::-(?:webkit-)?scrollbar\b/i.test(source) ||
+    !/::-(?:webkit-)?scrollbar-thumb\b/i.test(source)
+  ) {
+    problems.push('Generated styles do not define matching scrollbar track and thumb treatments.');
   }
   return problems;
 }
@@ -2357,7 +2488,8 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
   const codexHome =
     process.env.SITEFORGE_CODEX_HOME?.trim() ||
     join(process.env.HOME?.trim() || workerRoot, '.siteforge-codex-builder');
-  const model = process.env.SITEFORGE_CODEX_MODEL?.trim();
+  const executionProfile = builderExecutionProfile(run, workspace.agentPackage);
+  const { model, reasoningEffort } = executionProfile;
   await mkdir(codexHome, { recursive: true });
   const outputPath = join(workspace.runDirectory, 'codex-final-message.txt');
   const events = [];
@@ -2396,6 +2528,9 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
     outputPath,
   ];
   if (model) codexArguments.push('--model', model);
+  if (reasoningEffort) {
+    codexArguments.push('--config', `model_reasoning_effort="${reasoningEffort}"`);
+  }
   codexArguments.push(buildPrompt(workspace, run.build_instruction));
   const child = spawn(codexExecutable, codexArguments, {
     cwd: workspace.siteDirectory,
@@ -2552,9 +2687,11 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
       exitCode: exit.code,
       signal: exit.signal ?? null,
       eventCount: events.length,
+      executionProfile,
       buildContext: workspace.contextSummary,
     },
   });
+  if (model) run.model = model;
   if (cancelled) throw new BuilderCancelledError();
   await assertBuildActive(client, run, workerId);
   if (exit.code !== 0) {
@@ -2591,17 +2728,39 @@ async function buildWebsite(client, run, workerId, workspace, eventWriter, diagn
     env: process.env,
   });
   await assertLockedFiles(workspace.siteDirectory, workspace.lockedFiles);
-  const indexPath = join(workspace.siteDirectory, compiledOutputDirectoryName, 'index.html');
-  try {
-    await stat(indexPath);
-  } catch {
-    throw new Error('The generated website did not produce out/index.html.');
-  }
+  await assertRequiredCompiledOutputs(workspace);
   await syncDraftOutputFiles(client, run, workspace, eventWriter);
   await eventWriter(
     'stage',
     'Private website compiled successfully. Starting browser quality checks.',
   );
+}
+
+function requiredCompiledOutputPaths(workspace) {
+  const outputPaths = (workspace.stagedSourcePages ?? [])
+    .map((page) => page?.outputPath)
+    .filter((outputPath) => typeof outputPath === 'string' && outputPath.length > 0);
+  return [...new Set(outputPaths.length ? outputPaths : ['index.html'])];
+}
+
+async function assertRequiredCompiledOutputs(workspace) {
+  const outputDirectory = join(workspace.siteDirectory, compiledOutputDirectoryName);
+  const requiredOutputPaths = requiredCompiledOutputPaths(workspace);
+  const missingOutputPaths = [];
+  for (const outputPath of requiredOutputPaths) {
+    try {
+      const details = await stat(join(outputDirectory, outputPath));
+      if (!details.isFile()) missingOutputPaths.push(outputPath);
+    } catch {
+      missingOutputPaths.push(outputPath);
+    }
+  }
+  if (missingOutputPaths.length) {
+    throw new Error(
+      `The generated website did not produce required compiled route${missingOutputPaths.length === 1 ? '' : 's'}: ${missingOutputPaths.join(', ')}.`,
+    );
+  }
+  return requiredOutputPaths;
 }
 
 function safeRequestPath(rootDirectory, requestPath) {
@@ -3321,7 +3480,15 @@ async function activateCompactNavigationTrigger(trigger) {
   };
 }
 
-async function responsiveInteractionEvidence(page, viewport, htmlFile, captureOpenNavigation) {
+async function responsiveInteractionEvidence(
+  page,
+  viewport,
+  htmlFile,
+  captureOpenNavigation,
+  enforceLogoAlignment = false,
+  enforceLogoReadiness = false,
+  enforceLogoSequence = false,
+) {
   const problems = [];
   const overflow = await page.evaluate(() => ({
     documentWidth: document.documentElement.scrollWidth,
@@ -3357,6 +3524,36 @@ async function responsiveInteractionEvidence(page, viewport, htmlFile, captureOp
       `${htmlFile.relativePath} compact navigation trigger is not at the leading side of the header at ${viewport.width}px.`,
     );
   }
+  const compactLogo = page.locator('header [data-siteforge-brand-logo]').first();
+  if ((await compactLogo.count()) && (await compactLogo.isVisible())) {
+    const alignment = await compactLogo.getAttribute('data-siteforge-compact-logo-alignment');
+    if (enforceLogoAlignment && alignment !== 'center' && alignment !== 'flow') {
+      problems.push(
+        `${htmlFile.relativePath} does not declare whether its compact header logo is viewport-centred or flow-aligned at ${viewport.width}px.`,
+      );
+    }
+    if (alignment === 'center') {
+      const logoBox = await compactLogo.boundingBox();
+      if (logoBox && Math.abs(logoBox.x + logoBox.width / 2 - viewport.width / 2) > 2) {
+        problems.push(
+          `${htmlFile.relativePath} declares a centred compact logo but is offset from the viewport centre at ${viewport.width}px.`,
+        );
+      }
+    }
+    if (enforceLogoReadiness) {
+      const logoReady = await compactLogo.evaluate((element) => {
+        const image = element.matches('img') ? element : element.querySelector('img');
+        return (
+          image instanceof globalThis.HTMLImageElement && image.complete && image.naturalWidth > 0
+        );
+      });
+      if (!logoReady) {
+        problems.push(
+          `${htmlFile.relativePath} header logo is not decoded and ready on first render at ${viewport.width}px.`,
+        );
+      }
+    }
+  }
   const initialName = await trigger.getAttribute('aria-label');
   if (initialName !== 'Open navigation') {
     problems.push(
@@ -3390,6 +3587,36 @@ async function responsiveInteractionEvidence(page, viewport, htmlFile, captureOp
       `${htmlFile.relativePath} does not expose a visible data-siteforge-navigation-dialog at ${viewport.width}px.`,
     );
   } else {
+    if (enforceLogoReadiness) {
+      const navigationLogo = dialog.locator('[data-siteforge-navigation-logo]').first();
+      const navigationLogoReady =
+        (await navigationLogo.count()) > 0 &&
+        (await navigationLogo.evaluate((element) => {
+          const image = element.matches('img') ? element : element.querySelector('img');
+          if (image instanceof globalThis.HTMLImageElement) {
+            return image.complete && image.naturalWidth > 0;
+          }
+          return element.matches('svg') || Boolean(element.querySelector('svg'));
+        }));
+      if (!navigationLogoReady) {
+        problems.push(
+          `${htmlFile.relativePath} compact-navigation logo was not already decoded when the drawer first opened at ${viewport.width}px.`,
+        );
+      }
+      if (enforceLogoSequence && (await navigationLogo.count()) > 0) {
+        const logoLeadsSequence = await navigationLogo.evaluate((element) => {
+          const firstItem = element
+            .closest('[data-siteforge-navigation-dialog]')
+            ?.querySelector('[data-sf-navigation-item]');
+          return firstItem === element || Boolean(firstItem?.contains(element));
+        });
+        if (!logoLeadsSequence) {
+          problems.push(
+            `${htmlFile.relativePath} compact-navigation routes can animate before its approved logo at ${viewport.width}px.`,
+          );
+        }
+      }
+    }
     const closeControl = dialog.locator('[data-siteforge-navigation-close]').first();
     const closeBox =
       (await closeControl.count()) && (await closeControl.isVisible())
@@ -3557,16 +3784,30 @@ async function runQualityChecks(
   const motionProblems = motionRuntimeProblems(scopedHtmlFiles, allFiles);
   const expressivePackage = Number(workspace.agentPackage.version) >= 6.2;
   const immersiveMotionPackage = Number(workspace.agentPackage.version) >= 6.4;
+  const responsiveCraftPackage = Number(workspace.agentPackage.version) >= 7;
+  const immediateBrandPackage = Number(workspace.agentPackage.version) >= 7.1;
+  const decodedNavigationPackage = Number(workspace.agentPackage.version) >= 7.3;
+  const creativeAutonomyPackage = Number(workspace.agentPackage.version) >= 7.4;
   const motionComposition = motionCompositionProblems(
     scopedHtmlFiles,
     expressivePackage,
     immersiveMotionPackage,
   );
   const navigationMotion = expressivePackage
-    ? await expressiveNavigationMotionProblems(allFiles)
+    ? await expressiveNavigationMotionProblems(allFiles, decodedNavigationPackage)
+    : [];
+  const creativeAutonomy = creativeAutonomyPackage
+    ? await creativeAutonomyProblems(workspace.siteDirectory)
     : [];
   const responsiveImages = expressivePackage ? responsiveImageProblems(scopedHtmlFiles) : [];
-  const brandIntroCheckProblems = brandIntroProblems(manifest, scopedHtmlFiles, allFiles);
+  const brandIntroCheckProblems = brandIntroProblems(
+    manifest,
+    scopedHtmlFiles,
+    allFiles,
+    responsiveCraftPackage,
+    immediateBrandPackage,
+  );
+  const scrollbarProblems = responsiveCraftPackage ? await scrollbarStylingProblems(allFiles) : [];
   const checks = [
     {
       id: 'static-structure',
@@ -3679,6 +3920,16 @@ async function runQualityChecks(
           : 'The selected package does not require the expanded navigation-motion evidence.',
     },
     {
+      id: 'creative-autonomy',
+      label: 'Page-specific creative direction',
+      status: creativeAutonomy.length ? 'failed' : 'passed',
+      detail: creativeAutonomy.length
+        ? creativeAutonomy.join(' ')
+        : creativeAutonomyPackage
+          ? 'The generated source combines authored typography, multiple coordinated custom effect families, and a reduced-motion fallback beyond the locked reveal baseline.'
+          : 'The selected package does not require expanded creative-direction evidence.',
+    },
+    {
       id: 'responsive-image-loading',
       label: 'Responsive image loading',
       status: responsiveImages.length ? 'failed' : 'passed',
@@ -3693,6 +3944,16 @@ async function runQualityChecks(
       detail: brandIntroCheckProblems.length
         ? brandIntroCheckProblems.join(' ')
         : 'The approved header logo is ready for the loading transition and measured navigation handoff on every route.',
+    },
+    {
+      id: 'scrollbar-craft',
+      label: 'Scrollbar visual system',
+      status: scrollbarProblems.length ? 'failed' : 'passed',
+      detail: scrollbarProblems.length
+        ? scrollbarProblems.join(' ')
+        : responsiveCraftPackage
+          ? 'Document and component scrollbars use visible, accessible, brand-connected track and thumb treatments.'
+          : 'The selected package does not require generated scrollbar styling evidence.',
     },
     {
       id: 'selected-page-coverage',
@@ -3886,6 +4147,9 @@ async function runQualityChecks(
               viewport,
               htmlFile,
               htmlFile.relativePath === 'index.html' && openNavigationViewports.has(viewport.id),
+              responsiveCraftPackage,
+              immediateBrandPackage,
+              decodedNavigationPackage,
             );
             interactionProblems.push(...interaction.problems);
             if (interaction.openNavigationBody) {
@@ -3953,7 +4217,7 @@ async function runQualityChecks(
     status: interactionProblems.length ? 'failed' : 'passed',
     detail: interactionProblems.length
       ? interactionProblems.join(' ')
-      : 'Compact navigation, focus restoration, reduced motion, touch target, leading-edge trigger, vertical routes, and horizontal overflow checks passed.',
+      : 'Compact navigation, declared logo alignment, focus restoration, reduced motion, touch target, leading-edge trigger, vertical routes, and horizontal overflow checks passed.',
   });
   checks.push({
     id: 'browser-console',
@@ -4124,6 +4388,8 @@ function canContinueWithoutCodex(run, workspace) {
   }
   return [
     'builder_foundation_changed',
+    'compiled_homepage_missing',
+    'compiled_route_missing',
     'private_storage_rejected',
     'private_storage_temporary_failure',
   ].includes(resumeFailureCode(run));
@@ -4347,7 +4613,7 @@ async function processNextBuild(client, workerId, apiKey) {
       .from('builder_runs')
       .update({
         status: reviewRequired ? 'review_required' : 'ready',
-        model: process.env.SITEFORGE_CODEX_MODEL?.trim() || null,
+        model: run.model || process.env.SITEFORGE_CODEX_MODEL?.trim() || null,
         completed_at: new Date().toISOString(),
         lease_expires_at: null,
         progress_phase: 'complete',
@@ -4431,14 +4697,17 @@ export {
   activateCompactNavigationTrigger,
   approvedAssetDescriptor,
   applicableFeatureContracts,
+  assertRequiredCompiledOutputs,
   assetMatchesSelectedPages,
   buildContextSummary,
   buildPrompt,
+  builderExecutionProfile,
   canContinueWithoutCodex,
   checkpointSourceBody,
   collectBrowsableSourceFiles,
   contentTypeFor,
   contextualLogoProblems,
+  creativeAutonomyProblems,
   inconsistentHeaderNavigationProblems,
   lockedFoundationPaths,
   meaningfulPageNamingProblems,
@@ -4449,6 +4718,7 @@ export {
   multiPageHeaderRouteNavigationProblems,
   projectManifestData,
   refreshLockedFoundation,
+  restoreCheckpointFile,
   revisionManifestCompatible,
   selectedSourcePages,
   semanticCompositionDecisionCheck,

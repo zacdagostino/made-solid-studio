@@ -26,6 +26,8 @@ import type {
   RedesignBrief,
   RedesignConcept,
   Task,
+  TaxExpense,
+  TaxExpenseInput,
   Website,
 } from './domain';
 import {
@@ -39,6 +41,10 @@ import { createBriefDraft, visualContentMatchesBrief } from './redesign-brief';
 
 export type WorkspaceRepository = {
   bootstrap(): Promise<void>;
+  listTaxExpenses(): Promise<TaxExpense[]>;
+  createTaxExpense(input: TaxExpenseInput): Promise<TaxExpense>;
+  updateTaxExpense(id: string, input: TaxExpenseInput): Promise<TaxExpense>;
+  deleteTaxExpense(id: string): Promise<void>;
   listAgentPackages(): Promise<AgentPackage[]>;
   listAgentPackageProposals(): Promise<AgentPackageProposal[]>;
   requestAgentPackageProposal(
@@ -150,7 +156,7 @@ export type WorkspaceRepository = {
 };
 
 const databaseName = 'siteforge-os';
-const databaseVersion = 5;
+const databaseVersion = 6;
 const legacyStorageKey = 'siteforge-os.records.v2';
 const localAgentPackageKey = 'agent-package-v6';
 const localCreativePackageId = 'agent-package-local-v6-1-creative-composition';
@@ -162,6 +168,15 @@ const localMeaningfulPageNamesPackageId = 'agent-package-local-v6-6-meaningful-p
 const localCleanTestStartPackageId = 'agent-package-local-v6-7-clean-test-start';
 const localPreciseLogoHandoffPackageId = 'agent-package-local-v6-8-precise-logo-handoff';
 const localValidPreviewEntryPackageId = 'agent-package-local-v6-9-valid-preview-entry';
+const localResponsiveIntroCraftPackageId = 'agent-package-local-v7-responsive-intro-craft';
+const localImmediateBrandIntroductionPackageId =
+  'agent-package-local-v7-1-immediate-brand-introduction';
+const localEfficientBuilderExecutionPackageId = 'agent-package-local-v7-2-efficient-execution';
+const localDecodedNavigationLogoPackageId = 'agent-package-local-v7-3-decoded-navigation-logo';
+const localCreativeAutonomyPackageId = 'agent-package-local-v7-4-creative-autonomy';
+const localSelectedRouteCompilePackageId = 'agent-package-local-v7-5-selected-route-compile';
+const localCompleteCheckpointRestorePackageId =
+  'agent-package-local-v7-6-complete-checkpoint-restore';
 
 type StoreName =
   | 'activities'
@@ -179,6 +194,7 @@ type StoreName =
   | 'meta'
   | 'reports'
   | 'tasks'
+  | 'taxExpenses'
   | 'websites';
 
 type MetaRecord = { id: string; value: string };
@@ -223,6 +239,7 @@ function openDatabase() {
           'concepts',
           'reports',
           'tasks',
+          'taxExpenses',
           'activities',
           'meta',
         ] as StoreName[]
@@ -230,7 +247,12 @@ function openDatabase() {
         const store = database.objectStoreNames.contains(name)
           ? upgradeTransaction.objectStore(name)
           : database.createObjectStore(name, { keyPath: 'id' });
-        if (name !== 'businesses' && name !== 'meta' && !store.indexNames.contains('businessId')) {
+        if (
+          name !== 'businesses' &&
+          name !== 'meta' &&
+          name !== 'taxExpenses' &&
+          !store.indexNames.contains('businessId')
+        ) {
           store.createIndex('businessId', 'businessId');
         }
       });
@@ -331,6 +353,42 @@ export class SiteforgeRepository {
   async bootstrap() {
     this.bootstrapPromise ??= this.bootstrapStorage();
     return this.bootstrapPromise;
+  }
+
+  async listTaxExpenses() {
+    return (await this.getAll<TaxExpense>('taxExpenses')).sort(
+      (left, right) =>
+        right.incurredOn.localeCompare(left.incurredOn) ||
+        right.createdAt.localeCompare(left.createdAt),
+    );
+  }
+
+  async createTaxExpense(input: TaxExpenseInput) {
+    const timestamp = new Date().toISOString();
+    const expense: TaxExpense = {
+      ...input,
+      id: id('tax-expense'),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    await this.put('taxExpenses', expense);
+    return expense;
+  }
+
+  async updateTaxExpense(expenseId: string, input: TaxExpenseInput) {
+    const existing = await this.get<TaxExpense>('taxExpenses', expenseId);
+    if (!existing) throw new Error('The expense no longer exists.');
+    const expense: TaxExpense = {
+      ...existing,
+      ...input,
+      updatedAt: new Date().toISOString(),
+    };
+    await this.put('taxExpenses', expense);
+    return expense;
+  }
+
+  async deleteTaxExpense(expenseId: string) {
+    await this.deleteRecord('taxExpenses', expenseId);
   }
 
   private async bootstrapStorage() {
@@ -546,10 +604,151 @@ export class SiteforgeRepository {
         'Makes every completed test directly viewable even when its selected page set intentionally excludes the homepage.',
       stagedBehaviourIds: ['framework-quality-gates'],
     };
+    const localResponsiveIntroCraftPackage: AgentPackage = {
+      ...localValidPreviewEntryPackage,
+      id: localResponsiveIntroCraftPackageId,
+      version: 7,
+      basePackageId: localValidPreviewEntryPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v7.0',
+      contractAddendum:
+        'Treat compact-logo alignment as an explicit composition choice: flow alignment is valid, while a declared centred logo must be geometrically centred to the viewport independent of unequal side controls. Fit concise two-to-four-item mobile groups when swiping adds no value, while retaining horizontal browsing for genuinely dense, numerous, media-led, or comparison content. Style every visible scrollbar with accessible brand-connected track and thumb states. Use the logo’s exact contrasting header surface for the server-rendered loading cover, and release hero motion only after the slow eased logo handoff completes.',
+      instructionsAddendum:
+        'Annotate the marked header logo with data-siteforge-compact-logo-alignment="center" or "flow" and data-siteforge-intro-surface. If centred, verify its box centre against the viewport at 320, 375, and 768 pixels. Review every mobile horizontal rail against item count, density, and readable fitted width; keep a rail only when browsing materially helps. Define scrollbar-color, scrollbar-width, and matching WebKit track/thumb hover and active styles from semantic tokens. Do not add another loader or animate the hero behind the protected loading cover.',
+      summary:
+        'Responsive intro craft test package: honest compact-logo alignment, content-led mobile fitting, polished accessible scrollbars, contrasting server-rendered brand loading, and a visible post-handoff hero entrance.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents offset “centred” mobile logos, unnecessary swipe rails for concise content, unstyled scrollbars, white-on-white loading marks, pre-loader page flashes, and hero reveals that finish behind the introduction.',
+      stagedBehaviourIds: [
+        'brand-introduction',
+        'motion-runtime',
+        'responsive-sidebar',
+        'next-component-architecture',
+        'framework-quality-gates',
+      ],
+    };
+    const localImmediateBrandIntroductionPackage: AgentPackage = {
+      ...localResponsiveIntroCraftPackage,
+      id: localImmediateBrandIntroductionPackageId,
+      version: 7.1,
+      basePackageId: localResponsiveIntroCraftPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v7.1',
+      contractAddendum:
+        'Let the builder choose concise, brand-appropriate introduction copy instead of inheriting a generic loading sentence. Declare accessible message ink against the exact intro surface. Treat header and compact-navigation logos as immediate interface assets that are decoded before their first visible state.',
+      instructionsAddendum:
+        'Set data-siteforge-intro-copy, data-siteforge-intro-ink, and data-siteforge-intro-surface on the marked header logo. Prefer an approved slogan, otherwise use restrained evidence-grounded copy without inventing a claim. Load the intrinsically sized header logo eagerly with high fetch priority. Mark the drawer logo data-siteforge-navigation-logo and preload any distinct local drawer-logo source in the initial document through data-siteforge-navigation-logo-src. Verify refresh and first drawer open with an already decoded logo.',
+      summary:
+        'Immediate brand introduction test package: builder-chosen loading copy, guaranteed readable intro text, and preloaded header and drawer logos without first-open delay.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Removes the fixed preparation sentence, safeguards message contrast, and prevents the approved logo appearing late on refresh or the first compact-navigation open.',
+      stagedBehaviourIds: [
+        'brand-introduction',
+        'responsive-sidebar',
+        'contextual-logo-selection',
+        'framework-quality-gates',
+      ],
+    };
+    const localEfficientBuilderExecutionPackage: AgentPackage = {
+      ...localImmediateBrandIntroductionPackage,
+      id: localEfficientBuilderExecutionPackageId,
+      version: 7.2,
+      basePackageId: localImmediateBrandIntroductionPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v7.2',
+      contractAddendum:
+        'Keep private tests economical without weakening complete-build quality. Use the balanced GPT-5.6 Terra medium-reasoning profile for homepage and page-set tests, while retaining GPT-5.6 Sol high reasoning for whole-site revisions and full builds. Record the exact profile and official token-credit estimate with every Codex usage record.',
+      instructionsAddendum:
+        'Read each applicable contract once. Use Node.js, rg, sed, and sharp for bounded inspection; jq and ImageMagick are unavailable. Use no more than ten inspection commands before editing and never print a whole manifest, asset inventory, or unchanged tree. Format once before full verification. Run full verification at most twice and never repeat a passing run without source changes.',
+      summary:
+        'Efficient builder execution test package: balanced test-model routing, explicit credit attribution, bounded inspection, and no redundant full verification cycles.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Reduces avoidable test credits caused by unsupported tool probes, broad context dumps, excessive reasoning, and repeated unchanged verification while preserving stronger execution for complete builds.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localDecodedNavigationLogoPackage: AgentPackage = {
+      ...localEfficientBuilderExecutionPackage,
+      id: localDecodedNavigationLogoPackageId,
+      version: 7.3,
+      basePackageId: localEfficientBuilderExecutionPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v7.3',
+      contractAddendum:
+        'Decode the real compact-navigation logo before releasing the drawer item choreography. The approved logo must lead the sequence, and route links must never animate while its image is still unavailable.',
+      instructionsAddendum:
+        'Mark the drawer logo with both data-siteforge-navigation-logo and the first data-sf-navigation-item. Preload any distinct local drawer source from the initial document through data-siteforge-navigation-logo-src. Keep the locked readiness choreography intact so the surface may enter immediately but its logo and routes wait for the mounted image to decode together.',
+      summary:
+        'Decoded navigation logo test package: prewarmed drawer assets and readiness-gated logo-first route choreography without late image pop-in.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents the compact-navigation links animating before the approved logo and removes the delayed logo pop-in on first menu open.',
+      stagedBehaviourIds: ['responsive-sidebar', 'framework-quality-gates'],
+    };
+    const localCreativeAutonomyPackage: AgentPackage = {
+      ...localDecodedNavigationLogoPackage,
+      id: localCreativeAutonomyPackageId,
+      version: 7.4,
+      basePackageId: localDecodedNavigationLogoPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v7.4',
+      contractAddendum:
+        'Treat short subjective directions as outcome-level creative briefs. Independently create a coherent, page-specific art direction and execute it through expressive typography, distinctive composition, responsive depth, high-quality motion, and purposeful interaction rather than waiting for the member to enumerate techniques.',
+      instructionsAddendum:
+        'Infer the strongest fitting visual concept from the approved brand, page purpose, content, and assets. Required runtime hooks are the baseline, not the creative ceiling. Use custom page-owned React and CSS for coherent parallax, sticky narrative, scroll-linked transforms, layered or masked media, pointer-responsive ambient light, or other effects when they strengthen the concept. Select rather than stack effects, avoid conventional interchangeable sections, and provide performant reduced-motion fallbacks without adding dependencies.',
+      summary:
+        'Creative autonomy test package: decisive page-specific art direction, expressive typography, distinctive responsive composition, and custom high-quality motion from simple workspace prompts.',
+      capabilityAssessment: 'policy_only',
+      capabilityProposal:
+        'Lets a workspace member describe the desired outcome in one sentence while the builder independently supplies the design system, composition, typography, effects, and motion craft.',
+      stagedBehaviourIds: [
+        'motion-runtime',
+        'next-component-architecture',
+        'framework-quality-gates',
+      ],
+    };
+    const localSelectedRouteCompilePackage: AgentPackage = {
+      ...localCreativeAutonomyPackage,
+      id: localSelectedRouteCompilePackageId,
+      version: 7.5,
+      basePackageId: localCreativeAutonomyPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v7.5',
+      contractAddendum:
+        'A page or page-set test compiles successfully when every selected manifest output path exists. The worker must not require a root index.html when the selected test scope intentionally excludes the homepage.',
+      instructionsAddendum:
+        'After production compilation, validate the exact outputPath for every staged source page and publish the first selected output as the private draft entry. Report a missing selected route by its path; never relabel a valid non-homepage export as a missing homepage.',
+      summary:
+        'Selected-route compile test package: accepts valid non-homepage page sets and validates every selected exported route instead of requiring an unrelated root homepage.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents successfully compiled page and page-set tests from failing merely because their selected scope did not include the homepage.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localCompleteCheckpointRestorePackage: AgentPackage = {
+      ...localSelectedRouteCompilePackage,
+      id: localCompleteCheckpointRestorePackageId,
+      version: 7.6,
+      basePackageId: localSelectedRouteCompilePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v7.6',
+      contractAddendum:
+        'A resumable post-Codex checkpoint must restore every recorded source file at its recorded hash, including files inherited from the foundation when the current clean template no longer contains the same path or body.',
+      instructionsAddendum:
+        'Verify every template-inherited checkpoint entry against the prepared workspace. Recover a missing or changed entry from its immutable hash-addressed private source object before compilation, and save exact objects for every source entry when producing future validated checkpoints.',
+      summary:
+        'Complete checkpoint restore test package: recovers missing foundation-inherited source modules before compiling a saved post-Codex continuation.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Lets a stopped test continue from its complete validated source without rerunning Codex or losing generated modules that originally matched its foundation.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localCompleteCheckpointRestorePackage,
+          localSelectedRouteCompilePackage,
+          localCreativeAutonomyPackage,
+          localDecodedNavigationLogoPackage,
+          localEfficientBuilderExecutionPackage,
+          localImmediateBrandIntroductionPackage,
+          localResponsiveIntroCraftPackage,
           localValidPreviewEntryPackage,
           localPreciseLogoHandoffPackage,
           localCleanTestStartPackage,
@@ -567,6 +766,13 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localCompleteCheckpointRestorePackage,
+          localSelectedRouteCompilePackage,
+          localCreativeAutonomyPackage,
+          localDecodedNavigationLogoPackage,
+          localEfficientBuilderExecutionPackage,
+          localImmediateBrandIntroductionPackage,
+          localResponsiveIntroCraftPackage,
           localValidPreviewEntryPackage,
           localPreciseLogoHandoffPackage,
           localCleanTestStartPackage,
@@ -587,6 +793,13 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localCompleteCheckpointRestorePackage,
+            localSelectedRouteCompilePackage,
+            localCreativeAutonomyPackage,
+            localDecodedNavigationLogoPackage,
+            localEfficientBuilderExecutionPackage,
+            localImmediateBrandIntroductionPackage,
+            localResponsiveIntroCraftPackage,
             localValidPreviewEntryPackage,
             localPreciseLogoHandoffPackage,
             localCleanTestStartPackage,

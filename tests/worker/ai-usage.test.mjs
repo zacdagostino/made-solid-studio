@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { codexUsage, pricedUsage, responseUsage } from '../../worker/ai-usage.mjs';
+import { codexUsage, creditedUsage, pricedUsage, responseUsage } from '../../worker/ai-usage.mjs';
 
 test('normalises Responses API and Codex CLI token usage without inventing totals', () => {
   assert.deepEqual(
@@ -82,4 +82,24 @@ test('prices legacy Codex CLI build records at the same standard builder rate', 
     if (originalRateCard === undefined) delete process.env.SITEFORGE_AI_PRICING_JSON;
     else process.env.SITEFORGE_AI_PRICING_JSON = originalRateCard;
   }
+});
+
+test('records exact token-credit estimates for named Codex execution profiles', () => {
+  const usage = {
+    input_tokens: 1_000_000,
+    input_tokens_details: { cached_tokens: 200_000 },
+    output_tokens: 100_000,
+  };
+  assert.deepEqual(creditedUsage({ model: 'gpt-5.6-sol', usage }), {
+    credits: 177.5,
+    creditPricingVersion: 'ChatGPT Codex token credits 2026-08-04',
+  });
+  assert.deepEqual(creditedUsage({ model: 'gpt-5.6-terra', usage }), {
+    credits: 71,
+    creditPricingVersion: 'ChatGPT Codex token credits 2026-08-04',
+  });
+  assert.deepEqual(creditedUsage({ model: 'Codex CLI', usage }), {
+    credits: null,
+    creditPricingVersion: null,
+  });
 });

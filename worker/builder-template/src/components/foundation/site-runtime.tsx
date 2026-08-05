@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useLayoutEffect } from 'react';
+import { useLayoutEffect } from 'react';
 import { usePathname } from 'next/navigation';
 
 const runtimeStyles = `
@@ -92,7 +92,7 @@ const runtimeStyles = `
       transform 820ms cubic-bezier(.16,1,.3,1);
     transition-delay: var(--sf-navigation-item-delay, 0ms);
   }
-  .sf-runtime [data-siteforge-navigation-dialog][data-sf-navigation-motion].is-sf-navigation-open [data-sf-navigation-item] {
+  .sf-runtime [data-siteforge-navigation-dialog][data-sf-navigation-motion].is-sf-navigation-ready [data-sf-navigation-item] {
     opacity: 1;
     transform: none;
   }
@@ -103,10 +103,10 @@ const runtimeStyles = `
     display: grid;
     place-items: center;
     pointer-events: none;
-    color: CanvasText;
-    background: Canvas;
+    color: var(--sf-brand-intro-ink, CanvasText);
+    background: var(--sf-brand-intro-background, var(--color-background, Canvas));
     opacity: 1;
-    transition: background-color 850ms cubic-bezier(.16,1,.3,1);
+    transition: background-color 1100ms cubic-bezier(.16,1,.3,1);
   }
   .sf-brand-intro__content {
     display: grid;
@@ -122,8 +122,8 @@ const runtimeStyles = `
     opacity: 0;
     transform: translateY(.65rem) scale(.84);
     transition:
-      opacity 520ms cubic-bezier(.16,1,.3,1),
-      transform 760ms cubic-bezier(.16,1,.3,1);
+      opacity 720ms cubic-bezier(.16,1,.3,1),
+      transform 1050ms cubic-bezier(.16,1,.3,1);
   }
   .sf-brand-intro__status {
     margin: 0;
@@ -131,8 +131,8 @@ const runtimeStyles = `
     opacity: 0;
     transform: translateY(.4rem);
     transition:
-      opacity 460ms cubic-bezier(.16,1,.3,1) 180ms,
-      transform 620ms cubic-bezier(.16,1,.3,1) 180ms;
+      opacity 620ms cubic-bezier(.16,1,.3,1) 240ms,
+      transform 860ms cubic-bezier(.16,1,.3,1) 240ms;
   }
   .sf-brand-intro.is-entered .sf-brand-intro__mark,
   .sf-brand-intro.is-entered .sf-brand-intro__status {
@@ -147,6 +147,9 @@ const runtimeStyles = `
     transform: translateY(-.5rem);
   }
   @media (prefers-reduced-motion: reduce) {
+    .sf-brand-intro {
+      display: none;
+    }
     .sf-runtime [data-sf-reveal],
     .sf-runtime .sf-reveal-word,
     .sf-runtime [data-sf-reveal-item],
@@ -165,6 +168,100 @@ const runtimeStyles = `
 
 function prefersReducedMotion() {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function channelLuminance(channel: number) {
+  const value = channel / 255;
+  return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+}
+
+function rgbLuminance(value: string) {
+  const channels = value
+    .match(/[\d.]+/g)
+    ?.slice(0, 3)
+    .map(Number);
+  if (!channels || channels.length !== 3 || channels.some((channel) => !Number.isFinite(channel))) {
+    return undefined;
+  }
+  return (
+    0.2126 * channelLuminance(channels[0]!) +
+    0.7152 * channelLuminance(channels[1]!) +
+    0.0722 * channelLuminance(channels[2]!)
+  );
+}
+
+function enforceIntroTextContrast(overlay: HTMLElement) {
+  const styles = getComputedStyle(overlay);
+  const background = rgbLuminance(styles.backgroundColor);
+  const ink = rgbLuminance(styles.color);
+  if (background === undefined || ink === undefined) return;
+  const ratio = (Math.max(background, ink) + 0.05) / (Math.min(background, ink) + 0.05);
+  if (ratio >= 4.5) return;
+  overlay.style.setProperty('--sf-brand-intro-ink', background > 0.179 ? '#000000' : '#ffffff');
+}
+
+const logoDecodePromises = new Map<string, Promise<void>>();
+
+function decodeLogoSource(source: string) {
+  const resolvedSource = new URL(source, document.baseURI).href;
+  const existing = logoDecodePromises.get(resolvedSource);
+  if (existing) return existing;
+  const image = new Image();
+  image.decoding = 'async';
+  image.loading = 'eager';
+  image.fetchPriority = 'high';
+  image.src = resolvedSource;
+  const decoded = image
+    .decode()
+    .catch(
+      () =>
+        new Promise<void>((resolve) => {
+          if (image.complete) {
+            resolve();
+            return;
+          }
+          image.addEventListener('load', () => resolve(), { once: true });
+          image.addEventListener('error', () => resolve(), { once: true });
+        }),
+    )
+    .then(() => undefined);
+  logoDecodePromises.set(resolvedSource, decoded);
+  return decoded;
+}
+
+function prioritiseBrandLogos() {
+  const marked = document.querySelector<HTMLElement>('[data-siteforge-brand-logo]');
+  const navigationMarks = [
+    ...document.querySelectorAll<HTMLElement>('[data-siteforge-navigation-logo]'),
+  ];
+  const images = [
+    ...(marked?.matches('img') ? [marked] : (marked?.querySelectorAll('img') ?? [])),
+    ...navigationMarks.flatMap((navigationMark) =>
+      navigationMark.matches('img')
+        ? [navigationMark]
+        : [...navigationMark.querySelectorAll<HTMLElement>('img')],
+    ),
+  ].filter((image): image is HTMLImageElement => image instanceof HTMLImageElement);
+  images.forEach((image) => {
+    image.loading = 'eager';
+    image.fetchPriority = 'high';
+  });
+  const headerImage = images[0];
+  const navigationLogoSource =
+    marked?.dataset.siteforgeNavigationLogoSrc?.trim() ||
+    headerImage?.currentSrc ||
+    headerImage?.src;
+  if (navigationLogoSource && !document.head.querySelector(`link[data-siteforge-logo-preload]`)) {
+    const preload = document.createElement('link');
+    preload.rel = 'preload';
+    preload.as = 'image';
+    preload.href = navigationLogoSource;
+    preload.fetchPriority = 'high';
+    preload.dataset.siteforgeLogoPreload = 'runtime-fallback';
+    document.head.append(preload);
+  }
+  if (navigationLogoSource) void decodeLogoSource(navigationLogoSource);
+  return images;
 }
 
 function revealCandidates() {
@@ -293,7 +390,7 @@ function startScrollZoom(reducedMotion: boolean) {
   return () => observer.disconnect();
 }
 
-function startReveals(reducedMotion: boolean) {
+function prepareReveals() {
   const candidates = revealCandidates();
   candidates.forEach((candidate, index) => {
     candidate.dataset.sfReveal = 'true';
@@ -306,6 +403,10 @@ function startReveals(reducedMotion: boolean) {
     if (variant === 'stagger') prepareStaggerReveal(candidate);
     if (variant === 'sequence') prepareSequenceReveal(candidate);
   });
+  return candidates;
+}
+
+function startReveals(reducedMotion: boolean, candidates = prepareReveals()) {
   const reveal = (element: HTMLElement) => {
     element.classList.add('is-visible');
     if (!reducedMotion) {
@@ -336,11 +437,32 @@ function startReveals(reducedMotion: boolean) {
 
 function startNavigationMotion() {
   let frame = 0;
+  let revision = 0;
   const prepare = (dialog: HTMLElement) => {
-    if (dialog.dataset.sfNavigationPrepared) return;
-    dialog.dataset.sfNavigationPrepared = 'true';
+    if (!dialog.dataset.sfNavigationPrepared) {
+      dialog.dataset.sfNavigationPrepared = 'true';
+      prioritiseBrandLogos();
+    }
+    dialog.querySelectorAll<HTMLElement>('[data-siteforge-navigation-logo]').forEach((logo) => {
+      logo.dataset.sfNavigationItem = '';
+    });
+  };
+  const waitForLogo = async (dialog: HTMLElement) => {
+    const logos = [...dialog.querySelectorAll<HTMLElement>('[data-siteforge-navigation-logo]')];
+    await Promise.allSettled(
+      logos.map(async (logo) => {
+        const image = logo.matches('img') ? logo : logo.querySelector('img');
+        if (!(image instanceof HTMLImageElement)) return;
+        image.loading = 'eager';
+        image.fetchPriority = 'high';
+        const source = image.currentSrc || image.src;
+        if (source) await decodeLogoSource(source);
+        if (!image.complete || image.naturalWidth < 1) await image.decode().catch(() => undefined);
+      }),
+    );
   };
   const sync = () => {
+    const currentRevision = ++revision;
     cancelAnimationFrame(frame);
     const trigger = document.querySelector<HTMLElement>('[data-siteforge-menu-trigger]');
     const open = trigger?.getAttribute('aria-expanded') === 'true';
@@ -349,7 +471,10 @@ function startNavigationMotion() {
     );
     dialogs.forEach(prepare);
     frame = requestAnimationFrame(() => {
+      const reducedMotion = prefersReducedMotion();
       dialogs.forEach((dialog) => {
+        dialog.classList.toggle('is-sf-navigation-open', open);
+        dialog.classList.toggle('is-sf-navigation-ready', open && reducedMotion);
         const items = [...dialog.querySelectorAll<HTMLElement>('[data-sf-navigation-item]')];
         items.forEach((item, index) => {
           const delay = open
@@ -357,7 +482,13 @@ function startNavigationMotion() {
             : Math.min((items.length - index - 1) * 45, 270);
           item.style.setProperty('--sf-navigation-item-delay', `${delay}ms`);
         });
-        dialog.classList.toggle('is-sf-navigation-open', open);
+      });
+      if (!open || reducedMotion) return;
+      void Promise.all([...dialogs].map(waitForLogo)).then(() => {
+        if (currentRevision !== revision) return;
+        frame = requestAnimationFrame(() => {
+          dialogs.forEach((dialog) => dialog.classList.add('is-sf-navigation-ready'));
+        });
       });
     });
   };
@@ -377,27 +508,37 @@ function startNavigationMotion() {
 
 function runRouteBrandTransition(reducedMotion: boolean, onComplete: () => void) {
   const marked = document.querySelector<HTMLElement>('[data-siteforge-brand-logo]');
-  const logo = marked?.matches('img') ? marked : marked?.querySelector<HTMLImageElement>('img');
+  const logoElement = marked?.matches('img')
+    ? marked
+    : marked?.querySelector<HTMLImageElement>('img');
+  const existingOverlay = document.querySelector<HTMLElement>('[data-siteforge-brand-intro]');
   if (
     reducedMotion ||
-    !logo ||
+    !(logoElement instanceof HTMLImageElement) ||
     document.visibilityState === 'hidden' ||
-    logo.getBoundingClientRect().width < 1
+    logoElement.getBoundingClientRect().width < 1
   ) {
+    existingOverlay?.remove();
     onComplete();
     return () => undefined;
   }
-  const overlay = document.createElement('div');
-  const content = document.createElement('div');
+  const logo = logoElement;
+  const overlay = existingOverlay ?? document.createElement('div');
+  const content =
+    overlay.querySelector<HTMLElement>('.sf-brand-intro__content') ?? document.createElement('div');
   const mark = logo.cloneNode(true) as HTMLImageElement;
-  const status = document.createElement('p');
+  const status =
+    overlay.querySelector<HTMLElement>('.sf-brand-intro__status') ?? document.createElement('p');
   const previousLogoOpacity = logo.style.opacity;
   const previousScrollBehavior = document.documentElement.style.scrollBehavior;
   let entryFrame = 0;
+  let completionFrame = 0;
+  let revealFrame = 0;
   let handoffTimer = 0;
   let handoffAnimation: Animation | undefined;
   let complete = false;
   overlay.className = 'sf-brand-intro';
+  overlay.dataset.siteforgeBrandIntro = 'true';
   overlay.setAttribute('role', 'status');
   overlay.setAttribute('aria-live', 'polite');
   overlay.dataset.siteforgeRouteTransition = 'true';
@@ -405,16 +546,41 @@ function runRouteBrandTransition(reducedMotion: boolean, onComplete: () => void)
   mark.className = 'sf-brand-intro__mark';
   mark.alt = '';
   mark.setAttribute('aria-hidden', 'true');
+  mark.removeAttribute('data-siteforge-brand-logo');
+  mark.removeAttribute('data-siteforge-intro-surface');
+  mark.removeAttribute('data-siteforge-intro-ink');
+  mark.removeAttribute('data-siteforge-intro-copy');
+  mark.removeAttribute('data-siteforge-navigation-logo-src');
+  mark.removeAttribute('data-siteforge-compact-logo-alignment');
   status.className = 'sf-brand-intro__status';
-  status.textContent = 'Preparing your site';
-  content.append(mark, status);
-  overlay.append(content);
+  const introCopy = marked?.dataset.siteforgeIntroCopy?.trim() ?? '';
+  status.textContent = introCopy;
+  status.hidden = !introCopy;
+  content.prepend(mark);
+  if (!status.parentElement) content.append(status);
+  if (!content.parentElement) overlay.append(content);
+  const introSurface = marked?.dataset.siteforgeIntroSurface?.trim();
+  const introInk = marked?.dataset.siteforgeIntroInk?.trim();
+  if (introSurface && CSS.supports('color', introSurface)) {
+    overlay.style.setProperty('transition', 'none');
+    overlay.style.setProperty('--sf-brand-intro-background', introSurface);
+    void overlay.offsetWidth;
+    overlay.style.removeProperty('transition');
+  }
+  if (introInk && CSS.supports('color', introInk)) {
+    overlay.style.setProperty('--sf-brand-intro-ink', introInk);
+  }
+  enforceIntroTextContrast(overlay);
+  logo.loading = 'eager';
+  logo.fetchPriority = 'high';
+  mark.loading = 'eager';
+  mark.fetchPriority = 'high';
   logo.style.opacity = '0';
   document.documentElement.classList.add('sf-route-transitioning');
   document.documentElement.style.scrollBehavior = 'auto';
   window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
   window.dispatchEvent(new Event('scroll'));
-  document.body.append(overlay);
+  if (!overlay.parentElement) document.body.append(overlay);
   const restoreRouteState = () => {
     if (previousScrollBehavior) {
       document.documentElement.style.scrollBehavior = previousScrollBehavior;
@@ -425,55 +591,65 @@ function runRouteBrandTransition(reducedMotion: boolean, onComplete: () => void)
   const finish = () => {
     if (complete) return;
     complete = true;
-    overlay.remove();
     if (previousLogoOpacity) logo.style.opacity = previousLogoOpacity;
     else logo.style.removeProperty('opacity');
-    document.dispatchEvent(new Event('siteforge:route-transition-complete'));
-    onComplete();
     document.documentElement.classList.remove('sf-route-transitioning');
     restoreRouteState();
+    overlay.remove();
+    completionFrame = requestAnimationFrame(() => {
+      revealFrame = requestAnimationFrame(() => {
+        document.dispatchEvent(new Event('siteforge:route-transition-complete'));
+        onComplete();
+      });
+    });
   };
-  entryFrame = requestAnimationFrame(() => overlay.classList.add('is-entered'));
-  handoffTimer = window.setTimeout(async () => {
-    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
-    window.dispatchEvent(new Event('scroll'));
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-    );
-    const from = mark.getBoundingClientRect();
-    const to = logo.getBoundingClientRect();
-    if (from.width < 1 || from.height < 1 || to.width < 1 || to.height < 1) {
-      finish();
-      return;
-    }
-    mark.style.position = 'fixed';
-    mark.style.inset = 'auto';
-    mark.style.left = `${from.left}px`;
-    mark.style.top = `${from.top}px`;
-    mark.style.width = `${from.width}px`;
-    mark.style.height = `${from.height}px`;
-    mark.style.maxHeight = 'none';
-    mark.style.transformOrigin = 'top left';
-    overlay.classList.add('is-handing-off');
-    handoffAnimation = mark.animate(
-      [
-        { opacity: 1, transform: 'translate3d(0, 0, 0) scale(1)' },
+  const beginHandoff = () => {
+    if (complete) return;
+    entryFrame = requestAnimationFrame(() => overlay.classList.add('is-entered'));
+    handoffTimer = window.setTimeout(async () => {
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      window.dispatchEvent(new Event('scroll'));
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+      const from = mark.getBoundingClientRect();
+      const to = logo.getBoundingClientRect();
+      if (from.width < 1 || from.height < 1 || to.width < 1 || to.height < 1) {
+        finish();
+        return;
+      }
+      mark.style.position = 'fixed';
+      mark.style.inset = 'auto';
+      mark.style.left = `${from.left}px`;
+      mark.style.top = `${from.top}px`;
+      mark.style.width = `${from.width}px`;
+      mark.style.height = `${from.height}px`;
+      mark.style.maxHeight = 'none';
+      mark.style.transformOrigin = 'top left';
+      overlay.classList.add('is-handing-off');
+      handoffAnimation = mark.animate(
+        [
+          { opacity: 1, transform: 'translate3d(0, 0, 0) scale(1)' },
+          {
+            opacity: 1,
+            transform: `translate3d(${to.left - from.left}px, ${to.top - from.top}px, 0) scale(${to.width / from.width}, ${to.height / from.height})`,
+          },
+        ],
         {
-          opacity: 1,
-          transform: `translate3d(${to.left - from.left}px, ${to.top - from.top}px, 0) scale(${to.width / from.width}, ${to.height / from.height})`,
+          duration: 1_250,
+          easing: 'cubic-bezier(.16,1,.3,1)',
+          fill: 'forwards',
         },
-      ],
-      {
-        duration: 950,
-        easing: 'cubic-bezier(.16,1,.3,1)',
-        fill: 'forwards',
-      },
-    );
-    await handoffAnimation.finished.catch(() => undefined);
-    finish();
-  }, 1_150);
+      );
+      await handoffAnimation.finished.catch(() => undefined);
+      finish();
+    }, 1_500);
+  };
+  Promise.allSettled([logo.decode(), mark.decode()]).then(beginHandoff);
   return () => {
     cancelAnimationFrame(entryFrame);
+    cancelAnimationFrame(completionFrame);
+    cancelAnimationFrame(revealFrame);
     window.clearTimeout(handoffTimer);
     handoffAnimation?.cancel();
     if (complete) return;
@@ -489,17 +665,19 @@ function runRouteBrandTransition(reducedMotion: boolean, onComplete: () => void)
 export function SiteRuntime() {
   const pathname = usePathname();
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.documentElement.classList.add('sf-runtime');
+    prioritiseBrandLogos();
     const stopNavigationMotion = startNavigationMotion();
     return stopNavigationMotion;
   }, []);
 
   useLayoutEffect(() => {
     const reducedMotion = prefersReducedMotion();
+    const revealElements = prepareReveals();
     let stopReveals: () => void = () => undefined;
     const stopTransition = runRouteBrandTransition(reducedMotion, () => {
-      stopReveals = startReveals(reducedMotion);
+      stopReveals = startReveals(reducedMotion, revealElements);
     });
     return () => {
       stopTransition();
@@ -510,6 +688,11 @@ export function SiteRuntime() {
   return (
     <>
       <style data-siteforge-runtime-styles>{runtimeStyles}</style>
+      <div aria-live="polite" className="sf-brand-intro" data-siteforge-brand-intro role="status">
+        <div className="sf-brand-intro__content">
+          <p className="sf-brand-intro__status" />
+        </div>
+      </div>
       <span data-siteforge-runtime="next-component-v2" hidden />
     </>
   );

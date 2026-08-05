@@ -7,16 +7,18 @@ import {
   LogOut,
   Menu,
   Moon,
+  ReceiptText,
   Settings,
   Sun,
   UsersRound,
   WalletCards,
   X,
 } from 'lucide-react';
-import { useEffect, useRef, useState, type PropsWithChildren } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type PropsWithChildren } from 'react';
 import { Button, IconButton } from './ui';
 
-export type AppPage = 'today' | 'prospects' | 'agent-studio' | 'usage' | 'data' | 'settings';
+export type AppPage =
+  'today' | 'prospects' | 'agent-studio' | 'usage' | 'tax' | 'data' | 'settings';
 type Theme = 'light' | 'dark';
 
 const themeStorageKey = 'siteforge-os.theme';
@@ -26,6 +28,7 @@ const navigation = [
   { page: 'prospects' as const, label: 'Prospects', icon: UsersRound },
   { page: 'agent-studio' as const, label: 'Agent Studio', icon: Bot },
   { page: 'usage' as const, label: 'AI usage', icon: WalletCards },
+  { page: 'tax' as const, label: 'Tax expenses', icon: ReceiptText },
   { page: 'data' as const, label: 'Data', icon: Database },
   { page: 'settings' as const, label: 'Settings', icon: Settings },
 ];
@@ -197,7 +200,7 @@ export function AppShell({
     }
   }, [theme]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     mainRef.current?.scrollTo({ top: 0 });
   }, [contentKey]);
 

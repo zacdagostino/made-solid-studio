@@ -71,6 +71,7 @@ import builderWorkerSource from '../worker/builder-worker.mjs?raw';
 import buildManifestSource from './lib/build-manifest.ts?raw';
 import { AppShell, type AppPage } from './components/AppShell';
 import { AgentArchitectureOverview } from './components/AgentArchitectureOverview';
+import { TaxExpensesPage } from './components/TaxExpensesPage';
 import {
   Button,
   ButtonGroup,
@@ -138,6 +139,7 @@ type Route =
   | { page: 'today' }
   | { page: 'data' }
   | { page: 'usage'; builderRunId?: string }
+  | { page: 'tax' }
   | { page: 'settings' }
   | { page: 'agent-studio'; section?: AgentStudioSection; businessId?: string }
   | { page: 'prospects'; businessId?: string; versionId?: string; tab?: WorkspaceTab };
@@ -176,6 +178,7 @@ function routeFromHash(hash: string): Route {
   }
   if (parts[0] === 'settings') return { page: 'settings' };
   if (parts[0] === 'usage') return { page: 'usage', builderRunId: parts[1] };
+  if (parts[0] === 'tax') return { page: 'tax' };
   if (parts[0] === 'data') return { page: 'data' };
   if (parts[0] === 'agent-studio') {
     if (isAgentStudioSection(parts[1])) {
@@ -196,6 +199,7 @@ function hrefForRoute(route: Route) {
   if (route.page === 'settings') return '#/settings';
   if (route.page === 'data') return '#/data';
   if (route.page === 'usage') return `#/usage${route.builderRunId ? `/${route.builderRunId}` : ''}`;
+  if (route.page === 'tax') return '#/tax';
   if (route.page === 'agent-studio') {
     const section = route.section ?? 'refine';
     return `#/agent-studio/${section}${route.businessId ? `/${route.businessId}` : ''}`;
@@ -7633,36 +7637,36 @@ function BuilderRunPanel({
                 : 'package-behaviour',
             title: `Package ${agentPackageVersionLabel(selectedAgentPackage.version)} testing behaviour`,
             detail: selectedAgentPackage.capabilityProposal || selectedAgentPackage.summary,
-            revision: `v${selectedAgentPackage.version}.0.10`,
+            revision: `v${selectedAgentPackage.version}.0.15`,
             change:
-              'Latest edit: opening a non-homepage test now enters through its first selected generated route instead of the capability root’s framework not-found page.',
+              'Latest edit: package v7.6 restores every validated source module at its recorded hash before compiling a continued test, including foundation-inherited files.',
           },
           {
             id: 'hero-handoff',
             title: 'Visible hero entrance after the logo handoff',
             detail:
               'After the logo has reached the real navigation mark, the hero heading, supporting copy, and visual media reveal separately. The entrance no longer plays behind the loading overlay, so visitors can see it happen.',
-            revision: `v${selectedAgentPackage.version}.38`,
+            revision: `v${selectedAgentPackage.version}.40`,
             change:
-              'Latest edit: the loading logo now uses top-left geometry against a visible settled header, preventing an offset endpoint or upward shot before the page reveal.',
+              'Latest edit: locked reveal hooks are now the baseline rather than the creative ceiling, allowing coordinated page-owned parallax, scroll, pointer, masking, and layered effects after handoff.',
           },
           {
             id: 'responsive-sidebar',
             title: 'Mobile & tablet sidebar navigation',
             detail:
               'Below desktop width, the header links become a leading-edge sidebar that reuses the real logo and header palette and opens from the trigger side. On motion-enabled visits, the header slides away after a downward scroll and returns on any upward scroll. It supports close, backdrop, Escape, keyboard focus, route selection, and reduced-motion users; desktop navigation stays visible.',
-            revision: `v${selectedAgentPackage.version}.15`,
+            revision: `v${selectedAgentPackage.version}.18`,
             change:
-              'Latest edit: compact navigation now uses the slower smooth timing vocabulary while retaining full enter/exit travel and ordered logo, route, and action reveals.',
+              'Latest edit: the drawer surface may enter immediately, but its logo-first item sequence is held until the approved logo has decoded so links cannot animate ahead of it.',
           },
           {
             id: 'contextual-logo-selection',
             title: 'Context-aware logo selection',
             detail:
               'The builder treats the approved source logo and its transparent versions as one family. It chooses white or white-with-accent on dark surfaces, and original, black-with-accent, or black on light surfaces, with a stable protective surface for photography or mixed backgrounds.',
-            revision: `v${selectedAgentPackage.version}.5`,
+            revision: `v${selectedAgentPackage.version}.7`,
             change:
-              'Latest edit: approved logo-family files now use framework-safe public asset paths while retaining exact appearance and light/dark surface verification.',
+              'Latest edit: the header logo now supplies exact intro surface, accessible ink, builder-chosen copy, and any distinct preloaded drawer appearance.',
           },
           {
             id: 'visual-content-recovery',
@@ -7687,9 +7691,9 @@ function BuilderRunPanel({
             title: 'Next.js generated component architecture',
             detail:
               'The agent creates each business’s visual tokens, UI primitives, patterns, sections, site components, layouts, and pages on a pinned strict TypeScript, Tailwind, Base UI, and Lucide foundation.',
-            revision: `v${selectedAgentPackage.version}.39`,
+            revision: `v${selectedAgentPackage.version}.41`,
             change:
-              'Latest edit: every route now uses gap-token text stacks that reveal direct children sequentially and includes a bounded scroll-depth composition without changing its spacing geometry.',
+              'Latest edit: short creative directions now produce a decisive visual concept with expressive typography, distinctive responsive composition, depth, and authored interaction rather than interchangeable sections.',
           },
           {
             id: 'runtime-profiles',
@@ -7705,9 +7709,9 @@ function BuilderRunPanel({
             title: 'Framework and responsive quality gates',
             detail:
               'Generated source must pass formatting, lint, strict typing, production build, route and provenance checks, browser interactions, accessibility, and exact responsive evidence.',
-            revision: `v${selectedAgentPackage.version}.36`,
+            revision: `v${selectedAgentPackage.version}.43`,
             change:
-              'Latest edit: package v6.9 resolves the preview entry from the immutable selected-page mapping so every completed page-set test opens on built output.',
+              'Latest edit: package v7.6 verifies and recovers missing or changed foundation-inherited checkpoint files before compiling a saved post-Codex continuation.',
           },
         ]
       : [];
@@ -8737,7 +8741,7 @@ function BuilderRunPanel({
                       )
                     }
                     type="button"
-                    variant="secondary"
+                    variant="primary"
                   >
                     <Play aria-hidden="true" size={16} />
                     {isRequesting
@@ -11719,7 +11723,7 @@ const agentPackageFeatures: AgentFeature[] = [
     id: 'next-component-architecture',
     title: 'Next.js generated component architecture',
     detail:
-      'Builds strict TypeScript App Router sites from clean routes while letting Codex create each business’s typography, spacing rhythm, tokens, primitives, patterns, content-led responsive compositions, distinctive service routes, site components, layouts, and pages.',
+      'Builds strict TypeScript App Router sites from clean routes while letting Codex turn short outcome-level prompts into a decisive page-specific concept spanning expressive typography, spacing rhythm, tokens, primitives, patterns, distinctive responsive composition, custom effects, site components, layouts, and pages.',
     files: [
       {
         label: 'Component architecture contract',
@@ -11728,8 +11732,10 @@ const agentPackageFeatures: AgentFeature[] = [
         terms: [
           'The foundation locks dependencies',
           'Creative ownership',
+          'Creative autonomy from short directions',
           'Content-led composition',
           'Mobile is a distinct composition opportunity',
+          'Scrollbar craft',
           'Behaviour boundary',
         ],
       },
@@ -11787,7 +11793,7 @@ const agentPackageFeatures: AgentFeature[] = [
     id: 'framework-quality-gates',
     title: 'Framework, interaction & responsive quality gates',
     detail:
-      'Runs formatting, ESLint, strict type checks, production compilation, route validation, exact responsive captures, compact-navigation interaction and motion checks, image-loading checks, overflow checks, browser errors, and axe.',
+      'Runs formatting, ESLint, strict type checks, production compilation against the exact selected route outputs, route validation, exact responsive captures, creative-direction signals, compact-navigation interaction and motion checks, image-loading checks, overflow checks, browser errors, and axe while keeping private test inspection and verification credit-efficient.',
     files: [
       {
         label: 'Template packages',
@@ -11810,6 +11816,10 @@ const agentPackageFeatures: AgentFeature[] = [
           'collectBrowsableSourceFiles',
           'source_bundle',
           'final_source',
+          'builderExecutionProfile',
+          'efficientExecutionInstruction',
+          'creativeAutonomyProblems',
+          'assertRequiredCompiledOutputs',
         ],
       },
       {
@@ -11863,7 +11873,7 @@ const agentPackageFeatures: AgentFeature[] = [
     id: 'motion-runtime',
     title: 'Entrance motion & factual counters',
     detail:
-      'Lets the agent compose slower eased word, stacked-text, staggered, directional, scale, fade, and reversible scroll-depth sequences after the route logo handoff, while animating only explicitly marked factual metrics.',
+      'Prepares reveal states behind the loading cover, then treats those hooks as a baseline for the agent’s page-owned parallax, sticky narrative, pointer-responsive atmosphere, masking, layering, and other art-directed motion after the route logo handoff, while animating only explicitly marked factual metrics.',
     files: [
       {
         label: 'Motion runtime',
@@ -11884,6 +11894,7 @@ const agentPackageFeatures: AgentFeature[] = [
         detail: 'The rule that asks for creative but restrained composition and real metrics.',
         terms: [
           'Use motion to support hierarchy',
+          'outcome-level creative brief',
           'data-counter',
           'at least two fitting treatments',
         ],
@@ -11894,7 +11905,7 @@ const agentPackageFeatures: AgentFeature[] = [
     id: 'brand-introduction',
     title: 'Brand introduction',
     detail:
-      'On every route, the approved logo fades in at centre, rises and scales, then its live clone moves into the measured navigation-logo position before page motion begins.',
+      'On every route, a pre-paint contrasting cover uses builder-chosen brand copy and accessible ink while an eagerly decoded approved logo enters with a slow ease, then moves into the measured navigation position before visible hero motion begins.',
     files: [
       {
         label: 'Motion runtime',
@@ -11904,8 +11915,11 @@ const agentPackageFeatures: AgentFeature[] = [
           'sf-brand-intro',
           'function runRouteBrandTransition',
           'siteforge:route-transition-complete',
-          'Preparing your site',
           'is-handing-off',
+          'data-siteforge-intro-surface',
+          'data-siteforge-intro-ink',
+          'data-siteforge-intro-copy',
+          'prioritiseBrandLogos',
         ],
       },
       {
@@ -11916,7 +11930,11 @@ const agentPackageFeatures: AgentFeature[] = [
       {
         label: 'Template instructions',
         detail: 'Requires generated pages to mark their actual navigation logo.',
-        terms: ['data-siteforge-brand-logo', 'preparation message'],
+        terms: [
+          'data-siteforge-brand-logo',
+          'data-siteforge-intro-copy',
+          'data-siteforge-navigation-logo',
+        ],
       },
     ],
   },
@@ -11924,7 +11942,7 @@ const agentPackageFeatures: AgentFeature[] = [
     id: 'responsive-sidebar',
     title: 'Mobile & tablet sidebar navigation',
     detail:
-      'Keeps the logo and menu control together in the header, then animates the branded trigger-side surface fully in and out while sequencing its approved logo, primary routes, and actions below desktop width.',
+      'Keeps the logo and menu control together in the header, verifies declared flow or true viewport-centred alignment, preloads and decodes the drawer logo before first open, then animates the branded trigger-side surface fully in and out while releasing its approved logo, primary routes, and actions as one logo-first sequence below desktop width.',
     files: [
       {
         label: 'Mobile navigation contract',
@@ -11937,6 +11955,10 @@ const agentPackageFeatures: AgentFeature[] = [
           'icon-only',
           'icon choreography',
           'scroll behaviour',
+          'data-siteforge-compact-logo-alignment',
+          'data-siteforge-navigation-logo',
+          'data-siteforge-navigation-logo-src',
+          'is-sf-navigation-ready',
         ],
       },
       {
@@ -16518,11 +16540,7 @@ function WorkspaceApp({
     <>
       <AppShell
         activePage={activePage}
-        contentKey={
-          route.page === 'prospects' && route.businessId
-            ? `#/prospects/${route.businessId}`
-            : hrefForRoute(route)
-        }
+        contentKey={hrefForRoute(route)}
         isLoading={loadingPresentation}
         isHydrating={!loadingPresentation && isHydrating}
         onNavigate={(page) =>
@@ -16533,11 +16551,13 @@ function WorkspaceApp({
                 ? { page: 'data' }
                 : page === 'usage'
                   ? { page: 'usage' }
-                  : page === 'settings'
-                    ? { page: 'settings' }
-                    : page === 'agent-studio'
-                      ? { page: 'agent-studio', section: 'refine' }
-                      : { page: 'prospects' },
+                  : page === 'tax'
+                    ? { page: 'tax' }
+                    : page === 'settings'
+                      ? { page: 'settings' }
+                      : page === 'agent-studio'
+                        ? { page: 'agent-studio', section: 'refine' }
+                        : { page: 'prospects' },
           )
         }
         onSignOut={onSignOut}
@@ -16570,6 +16590,8 @@ function WorkspaceApp({
             onOpenWorkspace={openWorkspace}
             workspaces={workspaces}
           />
+        ) : route.page === 'tax' ? (
+          <TaxExpensesPage repository={repository} workspaces={workspaces} />
         ) : route.page === 'settings' ? (
           <BuilderSettingsPage />
         ) : route.page === 'agent-studio' ? (

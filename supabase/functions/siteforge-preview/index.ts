@@ -175,6 +175,15 @@ function rewritePreviewRootReferences(source: string, base: string) {
     .replace(/url\(\s*(["']?)\/(?!\/)/gi, (_match, quote: string) => `url(${quote}${base}`);
 }
 
+function rewritePreviewRuntimeReferences(source: string, base: string) {
+  return rewritePreviewRootReferences(source, base)
+    .replace(
+      /(\.p\s*=\s*["'])\/_next\//g,
+      (_match, assignment: string) => `${assignment}${base}_next/`,
+    )
+    .replace(/(["'])\/assets\//g, (_match, quote: string) => `${quote}${base}assets/`);
+}
+
 Deno.serve(async (request) => {
   if (request.method !== 'GET' && request.method !== 'HEAD')
     return response(405, 'Method not allowed');
@@ -303,6 +312,11 @@ Deno.serve(async (request) => {
     const draftPrefix = parsed.previewMode === 'draft' ? '__draft__/' : '';
     const base = `${supabaseUrl}/functions/v1/siteforge-preview/${parsed.runId}/${parsed.token}/${draftPrefix}`;
     return new Response(rewritePreviewRootReferences(await file.text(), base), { headers });
+  }
+  if (resolvedFilePath.toLowerCase().endsWith('.js')) {
+    const draftPrefix = parsed.previewMode === 'draft' ? '__draft__/' : '';
+    const base = `${supabaseUrl}/functions/v1/siteforge-preview/${parsed.runId}/${parsed.token}/${draftPrefix}`;
+    return new Response(rewritePreviewRuntimeReferences(await file.text(), base), { headers });
   }
   return new Response(file.stream(), { headers });
 });

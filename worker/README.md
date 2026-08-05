@@ -47,6 +47,7 @@ SITEFORGE_WORKER_ID=siteforge-capture-1
 SITEFORGE_CAPTURE_POLL_MS=5000
 SITEFORGE_ASSET_VISION_MODEL=gpt-5
 SITEFORGE_CODEX_MODEL=gpt-5.6
+SITEFORGE_CODEX_REASONING_EFFORT=high
 SITEFORGE_CODEX_BIN=codex
 SITEFORGE_AGENT_PACKAGE_MODEL=gpt-5.6
 # Optional rate card for the in-app AI usage page. Values are USD per 1M tokens.
@@ -58,6 +59,15 @@ The worker always records provider token usage. It automatically prices the stan
 Codex test-builder alias at the published OpenAI standard rate current on 2026-07-24. Configure a
 reviewed rate card for any other model, non-standard processing tier, subscription, or invoice
 adjustment so the in-app total never treats an unknown amount as a real cost.
+
+Without overrides, private homepage and page-set tests use GPT-5.6 Terra at medium reasoning;
+whole-site revisions and complete builds retain GPT-5.6 Sol at high reasoning. Every named profile
+stores its official token-credit estimate in the usage record metadata. Override both settings only
+when a deployment has reviewed the quality and usage tradeoff.
+
+Package v7.4 treats short workspace directions as outcome-level creative briefs. The builder
+independently develops page-specific art direction, typography, responsive composition, and custom
+React/CSS motion or interaction instead of requiring the tester to enumerate individual effects.
 
 ## Run
 
