@@ -2144,7 +2144,7 @@ function buildPrompt(workspace, buildInstruction) {
           'Read and implement feature-contracts/contextual-logo-selection.md. The approved primary logo family is mandatory in the header and footer. Use the explicit logoFamilyPrimaryAssetId and logoAppearance fields in approved-assets.json to choose a contrast-safe approved version for each direct background surface, and annotate every logo image as required by the contract. Use the reviewed primary and accent colours as brand tokens, then design coherent accessible neutrals, surfaces, and backgrounds yourself; do not copy a weak legacy colour system or replace the identity with a generic one.',
         ]
       : []),
-    'Keep the locked SiteRuntime mounted in the root layout. It supplies the server-rendered loading cover, post-handoff hero reveal, factual counters, and approved-logo introduction without determining visual design. Mark the real header logo or wrapper with data-siteforge-brand-logo, its exact data-siteforge-intro-surface and 4.5:1-contrasting data-siteforge-intro-ink colours, builder-chosen data-siteforge-intro-copy, and an honest data-siteforge-compact-logo-alignment of center or flow. Prefer an approved slogan for the intro copy, otherwise choose a concise evidence-grounded line without inventing a claim. Load the intrinsically sized header logo eagerly with high fetch priority. Mark the drawer logo with both data-siteforge-navigation-logo and the first data-sf-navigation-item, and preload any distinct drawer appearance in the initial document through data-siteforge-navigation-logo-src. The runtime holds drawer items until that mounted logo is decoded, so do not override its readiness visibility or animate routes independently. If center is chosen, align to the viewport rather than an unequal middle grid cell. Do not add a second loader, fake progress, generic wordmark, or invented metric.',
+    'Keep the locked SiteRuntime mounted in the root layout. It supplies the server-rendered loading cover, post-handoff hero reveal, factual counters, and approved-logo introduction without determining visual design. Mark the real header logo or wrapper with data-siteforge-brand-logo, its exact data-siteforge-intro-surface and 4.5:1-contrasting data-siteforge-intro-ink colours, builder-chosen data-siteforge-intro-copy, and an honest data-siteforge-compact-logo-alignment of center or flow. Prefer an approved slogan for the intro copy, otherwise choose a concise evidence-grounded line without inventing a claim. Load the intrinsically sized header logo eagerly with high fetch priority. Mark the drawer logo with both data-siteforge-navigation-logo and the first data-sf-navigation-item, and preload any distinct drawer appearance in the initial document through data-siteforge-navigation-logo-src. The runtime pre-decodes and prioritises that mark, then exposes the logo and routes together when the drawer opens; do not add independent readiness visibility or route animations. If center is chosen, align to the viewport rather than an unequal middle grid cell. Do not add a second loader, fake progress, generic wordmark, or invented metric.',
     'Read and implement feature-contracts/mobile-navigation.md as generated React site components. Use native HTML and Base UI where focus-managed dialog behaviour is needed. Own the icon, composition, tokens, layout, and motion while preserving every required hook and state.',
     ...(agentPackage.contract_addendum
       ? [
@@ -2545,6 +2545,23 @@ function responsiveImageProblems(htmlFiles) {
     }
   }
   return [...new Set(problems)];
+}
+
+function firstViewportHeroHookProblems(htmlFiles) {
+  const requiredHooks = [
+    ['data-siteforge-hero', 'hero section'],
+    ['data-siteforge-hero-heading', 'hero heading'],
+    ['data-siteforge-hero-primary-action', 'hero primary action'],
+    ['data-siteforge-hero-media', 'hero media'],
+  ];
+  return htmlFiles.flatMap((file) =>
+    requiredHooks
+      .filter(([hook]) => !file.contents.includes(hook))
+      .map(
+        ([, label]) =>
+          `${file.relativePath} does not identify its ${label} for first-viewport verification.`,
+      ),
+  );
 }
 
 function brandIntroProblems(
@@ -3828,8 +3845,44 @@ async function responsiveInteractionEvidence(
   enforceLogoReadiness = false,
   enforceLogoSequence = false,
   enforceSectionRhythm = false,
+  enforceImmediateNavigation = false,
+  enforceFirstViewportHero = false,
 ) {
   const problems = [];
+  await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+        window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
+      }),
+  );
+  const renderedImagesReady = () =>
+    [...document.images]
+      .filter((image) => image.getClientRects().length > 0)
+      .every((image) => image.complete && image.naturalWidth > 0 && image.naturalHeight > 0);
+  const imagesReady = enforceFirstViewportHero
+    ? await page
+        .waitForFunction(renderedImagesReady, undefined, { timeout: 2_000 })
+        .then(() => true)
+        .catch(() => false)
+    : true;
+  if (enforceFirstViewportHero && !imagesReady) {
+    const brokenImages = await page.evaluate(() =>
+      [...document.images]
+        .filter(
+          (image) =>
+            image.getClientRects().length > 0 &&
+            (!image.complete || image.naturalWidth < 1 || image.naturalHeight < 1),
+        )
+        .map(
+          (image) => image.currentSrc || image.src || image.getAttribute('src') || 'unknown image',
+        )
+        .slice(0, 4),
+    );
+    problems.push(
+      `${htmlFile.relativePath} has a rendered image that failed to load with positive intrinsic dimensions at ${viewport.width}px: ${brokenImages.join(', ')}.`,
+    );
+  }
   const overflow = await page.evaluate(() => ({
     documentWidth: document.documentElement.scrollWidth,
     viewportWidth: window.innerWidth,
@@ -3852,6 +3905,62 @@ async function responsiveInteractionEvidence(
       problems.push(`${htmlFile.relativePath} exposes its compact trigger at desktop width.`);
     }
     return { problems };
+  }
+
+  if (enforceFirstViewportHero) {
+    const heroFit = await page.evaluate(() => {
+      const heading = document.querySelector(
+        '[data-siteforge-hero-heading], [data-siteforge-hero] h1, main h1',
+      );
+      const hero =
+        heading?.closest('[data-siteforge-hero]') ||
+        heading?.closest('section') ||
+        heading?.parentElement;
+      const primaryAction =
+        hero?.querySelector('[data-siteforge-hero-primary-action]') ||
+        hero?.querySelector('a[href], button:not([disabled])');
+      const headingBox = heading?.getBoundingClientRect();
+      const actionBox = primaryAction?.getBoundingClientRect();
+      return {
+        hasHeading: Boolean(headingBox?.width && headingBox.height),
+        hasAction: Boolean(actionBox?.width && actionBox.height),
+        headingBottom: headingBox?.bottom,
+        actionBottom: actionBox?.bottom,
+        headingClipped:
+          heading instanceof window.HTMLElement &&
+          (heading.scrollWidth > heading.clientWidth + 1 ||
+            Boolean(
+              headingBox && (headingBox.left < -1 || headingBox.right > window.innerWidth + 1),
+            )),
+        actionClipped: Boolean(
+          actionBox && (actionBox.left < -1 || actionBox.right > window.innerWidth + 1),
+        ),
+        viewportHeight: window.innerHeight,
+      };
+    });
+    if (!heroFit.hasHeading || heroFit.headingClipped) {
+      problems.push(
+        `${htmlFile.relativePath} mobile hero heading is missing or horizontally clipped at ${viewport.width}px.`,
+      );
+    }
+    if (
+      typeof heroFit.headingBottom !== 'number' ||
+      heroFit.headingBottom > heroFit.viewportHeight + 1
+    ) {
+      problems.push(
+        `${htmlFile.relativePath} complete hero heading extends below the first viewport at ${viewport.width}px.`,
+      );
+    }
+    if (
+      !heroFit.hasAction ||
+      heroFit.actionClipped ||
+      typeof heroFit.actionBottom !== 'number' ||
+      heroFit.actionBottom > heroFit.viewportHeight + 1
+    ) {
+      problems.push(
+        `${htmlFile.relativePath} primary hero action extends below the first viewport at ${viewport.width}px.`,
+      );
+    }
   }
 
   if ((await desktopNavigation.count()) > 0 && (await desktopNavigation.isVisible())) {
@@ -3985,6 +4094,12 @@ async function responsiveInteractionEvidence(
         logoDelay: delayFor(logo),
         firstRouteDelay: delayFor(firstRoute),
         maximumDelay: items.length ? Math.max(...items.map((item) => delayFor(item) ?? 0)) : 0,
+        animationName: getComputedStyle(surface).animationName,
+        scrollbarWidth: getComputedStyle(surface).scrollbarWidth,
+        closedTranslate: getComputedStyle(surface).getPropertyValue(
+          '--sf-navigation-closed-translate',
+        ),
+        direction: getComputedStyle(surface).direction,
       };
     });
     if ((navigationPacing.logoDelay ?? Number.POSITIVE_INFINITY) > 16) {
@@ -3992,14 +4107,36 @@ async function responsiveInteractionEvidence(
         `${htmlFile.relativePath} compact-navigation logo does not begin revealing immediately at ${viewport.width}px.`,
       );
     }
-    if ((navigationPacing.firstRouteDelay ?? Number.POSITIVE_INFINITY) > 60) {
+    if (
+      (navigationPacing.firstRouteDelay ?? Number.POSITIVE_INFINITY) >
+      (enforceImmediateNavigation ? 16 : 60)
+    ) {
       problems.push(
         `${htmlFile.relativePath} first compact-navigation route waits too long to begin revealing at ${viewport.width}px.`,
       );
     }
-    if (navigationPacing.maximumDelay > 250) {
+    if (navigationPacing.maximumDelay > (enforceImmediateNavigation ? 16 : 250)) {
       problems.push(
         `${htmlFile.relativePath} compact-navigation item sequence is delayed too long at ${viewport.width}px.`,
+      );
+    }
+    if (enforceImmediateNavigation && navigationPacing.animationName !== 'none') {
+      problems.push(
+        `${htmlFile.relativePath} compact-navigation surface has a competing generated animation at ${viewport.width}px.`,
+      );
+    }
+    if (enforceImmediateNavigation && navigationPacing.scrollbarWidth !== 'none') {
+      problems.push(
+        `${htmlFile.relativePath} compact-navigation surface exposes nested scrollbar chrome at ${viewport.width}px.`,
+      );
+    }
+    if (
+      enforceImmediateNavigation &&
+      navigationPacing.direction !== 'rtl' &&
+      navigationPacing.closedTranslate.trim() !== '-100%'
+    ) {
+      problems.push(
+        `${htmlFile.relativePath} compact navigation is not configured to enter from the left at ${viewport.width}px.`,
       );
     }
     const navigationItemsVisible = await page
@@ -4036,6 +4173,16 @@ async function responsiveInteractionEvidence(
     if (!dialogBox || dialogBox.y > 1 || dialogBox.height < viewport.height - 1) {
       problems.push(
         `${htmlFile.relativePath} compact navigation does not fill the viewport height at ${viewport.width}px.`,
+      );
+    }
+    if (
+      enforceImmediateNavigation &&
+      navigationPacing.direction !== 'rtl' &&
+      dialogBox &&
+      dialogBox.x > 1
+    ) {
+      problems.push(
+        `${htmlFile.relativePath} compact navigation is not anchored to the left edge at ${viewport.width}px.`,
       );
     }
     const backdrop = page.locator('[data-siteforge-navigation-backdrop]').first();
@@ -4138,6 +4285,11 @@ async function responsiveInteractionEvidence(
     undefined,
     { timeout: 2_000 },
   );
+  if (enforceImmediateNavigation && (await dialog.count()) === 0) {
+    problems.push(
+      `${htmlFile.relativePath} unmounts compact navigation before its exit motion can complete at ${viewport.width}px.`,
+    );
+  }
   const focusRestored = await page
     .waitForFunction(
       () => document.activeElement === document.querySelector('[data-siteforge-menu-trigger]'),
@@ -4254,6 +4406,7 @@ async function runQualityChecks(
   );
   const packageVersion = Number(workspace.agentPackage.version);
   const designSystemPackage = packageVersion >= 8.2;
+  const firstViewportPackage = packageVersion >= 8.6;
   const brandCheckProblems = await brandProblems(manifest, workspace.stagedAssets, allFiles);
   const approvedImageProblems = approvedImageUsageProblems(
     workspace.stagedAssets,
@@ -4286,6 +4439,9 @@ async function runQualityChecks(
     ? await creativeAutonomyProblems(workspace.siteDirectory)
     : [];
   const responsiveImages = expressivePackage ? responsiveImageProblems(scopedHtmlFiles) : [];
+  const firstViewportHeroHooks = firstViewportPackage
+    ? firstViewportHeroHookProblems(scopedHtmlFiles)
+    : [];
   const brandIntroCheckProblems = brandIntroProblems(
     manifest,
     scopedHtmlFiles,
@@ -4423,9 +4579,11 @@ async function runQualityChecks(
       status: navigationMotion.length ? 'failed' : 'passed',
       detail: navigationMotion.length
         ? navigationMotion.join(' ')
-        : expressivePackage
-          ? 'The compact surface animates in and out while its logo, routes, and actions sequence in reading order.'
-          : 'The selected package does not require the expanded navigation-motion evidence.',
+        : firstViewportPackage
+          ? 'The compact surface enters from the leading edge while its decoded logo, routes, and actions are visible together without nested scrollbar chrome.'
+          : expressivePackage
+            ? 'The compact surface animates in and out while its logo, routes, and actions sequence in reading order.'
+            : 'The selected package does not require the expanded navigation-motion evidence.',
     },
     {
       id: 'creative-autonomy',
@@ -4444,6 +4602,16 @@ async function runQualityChecks(
       detail: responsiveImages.length
         ? responsiveImages.join(' ')
         : 'Raster images use stable dimensions, asynchronous decoding, and lazy loading where applicable.',
+    },
+    {
+      id: 'first-viewport-hero',
+      label: 'Mobile first-viewport hero',
+      status: firstViewportHeroHooks.length ? 'failed' : 'passed',
+      detail: firstViewportHeroHooks.length
+        ? firstViewportHeroHooks.join(' ')
+        : firstViewportPackage
+          ? 'The hero exposes its proposition, primary action, and media for rendered first-viewport checks.'
+          : 'The selected package does not require first-viewport hero evidence.',
     },
     {
       id: 'brand-introduction',
@@ -4663,6 +4831,8 @@ async function runQualityChecks(
               immediateBrandPackage,
               decodedNavigationPackage,
               designSystemPackage,
+              firstViewportPackage,
+              firstViewportPackage,
             );
             interactionProblems.push(...interaction.problems);
             if (interaction.openNavigationBody) {
@@ -4730,7 +4900,9 @@ async function runQualityChecks(
     status: interactionProblems.length ? 'failed' : 'passed',
     detail: interactionProblems.length
       ? interactionProblems.join(' ')
-      : 'Compact navigation, declared logo alignment, focus restoration, reduced motion, touch target, leading-edge trigger, vertical routes, and horizontal overflow checks passed.',
+      : firstViewportPackage
+        ? 'Compact navigation direction, immediate content, hidden nested scrollbar chrome, decoded images, mobile first-viewport hero fit, focus restoration, reduced motion, touch targets, and overflow checks passed.'
+        : 'Compact navigation, declared logo alignment, focus restoration, reduced motion, touch target, leading-edge trigger, vertical routes, and horizontal overflow checks passed.',
   });
   checks.push({
     id: 'browser-console',

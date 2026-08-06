@@ -7640,27 +7640,27 @@ function BuilderRunPanel({
                 : 'package-behaviour',
             title: `Package ${agentPackageVersionLabel(selectedAgentPackage.version)} testing behaviour`,
             detail: selectedAgentPackage.capabilityProposal || selectedAgentPackage.summary,
-            revision: `v${selectedAgentPackage.version}.0.17`,
+            revision: `v${selectedAgentPackage.version}.0.18`,
             change:
-              'Latest edit: package v8.5 keeps the settled visual-quality evidence and makes compact navigation begin revealing its logo and routes immediately.',
+              'Latest edit: package v8.6 keeps mobile navigation on the leading edge without nested scrollbar chrome and verifies that the complete hero proposition and primary action fit the first viewport.',
           },
           {
             id: 'hero-handoff',
             title: 'Visible hero entrance after the logo handoff',
             detail:
               'After the logo has reached the real navigation mark, the hero heading, supporting copy, and visual media reveal separately. The entrance no longer plays behind the loading overlay, so visitors can see it happen.',
-            revision: `v${selectedAgentPackage.version}.40`,
+            revision: `v${selectedAgentPackage.version}.41`,
             change:
-              'Latest edit: locked reveal hooks are now the baseline rather than the creative ceiling, allowing coordinated page-owned parallax, scroll, pointer, masking, and layered effects after handoff.',
+              'Latest edit: explicit hero hooks now let browser checks verify that the complete heading and primary action fit the first compact viewport before optional media.',
           },
           {
             id: 'responsive-sidebar',
             title: 'Mobile & tablet sidebar navigation',
             detail:
               'Below desktop width, the header links become a leading-edge sidebar that reuses the real logo and header palette and opens from the trigger side. On motion-enabled visits, the header slides away after a downward scroll and returns on any upward scroll. It supports close, backdrop, Escape, keyboard focus, route selection, and reduced-motion users; desktop navigation stays visible.',
-            revision: `v${selectedAgentPackage.version}.22`,
+            revision: `v${selectedAgentPackage.version}.23`,
             change:
-              'Latest edit: the decoded drawer logo now begins with the entering surface, the first route follows within 60ms, and browser checks reject delayed item sequences.',
+              'Latest edit: the compact drawer enters from the leading edge without nested scrollbar chrome, while its decoded logo, routes, and actions are visible together without item delays.',
           },
           {
             id: 'contextual-logo-selection',
@@ -7694,9 +7694,9 @@ function BuilderRunPanel({
             title: 'Next.js generated component architecture',
             detail:
               'The agent creates each business’s visual tokens, UI primitives, patterns, sections, site components, layouts, and pages on a pinned strict TypeScript, Tailwind, Base UI, and Lucide foundation.',
-            revision: `v${selectedAgentPackage.version}.42`,
+            revision: `v${selectedAgentPackage.version}.43`,
             change:
-              'Latest edit: shared SectionShell and SectionHeading components now own semantic eyebrow, title, copy, and section-end spacing so repeated relationships cannot drift between sections.',
+              'Latest edit: generated heroes now expose reusable section, heading, primary-action, and media hooks, with mobile-first composition that puts the proposition before supporting media.',
           },
           {
             id: 'runtime-profiles',
@@ -7712,9 +7712,9 @@ function BuilderRunPanel({
             title: 'Framework and responsive quality gates',
             detail:
               'Generated source must pass formatting, lint, strict typing, production build, route and provenance checks, browser interactions, accessibility, and exact responsive evidence.',
-            revision: `v${selectedAgentPackage.version}.50`,
+            revision: `v${selectedAgentPackage.version}.51`,
             change:
-              'Latest edit: final-state evidence now waits for factual counters to reach their endpoint before accessibility scans and screenshots, so viewport timing cannot change saved values.',
+              'Latest edit: responsive checks now reject broken intrinsic image loads, clipped or below-fold first-viewport hero content, wrong-way drawer entry, nested drawer scrollbar chrome, and delayed navigation items.',
           },
         ]
       : [];

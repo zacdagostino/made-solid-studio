@@ -98,9 +98,13 @@ test('verifies and exports the isolated Next.js component foundation', async () 
     assert.match(runtime, /grid-column: 1 !important/);
     assert.match(runtime, /grid-column: 2 !important/);
     assert.match(runtime, /focusTarget\?\.focus\(\{ preventScroll: true \}\)/);
-    assert.match(runtime, /window\.setTimeout\(revealItems, 1_200\)/);
-    assert.match(runtime, /Math\.min\(\+\+enteringSequenceIndex \* 45, 225\)/);
-    assert.match(runtime, /opacity 240ms cubic-bezier\(\.16,1,\.3,1\)/);
+    assert.doesNotMatch(runtime, /window\.setTimeout\(revealItems, 1_200\)/);
+    assert.match(runtime, /else dialog\.classList\.add\('is-sf-navigation-ready'\)/);
+    assert.match(runtime, /--sf-navigation-closed-translate/);
+    assert.match(runtime, /scrollbar-width: none/);
+    assert.match(runtime, /animation: none !important/);
+    assert.match(runtime, /transition: none/);
+    assert.doesNotMatch(runtime, /enteringSequenceIndex/);
     assert.doesNotMatch(runtime, /Preparing your site/);
     assert.match(runtime, /usePathname/);
     assert.match(runtime, /sf-route-transitioning/);
@@ -273,8 +277,12 @@ test('verifies and exports the isolated Next.js component foundation', async () 
         ),
         true,
       );
+      let releaseNavigationLogo;
+      const navigationLogoResponse = new Promise((resolve) => {
+        releaseNavigationLogo = resolve;
+      });
       await page.route('**/delayed-navigation-logo.svg', async (route) => {
-        await new Promise((resolve) => setTimeout(resolve, 1_600));
+        await navigationLogoResponse;
         await route.fulfill({
           body: `<svg xmlns="http://www.w3.org/2000/svg" width="124" height="40"><rect width="124" height="40" fill="#173f35"/></svg>`,
           contentType: 'image/svg+xml',
@@ -338,14 +346,19 @@ test('verifies and exports the isolated Next.js component foundation', async () 
         await page
           .locator('[data-siteforge-navigation-dialog]')
           .evaluate((dialog) => dialog.classList.contains('is-sf-navigation-ready')),
-        false,
+        true,
       );
       assert.equal(
         await page
-          .locator('[data-siteforge-navigation-logo]')
-          .evaluate((logo) => globalThis.getComputedStyle(logo).opacity),
-        '0',
+          .locator('[data-sf-navigation-item]')
+          .evaluateAll((items) =>
+            items.every(
+              (item) => Number.parseFloat(globalThis.getComputedStyle(item).opacity) >= 0.95,
+            ),
+          ),
+        true,
       );
+      releaseNavigationLogo();
       await page.waitForFunction(() =>
         globalThis.document
           .querySelector('[data-siteforge-navigation-dialog]')
@@ -391,7 +404,7 @@ test('verifies and exports the isolated Next.js component foundation', async () 
           .evaluateAll((items) =>
             items.map((item) => item.style.getPropertyValue('--sf-navigation-item-delay')),
           ),
-        ['0ms', '0ms', '45ms', '90ms'],
+        ['0ms', '0ms', '0ms', '0ms'],
       );
       await page.waitForFunction(() => {
         const logo = globalThis.document.querySelector('[data-siteforge-navigation-logo]');
@@ -433,7 +446,7 @@ test('verifies and exports the isolated Next.js component foundation', async () 
           .evaluateAll((items) =>
             items.map((item) => item.style.getPropertyValue('--sf-navigation-item-delay')),
           ),
-        ['75ms', '50ms', '25ms', '0ms'],
+        ['0ms', '0ms', '0ms', '0ms'],
       );
       assert.deepEqual(
         await page.evaluate(() => {

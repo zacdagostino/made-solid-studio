@@ -194,6 +194,7 @@ const localForcedFinalStatePackageId = 'agent-package-local-v8-3-forced-final-st
 const localSettledFactualEvidencePackageId = 'agent-package-local-v8-4-settled-factual-evidence';
 const localImmediateNavigationSequencePackageId =
   'agent-package-local-v8-5-immediate-navigation-sequence';
+const localMobileViewportIntegrityPackageId = 'agent-package-local-v8-6-mobile-viewport-integrity';
 
 type StoreName =
   | 'activities'
@@ -912,10 +913,32 @@ export class SiteforgeRepository {
         'Makes the mobile and tablet drawer respond immediately instead of showing its surface before the logo and links begin animating.',
       stagedBehaviourIds: ['responsive-sidebar'],
     };
+    const localMobileViewportIntegrityPackage: AgentPackage = {
+      ...localImmediateNavigationSequencePackage,
+      id: localMobileViewportIntegrityPackageId,
+      version: 8.6,
+      basePackageId: localImmediateNavigationSequencePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v8.6',
+      contractAddendum:
+        'Compact navigation is locked to the logical leading edge without generated keyframe overrides or nested scrollbar chrome, and its decoded items become visible together with zero delay. Mobile browser checks require the complete hero proposition and primary action in the first viewport, reject clipped heading words, and verify every traversed image has positive intrinsic dimensions.',
+      instructionsAddendum:
+        'Mark hero, heading, primary action, and media with the required Siteforge hero hooks. At 320×568 and 375×812 place the proposition and primary action before supporting media, size display type against the longest word, keep the complete heading and action in the first viewport, and do not add navigation item animations, right anchoring, or drawer scrollbar styling.',
+      summary:
+        'Mobile viewport integrity test package: fixes left-edge drawer motion, removes nested navigation scrollbar chrome and delayed items, verifies loaded images, and keeps the mobile hero proposition and action above the fold.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents compact navigation entering from the wrong side or appearing empty, and stops oversized mobile hero media or type from clipping the proposition and hiding its primary action.',
+      stagedBehaviourIds: [
+        'responsive-sidebar',
+        'next-component-architecture',
+        'framework-quality-gates',
+      ],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localMobileViewportIntegrityPackage,
           localImmediateNavigationSequencePackage,
           localSettledFactualEvidencePackage,
           localForcedFinalStatePackage,
@@ -949,6 +972,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localMobileViewportIntegrityPackage,
           localImmediateNavigationSequencePackage,
           localSettledFactualEvidencePackage,
           localForcedFinalStatePackage,
@@ -985,6 +1009,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localMobileViewportIntegrityPackage,
             localImmediateNavigationSequencePackage,
             localSettledFactualEvidencePackage,
             localForcedFinalStatePackage,

@@ -168,6 +168,10 @@ const immediateNavigationSequenceMigrationUrl = new URL(
   '../../supabase/migrations/20260806153000_immediate_navigation_sequence_test_package.sql',
   import.meta.url,
 );
+const mobileViewportIntegrityMigrationUrl = new URL(
+  '../../supabase/migrations/20260806170000_mobile_viewport_integrity_test_package.sql',
+  import.meta.url,
+);
 const preserveResumeContextMigrationUrl = new URL(
   '../../supabase/migrations/20260731123000_preserve_builder_resume_context.sql',
   import.meta.url,
@@ -700,8 +704,9 @@ test('defines immersive motion, typography, service-page, and image craft requir
   assert.match(navigationContract, /data-siteforge-desktop-navigation/);
   assert.match(navigationContract, /data-siteforge-navigation-backdrop/);
   assert.match(navigationContract, /one shared close function/i);
-  assert.match(navigationContract, /decoded logo has no deliberate transition delay/i);
-  assert.match(navigationContract, /first route begins within 60ms/i);
+  assert.match(navigationContract, /every decoded navigation item together/i);
+  assert.match(navigationContract, /zero transition delay/i);
+  assert.match(navigationContract, /do not show a nested scrollbar track/i);
   assert.match(runtime, /transform 1100ms cubic-bezier\(\.16,1,\.3,1\)/);
   assert.match(runtime, /function startNavigationMotion/);
   assert.match(runtime, /function startNavigationInteractions/);
@@ -715,7 +720,9 @@ test('defines immersive motion, typography, service-page, and image craft requir
   assert.match(runtime, /window\.scrollTo\(\{ top: 0, left: 0, behavior: 'auto' \}\)/);
   assert.match(runtime, /requestAnimationFrame\(\(\) => requestAnimationFrame/);
   assert.match(runtime, /header:has\(\[data-siteforge-brand-logo\]\)/);
-  assert.match(runtime, /\+\+enteringSequenceIndex \* 45/);
+  assert.match(runtime, /--sf-navigation-closed-translate/);
+  assert.match(runtime, /scrollbar-width: none/);
+  assert.doesNotMatch(runtime, /enteringSequenceIndex/);
   assert.match(runtime, /1_500/);
 });
 
@@ -782,7 +789,8 @@ test('creates a feature-only whole-site Agent Studio prompt', () => {
   assert.match(prompt, /Repair nested navigation without redesigning the site/);
   assert.match(prompt, /complete change scope/);
   assert.match(prompt, /first data-sf-navigation-item/);
-  assert.match(prompt, /holds drawer items until that mounted logo is decoded/);
+  assert.match(prompt, /pre-decodes and prioritises that mark/);
+  assert.match(prompt, /exposes the logo and routes together/);
   assert.match(prompt, /outcome-level creative brief/);
   assert.match(prompt, /Required runtime hooks are the baseline, not the creative ceiling/);
   assert.match(prompt, /pointer-responsive ambient light/);
@@ -1695,20 +1703,44 @@ test('registers settled factual evidence above forced final-state evidence', asy
 });
 
 test('registers immediate compact navigation sequencing above settled factual evidence', async () => {
-  const [migration, runtime, worker] = await Promise.all([
+  const [migration, worker] = await Promise.all([
     readFile(immediateNavigationSequenceMigrationUrl, 'utf8'),
-    readFile(motionRuntimeUrl, 'utf8'),
     readFile(new URL('../../worker/builder-worker.mjs', import.meta.url), 'utf8'),
   ]);
   assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
   assert.match(migration, /Immediate compact navigation test package:/);
   assert.match(migration, /first route within 60ms/);
   assert.match(migration, /"responsive-sidebar"/);
-  assert.match(runtime, /Math\.min\(\+\+enteringSequenceIndex \* 45, 225\)/);
-  assert.match(runtime, /opacity 240ms cubic-bezier\(\.16,1,\.3,1\)/);
   assert.match(worker, /compact-navigation logo does not begin revealing immediately/);
   assert.match(worker, /first compact-navigation route waits too long/);
   assert.match(worker, /compact-navigation item sequence is delayed too long/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers mobile viewport integrity above immediate compact navigation', async () => {
+  const [migration, runtime, worker, componentContract] = await Promise.all([
+    readFile(mobileViewportIntegrityMigrationUrl, 'utf8'),
+    readFile(motionRuntimeUrl, 'utf8'),
+    readFile(new URL('../../worker/builder-worker.mjs', import.meta.url), 'utf8'),
+    readFile(componentArchitectureContractUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Mobile viewport integrity test package:/);
+  assert.match(migration, /logical leading edge/);
+  assert.match(migration, /positive intrinsic dimensions/);
+  assert.match(migration, /"responsive-sidebar"/);
+  assert.match(migration, /"next-component-architecture"/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(runtime, /--sf-navigation-closed-translate/);
+  assert.match(runtime, /scrollbar-width: none/);
+  assert.match(runtime, /animation: none !important/);
+  assert.doesNotMatch(runtime, /enteringSequenceIndex/);
+  assert.match(worker, /complete hero heading extends below the first viewport/);
+  assert.match(worker, /primary hero action extends below the first viewport/);
+  assert.match(worker, /failed to load with positive intrinsic dimensions/);
+  assert.match(worker, /unmounts compact navigation before its exit motion can complete/);
+  assert.match(componentContract, /data-siteforge-hero-primary-action/);
+  assert.match(componentContract, /320×568 and 375×812/);
   assert.match(migration, /not exists/i);
 });
 

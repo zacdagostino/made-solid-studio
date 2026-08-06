@@ -56,6 +56,13 @@ These layers describe responsibility, not mandatory component counts. Do not cre
 - Build stacked copy as a named `Stack` or equivalent component with semantic gap tokens. When a stack uses `data-reveal="sequence"`, keep its eyebrow, heading, paragraph, and actions as direct children in reading order so the runtime can reveal them one after another without changing the spacing geometry.
 - Review the full services page and at least one content-dense page at every required viewport. Fix widows, overlong measures, awkward wraps, inconsistent heading gaps, and empty areas rather than shrinking the type.
 
+## Mobile first-viewport composition
+
+- Mark the primary hero section with `data-siteforge-hero`, its H1 with `data-siteforge-hero-heading`, its primary conversion action with `data-siteforge-hero-primary-action`, and meaningful hero media with `data-siteforge-hero-media`.
+- At 320×568 and 375×812, prioritise the visitor-facing proposition and action before supporting media. The complete H1 and primary action must appear within the initial viewport below the header without horizontal clipping. Put hero media after the copy in mobile reading order, use it as a bounded supporting layer, or deliberately crop it as background; never place a tall standalone image before the proposition and push the action below the fold.
+- Size mobile display type from the available content width and longest unbroken word, not viewport width alone. A fluid `clamp()` still fails if its mobile maximum lets a word exceed its container. Verify the rendered heading's own scroll width as well as document overflow, because `overflow-x: hidden` can conceal clipped words from page-level checks.
+- Keep the initial viewport purposeful rather than cramming every hero detail into it. The required proposition and primary action fit first; secondary copy, media captions, secondary actions, and decorative depth may continue below.
+
 ## Motion composition
 
 - Choreograph the hero as a sequence, not a single heading effect: introduce the short title, supporting copy, primary actions, and meaningful media as distinct but related beats. At least one subsequent section must reveal its own heading/supporting content and one genuinely grouped set must use staggered item motion.
@@ -72,7 +79,7 @@ These layers describe responsibility, not mandatory component counts. Do not cre
 
 - Style document and component scrollbars as part of the generated visual system. Define neutral `--scrollbar-track` and `--scrollbar-thumb` tokens plus restrained hover and active treatments, using standards-based `scrollbar-color` and `scrollbar-width` with matching `::-webkit-scrollbar` rules where supported.
 - Scrollbars are utility chrome, not a brand-colour showcase. Use a quiet light or dark neutral pair derived from surface and ink; never use the reviewed primary or accent colour, including a red/blue pairing, for the track or thumb.
-- Keep scrollbars usable: preserve sufficient thumb contrast, avoid hairline targets, do not hide scrollbars on scrollable regions, and do not let decorative styling obscure horizontal-browse affordance.
+- Keep document and content-region scrollbars usable: preserve sufficient thumb contrast, avoid hairline targets, and do not let decorative styling obscure horizontal-browse affordance. Compact navigation is the exception: retain touch, wheel, and keyboard scrolling for unusually long menus while suppressing nested drawer scrollbar chrome so it does not compete with the document scrollbar.
 
 ## Image quality and loading
 
@@ -80,6 +87,7 @@ These layers describe responsibility, not mandatory component counts. Do not cre
 - Inspect the staged asset dimensions and choose the highest-resolution approved image suitable for each rendered slot. Never stretch a thumbnail, preview derivative, logo, or small raster beyond its intrinsic dimensions; reduce the display size, choose a stronger approved asset, or use a designed non-image composition instead.
 - Give every raster image explicit intrinsic dimensions or a stable aspect-ratio wrapper. Provide responsive `sizes` and framework-generated or authored `srcset` candidates where the source permits it, and use an object-fit treatment chosen for the subject rather than cropping accidentally.
 - Load the above-the-fold/LCP image eagerly with high fetch priority when it is genuinely the primary visual. Lazy-load below-the-fold images, use asynchronous decoding, and avoid loading hidden carousel or duplicate breakpoint imagery up front.
+- Treat a local image that finishes with zero intrinsic width as a build failure. Before accepting responsive evidence, verify that every rendered image requested during the full-page traversal completed with a positive intrinsic width at mobile, tablet, and desktop sizes. Never hide a failed image with background colour, opacity, clipping, or overflow.
 - Preserve useful alternative text from approved evidence. Decorative images use empty alt text; meaningful images must not use filenames or generic filler as alternatives.
 
 ## Behaviour boundary

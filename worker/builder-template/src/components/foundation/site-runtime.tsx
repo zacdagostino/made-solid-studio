@@ -75,7 +75,7 @@ const runtimeStyles = `
   }
   .sf-runtime [data-siteforge-navigation-dialog][data-sf-navigation-motion] {
     opacity: 0;
-    transform: translateX(calc(var(--sf-navigation-direction, -1) * 100%));
+    transform: translateX(var(--sf-navigation-closed-translate, -100%));
     transition:
       opacity 360ms cubic-bezier(.16,1,.3,1),
       transform 520ms cubic-bezier(.16,1,.3,1);
@@ -86,11 +86,8 @@ const runtimeStyles = `
   }
   .sf-runtime [data-siteforge-navigation-dialog][data-sf-navigation-motion] [data-sf-navigation-item] {
     opacity: 0;
-    transform: translateX(calc(var(--sf-navigation-direction, -1) * 1.5rem));
-    transition:
-      opacity 240ms cubic-bezier(.16,1,.3,1),
-      transform 360ms cubic-bezier(.16,1,.3,1);
-    transition-delay: var(--sf-navigation-item-delay, 0ms);
+    transform: none;
+    transition: none;
   }
   .sf-runtime [data-siteforge-navigation-dialog][data-sf-navigation-motion].is-sf-navigation-ready [data-sf-navigation-item] {
     opacity: 1;
@@ -123,11 +120,20 @@ const runtimeStyles = `
       position: fixed !important;
       inset-block: 0 !important;
       inset-inline-start: 0 !important;
+      inset-inline-end: auto !important;
       box-sizing: border-box;
       min-height: 100dvh;
       max-height: 100dvh;
       overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-width: none;
+      animation: none !important;
       z-index: 2147482001 !important;
+    }
+    .sf-runtime [data-siteforge-navigation-dialog]::-webkit-scrollbar {
+      display: none;
+      width: 0;
+      height: 0;
     }
   }
   @media (min-width: 769px) {
@@ -487,8 +493,6 @@ function startReveals(reducedMotion: boolean, candidates = prepareReveals()) {
 
 function startNavigationMotion() {
   let frame = 0;
-  let revision = 0;
-  let readinessTimer = 0;
   const prepare = (dialog: HTMLElement) => {
     if (!dialog.dataset.sfNavigationPrepared) {
       dialog.dataset.sfNavigationPrepared = 'true';
@@ -497,6 +501,8 @@ function startNavigationMotion() {
     dialog.querySelectorAll<HTMLElement>('[data-siteforge-navigation-logo]').forEach((logo) => {
       logo.dataset.sfNavigationItem = '';
     });
+    const fromRight = getComputedStyle(dialog).direction === 'rtl';
+    dialog.style.setProperty('--sf-navigation-closed-translate', fromRight ? '100%' : '-100%');
   };
   const waitForLogo = async (dialog: HTMLElement) => {
     const logos = [...dialog.querySelectorAll<HTMLElement>('[data-siteforge-navigation-logo]')];
@@ -513,9 +519,7 @@ function startNavigationMotion() {
     );
   };
   const sync = () => {
-    const currentRevision = ++revision;
     cancelAnimationFrame(frame);
-    window.clearTimeout(readinessTimer);
     const trigger = document.querySelector<HTMLElement>('[data-siteforge-menu-trigger]');
     const open = trigger?.getAttribute('aria-expanded') === 'true';
     const dialogs = document.querySelectorAll<HTMLElement>(
@@ -523,25 +527,13 @@ function startNavigationMotion() {
     );
     dialogs.forEach(prepare);
     frame = requestAnimationFrame(() => {
-      const reducedMotion = prefersReducedMotion();
       dialogs.forEach((dialog) => {
-        const wasOpen = dialog.classList.contains('is-sf-navigation-open');
         dialog.classList.toggle('is-sf-navigation-open', open);
         if (!open) dialog.classList.remove('is-sf-navigation-ready');
-        else if (reducedMotion) dialog.classList.add('is-sf-navigation-ready');
-        else if (!wasOpen) dialog.classList.remove('is-sf-navigation-ready');
+        else dialog.classList.add('is-sf-navigation-ready');
         const items = [...dialog.querySelectorAll<HTMLElement>('[data-sf-navigation-item]')];
-        let enteringSequenceIndex = 0;
-        items.forEach((item, index) => {
-          const immediateInterfaceItem =
-            item.matches('[data-siteforge-navigation-logo]') ||
-            item.matches('[data-siteforge-navigation-close]');
-          const delay = open
-            ? immediateInterfaceItem
-              ? 0
-              : Math.min(++enteringSequenceIndex * 45, 225)
-            : Math.min((items.length - index - 1) * 25, 150);
-          item.style.setProperty('--sf-navigation-item-delay', `${delay}ms`);
+        items.forEach((item) => {
+          item.style.setProperty('--sf-navigation-item-delay', '0ms');
         });
         if (open && !dialog.contains(document.activeElement)) {
           const focusTarget = dialog.querySelector<HTMLElement>(
@@ -550,15 +542,7 @@ function startNavigationMotion() {
           focusTarget?.focus({ preventScroll: true });
         }
       });
-      if (!open || reducedMotion) return;
-      const revealItems = () => {
-        if (currentRevision !== revision) return;
-        frame = requestAnimationFrame(() => {
-          dialogs.forEach((dialog) => dialog.classList.add('is-sf-navigation-ready'));
-        });
-      };
-      readinessTimer = window.setTimeout(revealItems, 1_200);
-      void Promise.all([...dialogs].map(waitForLogo)).then(revealItems);
+      if (open) void Promise.all([...dialogs].map(waitForLogo));
     });
   };
   sync();
@@ -571,7 +555,6 @@ function startNavigationMotion() {
   });
   return () => {
     cancelAnimationFrame(frame);
-    window.clearTimeout(readinessTimer);
     observer.disconnect();
   };
 }

@@ -2066,13 +2066,14 @@ test('keeps the build manifest package separate from the Agent Studio test contr
   await expect(testingBehaviour).toBeVisible();
   await expect(testingBehaviour).toContainText('Testing behaviour');
   await expect(testingBehaviour).toContainText('Package v7.0 testing behaviour');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.0.17');
-  await expect(testingBehaviour).toContainText('makes compact navigation begin revealing');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.0.18');
+  await expect(testingBehaviour).toContainText('keeps mobile navigation on the leading edge');
   await expect(testingBehaviour).toContainText('Visible hero entrance after the logo handoff');
-  await expect(testingBehaviour).toContainText('creative ceiling');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.41');
+  await expect(testingBehaviour).toContainText('complete heading and primary action fit');
   await expect(testingBehaviour).toContainText('Mobile & tablet sidebar navigation');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.22');
-  await expect(testingBehaviour).toContainText('first route follows within 60ms');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.23');
+  await expect(testingBehaviour).toContainText('without nested scrollbar chrome');
   await expect(testingBehaviour).toContainText('Context-aware logo selection');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.8');
   await expect(testingBehaviour).toContainText('applied deterministically before compile');
@@ -2081,12 +2082,12 @@ test('keeps the build manifest package separate from the Agent Studio test contr
   await expect(testingBehaviour).toContainText('excluded from reusable manifest assets');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.35');
   await expect(testingBehaviour).toContainText('consistent content-derived page names');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.42');
-  await expect(testingBehaviour).toContainText('SectionShell and SectionHeading');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.43');
+  await expect(testingBehaviour).toContainText('proposition before supporting media');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.19');
   await expect(testingBehaviour).toContainText('explicit preview, production service');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.50');
-  await expect(testingBehaviour).toContainText('factual counters to reach their endpoint');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.51');
+  await expect(testingBehaviour).toContainText('broken intrinsic image loads');
   await expect(testingBehaviour).toContainText(
     'Select behaviours to stage for the next production draft',
   );
@@ -2333,7 +2334,7 @@ test('keeps the active semantic recovery safeguard with its package version', as
     .toBe(true);
 });
 
-test('displays immediate navigation sequencing above retained package versions', async ({
+test('displays mobile viewport integrity above retained package versions', async ({
   page,
 }, testInfo) => {
   await openReadyBuildManifest(page);
@@ -2341,7 +2342,8 @@ test('displays immediate navigation sequencing above retained package versions',
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const packagePicker = page.getByLabel('Test agent package');
-  await expect(packagePicker).toHaveValue('agent-package-local-v8-5-immediate-navigation-sequence');
+  await expect(packagePicker).toHaveValue('agent-package-local-v8-6-mobile-viewport-integrity');
+  await expect(packagePicker).toContainText('v8.6 · Approved test');
   await expect(packagePicker).toContainText('v8.5 · Approved test');
   await expect(packagePicker).toContainText('v8.4 · Approved test');
   await expect(packagePicker).toContainText('v8.3 · Approved test');
@@ -2373,6 +2375,7 @@ test('displays immediate navigation sequencing above retained package versions',
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v8.6', 'Mobile viewport integrity'],
     ['v8.5', 'Immediate compact navigation'],
     ['v8.4', 'Settled factual evidence'],
     ['v8.3', 'Forced final-state evidence'],
