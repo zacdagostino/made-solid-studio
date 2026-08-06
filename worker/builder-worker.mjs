@@ -3965,6 +3965,43 @@ async function responsiveInteractionEvidence(
         `${htmlFile.relativePath} compact-navigation content did not become ready at ${viewport.width}px.`,
       );
     }
+    const navigationPacing = await dialog.evaluate((surface) => {
+      const milliseconds = (value) => {
+        const trimmed = value.trim();
+        const parsed = Number.parseFloat(trimmed);
+        if (!Number.isFinite(parsed)) return 0;
+        return trimmed.endsWith('ms') ? parsed : parsed * 1_000;
+      };
+      const items = [...surface.querySelectorAll('[data-sf-navigation-item]')];
+      const delayFor = (element) =>
+        element
+          ? Math.max(...getComputedStyle(element).transitionDelay.split(',').map(milliseconds))
+          : undefined;
+      const logo = items.find((item) => item.matches('[data-siteforge-navigation-logo]'));
+      const firstRoute = items.find(
+        (item) => item.matches('a[href]') || item.querySelector('a[href]'),
+      );
+      return {
+        logoDelay: delayFor(logo),
+        firstRouteDelay: delayFor(firstRoute),
+        maximumDelay: items.length ? Math.max(...items.map((item) => delayFor(item) ?? 0)) : 0,
+      };
+    });
+    if ((navigationPacing.logoDelay ?? Number.POSITIVE_INFINITY) > 16) {
+      problems.push(
+        `${htmlFile.relativePath} compact-navigation logo does not begin revealing immediately at ${viewport.width}px.`,
+      );
+    }
+    if ((navigationPacing.firstRouteDelay ?? Number.POSITIVE_INFINITY) > 60) {
+      problems.push(
+        `${htmlFile.relativePath} first compact-navigation route waits too long to begin revealing at ${viewport.width}px.`,
+      );
+    }
+    if (navigationPacing.maximumDelay > 250) {
+      problems.push(
+        `${htmlFile.relativePath} compact-navigation item sequence is delayed too long at ${viewport.width}px.`,
+      );
+    }
     const navigationItemsVisible = await page
       .waitForFunction(
         () => {

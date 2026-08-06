@@ -7642,7 +7642,7 @@ function BuilderRunPanel({
             detail: selectedAgentPackage.capabilityProposal || selectedAgentPackage.summary,
             revision: `v${selectedAgentPackage.version}.0.17`,
             change:
-              'Latest edit: package v8.4 preserves the reusable section and visual-quality rules while capturing the same completed factual values in every responsive screenshot.',
+              'Latest edit: package v8.5 keeps the settled visual-quality evidence and makes compact navigation begin revealing its logo and routes immediately.',
           },
           {
             id: 'hero-handoff',
@@ -7658,9 +7658,9 @@ function BuilderRunPanel({
             title: 'Mobile & tablet sidebar navigation',
             detail:
               'Below desktop width, the header links become a leading-edge sidebar that reuses the real logo and header palette and opens from the trigger side. On motion-enabled visits, the header slides away after a downward scroll and returns on any upward scroll. It supports close, backdrop, Escape, keyboard focus, route selection, and reduced-motion users; desktop navigation stays visible.',
-            revision: `v${selectedAgentPackage.version}.21`,
+            revision: `v${selectedAgentPackage.version}.22`,
             change:
-              'Latest edit: drawer readiness now survives unrelated live page updates, and browser checks wait until every animated route is visibly rendered before accepting the open state.',
+              'Latest edit: the decoded drawer logo now begins with the entering surface, the first route follows within 60ms, and browser checks reject delayed item sequences.',
           },
           {
             id: 'contextual-logo-selection',

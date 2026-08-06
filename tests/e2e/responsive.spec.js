@@ -2067,12 +2067,12 @@ test('keeps the build manifest package separate from the Agent Studio test contr
   await expect(testingBehaviour).toContainText('Testing behaviour');
   await expect(testingBehaviour).toContainText('Package v7.0 testing behaviour');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.0.17');
-  await expect(testingBehaviour).toContainText('same completed factual values');
+  await expect(testingBehaviour).toContainText('makes compact navigation begin revealing');
   await expect(testingBehaviour).toContainText('Visible hero entrance after the logo handoff');
   await expect(testingBehaviour).toContainText('creative ceiling');
   await expect(testingBehaviour).toContainText('Mobile & tablet sidebar navigation');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.21');
-  await expect(testingBehaviour).toContainText('every animated route is visibly rendered');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.22');
+  await expect(testingBehaviour).toContainText('first route follows within 60ms');
   await expect(testingBehaviour).toContainText('Context-aware logo selection');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.8');
   await expect(testingBehaviour).toContainText('applied deterministically before compile');
@@ -2333,7 +2333,7 @@ test('keeps the active semantic recovery safeguard with its package version', as
     .toBe(true);
 });
 
-test('displays checkpoint quality repair above retained package versions', async ({
+test('displays immediate navigation sequencing above retained package versions', async ({
   page,
 }, testInfo) => {
   await openReadyBuildManifest(page);
@@ -2341,7 +2341,8 @@ test('displays checkpoint quality repair above retained package versions', async
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const packagePicker = page.getByLabel('Test agent package');
-  await expect(packagePicker).toHaveValue('agent-package-local-v8-4-settled-factual-evidence');
+  await expect(packagePicker).toHaveValue('agent-package-local-v8-5-immediate-navigation-sequence');
+  await expect(packagePicker).toContainText('v8.5 · Approved test');
   await expect(packagePicker).toContainText('v8.4 · Approved test');
   await expect(packagePicker).toContainText('v8.3 · Approved test');
   await expect(packagePicker).toContainText('v8.2 · Approved test');
@@ -2372,6 +2373,7 @@ test('displays checkpoint quality repair above retained package versions', async
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v8.5', 'Immediate compact navigation'],
     ['v8.4', 'Settled factual evidence'],
     ['v8.3', 'Forced final-state evidence'],
     ['v8.2', 'Reusable section rhythm'],

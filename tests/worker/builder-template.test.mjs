@@ -99,6 +99,8 @@ test('verifies and exports the isolated Next.js component foundation', async () 
     assert.match(runtime, /grid-column: 2 !important/);
     assert.match(runtime, /focusTarget\?\.focus\(\{ preventScroll: true \}\)/);
     assert.match(runtime, /window\.setTimeout\(revealItems, 1_200\)/);
+    assert.match(runtime, /Math\.min\(\+\+enteringSequenceIndex \* 45, 225\)/);
+    assert.match(runtime, /opacity 240ms cubic-bezier\(\.16,1,\.3,1\)/);
     assert.doesNotMatch(runtime, /Preparing your site/);
     assert.match(runtime, /usePathname/);
     assert.match(runtime, /sf-route-transitioning/);
@@ -389,7 +391,7 @@ test('verifies and exports the isolated Next.js component foundation', async () 
           .evaluateAll((items) =>
             items.map((item) => item.style.getPropertyValue('--sf-navigation-item-delay')),
           ),
-        ['140ms', '225ms', '310ms', '395ms'],
+        ['0ms', '0ms', '45ms', '90ms'],
       );
       await page.waitForFunction(() => {
         const logo = globalThis.document.querySelector('[data-siteforge-navigation-logo]');
@@ -431,7 +433,7 @@ test('verifies and exports the isolated Next.js component foundation', async () 
           .evaluateAll((items) =>
             items.map((item) => item.style.getPropertyValue('--sf-navigation-item-delay')),
           ),
-        ['135ms', '90ms', '45ms', '0ms'],
+        ['75ms', '50ms', '25ms', '0ms'],
       );
       assert.deepEqual(
         await page.evaluate(() => {

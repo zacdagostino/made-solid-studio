@@ -77,8 +77,8 @@ const runtimeStyles = `
     opacity: 0;
     transform: translateX(calc(var(--sf-navigation-direction, -1) * 100%));
     transition:
-      opacity 680ms cubic-bezier(.16,1,.3,1),
-      transform 920ms cubic-bezier(.16,1,.3,1);
+      opacity 360ms cubic-bezier(.16,1,.3,1),
+      transform 520ms cubic-bezier(.16,1,.3,1);
   }
   .sf-runtime [data-siteforge-navigation-dialog][data-sf-navigation-motion].is-sf-navigation-open {
     opacity: 1;
@@ -88,8 +88,8 @@ const runtimeStyles = `
     opacity: 0;
     transform: translateX(calc(var(--sf-navigation-direction, -1) * 1.5rem));
     transition:
-      opacity 650ms cubic-bezier(.16,1,.3,1),
-      transform 820ms cubic-bezier(.16,1,.3,1);
+      opacity 240ms cubic-bezier(.16,1,.3,1),
+      transform 360ms cubic-bezier(.16,1,.3,1);
     transition-delay: var(--sf-navigation-item-delay, 0ms);
   }
   .sf-runtime [data-siteforge-navigation-dialog][data-sf-navigation-motion].is-sf-navigation-ready [data-sf-navigation-item] {
@@ -531,10 +531,16 @@ function startNavigationMotion() {
         else if (reducedMotion) dialog.classList.add('is-sf-navigation-ready');
         else if (!wasOpen) dialog.classList.remove('is-sf-navigation-ready');
         const items = [...dialog.querySelectorAll<HTMLElement>('[data-sf-navigation-item]')];
+        let enteringSequenceIndex = 0;
         items.forEach((item, index) => {
+          const immediateInterfaceItem =
+            item.matches('[data-siteforge-navigation-logo]') ||
+            item.matches('[data-siteforge-navigation-close]');
           const delay = open
-            ? 140 + Math.min(index * 85, 595)
-            : Math.min((items.length - index - 1) * 45, 270);
+            ? immediateInterfaceItem
+              ? 0
+              : Math.min(++enteringSequenceIndex * 45, 225)
+            : Math.min((items.length - index - 1) * 25, 150);
           item.style.setProperty('--sf-navigation-item-delay', `${delay}ms`);
         });
         if (open && !dialog.contains(document.activeElement)) {

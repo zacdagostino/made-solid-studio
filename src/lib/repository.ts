@@ -192,6 +192,8 @@ const localDeterministicEvidencePackageId = 'agent-package-local-v8-1-determinis
 const localReusableSectionRhythmPackageId = 'agent-package-local-v8-2-reusable-section-rhythm';
 const localForcedFinalStatePackageId = 'agent-package-local-v8-3-forced-final-state';
 const localSettledFactualEvidencePackageId = 'agent-package-local-v8-4-settled-factual-evidence';
+const localImmediateNavigationSequencePackageId =
+  'agent-package-local-v8-5-immediate-navigation-sequence';
 
 type StoreName =
   | 'activities'
@@ -893,10 +895,28 @@ export class SiteforgeRepository {
         'Prevents responsive screenshots from showing different intermediate values for the same approved factual counter.',
       stagedBehaviourIds: ['motion-runtime', 'framework-quality-gates'],
     };
+    const localImmediateNavigationSequencePackage: AgentPackage = {
+      ...localSettledFactualEvidencePackage,
+      id: localImmediateNavigationSequencePackageId,
+      version: 8.5,
+      basePackageId: localSettledFactualEvidencePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v8.5',
+      contractAddendum:
+        'Compact navigation begins its decoded logo reveal with the entering surface, starts the first route within 60ms, and bounds the remaining reading-order stagger. Protected browser checks reject delayed logo, route, or item sequences.',
+      instructionsAddendum:
+        'Use the locked compact-navigation choreography without adding independent delays. Keep the approved logo first, let it begin immediately, and follow with a short route and secondary-control sequence.',
+      summary:
+        'Immediate compact navigation test package: removes the empty-drawer pause while retaining decoded-logo ordering, responsive motion, and reduced-motion behaviour.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the mobile and tablet drawer respond immediately instead of showing its surface before the logo and links begin animating.',
+      stagedBehaviourIds: ['responsive-sidebar'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localImmediateNavigationSequencePackage,
           localSettledFactualEvidencePackage,
           localForcedFinalStatePackage,
           localReusableSectionRhythmPackage,
@@ -929,6 +949,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localImmediateNavigationSequencePackage,
           localSettledFactualEvidencePackage,
           localForcedFinalStatePackage,
           localReusableSectionRhythmPackage,
@@ -964,6 +985,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localImmediateNavigationSequencePackage,
             localSettledFactualEvidencePackage,
             localForcedFinalStatePackage,
             localReusableSectionRhythmPackage,

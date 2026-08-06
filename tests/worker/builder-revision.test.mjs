@@ -164,6 +164,10 @@ const checkpointQualityRecheckMigrationUrl = new URL(
   '../../supabase/migrations/20260806120000_checkpoint_quality_recheck_test_package.sql',
   import.meta.url,
 );
+const immediateNavigationSequenceMigrationUrl = new URL(
+  '../../supabase/migrations/20260806153000_immediate_navigation_sequence_test_package.sql',
+  import.meta.url,
+);
 const preserveResumeContextMigrationUrl = new URL(
   '../../supabase/migrations/20260731123000_preserve_builder_resume_context.sql',
   import.meta.url,
@@ -696,6 +700,8 @@ test('defines immersive motion, typography, service-page, and image craft requir
   assert.match(navigationContract, /data-siteforge-desktop-navigation/);
   assert.match(navigationContract, /data-siteforge-navigation-backdrop/);
   assert.match(navigationContract, /one shared close function/i);
+  assert.match(navigationContract, /decoded logo has no deliberate transition delay/i);
+  assert.match(navigationContract, /first route begins within 60ms/i);
   assert.match(runtime, /transform 1100ms cubic-bezier\(\.16,1,\.3,1\)/);
   assert.match(runtime, /function startNavigationMotion/);
   assert.match(runtime, /function startNavigationInteractions/);
@@ -709,7 +715,7 @@ test('defines immersive motion, typography, service-page, and image craft requir
   assert.match(runtime, /window\.scrollTo\(\{ top: 0, left: 0, behavior: 'auto' \}\)/);
   assert.match(runtime, /requestAnimationFrame\(\(\) => requestAnimationFrame/);
   assert.match(runtime, /header:has\(\[data-siteforge-brand-logo\]\)/);
-  assert.match(runtime, /index \* 85/);
+  assert.match(runtime, /\+\+enteringSequenceIndex \* 45/);
   assert.match(runtime, /1_500/);
 });
 
@@ -1685,6 +1691,24 @@ test('registers settled factual evidence above forced final-state evidence', asy
   assert.match(migration, /"framework-quality-gates"/);
   assert.match(worker, /\[data-counter\]\[data-sf-counter-animated\]/);
   assert.match(worker, /waitForTimeout\(1_600\)/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers immediate compact navigation sequencing above settled factual evidence', async () => {
+  const [migration, runtime, worker] = await Promise.all([
+    readFile(immediateNavigationSequenceMigrationUrl, 'utf8'),
+    readFile(motionRuntimeUrl, 'utf8'),
+    readFile(new URL('../../worker/builder-worker.mjs', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Immediate compact navigation test package:/);
+  assert.match(migration, /first route within 60ms/);
+  assert.match(migration, /"responsive-sidebar"/);
+  assert.match(runtime, /Math\.min\(\+\+enteringSequenceIndex \* 45, 225\)/);
+  assert.match(runtime, /opacity 240ms cubic-bezier\(\.16,1,\.3,1\)/);
+  assert.match(worker, /compact-navigation logo does not begin revealing immediately/);
+  assert.match(worker, /first compact-navigation route waits too long/);
+  assert.match(worker, /compact-navigation item sequence is delayed too long/);
   assert.match(migration, /not exists/i);
 });
 
