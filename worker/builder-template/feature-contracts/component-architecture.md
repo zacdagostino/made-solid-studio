@@ -50,7 +50,9 @@ These layers describe responsibility, not mandatory component counts. Do not cre
 
 - Choose an intentional display and body type system that fits the approved brand and content. Do not leave headings and paragraphs on an undifferentiated browser-default family. Use only bundled/local assets, the existing framework font facilities, or a considered system stack; never fetch a runtime font from a remote origin.
 - Define semantic font-family, weight, size, line-height, tracking, and measure tokens. Headings and body copy may use complementary families, but the pairing must remain legible, restrained, and consistent across routes.
-- Define section, heading-to-copy, copy-to-action, list, and card-internal rhythm with layout `gap` tokens. Headings must never accidentally collide with their supporting text, and equal relationships must use equal spacing across pages.
+- Define `--space-section-block`, `--space-heading`, and `--space-copy` semantic tokens in the global token layer. These are relationship tokens, not one-off values: use them for section block padding, eyebrow-to-title spacing, and title-to-supporting-copy spacing respectively.
+- Implement reusable `SectionShell` and `SectionHeading` components in `src/components/`. `SectionShell` owns section block padding and renders `data-siteforge-section-shell`; only a genuinely intentional full-bleed edge may opt out with `data-siteforge-section-edge="flush"`. `SectionHeading` owns the eyebrow, title, and optional supporting-copy stack and renders `data-siteforge-section-heading`, `data-siteforge-eyebrow`, and `data-siteforge-title` hooks. Use these components for repeated section headings instead of duplicating local spacing.
+- Define section, heading-to-copy, copy-to-action, list, and card-internal rhythm with layout `gap` tokens. Never create relationship spacing with a chain of child margins. Headings must never accidentally collide with supporting text, equal relationships must use equal spacing across pages, and final section copy must retain deliberate block-end breathing room at every viewport.
 - Build stacked copy as a named `Stack` or equivalent component with semantic gap tokens. When a stack uses `data-reveal="sequence"`, keep its eyebrow, heading, paragraph, and actions as direct children in reading order so the runtime can reveal them one after another without changing the spacing geometry.
 - Review the full services page and at least one content-dense page at every required viewport. Fix widows, overlong measures, awkward wraps, inconsistent heading gaps, and empty areas rather than shrinking the type.
 
@@ -68,11 +70,13 @@ These layers describe responsibility, not mandatory component counts. Do not cre
 
 ## Scrollbar craft
 
-- Style document and component scrollbars as part of the generated visual system. Define restrained thumb, track, hover, and active treatments from accessible semantic tokens, using standards-based `scrollbar-color` and `scrollbar-width` plus matching `::-webkit-scrollbar` rules where supported.
+- Style document and component scrollbars as part of the generated visual system. Define neutral `--scrollbar-track` and `--scrollbar-thumb` tokens plus restrained hover and active treatments, using standards-based `scrollbar-color` and `scrollbar-width` with matching `::-webkit-scrollbar` rules where supported.
+- Scrollbars are utility chrome, not a brand-colour showcase. Use a quiet light or dark neutral pair derived from surface and ink; never use the reviewed primary or accent colour, including a red/blue pairing, for the track or thumb.
 - Keep scrollbars usable: preserve sufficient thumb contrast, avoid hairline targets, do not hide scrollbars on scrollable regions, and do not let decorative styling obscure horizontal-browse affordance.
 
 ## Image quality and loading
 
+- When two or more approved page-matched worksite or project photographs are staged and permitted, use at least two distinct photographs as meaningful page content. Give them different information-bearing roles rather than repeating one file decoratively.
 - Inspect the staged asset dimensions and choose the highest-resolution approved image suitable for each rendered slot. Never stretch a thumbnail, preview derivative, logo, or small raster beyond its intrinsic dimensions; reduce the display size, choose a stronger approved asset, or use a designed non-image composition instead.
 - Give every raster image explicit intrinsic dimensions or a stable aspect-ratio wrapper. Provide responsive `sizes` and framework-generated or authored `srcset` candidates where the source permits it, and use an object-fit treatment chosen for the subject rather than cropping accidentally.
 - Load the above-the-fold/LCP image eagerly with high fetch priority when it is genuinely the primary visual. Lazy-load below-the-fold images, use asynchronous decoding, and avoid loading hidden carousel or duplicate breakpoint imagery up front.

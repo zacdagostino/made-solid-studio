@@ -8,6 +8,7 @@ import ts from 'typescript';
 import {
   activateCompactNavigationTrigger,
   approvedAssetDescriptor,
+  approvedImageUsageProblems,
   applicableFeatureContracts,
   assertRequiredCompiledOutputs,
   assetMatchesSelectedPages,
@@ -20,19 +21,26 @@ import {
   contentTypeFor,
   contextualLogoProblems,
   creativeAutonomyProblems,
+  cssColourRepresentations,
+  designSystemRhythmProblems,
+  enforceBrandPaletteTokens,
+  expressiveNavigationMotionProblems,
   inconsistentHeaderNavigationProblems,
   lockedFoundationPaths,
   meaningfulPageNamingProblems,
   mobileNavigationTriggerProblems,
   missingInternalNavigationTargets,
   motionCompositionProblems,
+  normaliseSemanticText,
   responsiveImageProblems,
+  scrollbarStylingProblems,
   multiPageHeaderRouteNavigationProblems,
   projectManifestData,
   refreshLockedFoundation,
   restoreCheckpointFile,
   revisionManifestCompatible,
   selectedSourcePages,
+  sourceCheckpointPayload,
   stageRevisionScope,
   unreachableSelectedPageProblems,
 } from '../../worker/builder-worker.mjs';
@@ -152,6 +160,10 @@ const builderWorkerLivenessMigrationUrl = new URL(
   '../../supabase/migrations/20260806103000_builder_worker_liveness.sql',
   import.meta.url,
 );
+const checkpointQualityRecheckMigrationUrl = new URL(
+  '../../supabase/migrations/20260806120000_checkpoint_quality_recheck_test_package.sql',
+  import.meta.url,
+);
 const preserveResumeContextMigrationUrl = new URL(
   '../../supabase/migrations/20260731123000_preserve_builder_resume_context.sql',
   import.meta.url,
@@ -174,6 +186,28 @@ const manifest = {
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
 }
+
+test('classifies restored generated files against the clean template for durable child checkpoints', () => {
+  const templateBody = Buffer.from('locked foundation');
+  const generatedBody = Buffer.from('generated page');
+  const payload = sourceCheckpointPayload(
+    [
+      {
+        relativePath: 'components/foundation/site-runtime.tsx',
+        hash: sha256(templateBody),
+      },
+      { relativePath: 'app/page.tsx', hash: sha256(generatedBody) },
+    ],
+    new Map([['components/foundation/site-runtime.tsx', sha256(templateBody)]]),
+  );
+  assert.deepEqual(
+    payload.files.map(({ path, source }) => ({ path, source })),
+    [
+      { path: 'app/page.tsx', source: 'checkpoint' },
+      { path: 'components/foundation/site-runtime.tsx', source: 'template' },
+    ],
+  );
+});
 
 function compiledPreviewFunction(source, name, firstName = name) {
   const start = source.indexOf(`function ${firstName}`);
@@ -878,7 +912,18 @@ test('requires an icon-only compact navigation trigger with a programmatic name'
   );
   assert.match(worker, /compact navigation does not fill the viewport height/);
   assert.match(worker, /compact-navigation backdrop does not cover the viewport/);
+  assert.match(worker, /compact-navigation routes are not visibly stable after opening/);
   assert.match(worker, /has no visible desktop navigation at 1440px/);
+  assert.ok(
+    worker.indexOf("qualityOperation = 'responsive_reveal_settle'") <
+      worker.indexOf("qualityOperation = 'accessibility_scan'"),
+    'accessibility must be scanned after reveal motion has settled',
+  );
+  assert.ok(
+    worker.indexOf("qualityOperation = 'final_state_evidence'") <
+      worker.indexOf("qualityOperation = 'accessibility_scan'"),
+    'accessibility must use the deterministic final reduced-motion state',
+  );
 });
 
 test('retries a transient compact-navigation pointer timeout without bypassing hit testing', async () => {
@@ -1233,6 +1278,13 @@ test('keeps legacy manifests from causing missing-architecture inspection turns'
 test('continues safe post-Codex failures from a restored checkpoint', () => {
   assert.equal(
     canContinueWithoutCodex(
+      { failure_context: { executionMode: 'quality_recheck' } },
+      { restoredCheckpoint: true, checkpointState: 'post_codex_validated' },
+    ),
+    true,
+  );
+  assert.equal(
+    canContinueWithoutCodex(
       { failure_context: { resumeFromFailureCode: 'compiled_homepage_missing' } },
       { restoredCheckpoint: true, checkpointState: 'post_codex_validated' },
     ),
@@ -1498,6 +1550,144 @@ test('registers reliable compact navigation above checkpoint restoration', async
   assert.match(migration, /not exists/i);
 });
 
+test('registers checkpoint quality rechecks above reliable compact navigation', async () => {
+  const migration = await readFile(checkpointQualityRecheckMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /base\.id/);
+  assert.match(migration, /Checkpoint repair and brand enforcement test package:/);
+  assert.match(migration, /request_builder_quality_recheck/);
+  assert.match(migration, /post_codex_validated/);
+  assert.match(migration, /'executionMode', 'quality_recheck'/);
+  assert.match(migration, /"responsive-sidebar"/);
+  assert.match(migration, /"contextual-logo-selection"/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers stable navigation visibility above checkpoint quality rechecks', async () => {
+  const migration = await readFile(
+    new URL(
+      '../../supabase/migrations/20260806123000_stable_navigation_visibility_test_package.sql',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /base\.id/);
+  assert.match(migration, /Stable navigation visibility test package:/);
+  assert.match(migration, /visibly rendered/);
+  assert.match(migration, /"responsive-sidebar"/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers settled accessibility above stable navigation visibility', async () => {
+  const migration = await readFile(
+    new URL(
+      '../../supabase/migrations/20260806130000_settled_accessibility_test_package.sql',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /base\.id/);
+  assert.match(migration, /Settled accessibility test package:/);
+  assert.match(migration, /reveal motion/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers deterministic final evidence above settled accessibility', async () => {
+  const migration = await readFile(
+    new URL(
+      '../../supabase/migrations/20260806133000_deterministic_final_evidence_test_package.sql',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /base\.id/);
+  assert.match(migration, /Deterministic final evidence test package:/);
+  assert.match(migration, /reduced-motion final state/);
+  assert.match(migration, /"responsive-sidebar"/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers reusable section rhythm above deterministic final evidence', async () => {
+  const migration = await readFile(
+    new URL(
+      '../../supabase/migrations/20260806140000_reusable_section_rhythm_test_package.sql',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Reusable section rhythm test package:/);
+  assert.match(migration, /SectionShell and SectionHeading/);
+  assert.match(migration, /--scrollbar-track/);
+  assert.match(migration, /two distinct approved page photographs/);
+  assert.match(migration, /"next-component-architecture"/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers forced final-state evidence above reusable section rhythm', async () => {
+  const migration = await readFile(
+    new URL(
+      '../../supabase/migrations/20260806143000_forced_final_state_test_package.sql',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  const [runtime, worker] = await Promise.all([
+    readFile(
+      new URL(
+        '../../worker/builder-template/src/components/foundation/site-runtime.tsx',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+    readFile(new URL('../../worker/builder-worker.mjs', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Forced final-state evidence test package:/);
+  assert.match(migration, /sf-quality-final-state/);
+  assert.match(migration, /"motion-runtime"/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(runtime, /html\.sf-quality-final-state\.sf-runtime/);
+  assert.match(worker, /enableFinalStateEvidence/);
+  assert.match(worker, /disableFinalStateEvidence/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers settled factual evidence above forced final-state evidence', async () => {
+  const migration = await readFile(
+    new URL(
+      '../../supabase/migrations/20260806150000_settled_factual_evidence_test_package.sql',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  const worker = await readFile(
+    new URL('../../worker/builder-worker.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Settled factual evidence test package:/);
+  assert.match(migration, /same completed metric values/);
+  assert.match(migration, /"motion-runtime"/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(worker, /\[data-counter\]\[data-sf-counter-animated\]/);
+  assert.match(worker, /waitForTimeout\(1_600\)/);
+  assert.match(migration, /not exists/i);
+});
+
 test('rejects unbounded builder queues and reconciles lost workers promptly', async () => {
   const migration = await readFile(builderWorkerLivenessMigrationUrl, 'utf8');
   assert.match(migration, /worker_runtime_heartbeats/);
@@ -1648,6 +1838,192 @@ test('stages explicit logo-family appearance metadata for the builder', () => {
     logoAppearance: 'white',
     transparentBackground: true,
   });
+});
+
+test('keeps reviewed asset roles and reuse guidance beside staged public paths', () => {
+  const descriptor = approvedAssetDescriptor(
+    { id: 'worksite', label: 'Switchboard upgrade', metadata: {} },
+    'logo-primary',
+    'public/assets/worksite.jpg',
+    'image/jpeg',
+    {
+      role: 'worksite_photo',
+      observedDescription: 'An electrician working at a switchboard.',
+      safeReuseNote: 'Approved as homepage service imagery.',
+      cautions: ['Do not identify the worker.'],
+      visibleText: ['Main switch'],
+    },
+  );
+
+  assert.equal(descriptor.role, 'worksite_photo');
+  assert.equal(descriptor.safeReuseNote, 'Approved as homepage service imagery.');
+  assert.deepEqual(descriptor.cautions, ['Do not identify the worker.']);
+  assert.deepEqual(descriptor.visibleText, ['Main switch']);
+});
+
+test('normalises the hexadecimal apostrophe entity emitted by Next static HTML', () => {
+  assert.equal(
+    normaliseSemanticText('Couldn&#x27;t speak more highly'),
+    "couldn't speak more highly",
+  );
+});
+
+test('requires staged approved worksite photography to appear in selected output', () => {
+  const assets = [
+    {
+      role: 'worksite_photo',
+      contentType: 'image/jpeg',
+      relativePath: 'public/assets/switchboard.jpg',
+    },
+  ];
+  assert.equal(
+    approvedImageUsageProblems(assets, [
+      { relativePath: 'index.html', contents: '<main>No local imagery</main>' },
+    ]).length,
+    1,
+  );
+  assert.deepEqual(
+    approvedImageUsageProblems(assets, [
+      { relativePath: 'index.html', contents: '<img src="/assets/switchboard.jpg">' },
+    ]),
+    [],
+  );
+});
+
+test('requires two distinct approved photographs when two are available', () => {
+  const assets = [
+    {
+      role: 'worksite_photo',
+      contentType: 'image/jpeg',
+      relativePath: 'public/assets/switchboard.jpg',
+    },
+    {
+      role: 'project_photo',
+      contentType: 'image/webp',
+      relativePath: 'public/assets/site-team.webp',
+    },
+  ];
+  assert.equal(
+    approvedImageUsageProblems(
+      assets,
+      [{ relativePath: 'index.html', contents: '<img src="/assets/switchboard.jpg">' }],
+      2,
+    ).length,
+    1,
+  );
+  assert.deepEqual(
+    approvedImageUsageProblems(
+      assets,
+      [
+        {
+          relativePath: 'index.html',
+          contents: '<img src="/assets/switchboard.jpg"><img src="/assets/site-team.webp">',
+        },
+      ],
+      2,
+    ),
+    [],
+  );
+});
+
+test('requires reusable section components and semantic rhythm tokens', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'siteforge-section-rhythm-'));
+  try {
+    await mkdir(join(directory, 'src/components'), { recursive: true });
+    await writeFile(
+      join(directory, 'src/components/sections.tsx'),
+      'export const SectionShell = () => null; export function SectionHeading() { return null; }',
+    );
+    await writeFile(
+      join(directory, 'src/globals.css'),
+      ':root { --space-section-block: 4rem; --space-heading: 0.75rem; --space-copy: 1.5rem; }',
+    );
+    const html = [
+      {
+        relativePath: 'index.html',
+        contents:
+          '<h2>One</h2><div data-siteforge-section-shell><div data-siteforge-section-heading></div></div><h2>Two</h2><div data-siteforge-section-shell><div data-siteforge-section-heading></div></div>',
+      },
+    ];
+    assert.deepEqual(await designSystemRhythmProblems(directory, html), []);
+    await writeFile(join(directory, 'src/globals.css'), ':root { --space-heading: 1rem; }');
+    assert.equal((await designSystemRhythmProblems(directory, html)).length, 2);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('rejects brand-coloured scrollbar chrome and accepts neutral tokens', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'siteforge-scrollbar-'));
+  const stylesheet = join(directory, 'site.css');
+  const colourManifest = {
+    data: { brandKit: { palette: { primary: '#306090', accent: '#ff0000' } } },
+  };
+  try {
+    await writeFile(
+      stylesheet,
+      ':root{--scrollbar-track:#306090;--scrollbar-thumb:#ff0000}*{scrollbar-color:var(--scrollbar-thumb) var(--scrollbar-track);scrollbar-width:auto}::-webkit-scrollbar{width:12px}::-webkit-scrollbar-thumb{background:#ff0000}',
+    );
+    assert.equal((await scrollbarStylingProblems([stylesheet], colourManifest, true)).length, 1);
+    await writeFile(
+      stylesheet,
+      ':root{--scrollbar-track:#e6e6e6;--scrollbar-thumb:#4c4c4c}*{scrollbar-color:var(--scrollbar-thumb) var(--scrollbar-track);scrollbar-width:auto}::-webkit-scrollbar{width:12px;background:var(--scrollbar-track)}::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb)}',
+    );
+    assert.deepEqual(await scrollbarStylingProblems([stylesheet], colourManifest, true), []);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('applies exact reviewed brand colours to generated CSS tokens', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'siteforge-brand-tokens-'));
+  const stylesheet = join(directory, 'src/app/globals.css');
+  try {
+    await mkdir(dirname(stylesheet), { recursive: true });
+    await writeFile(
+      stylesheet,
+      ':root {\n  --brand-primary: #162423;\n  --brand-accent: #ed5b2b;\n}\n',
+    );
+    const applied = await enforceBrandPaletteTokens(
+      { data: { brandKit: { palette: { primary: '#306090', accent: '#FF0000' } } } },
+      directory,
+    );
+    const result = await readFile(stylesheet, 'utf8');
+    assert.deepEqual(applied, [
+      { token: '--brand-primary', value: '#306090' },
+      { token: '--brand-accent', value: '#ff0000' },
+    ]);
+    assert.match(result, /--brand-primary: #306090;/);
+    assert.match(result, /--brand-accent: #ff0000;/);
+    assert.doesNotMatch(result, /#162423|#ed5b2b/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('recognises minified CSS equivalents of reviewed brand colours', () => {
+  assert.deepEqual(cssColourRepresentations('#FF0000'), ['#ff0000', '#f00', 'red']);
+  assert.deepEqual(cssColourRepresentations('#306090'), ['#306090']);
+});
+
+test('accepts locked-runtime logo sequencing while still requiring a navigation logo', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'siteforge-navigation-sequence-'));
+  const source = join(directory, 'navigation.tsx');
+  try {
+    await writeFile(
+      source,
+      '<aside data-sf-navigation-motion><img data-siteforge-navigation-logo />' +
+        '<a data-sf-navigation-item>One</a><a data-sf-navigation-item>Two</a>' +
+        '<a data-sf-navigation-item>Three</a></aside>',
+    );
+    assert.deepEqual(await expressiveNavigationMotionProblems([source], true, true), []);
+    assert.match(
+      (await expressiveNavigationMotionProblems([source], true, false)).join(' '),
+      /logo must be the first sequenced item/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('accepts contrast-safe logo appearances for their declared surfaces', () => {

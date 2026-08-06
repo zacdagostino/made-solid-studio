@@ -99,6 +99,16 @@ const runtimeStyles = `
   @media (max-width: 768px) {
     .sf-runtime [data-siteforge-menu-trigger] {
       display: inline-flex !important;
+      grid-column: 1 !important;
+      grid-row: 1 !important;
+      justify-self: start !important;
+      order: -1;
+    }
+    .sf-runtime header [data-siteforge-brand-logo][data-siteforge-compact-logo-alignment="center"] {
+      grid-column: 2 !important;
+      grid-row: 1 !important;
+      justify-self: center !important;
+      order: 0;
     }
     .sf-runtime [data-siteforge-desktop-navigation] {
       display: none !important;
@@ -107,12 +117,17 @@ const runtimeStyles = `
       position: fixed !important;
       inset: 0 !important;
       min-height: 100dvh;
+      z-index: 2147482000 !important;
     }
     .sf-runtime [data-siteforge-navigation-dialog] {
+      position: fixed !important;
+      inset-block: 0 !important;
+      inset-inline-start: 0 !important;
       box-sizing: border-box;
       min-height: 100dvh;
       max-height: 100dvh;
       overflow-y: auto;
+      z-index: 2147482001 !important;
     }
   }
   @media (min-width: 769px) {
@@ -189,6 +204,15 @@ const runtimeStyles = `
     .sf-runtime [data-siteforge-navigation-dialog][data-sf-navigation-motion] [data-sf-navigation-item] {
       transition: none;
     }
+  }
+  html.sf-quality-final-state.sf-runtime [data-sf-reveal],
+  html.sf-quality-final-state.sf-runtime .sf-reveal-word,
+  html.sf-quality-final-state.sf-runtime [data-sf-reveal-item],
+  html.sf-quality-final-state.sf-runtime [data-sf-scroll-zoom],
+  html.sf-quality-final-state.sf-runtime [data-sf-scroll-zoom] > [data-sf-scroll-zoom-item] {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
   }
 `;
 
@@ -464,6 +488,7 @@ function startReveals(reducedMotion: boolean, candidates = prepareReveals()) {
 function startNavigationMotion() {
   let frame = 0;
   let revision = 0;
+  let readinessTimer = 0;
   const prepare = (dialog: HTMLElement) => {
     if (!dialog.dataset.sfNavigationPrepared) {
       dialog.dataset.sfNavigationPrepared = 'true';
@@ -490,6 +515,7 @@ function startNavigationMotion() {
   const sync = () => {
     const currentRevision = ++revision;
     cancelAnimationFrame(frame);
+    window.clearTimeout(readinessTimer);
     const trigger = document.querySelector<HTMLElement>('[data-siteforge-menu-trigger]');
     const open = trigger?.getAttribute('aria-expanded') === 'true';
     const dialogs = document.querySelectorAll<HTMLElement>(
@@ -499,8 +525,11 @@ function startNavigationMotion() {
     frame = requestAnimationFrame(() => {
       const reducedMotion = prefersReducedMotion();
       dialogs.forEach((dialog) => {
+        const wasOpen = dialog.classList.contains('is-sf-navigation-open');
         dialog.classList.toggle('is-sf-navigation-open', open);
-        dialog.classList.toggle('is-sf-navigation-ready', open && reducedMotion);
+        if (!open) dialog.classList.remove('is-sf-navigation-ready');
+        else if (reducedMotion) dialog.classList.add('is-sf-navigation-ready');
+        else if (!wasOpen) dialog.classList.remove('is-sf-navigation-ready');
         const items = [...dialog.querySelectorAll<HTMLElement>('[data-sf-navigation-item]')];
         items.forEach((item, index) => {
           const delay = open
@@ -508,14 +537,22 @@ function startNavigationMotion() {
             : Math.min((items.length - index - 1) * 45, 270);
           item.style.setProperty('--sf-navigation-item-delay', `${delay}ms`);
         });
+        if (open && !dialog.contains(document.activeElement)) {
+          const focusTarget = dialog.querySelector<HTMLElement>(
+            '[data-siteforge-navigation-close], a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+          );
+          focusTarget?.focus({ preventScroll: true });
+        }
       });
       if (!open || reducedMotion) return;
-      void Promise.all([...dialogs].map(waitForLogo)).then(() => {
+      const revealItems = () => {
         if (currentRevision !== revision) return;
         frame = requestAnimationFrame(() => {
           dialogs.forEach((dialog) => dialog.classList.add('is-sf-navigation-ready'));
         });
-      });
+      };
+      readinessTimer = window.setTimeout(revealItems, 1_200);
+      void Promise.all([...dialogs].map(waitForLogo)).then(revealItems);
     });
   };
   sync();
@@ -528,6 +565,7 @@ function startNavigationMotion() {
   });
   return () => {
     cancelAnimationFrame(frame);
+    window.clearTimeout(readinessTimer);
     observer.disconnect();
   };
 }

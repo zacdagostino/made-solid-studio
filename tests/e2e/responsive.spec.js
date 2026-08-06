@@ -2066,28 +2066,27 @@ test('keeps the build manifest package separate from the Agent Studio test contr
   await expect(testingBehaviour).toBeVisible();
   await expect(testingBehaviour).toContainText('Testing behaviour');
   await expect(testingBehaviour).toContainText('Package v7.0 testing behaviour');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.0.16');
-  await expect(testingBehaviour).toContainText('exact tablet breakpoint');
-  await expect(testingBehaviour).toContainText('Escape focus recovery');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.0.17');
+  await expect(testingBehaviour).toContainText('same completed factual values');
   await expect(testingBehaviour).toContainText('Visible hero entrance after the logo handoff');
   await expect(testingBehaviour).toContainText('creative ceiling');
   await expect(testingBehaviour).toContainText('Mobile & tablet sidebar navigation');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.19');
-  await expect(testingBehaviour).toContainText('compact navigation now remains active');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.21');
+  await expect(testingBehaviour).toContainText('every animated route is visibly rendered');
   await expect(testingBehaviour).toContainText('Context-aware logo selection');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.7');
-  await expect(testingBehaviour).toContainText('distinct preloaded drawer appearance');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.8');
+  await expect(testingBehaviour).toContainText('applied deterministically before compile');
   await expect(testingBehaviour).toContainText('Semantic recovery from image-based content');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.15');
   await expect(testingBehaviour).toContainText('excluded from reusable manifest assets');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.35');
   await expect(testingBehaviour).toContainText('consistent content-derived page names');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.41');
-  await expect(testingBehaviour).toContainText('decisive visual concept');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.42');
+  await expect(testingBehaviour).toContainText('SectionShell and SectionHeading');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.19');
   await expect(testingBehaviour).toContainText('explicit preview, production service');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.44');
-  await expect(testingBehaviour).toContainText('waits for the brand-introduction handoff');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.50');
+  await expect(testingBehaviour).toContainText('factual counters to reach their endpoint');
   await expect(testingBehaviour).toContainText(
     'Select behaviours to stage for the next production draft',
   );
@@ -2334,7 +2333,7 @@ test('keeps the active semantic recovery safeguard with its package version', as
     .toBe(true);
 });
 
-test('displays reliable compact navigation above retained package versions', async ({
+test('displays checkpoint quality repair above retained package versions', async ({
   page,
 }, testInfo) => {
   await openReadyBuildManifest(page);
@@ -2342,7 +2341,14 @@ test('displays reliable compact navigation above retained package versions', asy
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const packagePicker = page.getByLabel('Test agent package');
-  await expect(packagePicker).toHaveValue('agent-package-local-v7-7-reliable-compact-navigation');
+  await expect(packagePicker).toHaveValue('agent-package-local-v8-4-settled-factual-evidence');
+  await expect(packagePicker).toContainText('v8.4 · Approved test');
+  await expect(packagePicker).toContainText('v8.3 · Approved test');
+  await expect(packagePicker).toContainText('v8.2 · Approved test');
+  await expect(packagePicker).toContainText('v8.1 · Approved test');
+  await expect(packagePicker).toContainText('v8.0 · Approved test');
+  await expect(packagePicker).toContainText('v7.9 · Approved test');
+  await expect(packagePicker).toContainText('v7.8 · Approved test');
   await expect(packagePicker).toContainText('v7.7 · Approved test');
   await expect(packagePicker).toContainText('v7.6 · Approved test');
   await expect(packagePicker).toContainText('v7.5 · Approved test');
@@ -2365,44 +2371,39 @@ test('displays reliable compact navigation above retained package versions', asy
   await page.getByRole('button', { name: 'Package versions' }).click();
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
-  await expect(versions).toHaveCount(18);
-  await expect(versions.nth(0)).toContainText('v7.7');
+  const expectedVersions = [
+    ['v8.4', 'Settled factual evidence'],
+    ['v8.3', 'Forced final-state evidence'],
+    ['v8.2', 'Reusable section rhythm'],
+    ['v8.1', 'Deterministic final evidence'],
+    ['v8.0', 'Settled accessibility'],
+    ['v7.9', 'Stable navigation visibility'],
+    ['v7.8', 'Checkpoint repair and brand enforcement'],
+    ['v7.7', 'Reliable compact navigation test package'],
+    ['v7.6', 'Complete checkpoint restore test package'],
+    ['v7.5', 'Selected-route compile test package'],
+    ['v7.4', 'Creative autonomy test package'],
+    ['v7.3', 'Decoded navigation logo test package'],
+    ['v7.2', 'Efficient builder execution test package'],
+    ['v7.1', 'Immediate brand introduction test package'],
+    ['v7.0', 'Responsive intro craft test package'],
+    ['v6.9', 'Valid preview entry test package'],
+    ['v6.8', 'Precise logo handoff test package'],
+    ['v6.7', 'Clean test start package'],
+    ['v6.6', 'Meaningful page names test package'],
+    ['v6.5', 'Resilient resume test package'],
+    ['v6.4', 'Immersive motion test package'],
+    ['v6.3', 'Resilient quality test package'],
+    ['v6.2', 'Expressive craft test package'],
+    ['v6.1', 'Creative composition test package'],
+    ['v6.0', 'Current production'],
+  ];
+  await expect(versions).toHaveCount(expectedVersions.length);
   await expect(versions.nth(0)).toContainText('Approved test');
-  await expect(versions.nth(0)).toContainText('Reliable compact navigation test package');
-  await expect(versions.nth(1)).toContainText('v7.6');
-  await expect(versions.nth(1)).toContainText('Complete checkpoint restore test package');
-  await expect(versions.nth(2)).toContainText('v7.5');
-  await expect(versions.nth(2)).toContainText('Selected-route compile test package');
-  await expect(versions.nth(3)).toContainText('v7.4');
-  await expect(versions.nth(3)).toContainText('Creative autonomy test package');
-  await expect(versions.nth(4)).toContainText('v7.3');
-  await expect(versions.nth(4)).toContainText('Decoded navigation logo test package');
-  await expect(versions.nth(5)).toContainText('v7.2');
-  await expect(versions.nth(5)).toContainText('Efficient builder execution test package');
-  await expect(versions.nth(6)).toContainText('v7.1');
-  await expect(versions.nth(6)).toContainText('Immediate brand introduction test package');
-  await expect(versions.nth(7)).toContainText('v7.0');
-  await expect(versions.nth(7)).toContainText('Responsive intro craft test package');
-  await expect(versions.nth(8)).toContainText('v6.9');
-  await expect(versions.nth(8)).toContainText('Valid preview entry test package');
-  await expect(versions.nth(9)).toContainText('v6.8');
-  await expect(versions.nth(9)).toContainText('Precise logo handoff test package');
-  await expect(versions.nth(10)).toContainText('v6.7');
-  await expect(versions.nth(10)).toContainText('Clean test start package');
-  await expect(versions.nth(11)).toContainText('v6.6');
-  await expect(versions.nth(11)).toContainText('Meaningful page names test package');
-  await expect(versions.nth(12)).toContainText('v6.5');
-  await expect(versions.nth(12)).toContainText('Resilient resume test package');
-  await expect(versions.nth(13)).toContainText('v6.4');
-  await expect(versions.nth(13)).toContainText('Immersive motion test package');
-  await expect(versions.nth(14)).toContainText('v6.3');
-  await expect(versions.nth(14)).toContainText('Resilient quality test package');
-  await expect(versions.nth(15)).toContainText('v6.2');
-  await expect(versions.nth(15)).toContainText('Expressive craft test package');
-  await expect(versions.nth(16)).toContainText('v6.1');
-  await expect(versions.nth(16)).toContainText('Creative composition test package');
-  await expect(versions.nth(17)).toContainText('v6.0');
-  await expect(versions.nth(17)).toContainText('Current production');
+  for (const [index, [version, summary]] of expectedVersions.entries()) {
+    await expect(versions.nth(index)).toContainText(version);
+    await expect(versions.nth(index)).toContainText(summary);
+  }
   await expect(testInfo.project.name === 'mobile' ? versions.nth(0) : register).toHaveScreenshot(
     'reliable-compact-navigation-package-register.png',
   );
@@ -2414,6 +2415,73 @@ test('displays reliable compact navigation above retained package versions', asy
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
     .toBe(true);
+});
+
+test('offers a responsive saved-source recheck on completed test evidence', async ({
+  page,
+}, testInfo) => {
+  await openReadyBuildManifest(page);
+  await page.evaluate(async () => {
+    const database = await new Promise((resolve, reject) => {
+      const request = window.indexedDB.open('siteforge-os');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const now = '2026-08-06T10:30:00.000Z';
+    const transaction = database.transaction('builderRuns', 'readwrite');
+    transaction.objectStore('builderRuns').put({
+      id: 'builder-saved-source-recheck',
+      businessId: 'business-demo-local-services',
+      buildManifestId: 'manifest-layout-check',
+      buildMode: 'homepage_test',
+      agentPackageId: 'agent-package-local-v7-7-reliable-compact-navigation',
+      agentPackageVersion: 7.7,
+      sourceCheckpointAvailable: true,
+      status: 'review_required',
+      templateVersion: 'made-solid-studio-next-builder-v2',
+      progressPhase: 'complete',
+      progressDetail: 'Private homepage review complete.',
+      totalItems: 7,
+      completedItems: 7,
+      failureContext: {},
+      qualitySummary: {
+        status: 'failed',
+        checks: [
+          {
+            id: 'responsive-interactions',
+            label: 'Responsive interaction contract',
+            status: 'failed',
+            detail: 'Compact navigation focus requires protected runtime repair.',
+          },
+        ],
+        generatedAt: now,
+      },
+      startedAt: now,
+      completedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await new Promise((resolve, reject) => {
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+    database.close();
+  });
+  await page.goto('/#/agent-studio/refine/business-demo-local-services');
+  await page.reload();
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+
+  const quality = page.locator('.builder-quality');
+  await expect(quality.getByRole('button', { name: 'Recheck saved source' })).toBeVisible();
+  await expect(quality).toContainText('without a Codex page generation pass');
+  await expect(quality).toHaveScreenshot('saved-source-quality-recheck.png');
+  const accessibility = await new AxeBuilder({ page }).include('.builder-quality').analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  expect(testInfo.project.name).toMatch(/mobile|tablet|desktop/);
 });
 
 test('keeps a failed test available without blocking another test', async ({ page }, testInfo) => {

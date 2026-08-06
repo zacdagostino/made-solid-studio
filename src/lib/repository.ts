@@ -133,6 +133,10 @@ export type WorkspaceRepository = {
     sourceBuilderRunId?: string,
     targetSourceUrls?: string[],
   ): Promise<BuilderRun | undefined>;
+  requestBuilderQualityRecheck(
+    builderRunId: string,
+    agentPackageId: string,
+  ): Promise<BuilderRun | undefined>;
   moveBuilderRunToAgentStudio(builderRunId: string): Promise<BuilderRun | undefined>;
   requestAgentStudioSiteTest(
     sourceBuilderRunId: string,
@@ -179,6 +183,15 @@ const localCompleteCheckpointRestorePackageId =
   'agent-package-local-v7-6-complete-checkpoint-restore';
 const localReliableCompactNavigationPackageId =
   'agent-package-local-v7-7-reliable-compact-navigation';
+const localCheckpointQualityRecheckPackageId =
+  'agent-package-local-v7-8-checkpoint-quality-recheck';
+const localStableNavigationVisibilityPackageId =
+  'agent-package-local-v7-9-stable-navigation-visibility';
+const localSettledAccessibilityPackageId = 'agent-package-local-v8-settled-accessibility';
+const localDeterministicEvidencePackageId = 'agent-package-local-v8-1-deterministic-final-evidence';
+const localReusableSectionRhythmPackageId = 'agent-package-local-v8-2-reusable-section-rhythm';
+const localForcedFinalStatePackageId = 'agent-package-local-v8-3-forced-final-state';
+const localSettledFactualEvidencePackageId = 'agent-package-local-v8-4-settled-factual-evidence';
 
 type StoreName =
   | 'activities'
@@ -757,10 +770,140 @@ export class SiteforgeRepository {
         'Moves the repeated v7.4 navigation failures into the protected foundation so generated sites cannot silently drop tablet navigation, strand keyboard focus, or capture the loading surface instead of the page.',
       stagedBehaviourIds: ['responsive-sidebar', 'framework-quality-gates'],
     };
+    const localCheckpointQualityRecheckPackage: AgentPackage = {
+      ...localReliableCompactNavigationPackage,
+      id: localCheckpointQualityRecheckPackageId,
+      version: 7.8,
+      basePackageId: localReliableCompactNavigationPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v7.8',
+      contractAddendum:
+        'A saved post-Codex checkpoint can be recompiled and browser-checked against the current protected foundation without generating the page again. The worker deterministically applies the reviewed primary and accent values to the shared brand tokens. Approved asset descriptors retain their reviewed role and reuse guidance, and page-matched approved worksite or project photography is a quality requirement.',
+      instructionsAddendum:
+        'Use the Siteforge navigation hooks and reviewed assets as before. For a content build, use at least one approved page-matched worksite or project photograph when one is staged and permitted. A quality recheck restores immutable source, reapplies locked runtime and reviewed palette tokens, compiles, captures all responsive evidence, and runs quality gates without invoking Codex.',
+      summary:
+        'Checkpoint repair and brand enforcement test package: rechecks saved generated source without Codex, guarantees compact navigation focus, readiness, and centring, applies reviewed palette tokens, and carries approved photo guidance.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Repairs and verifies an existing private page from its saved checkpoint in minutes, while preventing the generator from silently replacing reviewed colours or discarding approved worksite imagery.',
+      stagedBehaviourIds: [
+        'responsive-sidebar',
+        'contextual-logo-selection',
+        'framework-quality-gates',
+      ],
+    };
+    const localStableNavigationVisibilityPackage: AgentPackage = {
+      ...localCheckpointQualityRecheckPackage,
+      id: localStableNavigationVisibilityPackageId,
+      version: 7.9,
+      basePackageId: localCheckpointQualityRecheckPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v7.9',
+      contractAddendum:
+        'Compact-navigation readiness remains stable across unrelated DOM updates while the drawer is open. Browser quality checks wait for every sequenced navigation item to become visibly rendered before accepting or capturing the open state.',
+      instructionsAddendum:
+        'Keep every compact-navigation route and action marked with data-sf-navigation-item. The protected runtime owns durable readiness; generated components must not reset or override its open and ready classes.',
+      summary:
+        'Stable navigation visibility test package: keeps animated drawer routes visible after live page updates and rejects open-state captures until every route is visibly rendered.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents a drawer from passing structural checks while its route list is transparent, mid-animation, or repeatedly hidden by unrelated page updates.',
+      stagedBehaviourIds: ['responsive-sidebar', 'framework-quality-gates'],
+    };
+    const localSettledAccessibilityPackage: AgentPackage = {
+      ...localStableNavigationVisibilityPackage,
+      id: localSettledAccessibilityPackageId,
+      version: 8,
+      basePackageId: localStableNavigationVisibilityPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v8.0',
+      contractAddendum:
+        'Accessibility checks run against the settled visitor-visible page state after lazy sections and reveal motion have completed, preventing transient animation colours from being reported as final contrast failures.',
+      instructionsAddendum:
+        'Keep final-state colours conformant to WCAG 2.2 AA. The protected browser runner owns reveal settlement before axe analysis; generated code must still provide reduced-motion styles and accessible final colours.',
+      summary:
+        'Settled accessibility test package: evaluates final rendered colours after reveal motion while retaining responsive drawer visibility checks and saved-source repair.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Stops a valid repaired preview being held in review because axe sampled a partially transparent reveal frame instead of the final visitor-visible colours.',
+      stagedBehaviourIds: ['responsive-sidebar', 'framework-quality-gates'],
+    };
+    const localDeterministicEvidencePackage: AgentPackage = {
+      ...localSettledAccessibilityPackage,
+      id: localDeterministicEvidencePackageId,
+      version: 8.1,
+      basePackageId: localSettledAccessibilityPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v8.1',
+      contractAddendum:
+        'Responsive screenshots and accessibility analysis use the deterministic reduced-motion final state after lazy sections are revealed. Open-navigation interaction evidence returns to normal motion and still waits for every route to become visibly rendered.',
+      instructionsAddendum:
+        'Provide complete reduced-motion styles that expose the same content, layout, colour, and controls as the final motion-enabled state. Never use reduced motion to omit content or bypass interaction checks.',
+      summary:
+        'Deterministic final evidence test package: captures fully revealed page content, tests final-state contrast, and separately verifies normal and reduced-motion drawer interaction.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents full-page evidence from containing half-transparent sections and prevents axe from sampling an arbitrary transition frame.',
+      stagedBehaviourIds: ['responsive-sidebar', 'framework-quality-gates'],
+    };
+    const localReusableSectionRhythmPackage: AgentPackage = {
+      ...localDeterministicEvidencePackage,
+      id: localReusableSectionRhythmPackageId,
+      version: 8.2,
+      basePackageId: localDeterministicEvidencePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v8.2',
+      contractAddendum:
+        'Generated pages define semantic section, heading, and copy relationship tokens and reuse SectionShell and SectionHeading components with observable rhythm hooks. Browser quality compares eyebrow-to-title gaps and section-end padding at every viewport. Scrollbar chrome uses neutral tokens rather than reviewed brand colours, and two distinct approved page photographs are required when two are available.',
+      instructionsAddendum:
+        'Define --space-section-block, --space-heading, --space-copy, --scrollbar-track, and --scrollbar-thumb. Use shared SectionShell and SectionHeading components with the required Siteforge hooks throughout the selected page. Keep equal relationships equal, retain at least 24px section-end clearance, use quiet neutral scrollbar colours, and place two distinct approved worksite or project photographs when available.',
+      summary:
+        'Reusable section rhythm test package: enforces shared spacing tokens and section components, consistent heading and section-end rhythm, neutral scrollbars, and meaningful use of approved photography.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Stops generated pages from hand-tuning repeated section spacing, crowding final copy against the next surface, using brand-red/blue scrollbars, or silently omitting available approved photography.',
+      stagedBehaviourIds: ['next-component-architecture', 'framework-quality-gates'],
+    };
+    const localForcedFinalStatePackage: AgentPackage = {
+      ...localReusableSectionRhythmPackage,
+      id: localForcedFinalStatePackageId,
+      version: 8.3,
+      basePackageId: localReusableSectionRhythmPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v8.3',
+      contractAddendum:
+        'Responsive screenshots and accessibility analysis apply a protected final-state evidence class after reveal traversal. It forces generated reveal and scroll-depth elements to their fully visible settled geometry before evidence is sampled, then removes the class before normal-motion interaction checks.',
+      instructionsAddendum:
+        'Keep final-state colours and layout WCAG 2.2 AA conformant. Do not override the protected sf-quality-final-state visibility rules or depend on transition timing for factual content to become readable.',
+      summary:
+        'Forced final-state evidence test package: captures fully opaque settled sections for screenshots and accessibility while preserving separate normal-motion interaction checks.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents browser evidence from blending below-fold section colours with the page background while reveal transitions are resetting after the full-page traversal.',
+      stagedBehaviourIds: ['motion-runtime', 'framework-quality-gates'],
+    };
+    const localSettledFactualEvidencePackage: AgentPackage = {
+      ...localForcedFinalStatePackage,
+      id: localSettledFactualEvidencePackageId,
+      version: 8.4,
+      basePackageId: localForcedFinalStatePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v8.4',
+      contractAddendum:
+        'Final-state evidence waits for any factual counter animation triggered during full-page traversal to reach its defined endpoint before applying the protected opaque evidence state, running accessibility analysis, or capturing screenshots.',
+      instructionsAddendum:
+        'Use data-counter only for supported factual metrics and keep its visible endpoint accurate. Browser evidence owns the bounded completion wait; do not lengthen factual counter animations or make their endpoint depend on viewport timing.',
+      summary:
+        'Settled factual evidence test package: captures the same completed metric values at mobile, tablet, and desktop instead of saving transition frames.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents responsive screenshots from showing different intermediate values for the same approved factual counter.',
+      stagedBehaviourIds: ['motion-runtime', 'framework-quality-gates'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localSettledFactualEvidencePackage,
+          localForcedFinalStatePackage,
+          localReusableSectionRhythmPackage,
+          localDeterministicEvidencePackage,
+          localSettledAccessibilityPackage,
+          localStableNavigationVisibilityPackage,
+          localCheckpointQualityRecheckPackage,
           localReliableCompactNavigationPackage,
           localCompleteCheckpointRestorePackage,
           localSelectedRouteCompilePackage,
@@ -786,6 +929,13 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localSettledFactualEvidencePackage,
+          localForcedFinalStatePackage,
+          localReusableSectionRhythmPackage,
+          localDeterministicEvidencePackage,
+          localSettledAccessibilityPackage,
+          localStableNavigationVisibilityPackage,
+          localCheckpointQualityRecheckPackage,
           localReliableCompactNavigationPackage,
           localCompleteCheckpointRestorePackage,
           localSelectedRouteCompilePackage,
@@ -814,6 +964,13 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localSettledFactualEvidencePackage,
+            localForcedFinalStatePackage,
+            localReusableSectionRhythmPackage,
+            localDeterministicEvidencePackage,
+            localSettledAccessibilityPackage,
+            localStableNavigationVisibilityPackage,
+            localCheckpointQualityRecheckPackage,
             localReliableCompactNavigationPackage,
             localCompleteCheckpointRestorePackage,
             localSelectedRouteCompilePackage,
@@ -1677,6 +1834,10 @@ export class SiteforgeRepository {
 
   async requestWebsiteBuild(): Promise<BuilderRun | undefined> {
     throw new Error('Private preview builds require the protected Supabase builder worker.');
+  }
+
+  async requestBuilderQualityRecheck(): Promise<BuilderRun | undefined> {
+    throw new Error('Saved-source quality rechecks require the protected Supabase builder worker.');
   }
 
   async moveBuilderRunToAgentStudio(builderRunId: string): Promise<BuilderRun | undefined> {

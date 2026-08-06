@@ -2349,6 +2349,21 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     return workspace?.latestBuilderRun;
   }
 
+  async requestBuilderQualityRecheck(builderRunId: string, agentPackageId: string) {
+    const { data, error } = await this.client.rpc('request_builder_quality_recheck', {
+      target_builder_run_id: builderRunId,
+      requested_agent_package_id: agentPackageId,
+    });
+    throwIfError(error);
+    const { data: run, error: runError } = await this.client
+      .from('builder_runs')
+      .select('*, agent_packages(version), builder_artifacts(kind)')
+      .eq('id', data as string)
+      .single();
+    throwIfError(runError);
+    return builderRunFromRow(run as DatabaseRow);
+  }
+
   async moveBuilderRunToAgentStudio(builderRunId: string) {
     const { data, error } = await this.client.rpc('move_builder_run_to_agent_studio', {
       target_builder_run_id: builderRunId,

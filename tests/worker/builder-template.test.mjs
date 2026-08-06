@@ -95,6 +95,10 @@ test('verifies and exports the isolated Next.js component foundation', async () 
     assert.match(runtime, /@media \(min-width: 769px\)/);
     assert.match(runtime, /data-siteforge-desktop-navigation/);
     assert.match(runtime, /min-height: 100dvh/);
+    assert.match(runtime, /grid-column: 1 !important/);
+    assert.match(runtime, /grid-column: 2 !important/);
+    assert.match(runtime, /focusTarget\?\.focus\(\{ preventScroll: true \}\)/);
+    assert.match(runtime, /window\.setTimeout\(revealItems, 1_200\)/);
     assert.doesNotMatch(runtime, /Preparing your site/);
     assert.match(runtime, /usePathname/);
     assert.match(runtime, /sf-route-transitioning/);
@@ -210,6 +214,24 @@ test('verifies and exports the isolated Next.js component foundation', async () 
       assert.equal(await page.locator('h1').getAttribute('data-sf-reveal'), 'true');
       assert.equal(await page.locator('h1').getAttribute('data-sf-reveal-variant'), 'words');
       assert.equal(await page.locator('h1 .sf-reveal-word').count(), 2);
+      await page.evaluate(() => {
+        globalThis.document.documentElement.classList.add('sf-quality-final-state');
+        globalThis.document.querySelector('h1')?.classList.remove('is-visible');
+      });
+      assert.deepEqual(
+        await page
+          .locator('h1 .sf-reveal-word')
+          .first()
+          .evaluate((word) => ({
+            opacity: globalThis.getComputedStyle(word).opacity,
+            transform: globalThis.getComputedStyle(word).transform,
+          })),
+        { opacity: '1', transform: 'none' },
+      );
+      await page.evaluate(() =>
+        globalThis.document.documentElement.classList.remove('sf-quality-final-state'),
+      );
+      await page.locator('h1').evaluate((heading) => heading.classList.add('is-visible'));
       assert.equal(
         await page.locator('[data-reveal="stagger"] > [data-sf-reveal-item]').count(),
         2,
@@ -279,6 +301,13 @@ test('verifies and exports the isolated Next.js component foundation', async () 
         logo.alt = '';
         logo.src = '/delayed-navigation-logo.svg';
         dialog.append(logo);
+        const closeControl = globalThis.document.createElement('button');
+        closeControl.dataset.siteforgeNavigationClose = '';
+        closeControl.textContent = 'Close';
+        closeControl.addEventListener('click', () =>
+          trigger.setAttribute('aria-expanded', 'false'),
+        );
+        dialog.append(closeControl);
         ['Logo', 'Services', 'Contact'].forEach((label) => {
           const item = globalThis.document.createElement('a');
           item.dataset.sfNavigationItem = '';
@@ -320,6 +349,40 @@ test('verifies and exports the isolated Next.js component foundation', async () 
           .querySelector('[data-siteforge-navigation-dialog]')
           .classList.contains('is-sf-navigation-ready'),
       );
+      await page.evaluate(() => {
+        const unrelatedUpdate = globalThis.document.createElement('span');
+        unrelatedUpdate.textContent = 'Live page update';
+        globalThis.document.body.append(unrelatedUpdate);
+      });
+      await page.waitForFunction(() =>
+        [...globalThis.document.querySelectorAll('[data-sf-navigation-item]')].every(
+          (item) => Number.parseFloat(globalThis.getComputedStyle(item).opacity) >= 0.95,
+        ),
+      );
+      assert.equal(
+        await page
+          .locator('[data-siteforge-navigation-dialog]')
+          .evaluate((dialog) => dialog.classList.contains('is-sf-navigation-ready')),
+        true,
+      );
+      assert.equal(
+        await page
+          .locator('[data-sf-navigation-item]')
+          .evaluateAll((items) =>
+            items.every(
+              (item) => Number.parseFloat(globalThis.getComputedStyle(item).opacity) >= 0.95,
+            ),
+          ),
+        true,
+      );
+      assert.equal(
+        await page.evaluate(
+          () =>
+            globalThis.document.activeElement ===
+            globalThis.document.querySelector('[data-siteforge-navigation-close]'),
+        ),
+        true,
+      );
       assert.deepEqual(
         await page
           .locator('[data-sf-navigation-item]')
@@ -328,12 +391,10 @@ test('verifies and exports the isolated Next.js component foundation', async () 
           ),
         ['140ms', '225ms', '310ms', '395ms'],
       );
-      assert.equal(
-        await page
-          .locator('[data-siteforge-navigation-logo]')
-          .evaluate((logo) => logo.complete && logo.naturalWidth > 0),
-        true,
-      );
+      await page.waitForFunction(() => {
+        const logo = globalThis.document.querySelector('[data-siteforge-navigation-logo]');
+        return logo.complete && logo.naturalWidth > 0;
+      });
       await page.keyboard.press('Escape');
       await page.waitForFunction(
         () =>

@@ -7517,6 +7517,7 @@ function BuilderRunPanel({
   agentPackages = [],
   onRequestBuild,
   onResumeBuild,
+  onQualityRecheck,
   onCancelBuild,
   onDeleteBuild,
   onOpenPreview,
@@ -7539,6 +7540,7 @@ function BuilderRunPanel({
     targetSourceUrls?: string[],
   ) => Promise<void>;
   onResumeBuild?: (builderRunId: string) => Promise<void>;
+  onQualityRecheck?: (builderRunId: string, agentPackageId: string) => Promise<void>;
   onCancelBuild: () => Promise<void>;
   onDeleteBuild: (businessId: string) => Promise<void>;
   onOpenPreview: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
@@ -7568,6 +7570,7 @@ function BuilderRunPanel({
   const runIsLatest = run?.id === workspace.latestBuilderRun?.id;
   const [isRequesting, setIsRequesting] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
+  const [isRechecking, setIsRechecking] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isOpeningPreview, setIsOpeningPreview] = useState(false);
@@ -7637,9 +7640,9 @@ function BuilderRunPanel({
                 : 'package-behaviour',
             title: `Package ${agentPackageVersionLabel(selectedAgentPackage.version)} testing behaviour`,
             detail: selectedAgentPackage.capabilityProposal || selectedAgentPackage.summary,
-            revision: `v${selectedAgentPackage.version}.0.16`,
+            revision: `v${selectedAgentPackage.version}.0.17`,
             change:
-              'Latest edit: package v7.7 moves the exact tablet breakpoint, full-height side panel, Escape focus recovery, and unobscured browser evidence into the protected foundation.',
+              'Latest edit: package v8.4 preserves the reusable section and visual-quality rules while capturing the same completed factual values in every responsive screenshot.',
           },
           {
             id: 'hero-handoff',
@@ -7655,18 +7658,18 @@ function BuilderRunPanel({
             title: 'Mobile & tablet sidebar navigation',
             detail:
               'Below desktop width, the header links become a leading-edge sidebar that reuses the real logo and header palette and opens from the trigger side. On motion-enabled visits, the header slides away after a downward scroll and returns on any upward scroll. It supports close, backdrop, Escape, keyboard focus, route selection, and reduced-motion users; desktop navigation stays visible.',
-            revision: `v${selectedAgentPackage.version}.19`,
+            revision: `v${selectedAgentPackage.version}.21`,
             change:
-              'Latest edit: compact navigation now remains active through exactly 768px, fills the viewport, and restores trigger focus after every Escape dismissal even when generated code omits it.',
+              'Latest edit: drawer readiness now survives unrelated live page updates, and browser checks wait until every animated route is visibly rendered before accepting the open state.',
           },
           {
             id: 'contextual-logo-selection',
             title: 'Context-aware logo selection',
             detail:
               'The builder treats the approved source logo and its transparent versions as one family. It chooses white or white-with-accent on dark surfaces, and original, black-with-accent, or black on light surfaces, with a stable protective surface for photography or mixed backgrounds.',
-            revision: `v${selectedAgentPackage.version}.7`,
+            revision: `v${selectedAgentPackage.version}.8`,
             change:
-              'Latest edit: the header logo now supplies exact intro surface, accessible ink, builder-chosen copy, and any distinct preloaded drawer appearance.',
+              'Latest edit: reviewed primary and accent values are applied deterministically before compile, while approved asset descriptors retain their visual role and safe-reuse guidance.',
           },
           {
             id: 'visual-content-recovery',
@@ -7691,9 +7694,9 @@ function BuilderRunPanel({
             title: 'Next.js generated component architecture',
             detail:
               'The agent creates each business’s visual tokens, UI primitives, patterns, sections, site components, layouts, and pages on a pinned strict TypeScript, Tailwind, Base UI, and Lucide foundation.',
-            revision: `v${selectedAgentPackage.version}.41`,
+            revision: `v${selectedAgentPackage.version}.42`,
             change:
-              'Latest edit: short creative directions now produce a decisive visual concept with expressive typography, distinctive responsive composition, depth, and authored interaction rather than interchangeable sections.',
+              'Latest edit: shared SectionShell and SectionHeading components now own semantic eyebrow, title, copy, and section-end spacing so repeated relationships cannot drift between sections.',
           },
           {
             id: 'runtime-profiles',
@@ -7709,9 +7712,9 @@ function BuilderRunPanel({
             title: 'Framework and responsive quality gates',
             detail:
               'Generated source must pass formatting, lint, strict typing, production build, route and provenance checks, browser interactions, accessibility, and exact responsive evidence.',
-            revision: `v${selectedAgentPackage.version}.44`,
+            revision: `v${selectedAgentPackage.version}.50`,
             change:
-              'Latest edit: browser quality now waits for the brand-introduction handoff before responsive screenshots and allows committed close motion before checking restored focus.',
+              'Latest edit: final-state evidence now waits for factual counters to reach their endpoint before accessibility scans and screenshots, so viewport timing cannot change saved values.',
           },
         ]
       : [];
@@ -8240,6 +8243,21 @@ function BuilderRunPanel({
       );
     } finally {
       setIsResuming(false);
+    }
+  }
+
+  async function qualityRecheck(builderRunId: string) {
+    if (!onQualityRecheck || !selectedAgentPackageId) return;
+    setIsRechecking(true);
+    setMessage('');
+    try {
+      await onQualityRecheck(builderRunId, selectedAgentPackageId);
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : 'This private test could not be rechecked.',
+      );
+    } finally {
+      setIsRechecking(false);
     }
   }
 
@@ -9717,6 +9735,27 @@ function BuilderRunPanel({
             <section className="builder-quality" aria-labelledby="builder-quality-title">
               <Eyebrow>Quality checks</Eyebrow>
               <h4 id="builder-quality-title">Generated preview review</h4>
+              {isTestBuild &&
+              onQualityRecheck &&
+              run.sourceCheckpointAvailable &&
+              (run.status === 'ready' || run.status === 'review_required') ? (
+                <div className="builder-quality__recheck">
+                  <p>
+                    Reapply the selected package’s protected navigation and Brand Kit rules to this
+                    saved source, then compile, capture, and test it again without a Codex page
+                    generation pass.
+                  </p>
+                  <Button
+                    disabled={isRechecking || !selectedAgentPackageId}
+                    onClick={() => void qualityRecheck(run.id)}
+                    type="button"
+                    variant="secondary"
+                  >
+                    <RotateCcw aria-hidden="true" size={16} />
+                    {isRechecking ? 'Queueing recheck' : 'Recheck saved source'}
+                  </Button>
+                </div>
+              ) : null}
               <ul>
                 {run.qualitySummary.checks.map((check) => (
                   <li key={check.id}>
@@ -13627,6 +13666,7 @@ function AgentStudioPage({
   onOpenUsageAnalysis,
   onRequestBuild,
   onResumeBuild,
+  onQualityRecheck,
   onCancelBuild,
   onDeleteBuild,
   onOpenPreview,
@@ -13658,6 +13698,7 @@ function AgentStudioPage({
     targetSourceUrls?: string[],
   ) => Promise<void>;
   onResumeBuild: (builderRunId: string) => Promise<void>;
+  onQualityRecheck: (builderRunId: string, agentPackageId: string) => Promise<void>;
   onCancelBuild: (businessId: string) => Promise<void>;
   onDeleteBuild: (businessId: string) => Promise<void>;
   onOpenPreview: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
@@ -13899,6 +13940,7 @@ function AgentStudioPage({
               onOpenPreview={onOpenPreview}
               onOpenUsageAnalysis={onOpenUsageAnalysis}
               onRequestProposal={onRequestAgentPackageProposal}
+              onQualityRecheck={onQualityRecheck}
               onResumeBuild={onResumeBuild}
               onRequestSiteTest={onRequestSiteTest}
               onStageBehaviours={onStageAgentPackageBehaviours}
@@ -16409,6 +16451,19 @@ function WorkspaceApp({
     });
   }
 
+  async function requestBuilderQualityRecheck(builderRunId: string, agentPackageId: string) {
+    const run = await repository.requestBuilderQualityRecheck(builderRunId, agentPackageId);
+    if (!run) throw new Error('The saved-source quality recheck could not be queued.');
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Saved-source recheck queued',
+      detail:
+        'The protected builder will reapply the selected runtime and reviewed colours, then compile and browser-test the saved page without another Codex generation pass.',
+      tone: 'success',
+    });
+  }
+
   async function requestAgentStudioSiteTest(
     sourceBuilderRunId: string,
     buildInstruction: string,
@@ -16619,6 +16674,7 @@ function WorkspaceApp({
               }
               onOpenUsageAnalysis={(builderRunId) => navigate({ page: 'usage', builderRunId })}
               onRequestBuild={requestWebsiteBuildForBusiness}
+              onQualityRecheck={requestBuilderQualityRecheck}
               onRequestSiteTest={requestAgentStudioSiteTest}
               onResumeBuild={resumeWebsiteBuildForBusiness}
               onRequestAgentPackageProposal={requestAgentPackageProposal}

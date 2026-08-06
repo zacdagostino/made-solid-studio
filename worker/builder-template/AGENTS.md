@@ -19,6 +19,7 @@ asset index.
 
 - Read `feature-contracts/component-architecture.md`. Implement a real site-specific component system using strict TypeScript and the existing Next.js App Router foundation.
 - The agent owns the visual system: semantic design tokens, typography, spacing, primitive appearance, component variants, patterns, sections, layouts, responsive composition, and brand-specific motion.
+- Define the required relationship tokens `--space-section-block`, `--space-heading`, and `--space-copy`. Build repeated sections with shared `SectionShell` and `SectionHeading` components and their Siteforge rhythm hooks; do not hand-tune eyebrow/title gaps or final-section padding in individual pages.
 - Use native semantic HTML first. Use the pinned Base UI package for complex behaviours such as dialogs, menus, popovers, tabs, comboboxes, and focus-managed disclosures. Base UI supplies behaviour, not a visual theme.
 - Use Tailwind utilities and semantic CSS custom properties together. Tokens express the approved brand and repeated design decisions; utilities implement component-local layouts and states.
 - Create only components the site needs. Extract repeated or behavioural UI, but do not turn every wrapper into a component.
@@ -30,6 +31,7 @@ asset index.
 ## Approved assets and identity
 
 - Assets in `public/assets/` are the only approved visual assets that may be reused. Reference them as `/assets/<file>`. Do not fetch remote images, fonts, scripts, stylesheets, packages, or libraries.
+- Treat each entry's reviewed role, observed description, reuse note, cautions, and public path in `../input/approved-assets.json` as its placement boundary. When the selected page includes approved `worksite_photo` or `project_photo` assets without cautions that prevent reuse, use at least two distinct photographs when two are available, or the one available photograph, as meaningful content imagery with accurate text alternatives.
 - Read `feature-contracts/contextual-logo-selection.md`. Use the explicit logo-family metadata in `../input/approved-assets.json` and annotate every logo image with its exact approved appearance and direct light/dark context.
 - When a Brand Kit is present, use its approved primary logo family in the header and footer and its reviewed primary/accent values as semantic brand tokens. Derive accessible ink, background, surface, muted, border, and state tokens.
 - Keep `SiteRuntime` in the root layout. Mark the real, stably sized header logo image or wrapper with `data-siteforge-brand-logo`. The locked runtime owns the safe motion mechanics, factual counters, and approved-logo transition on every route; the agent chooses a content-appropriate composition using `data-reveal="words"`, `sequence`, `stagger`, `fade-up`, `fade-left`, `fade-right`, `scale`, and `data-scroll-zoom`.
@@ -64,6 +66,7 @@ asset index.
 - Preserve entered form values after validation errors, prevent duplicate submissions, and announce asynchronous status changes.
 - Test realistic long labels, URLs, headings, task text, empty content, and large content sets. No page may create accidental horizontal overflow.
 - Use an intentional local/bundled display and body font system with semantic type and relationship-spacing tokens. Keep heading-to-copy spacing consistent across routes and correct awkward wraps at every required viewport.
+- Style scrollbars with neutral light/dark track and thumb tokens. Do not use the reviewed primary or accent colours as scrollbar chrome.
 - Use local, performance-conscious assets with stable dimensions. Avoid unnecessary Client Components and browser JavaScript.
 - Keep the generated `SiteRuntime` marker, approved logo annotations, source-page metadata, recovered-content annotations, and mobile-navigation test hooks intact.
 - Finish by running `npm run verify`. Fix formatting, lint, strict type errors, build failures, missing routes, and local asset problems before reporting completion.

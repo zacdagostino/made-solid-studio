@@ -768,7 +768,7 @@ function hasSourceChanges(currentFiles, initialSourceHashes) {
   return checkpointFiles.some((file) => initialSourceHashes.get(file.relativePath) !== file.hash);
 }
 
-function sourceCheckpointPayload(currentFiles, initialSourceHashes) {
+function sourceCheckpointPayload(currentFiles, templateSourceHashes) {
   return {
     version: 1,
     generatedAt: new Date().toISOString(),
@@ -778,7 +778,7 @@ function sourceCheckpointPayload(currentFiles, initialSourceHashes) {
         path: file.relativePath,
         hash: file.hash,
         source:
-          initialSourceHashes.get(file.relativePath) === file.hash ? 'template' : 'checkpoint',
+          templateSourceHashes.get(file.relativePath) === file.hash ? 'template' : 'checkpoint',
       }))
       .sort((left, right) => left.path.localeCompare(right.path)),
   };
@@ -1049,7 +1049,7 @@ async function restoreLegacyDraftFiles(client, run, sourceDirectory) {
 }
 
 async function saveSourceCheckpoint(client, run, workspace, currentFiles, event, options = {}) {
-  const payload = sourceCheckpointPayload(currentFiles, workspace.initialSourceHashes);
+  const payload = sourceCheckpointPayload(currentFiles, workspace.templateSourceHashes);
   const body = Buffer.from(JSON.stringify(payload));
   const hash = sha256(JSON.stringify({ version: payload.version, files: payload.files }));
   const checkpointState = options.state ?? 'resume_checkpoint';
@@ -1256,6 +1256,12 @@ function assetMatchesSelectedPages(asset, selectedPageUrls, primaryLogoAssetId) 
 async function stageApprovedAssets(client, manifest, siteDirectory, selectedPages = []) {
   const data = recordValue(manifest.data);
   const brandKit = recordValue(data.brandKit);
+  const guidanceByAssetId = new Map(
+    (Array.isArray(data.approvedAssetGuidance) ? data.approvedAssetGuidance : [])
+      .map((item) => recordValue(item))
+      .filter((item) => typeof item.assetId === 'string')
+      .map((item) => [item.assetId, item]),
+  );
   const recoveredContentAssetIds = new Set(
     (Array.isArray(data.approvedVisualContent) ? data.approvedVisualContent : [])
       .map((item) => recordValue(item).assetId)
@@ -1329,13 +1335,20 @@ async function stageApprovedAssets(client, manifest, siteDirectory, selectedPage
         primaryLogoAssetId,
         `public/assets/${fileName}`,
         asset.content_type || blob.type || 'application/octet-stream',
+        guidanceByAssetId.get(asset.id),
       ),
     );
   }
   return staged;
 }
 
-function approvedAssetDescriptor(asset, primaryLogoAssetId, relativePath, contentType) {
+function approvedAssetDescriptor(
+  asset,
+  primaryLogoAssetId,
+  relativePath,
+  contentType,
+  guidance = {},
+) {
   const metadata = recordValue(asset.metadata);
   const derivedFromAssetId =
     typeof metadata.derivedFromAssetId === 'string' ? metadata.derivedFromAssetId : undefined;
@@ -1356,6 +1369,19 @@ function approvedAssetDescriptor(asset, primaryLogoAssetId, relativePath, conten
     publicPath: `/${relativePath.replace(/^public\//, '')}`,
     contentType,
     ...(typeof asset.label === 'string' && asset.label ? { label: asset.label } : {}),
+    ...(typeof guidance.role === 'string' && guidance.role ? { role: guidance.role } : {}),
+    ...(typeof guidance.observedDescription === 'string' && guidance.observedDescription
+      ? { observedDescription: guidance.observedDescription }
+      : {}),
+    ...(typeof guidance.safeReuseNote === 'string' && guidance.safeReuseNote
+      ? { safeReuseNote: guidance.safeReuseNote }
+      : {}),
+    ...(Array.isArray(guidance.cautions) && guidance.cautions.length
+      ? { cautions: guidance.cautions.filter((item) => typeof item === 'string') }
+      : {}),
+    ...(Array.isArray(guidance.visibleText) && guidance.visibleText.length
+      ? { visibleText: guidance.visibleText.filter((item) => typeof item === 'string') }
+      : {}),
     ...(isLogoFamilyMember
       ? {
           logoFamilyPrimaryAssetId: primaryLogoAssetId,
@@ -1885,6 +1911,7 @@ async function prepareWorkspace(client, run, manifest, workerId, diagnostics) {
   const contextSummaryPath = join(inputDirectory, 'build-context.json');
   await writeFile(contextSummaryPath, JSON.stringify(contextSummary, null, 2));
   await chmod(contextSummaryPath, 0o444);
+  const templateSourceHashes = await sourceFileHashes(siteDirectory);
   const checkpoint = await restoreSourceCheckpoint(
     client,
     run,
@@ -1934,8 +1961,9 @@ async function prepareWorkspace(client, run, manifest, workerId, diagnostics) {
     buildMode,
     targetSourceUrl,
     targetSourceUrls,
+    templateSourceHashes,
     initialSourceHashes,
-    draftHashes: checkpoint.draftHashes,
+    draftHashes: sourceRun.id === run.id ? checkpoint.draftHashes : new Map(),
     draftFailures: new Map(),
     checkpointHash: checkpoint.checkpointHash,
     checkpointState: checkpoint.checkpointState,
@@ -2027,7 +2055,7 @@ function buildPrompt(workspace, buildInstruction) {
       `Change only these exact source files: ${allowedSourcePaths.map((path) => `src/${path}`).join(', ')}; and files beneath these generated component prefixes: ${allowedSourcePrefixes.map((path) => `src/${path}`).join(', ')}. Preserve every other restored route and source file byte-for-byte.`,
       `Preserve ${selectedPage?.sourcePath ?? 'the selected route source'} and its exact siteforge-source-url metadata, approved local assets, page content, and navigation unless the workspace direction requires a change. Do not add or strengthen business claims.`,
       'The assets staged in public/assets/ belong to the current manifest and replace the prior run’s asset set. Reference only the publicPath values in approved-assets.json.',
-      'Read feature-contracts/component-architecture.md. Preserve the typed component architecture while allowing the selected route and genuinely shared generated components to be refined.',
+      'Read feature-contracts/component-architecture.md. Preserve the typed component architecture while allowing the selected route and genuinely shared generated components to be refined. Use the shared SectionShell and SectionHeading primitives, required relationship tokens, Siteforge rhythm hooks, and neutral scrollbar tokens; do not hand-tune individual eyebrow/title or section-end gaps.',
       ...(usesContract('semantic-content-recovery.md')
         ? [
             'Implement feature-contracts/semantic-content-recovery.md for the approvedVisualContentGroups in revision-scope.json. Account for every group and item in the selected route, preserve reviewed semantic information, add exact provenance annotations, and decide how it integrates into the restored design. Do not leave a stale generic substitute.',
@@ -2080,7 +2108,7 @@ function buildPrompt(workspace, buildInstruction) {
     hasStructuredArchitecture
       ? 'Read the structured architecture in manifest.json. Use the locked Next.js App Router, strict TypeScript, Tailwind, semantic CSS tokens, native HTML, Base UI, and Lucide foundation. Do not install packages or change build configuration.'
       : 'This legacy manifest does not contain a structured architecture object. Do not search for one. Use the pinned package, applicable contracts, and locked Next.js App Router foundation as the architecture boundary; do not install packages or change build configuration.',
-    'Read feature-contracts/component-architecture.md. Create a business-specific component system in tokens, UI, patterns, sections, site components, layouts, and pages. The foundation locks behaviour, not appearance: own the typography, spacing, variants, composition, responsive transformation, scrollbar craft, and brand expression. For each prominent repeated group, first distinguish real order, item count and length, comparison needs, and browsing needs; then choose a content-led desktop and mobile composition instead of defaulting to numbered cards, vertical stacks, or horizontal rails. Fit concise two-to-four-item mobile groups when smaller readable containers expose the content better than swiping.',
+    'Read feature-contracts/component-architecture.md. Create a business-specific component system in tokens, UI, patterns, sections, site components, layouts, and pages. Define --space-section-block, --space-heading, and --space-copy; reuse SectionShell and SectionHeading with their required Siteforge hooks so equal eyebrow/title relationships and section-end clearance cannot drift between sections. The foundation locks behaviour, not appearance: own the typography, spacing, variants, composition, responsive transformation, scrollbar craft, and brand expression. For each prominent repeated group, first distinguish real order, item count and length, comparison needs, and browsing needs; then choose a content-led desktop and mobile composition instead of defaulting to numbered cards, vertical stacks, or horizontal rails. Fit concise two-to-four-item mobile groups when smaller readable containers expose the content better than swiping.',
     homepageTest
       ? 'source-pages/index.json contains the homepage. Implement only its exact sourcePath, link using its publicPath, and export its exact outputPath.'
       : pageSetTest
@@ -2110,6 +2138,7 @@ function buildPrompt(workspace, buildInstruction) {
       : []),
     'Do not invent or imply unsupported business facts. Preserve unresolved items for the human reviewer rather than guessing.',
     'Use only approved assets in public/assets/ through their staged publicPath. Do not make network requests, import remote resources, or add dependencies.',
+    'approved-assets.json includes each asset’s reviewed role, observed description, safe reuse note, cautions, and visible text beside its usable publicPath. When the selected page has permitted approved worksite_photo or project_photo assets, use at least two distinct photographs when two are available, or the one available photograph, as meaningful page content with accurate alt text; do not discard approved photography in favour of an image-free generic composition.',
     ...(usesContract('contextual-logo-selection.md')
       ? [
           'Read and implement feature-contracts/contextual-logo-selection.md. The approved primary logo family is mandatory in the header and footer. Use the explicit logoFamilyPrimaryAssetId and logoAppearance fields in approved-assets.json to choose a contrast-safe approved version for each direct background surface, and annotate every logo image as required by the contract. Use the reviewed primary and accent colours as brand tokens, then design coherent accessible neutrals, surfaces, and backgrounds yourself; do not copy a weak legacy colour system or replace the identity with a generic one.',
@@ -2152,6 +2181,85 @@ function buildPrompt(workspace, buildInstruction) {
             ? 'Finish by running npm run verify. Report the feature-only changes, preserved route count, and navigation paths verified.'
             : 'Finish by running npm run verify. Report the completed route count, component layers created, source pages mapped to clean paths, production runtime handoff, and unresolved manifest questions.',
   ].join('\n');
+}
+
+async function enforceBrandPaletteTokens(manifest, siteDirectory) {
+  const palette = recordValue(recordValue(recordValue(manifest.data).brandKit).palette);
+  const reviewedTokens = [
+    ['brand-primary', palette.primary],
+    ['brand-accent', palette.accent],
+  ].filter(([, value]) => typeof value === 'string' && value.trim());
+  if (!reviewedTokens.length) return [];
+  const stylesheetPath = join(siteDirectory, 'src', 'app', 'globals.css');
+  let stylesheet = await readFile(stylesheetPath, 'utf8');
+  const applied = [];
+  for (const [token, rawValue] of reviewedTokens) {
+    const reviewedValue = rawValue.trim();
+    const value = /^#[0-9a-f]{3,8}$/i.test(reviewedValue)
+      ? reviewedValue.toLowerCase()
+      : reviewedValue;
+    const declaration = new RegExp(`(--${token}\\s*:\\s*)[^;]+;`, 'i');
+    if (declaration.test(stylesheet)) {
+      stylesheet = stylesheet.replace(declaration, `$1${value};`);
+    } else if (/:root\s*\{/i.test(stylesheet)) {
+      stylesheet = stylesheet.replace(
+        /:root\s*\{/i,
+        (match) => `${match}\n  --${token}: ${value};`,
+      );
+    } else {
+      stylesheet = `:root {\n  --${token}: ${value};\n}\n\n${stylesheet}`;
+    }
+    applied.push({ token: `--${token}`, value });
+  }
+  await chmod(stylesheetPath, 0o644);
+  await writeFile(stylesheetPath, stylesheet);
+  return applied;
+}
+
+function approvedImageUsageProblems(stagedAssets, htmlFiles, minimumDistinctImages = 1) {
+  const approvedPhotography = stagedAssets.filter(
+    (asset) =>
+      ['worksite_photo', 'project_photo'].includes(asset.role) &&
+      /^image\/(?:avif|gif|jpe?g|png|webp)$/i.test(asset.contentType),
+  );
+  if (!approvedPhotography.length) return [];
+  const requiredCount = Math.min(minimumDistinctImages, approvedPhotography.length);
+  const combined = htmlFiles
+    .map((file) => file.contents)
+    .join('\n')
+    .toLowerCase();
+  const usedCount = approvedPhotography.filter((asset) =>
+    combined.includes(basename(asset.relativePath).toLowerCase()),
+  ).length;
+  if (usedCount >= requiredCount) return [];
+  return [
+    `${approvedPhotography.length} approved page-matched worksite or project photograph${approvedPhotography.length === 1 ? ' was' : 's were'} staged, but the generated page uses ${usedCount} distinct approved photograph${usedCount === 1 ? '' : 's'}; it must use ${requiredCount}.`,
+  ];
+}
+
+function cssColourRepresentations(value) {
+  const normalized = value.trim().toLowerCase();
+  const representations = new Set([normalized]);
+  const compactMatch = /^#([0-9a-f])\1([0-9a-f])\2([0-9a-f])\3$/i.exec(normalized);
+  if (compactMatch) representations.add(`#${compactMatch[1]}${compactMatch[2]}${compactMatch[3]}`);
+  const namedColours = new Map([
+    ['#000000', 'black'],
+    ['#000080', 'navy'],
+    ['#008000', 'green'],
+    ['#008080', 'teal'],
+    ['#800000', 'maroon'],
+    ['#800080', 'purple'],
+    ['#808000', 'olive'],
+    ['#808080', 'gray'],
+    ['#c0c0c0', 'silver'],
+    ['#f00', 'red'],
+    ['#ff0000', 'red'],
+    ['#ffa500', 'orange'],
+    ['#fff', 'white'],
+    ['#ffffff', 'white'],
+  ]);
+  if (namedColours.has(normalized)) representations.add(namedColours.get(normalized));
+  return [...representations];
 }
 
 function brandProblems(manifest, stagedAssets, allFiles) {
@@ -2197,7 +2305,7 @@ function brandProblems(manifest, stagedAssets, allFiles) {
       if (
         typeof value === 'string' &&
         /^#[0-9a-f]{6}$/i.test(value) &&
-        !combined.includes(value.toLowerCase())
+        !cssColourRepresentations(value).some((candidate) => combined.includes(candidate))
       ) {
         problems.push(
           `The reviewed ${role} brand colour is not present in the generated design tokens.`,
@@ -2339,7 +2447,11 @@ function motionCompositionProblems(htmlFiles, expressive = false, immersive = fa
   return problems;
 }
 
-async function expressiveNavigationMotionProblems(allFiles, requireReadyLogo = false) {
+async function expressiveNavigationMotionProblems(
+  allFiles,
+  requireReadyLogo = false,
+  runtimeGuaranteesLogoSequence = false,
+) {
   const authoredFiles = allFiles.filter((file) => {
     const normalized = file.split(sep).join('/');
     return (
@@ -2360,9 +2472,11 @@ async function expressiveNavigationMotionProblems(allFiles, requireReadyLogo = f
       'Compact navigation must sequence its approved logo, primary routes, and secondary controls.',
     );
   }
-  if (requireReadyLogo) {
+  if (requireReadyLogo && !runtimeGuaranteesLogoSequence) {
     const navigationLogoTags = source.match(/<[^>]*data-siteforge-navigation-logo[^>]*>/gi) ?? [];
-    if (!navigationLogoTags.some((tag) => /data-sf-navigation-item/i.test(tag))) {
+    if (!navigationLogoTags.length) {
+      problems.push('The compact-navigation surface does not identify its approved logo.');
+    } else if (!navigationLogoTags.some((tag) => /data-sf-navigation-item/i.test(tag))) {
       problems.push(
         'The compact-navigation logo must be the first sequenced item so routes cannot animate ahead of an empty mark.',
       );
@@ -2481,7 +2595,7 @@ function brandIntroProblems(
   return problems;
 }
 
-async function scrollbarStylingProblems(allFiles) {
+async function scrollbarStylingProblems(allFiles, manifest, enforceNeutralTokens = false) {
   const cssFiles = allFiles.filter((file) => /\.css$/i.test(file.split(sep).join('/')));
   const source = (await Promise.all(cssFiles.map((file) => readFile(file, 'utf8')))).join('\n');
   const problems = [];
@@ -2493,6 +2607,82 @@ async function scrollbarStylingProblems(allFiles) {
     !/::-(?:webkit-)?scrollbar-thumb\b/i.test(source)
   ) {
     problems.push('Generated styles do not define matching scrollbar track and thumb treatments.');
+  }
+  if (enforceNeutralTokens) {
+    if (!/--scrollbar-track\s*:/i.test(source) || !/--scrollbar-thumb\s*:/i.test(source)) {
+      problems.push(
+        'Generated styles do not define the required neutral --scrollbar-track and --scrollbar-thumb tokens.',
+      );
+    }
+    const scrollbarContexts = [
+      ...source.matchAll(/scrollbar-color\s*:[^;]+;|[^{}]*scrollbar[^{}]*\{[^}]*\}/gi),
+    ]
+      .map((match) => match[0])
+      .join('\n')
+      .toLowerCase();
+    const palette = recordValue(recordValue(manifest.data).brandKit).palette;
+    const reviewedColours = recordValue(palette);
+    const forbiddenValues = [reviewedColours.primary, reviewedColours.accent]
+      .filter((value) => typeof value === 'string' && value.trim())
+      .flatMap((value) => cssColourRepresentations(value));
+    const scrollbarTokenValues = ['scrollbar-track', 'scrollbar-thumb']
+      .map((token) => new RegExp(`--${token}\\s*:\\s*([^;}]+)`, 'i').exec(source)?.[1] ?? '')
+      .join('\n')
+      .toLowerCase();
+    if (
+      /var\(\s*--brand-(?:primary|accent)\b/i.test(
+        `${scrollbarContexts}\n${scrollbarTokenValues}`,
+      ) ||
+      forbiddenValues.some((value) =>
+        `${scrollbarContexts}\n${scrollbarTokenValues}`.includes(value.toLowerCase()),
+      )
+    ) {
+      problems.push(
+        'Scrollbar track and thumb styling uses a reviewed brand colour; scrollbar chrome must use a restrained neutral light or dark pair.',
+      );
+    }
+  }
+  return problems;
+}
+
+async function designSystemRhythmProblems(siteDirectory, htmlFiles) {
+  const sourceDirectory = join(siteDirectory, 'src');
+  const sourceFiles = await collectFiles(sourceDirectory);
+  const relevantFiles = sourceFiles.filter((file) => /\.(?:css|tsx?)$/i.test(file));
+  const source = (await Promise.all(relevantFiles.map((file) => readFile(file, 'utf8')))).join(
+    '\n',
+  );
+  const problems = [];
+  for (const token of ['space-section-block', 'space-heading', 'space-copy']) {
+    if (!new RegExp(`--${token}\\s*:`, 'i').test(source)) {
+      problems.push(`Generated design tokens do not define --${token}.`);
+    }
+  }
+  const componentSource = (
+    await Promise.all(
+      relevantFiles
+        .filter((file) => file.split(sep).join('/').includes('/src/components/'))
+        .map((file) => readFile(file, 'utf8')),
+    )
+  ).join('\n');
+  if (!/\b(?:function|const)\s+SectionShell\b/.test(componentSource)) {
+    problems.push('Generated source does not implement a reusable SectionShell component.');
+  }
+  if (!/\b(?:function|const)\s+SectionHeading\b/.test(componentSource)) {
+    problems.push('Generated source does not implement a reusable SectionHeading component.');
+  }
+  for (const file of htmlFiles) {
+    const secondLevelHeadings = (file.contents.match(/<h2\b/gi) ?? []).length;
+    if (secondLevelHeadings < 2) continue;
+    const shellHooks = (file.contents.match(/data-siteforge-section-shell(?:=|\s|>)/gi) ?? [])
+      .length;
+    const headingHooks = (file.contents.match(/data-siteforge-section-heading(?:=|\s|>)/gi) ?? [])
+      .length;
+    if (shellHooks < 2 || headingHooks < 2) {
+      problems.push(
+        `${file.relativePath} does not reuse the SectionShell and SectionHeading rhythm hooks across its content sections.`,
+      );
+    }
   }
   return problems;
 }
@@ -3234,7 +3424,7 @@ function normaliseSemanticText(value) {
     .replace(/&nbsp;|&#160;/gi, ' ')
     .replace(/&amp;/gi, '&')
     .replace(/&quot;|&#34;/gi, '"')
-    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&#39;|&#x27;|&apos;/gi, "'")
     .replace(/[‘’]/g, "'")
     .replace(/[“”]/g, '"')
     .replace(/[–—]/g, '-')
@@ -3533,6 +3723,102 @@ async function waitForBrandIntroHandoff(page) {
   );
 }
 
+async function revealPageForResponsiveEvidence(page) {
+  await page.evaluate(async () => {
+    const waitForFrame = () =>
+      new Promise((resolve) =>
+        globalThis.requestAnimationFrame(() => globalThis.requestAnimationFrame(resolve)),
+      );
+    const viewportStep = Math.max(Math.floor(window.innerHeight * 0.72), 240);
+    const maximumScroll = Math.max(document.documentElement.scrollHeight - window.innerHeight, 0);
+    for (let top = 0; top <= maximumScroll; top += viewportStep) {
+      window.scrollTo({ top, behavior: 'instant' });
+      await waitForFrame();
+    }
+    window.scrollTo({ top: maximumScroll, behavior: 'instant' });
+    await waitForFrame();
+    window.scrollTo({ top: 0, behavior: 'instant' });
+    await waitForFrame();
+  });
+  await page.waitForTimeout(180);
+}
+
+async function enableFinalStateEvidence(page) {
+  if ((await page.locator('[data-counter][data-sf-counter-animated]').count()) > 0) {
+    await page.waitForTimeout(1_600);
+  }
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        document.documentElement.classList.add('sf-quality-final-state');
+        globalThis.requestAnimationFrame(() => globalThis.requestAnimationFrame(resolve));
+      }),
+  );
+}
+
+async function disableFinalStateEvidence(page) {
+  await page.evaluate(() => document.documentElement.classList.remove('sf-quality-final-state'));
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+}
+
+async function sectionRhythmProblems(page, viewport, htmlFile) {
+  const evidence = await page.evaluate(() => {
+    const headings = [...document.querySelectorAll('[data-siteforge-section-heading]')]
+      .map((heading) => {
+        const eyebrow = heading.querySelector('[data-siteforge-eyebrow]');
+        const title = heading.querySelector('[data-siteforge-title]');
+        if (
+          !(eyebrow instanceof globalThis.HTMLElement) ||
+          !(title instanceof globalThis.HTMLElement)
+        )
+          return undefined;
+        const eyebrowBox = eyebrow.getBoundingClientRect();
+        const titleBox = title.getBoundingClientRect();
+        return {
+          gap: titleBox.top - eyebrowBox.bottom,
+          visible: eyebrowBox.height > 0 && titleBox.height > 0,
+        };
+      })
+      .filter(Boolean);
+    const sections = [...document.querySelectorAll('[data-siteforge-section-shell]')]
+      .filter((section) => section.getAttribute('data-siteforge-section-edge') !== 'flush')
+      .map((section) => ({
+        paddingBlockEnd: Number.parseFloat(getComputedStyle(section).paddingBlockEnd || '0'),
+      }));
+    return { headings, sections };
+  });
+  const problems = [];
+  if (evidence.headings.length < 2 || evidence.sections.length < 2) {
+    problems.push(
+      `${htmlFile.relativePath} does not expose reusable section-rhythm evidence at ${viewport.width}px.`,
+    );
+    return problems;
+  }
+  const headingGaps = evidence.headings
+    .filter((heading) => heading.visible)
+    .map((heading) => heading.gap);
+  if (
+    headingGaps.length < 2 ||
+    Math.min(...headingGaps) < 4 ||
+    Math.max(...headingGaps) - Math.min(...headingGaps) > 2
+  ) {
+    problems.push(
+      `${htmlFile.relativePath} has inconsistent eyebrow-to-title spacing at ${viewport.width}px.`,
+    );
+  }
+  const sectionEndSpacing = evidence.sections.map((section) => section.paddingBlockEnd);
+  if (
+    Math.min(...sectionEndSpacing) < 24 ||
+    Math.max(...sectionEndSpacing) - Math.min(...sectionEndSpacing) > 2
+  ) {
+    problems.push(
+      `${htmlFile.relativePath} has inconsistent or cramped section-end spacing at ${viewport.width}px.`,
+    );
+  }
+  return problems;
+}
+
 async function responsiveInteractionEvidence(
   page,
   viewport,
@@ -3541,6 +3827,7 @@ async function responsiveInteractionEvidence(
   enforceLogoAlignment = false,
   enforceLogoReadiness = false,
   enforceLogoSequence = false,
+  enforceSectionRhythm = false,
 ) {
   const problems = [];
   const overflow = await page.evaluate(() => ({
@@ -3551,6 +3838,9 @@ async function responsiveInteractionEvidence(
     problems.push(
       `${htmlFile.relativePath} overflows horizontally at ${viewport.width}px (${overflow.documentWidth}px document width).`,
     );
+  }
+  if (enforceSectionRhythm) {
+    problems.push(...(await sectionRhythmProblems(page, viewport, htmlFile)));
   }
   const desktopNavigation = page.locator('[data-siteforge-desktop-navigation]').first();
   if (viewport.id === 'desktop') {
@@ -3656,6 +3946,55 @@ async function responsiveInteractionEvidence(
       `${htmlFile.relativePath} does not expose a visible data-siteforge-navigation-dialog at ${viewport.width}px.`,
     );
   } else {
+    const navigationReady = await dialog
+      .waitFor({ state: 'visible', timeout: 2_000 })
+      .then(() =>
+        page.waitForFunction(
+          () =>
+            document
+              .querySelector('[data-siteforge-navigation-dialog]')
+              ?.classList.contains('is-sf-navigation-ready') === true,
+          undefined,
+          { timeout: 2_000 },
+        ),
+      )
+      .then(() => true)
+      .catch(() => false);
+    if (!navigationReady) {
+      problems.push(
+        `${htmlFile.relativePath} compact-navigation content did not become ready at ${viewport.width}px.`,
+      );
+    }
+    const navigationItemsVisible = await page
+      .waitForFunction(
+        () => {
+          const surface = document.querySelector('[data-siteforge-navigation-dialog]');
+          const elements = surface?.querySelectorAll('[data-sf-navigation-item]') ?? [];
+          return (
+            elements.length > 0 &&
+            [...elements].every((element) => {
+              const styles = getComputedStyle(element);
+              const bounds = element.getBoundingClientRect();
+              return (
+                styles.visibility !== 'hidden' &&
+                styles.display !== 'none' &&
+                Number.parseFloat(styles.opacity || '1') >= 0.95 &&
+                bounds.width > 0 &&
+                bounds.height > 0
+              );
+            })
+          );
+        },
+        undefined,
+        { timeout: 2_000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    if (!navigationItemsVisible) {
+      problems.push(
+        `${htmlFile.relativePath} compact-navigation routes are not visibly stable after opening at ${viewport.width}px.`,
+      );
+    }
     const dialogBox = await dialog.boundingBox();
     if (!dialogBox || dialogBox.y > 1 || dialogBox.height < viewport.height - 1) {
       problems.push(
@@ -3876,21 +4215,35 @@ async function runQualityChecks(
     scopedHtmlFiles,
     workspace.siteDirectory,
   );
+  const packageVersion = Number(workspace.agentPackage.version);
+  const designSystemPackage = packageVersion >= 8.2;
   const brandCheckProblems = await brandProblems(manifest, workspace.stagedAssets, allFiles);
+  const approvedImageProblems = approvedImageUsageProblems(
+    workspace.stagedAssets,
+    scopedHtmlFiles,
+    designSystemPackage ? 2 : 1,
+  );
+  const designSystemProblems = designSystemPackage
+    ? await designSystemRhythmProblems(workspace.siteDirectory, scopedHtmlFiles)
+    : [];
   const motionProblems = motionRuntimeProblems(scopedHtmlFiles, allFiles);
-  const expressivePackage = Number(workspace.agentPackage.version) >= 6.2;
-  const immersiveMotionPackage = Number(workspace.agentPackage.version) >= 6.4;
-  const responsiveCraftPackage = Number(workspace.agentPackage.version) >= 7;
-  const immediateBrandPackage = Number(workspace.agentPackage.version) >= 7.1;
-  const decodedNavigationPackage = Number(workspace.agentPackage.version) >= 7.3;
-  const creativeAutonomyPackage = Number(workspace.agentPackage.version) >= 7.4;
+  const expressivePackage = packageVersion >= 6.2;
+  const immersiveMotionPackage = packageVersion >= 6.4;
+  const responsiveCraftPackage = packageVersion >= 7;
+  const immediateBrandPackage = packageVersion >= 7.1;
+  const decodedNavigationPackage = packageVersion >= 7.3;
+  const creativeAutonomyPackage = packageVersion >= 7.4;
   const motionComposition = motionCompositionProblems(
     scopedHtmlFiles,
     expressivePackage,
     immersiveMotionPackage,
   );
   const navigationMotion = expressivePackage
-    ? await expressiveNavigationMotionProblems(allFiles, decodedNavigationPackage)
+    ? await expressiveNavigationMotionProblems(
+        allFiles,
+        decodedNavigationPackage,
+        packageVersion >= 7.8,
+      )
     : [];
   const creativeAutonomy = creativeAutonomyPackage
     ? await creativeAutonomyProblems(workspace.siteDirectory)
@@ -3903,7 +4256,9 @@ async function runQualityChecks(
     responsiveCraftPackage,
     immediateBrandPackage,
   );
-  const scrollbarProblems = responsiveCraftPackage ? await scrollbarStylingProblems(allFiles) : [];
+  const scrollbarProblems = responsiveCraftPackage
+    ? await scrollbarStylingProblems(allFiles, manifest, designSystemPackage)
+    : [];
   const checks = [
     {
       id: 'static-structure',
@@ -3988,6 +4343,26 @@ async function runQualityChecks(
         : 'No approved Brand Kit was required, or its primary logo and reviewed palette are present.',
     },
     {
+      id: 'approved-image-usage',
+      label: 'Approved page photography',
+      status: approvedImageProblems.length ? 'failed' : 'passed',
+      detail: approvedImageProblems.length
+        ? approvedImageProblems.join(' ')
+        : designSystemPackage
+          ? 'No approved page photography was required, or up to two distinct reviewed worksite or project images are used.'
+          : 'No approved page photography was required, or a reviewed worksite or project image is used.',
+    },
+    {
+      id: 'design-system-rhythm',
+      label: 'Reusable section rhythm',
+      status: designSystemProblems.length ? 'failed' : 'passed',
+      detail: designSystemProblems.length
+        ? designSystemProblems.join(' ')
+        : designSystemPackage
+          ? 'Shared section components and semantic relationship tokens govern heading and section-end spacing.'
+          : 'The selected package does not require reusable section-rhythm evidence.',
+    },
+    {
       id: 'motion-runtime',
       label: 'Built-in motion runtime',
       status: motionProblems.length ? 'failed' : 'passed',
@@ -4048,7 +4423,9 @@ async function runQualityChecks(
       detail: scrollbarProblems.length
         ? scrollbarProblems.join(' ')
         : responsiveCraftPackage
-          ? 'Document and component scrollbars use visible, accessible, brand-connected track and thumb treatments.'
+          ? designSystemPackage
+            ? 'Document and component scrollbars use visible, accessible, neutral track and thumb treatments.'
+            : 'Document and component scrollbars use visible, accessible track and thumb treatments.'
           : 'The selected package does not require generated scrollbar styling evidence.',
     },
     {
@@ -4184,6 +4561,10 @@ async function runQualityChecks(
                 `${htmlFile.relativePath} rendered no text at ${viewport.label.toLowerCase()} width.`,
               );
             }
+            qualityOperation = 'responsive_reveal_settle';
+            await revealPageForResponsiveEvidence(page);
+            qualityOperation = 'final_state_evidence';
+            await enableFinalStateEvidence(page);
             if (viewport.id === 'desktop' || viewport.id === 'mobile') {
               qualityOperation = 'accessibility_scan';
               const result = await new AxeBuilder({ page }).analyze();
@@ -4234,6 +4615,7 @@ async function runQualityChecks(
                 screenshotBytes: body.byteLength,
               },
             });
+            await disableFinalStateEvidence(page);
             qualityOperation = 'responsive_interactions';
             const interaction = await responsiveInteractionEvidence(
               page,
@@ -4243,6 +4625,7 @@ async function runQualityChecks(
               responsiveCraftPackage,
               immediateBrandPackage,
               decodedNavigationPackage,
+              designSystemPackage,
             );
             interactionProblems.push(...interaction.problems);
             if (interaction.openNavigationBody) {
@@ -4479,6 +4862,7 @@ function canContinueWithoutCodex(run, workspace) {
   if (!workspace.restoredCheckpoint || workspace.checkpointState !== 'post_codex_validated') {
     return false;
   }
+  if (recordValue(run.failure_context).executionMode === 'quality_recheck') return true;
   return [
     'builder_foundation_changed',
     'compiled_homepage_missing',
@@ -4584,6 +4968,18 @@ async function processBuild(client, run, workerId, apiKey) {
         eventWriter,
         diagnostics,
       );
+    }
+    const appliedBrandTokens = await enforceBrandPaletteTokens(manifest, workspace.siteDirectory);
+    if (appliedBrandTokens.length) {
+      await eventWriter(
+        'file',
+        `Applied ${appliedBrandTokens.length} reviewed Brand Kit colour token${appliedBrandTokens.length === 1 ? '' : 's'} before compilation.`,
+        { brandTokens: appliedBrandTokens },
+      );
+      await syncDraftFiles(client, run, workspace, eventWriter, {
+        force: true,
+        checkpointState: 'post_codex_validated',
+      });
     }
     await buildWebsite(client, run, workerId, workspace, eventWriter, diagnostics);
     const quality = await runQualityChecks(
@@ -4804,6 +5200,7 @@ async function main() {
 export {
   activateCompactNavigationTrigger,
   approvedAssetDescriptor,
+  approvedImageUsageProblems,
   applicableFeatureContracts,
   assertRequiredCompiledOutputs,
   assetMatchesSelectedPages,
@@ -4816,19 +5213,26 @@ export {
   contentTypeFor,
   contextualLogoProblems,
   creativeAutonomyProblems,
+  cssColourRepresentations,
+  designSystemRhythmProblems,
+  enforceBrandPaletteTokens,
+  expressiveNavigationMotionProblems,
   inconsistentHeaderNavigationProblems,
   lockedFoundationPaths,
   meaningfulPageNamingProblems,
   mobileNavigationTriggerProblems,
   missingInternalNavigationTargets,
   motionCompositionProblems,
+  normaliseSemanticText,
   responsiveImageProblems,
+  scrollbarStylingProblems,
   multiPageHeaderRouteNavigationProblems,
   projectManifestData,
   refreshLockedFoundation,
   restoreCheckpointFile,
   revisionManifestCompatible,
   selectedSourcePages,
+  sourceCheckpointPayload,
   semanticCompositionDecisionCheck,
   semanticContentCoverageCheck,
   stageRevisionScope,
