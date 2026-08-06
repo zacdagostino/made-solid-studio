@@ -144,6 +144,10 @@ const completeCheckpointRestorePackageMigrationUrl = new URL(
   '../../supabase/migrations/20260805030000_complete_checkpoint_restore_test_package.sql',
   import.meta.url,
 );
+const reliableCompactNavigationPackageMigrationUrl = new URL(
+  '../../supabase/migrations/20260806090000_reliable_compact_navigation_test_package.sql',
+  import.meta.url,
+);
 const preserveResumeContextMigrationUrl = new URL(
   '../../supabase/migrations/20260731123000_preserve_builder_resume_context.sql',
   import.meta.url,
@@ -649,8 +653,16 @@ test('defines immersive motion, typography, service-page, and image craft requir
   assert.match(navigationContract, /Animate both opening and closing/i);
   assert.match(navigationContract, /data-sf-navigation-motion/);
   assert.match(navigationContract, /data-sf-navigation-item/);
+  assert.match(navigationContract, /max-width: 768px/);
+  assert.match(navigationContract, /min-width: 769px/);
+  assert.match(navigationContract, /data-siteforge-desktop-navigation/);
+  assert.match(navigationContract, /data-siteforge-navigation-backdrop/);
+  assert.match(navigationContract, /one shared close function/i);
   assert.match(runtime, /transform 1100ms cubic-bezier\(\.16,1,\.3,1\)/);
   assert.match(runtime, /function startNavigationMotion/);
+  assert.match(runtime, /function startNavigationInteractions/);
+  assert.match(runtime, /@media \(max-width: 768px\)/);
+  assert.match(runtime, /min-height: 100dvh/);
   assert.match(runtime, /function startScrollZoom/);
   assert.match(runtime, /function prepareSequenceReveal/);
   assert.match(runtime, /function runRouteBrandTransition/);
@@ -839,6 +851,7 @@ test('requires an icon-only compact navigation trigger with a programmatic name'
   const valid = {
     relativePath: 'index.html',
     contents: `
+      <nav data-siteforge-desktop-navigation><a href="/">Home</a></nav>
       <button data-siteforge-menu-trigger aria-label="Open navigation" aria-expanded="false">
         <svg aria-hidden="true"><path d="M0 0h12"></path></svg>
       </button>
@@ -854,6 +867,14 @@ test('requires an icon-only compact navigation trigger with a programmatic name'
     (await mobileNavigationTriggerProblems([visibleMenu], [])).join(' '),
     /renders text inside the compact navigation trigger/,
   );
+
+  const worker = await readFile(
+    new URL('../../worker/builder-worker.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.match(worker, /compact navigation does not fill the viewport height/);
+  assert.match(worker, /compact-navigation backdrop does not cover the viewport/);
+  assert.match(worker, /has no visible desktop navigation at 1440px/);
 });
 
 test('retries a transient compact-navigation pointer timeout without bypassing hit testing', async () => {
@@ -1453,6 +1474,22 @@ test('registers complete checkpoint restore above selected-route compilation', a
   assert.match(migration, /Complete checkpoint restore test package:/);
   assert.match(migration, /every recorded source file at its recorded hash/);
   assert.match(migration, /hash-addressed private source object/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers reliable compact navigation above checkpoint restoration', async () => {
+  const migration = await readFile(reliableCompactNavigationPackageMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /base\.id/);
+  assert.match(migration, /Reliable compact navigation test package:/);
+  assert.match(migration, /base\.foundation_version/);
+  assert.match(migration, /base\.foundation_checksum/);
+  assert.match(migration, /768 CSS pixels/);
+  assert.match(migration, /full-height side panels/);
+  assert.match(migration, /brand-introduction handoff/);
+  assert.match(migration, /"responsive-sidebar"/);
   assert.match(migration, /"framework-quality-gates"/);
   assert.match(migration, /not exists/i);
 });

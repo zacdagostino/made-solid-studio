@@ -7637,9 +7637,9 @@ function BuilderRunPanel({
                 : 'package-behaviour',
             title: `Package ${agentPackageVersionLabel(selectedAgentPackage.version)} testing behaviour`,
             detail: selectedAgentPackage.capabilityProposal || selectedAgentPackage.summary,
-            revision: `v${selectedAgentPackage.version}.0.15`,
+            revision: `v${selectedAgentPackage.version}.0.16`,
             change:
-              'Latest edit: package v7.6 restores every validated source module at its recorded hash before compiling a continued test, including foundation-inherited files.',
+              'Latest edit: package v7.7 moves the exact tablet breakpoint, full-height side panel, Escape focus recovery, and unobscured browser evidence into the protected foundation.',
           },
           {
             id: 'hero-handoff',
@@ -7655,9 +7655,9 @@ function BuilderRunPanel({
             title: 'Mobile & tablet sidebar navigation',
             detail:
               'Below desktop width, the header links become a leading-edge sidebar that reuses the real logo and header palette and opens from the trigger side. On motion-enabled visits, the header slides away after a downward scroll and returns on any upward scroll. It supports close, backdrop, Escape, keyboard focus, route selection, and reduced-motion users; desktop navigation stays visible.',
-            revision: `v${selectedAgentPackage.version}.18`,
+            revision: `v${selectedAgentPackage.version}.19`,
             change:
-              'Latest edit: the drawer surface may enter immediately, but its logo-first item sequence is held until the approved logo has decoded so links cannot animate ahead of it.',
+              'Latest edit: compact navigation now remains active through exactly 768px, fills the viewport, and restores trigger focus after every Escape dismissal even when generated code omits it.',
           },
           {
             id: 'contextual-logo-selection',
@@ -7709,9 +7709,9 @@ function BuilderRunPanel({
             title: 'Framework and responsive quality gates',
             detail:
               'Generated source must pass formatting, lint, strict typing, production build, route and provenance checks, browser interactions, accessibility, and exact responsive evidence.',
-            revision: `v${selectedAgentPackage.version}.43`,
+            revision: `v${selectedAgentPackage.version}.44`,
             change:
-              'Latest edit: package v7.6 verifies and recovers missing or changed foundation-inherited checkpoint files before compiling a saved post-Codex continuation.',
+              'Latest edit: browser quality now waits for the brand-introduction handoff before responsive screenshots and allows committed close motion before checking restored focus.',
           },
         ]
       : [];
@@ -11942,7 +11942,7 @@ const agentPackageFeatures: AgentFeature[] = [
     id: 'responsive-sidebar',
     title: 'Mobile & tablet sidebar navigation',
     detail:
-      'Keeps the logo and menu control together in the header, verifies declared flow or true viewport-centred alignment, preloads and decodes the drawer logo before first open, then animates the branded trigger-side surface fully in and out while releasing its approved logo, primary routes, and actions as one logo-first sequence below desktop width.',
+      'Keeps the logo and menu control together in the header through 768px, guarantees a full-height trigger-side surface and Escape focus recovery, verifies declared flow or true viewport-centred alignment, preloads and decodes the drawer logo before first open, then releases its approved logo, primary routes, and actions as one logo-first sequence.',
     files: [
       {
         label: 'Mobile navigation contract',
@@ -11952,6 +11952,8 @@ const agentPackageFeatures: AgentFeature[] = [
           'Creative ownership',
           'Required behaviour',
           'data-siteforge-menu-trigger',
+          'data-siteforge-desktop-navigation',
+          'data-siteforge-navigation-backdrop',
           'icon-only',
           'icon choreography',
           'scroll behaviour',
@@ -11959,6 +11961,8 @@ const agentPackageFeatures: AgentFeature[] = [
           'data-siteforge-navigation-logo',
           'data-siteforge-navigation-logo-src',
           'is-sf-navigation-ready',
+          'max-width: 768px',
+          'min-width: 769px',
         ],
       },
       {

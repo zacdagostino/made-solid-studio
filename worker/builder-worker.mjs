@@ -2887,6 +2887,11 @@ function meaningfulPageNamingProblems(htmlFiles) {
 async function mobileNavigationTriggerProblems(htmlFiles, allFiles) {
   const problems = [];
   for (const file of htmlFiles) {
+    if (!/\bdata-siteforge-desktop-navigation(?:\s*=|[\s>])/i.test(file.contents)) {
+      problems.push(
+        `${file.relativePath} must mark its desktop route list with data-siteforge-desktop-navigation.`,
+      );
+    }
     const triggers =
       file.contents.match(
         /<button\b[^>]*\bdata-siteforge-menu-trigger(?:\s*=\s*["'][^"']*["'])?[^>]*>[\s\S]*?<\/button>/gi,
@@ -3480,6 +3485,15 @@ async function activateCompactNavigationTrigger(trigger) {
   };
 }
 
+async function waitForBrandIntroHandoff(page) {
+  await page.locator('[data-siteforge-brand-intro]').waitFor({ state: 'detached', timeout: 6_000 });
+  await page.waitForFunction(
+    () => !document.documentElement.classList.contains('sf-route-transitioning'),
+    undefined,
+    { timeout: 1_000 },
+  );
+}
+
 async function responsiveInteractionEvidence(
   page,
   viewport,
@@ -3499,7 +3513,23 @@ async function responsiveInteractionEvidence(
       `${htmlFile.relativePath} overflows horizontally at ${viewport.width}px (${overflow.documentWidth}px document width).`,
     );
   }
-  if (viewport.id === 'desktop') return { problems };
+  const desktopNavigation = page.locator('[data-siteforge-desktop-navigation]').first();
+  if (viewport.id === 'desktop') {
+    if ((await desktopNavigation.count()) === 0 || !(await desktopNavigation.isVisible())) {
+      problems.push(`${htmlFile.relativePath} has no visible desktop navigation at 1440px.`);
+    }
+    const compactTrigger = page.locator('[data-siteforge-menu-trigger]').first();
+    if ((await compactTrigger.count()) > 0 && (await compactTrigger.isVisible())) {
+      problems.push(`${htmlFile.relativePath} exposes its compact trigger at desktop width.`);
+    }
+    return { problems };
+  }
+
+  if ((await desktopNavigation.count()) > 0 && (await desktopNavigation.isVisible())) {
+    problems.push(
+      `${htmlFile.relativePath} exposes desktop navigation in compact mode at ${viewport.width}px.`,
+    );
+  }
 
   const trigger = page.locator('[data-siteforge-menu-trigger]').first();
   if ((await trigger.count()) === 0 || !(await trigger.isVisible())) {
@@ -3587,6 +3617,28 @@ async function responsiveInteractionEvidence(
       `${htmlFile.relativePath} does not expose a visible data-siteforge-navigation-dialog at ${viewport.width}px.`,
     );
   } else {
+    const dialogBox = await dialog.boundingBox();
+    if (!dialogBox || dialogBox.y > 1 || dialogBox.height < viewport.height - 1) {
+      problems.push(
+        `${htmlFile.relativePath} compact navigation does not fill the viewport height at ${viewport.width}px.`,
+      );
+    }
+    const backdrop = page.locator('[data-siteforge-navigation-backdrop]').first();
+    const backdropBox =
+      (await backdrop.count()) > 0 && (await backdrop.isVisible())
+        ? await backdrop.boundingBox()
+        : undefined;
+    if (
+      !backdropBox ||
+      backdropBox.x > 1 ||
+      backdropBox.y > 1 ||
+      backdropBox.width < viewport.width - 1 ||
+      backdropBox.height < viewport.height - 1
+    ) {
+      problems.push(
+        `${htmlFile.relativePath} compact-navigation backdrop does not cover the viewport at ${viewport.width}px.`,
+      );
+    }
     if (enforceLogoReadiness) {
       const navigationLogo = dialog.locator('[data-siteforge-navigation-logo]').first();
       const navigationLogoReady =
@@ -3671,9 +3723,14 @@ async function responsiveInteractionEvidence(
     undefined,
     { timeout: 2_000 },
   );
-  const focusRestored = await page.evaluate(
-    () => document.activeElement === document.querySelector('[data-siteforge-menu-trigger]'),
-  );
+  const focusRestored = await page
+    .waitForFunction(
+      () => document.activeElement === document.querySelector('[data-siteforge-menu-trigger]'),
+      undefined,
+      { timeout: 750 },
+    )
+    .then(() => true)
+    .catch(() => false);
   if (!focusRestored) {
     problems.push(
       `${htmlFile.relativePath} does not restore focus to the compact trigger after Escape at ${viewport.width}px.`,
@@ -4076,11 +4133,8 @@ async function runQualityChecks(
               waitUntil: 'domcontentloaded',
               timeout: 15_000,
             });
-            await page.waitForTimeout(250);
-            await page
-              .locator('.sf-brand-intro')
-              .waitFor({ state: 'detached', timeout: 2_000 })
-              .catch(() => undefined);
+            qualityOperation = 'brand_intro_handoff';
+            await waitForBrandIntroHandoff(page);
             qualityOperation = 'rendered_text';
             const contentLength = await page
               .locator('body')

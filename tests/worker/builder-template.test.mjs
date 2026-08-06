@@ -90,6 +90,11 @@ test('verifies and exports the isolated Next.js component foundation', async () 
     assert.match(runtime, /dataset\.siteforgeIntroInk/);
     assert.match(runtime, /function enforceIntroTextContrast/);
     assert.match(runtime, /function prioritiseBrandLogos/);
+    assert.match(runtime, /function startNavigationInteractions/);
+    assert.match(runtime, /@media \(max-width: 768px\)/);
+    assert.match(runtime, /@media \(min-width: 769px\)/);
+    assert.match(runtime, /data-siteforge-desktop-navigation/);
+    assert.match(runtime, /min-height: 100dvh/);
     assert.doesNotMatch(runtime, /Preparing your site/);
     assert.match(runtime, /usePathname/);
     assert.match(runtime, /sf-route-transitioning/);
@@ -255,9 +260,20 @@ test('verifies and exports the isolated Next.js component foundation', async () 
         const trigger = globalThis.document.createElement('button');
         trigger.dataset.siteforgeMenuTrigger = '';
         trigger.setAttribute('aria-expanded', 'false');
+        trigger.addEventListener('click', () => {
+          trigger.setAttribute(
+            'aria-expanded',
+            trigger.getAttribute('aria-expanded') === 'true' ? 'false' : 'true',
+          );
+        });
         const dialog = globalThis.document.createElement('aside');
         dialog.dataset.siteforgeNavigationDialog = '';
         dialog.dataset.sfNavigationMotion = '';
+        const backdrop = globalThis.document.createElement('div');
+        backdrop.dataset.siteforgeNavigationBackdrop = '';
+        const desktopNavigation = globalThis.document.createElement('nav');
+        desktopNavigation.dataset.siteforgeDesktopNavigation = '';
+        desktopNavigation.textContent = 'Desktop navigation';
         const logo = globalThis.document.createElement('img');
         logo.dataset.siteforgeNavigationLogo = '';
         logo.alt = '';
@@ -269,7 +285,8 @@ test('verifies and exports the isolated Next.js component foundation', async () 
           item.textContent = label;
           dialog.append(item);
         });
-        globalThis.document.body.append(trigger, dialog);
+        backdrop.append(dialog);
+        globalThis.document.body.append(trigger, desktopNavigation, backdrop);
       });
       await page.waitForFunction(
         () =>
@@ -317,6 +334,27 @@ test('verifies and exports the isolated Next.js component foundation', async () 
           .evaluate((logo) => logo.complete && logo.naturalWidth > 0),
         true,
       );
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(
+        () =>
+          globalThis.document
+            .querySelector('[data-siteforge-menu-trigger]')
+            .getAttribute('aria-expanded') === 'false',
+      );
+      await page.waitForFunction(
+        () =>
+          globalThis.document.activeElement ===
+          globalThis.document.querySelector('[data-siteforge-menu-trigger]'),
+      );
+      await page
+        .locator('[data-siteforge-menu-trigger]')
+        .evaluate((trigger) => trigger.setAttribute('aria-expanded', 'true'));
+      await page.waitForFunction(
+        () =>
+          globalThis.getComputedStyle(
+            globalThis.document.querySelector('[data-siteforge-navigation-dialog]'),
+          ).opacity === '1',
+      );
       await page
         .locator('[data-siteforge-menu-trigger]')
         .evaluate((trigger) => trigger.setAttribute('aria-expanded', 'false'));
@@ -334,6 +372,82 @@ test('verifies and exports the isolated Next.js component foundation', async () 
           ),
         ['135ms', '90ms', '45ms', '0ms'],
       );
+      assert.deepEqual(
+        await page.evaluate(() => {
+          const backdrop = globalThis.document.querySelector(
+            '[data-siteforge-navigation-backdrop]',
+          );
+          const dialog = globalThis.document.querySelector('[data-siteforge-navigation-dialog]');
+          return {
+            backdropHeight: Math.round(backdrop.getBoundingClientRect().height),
+            dialogHeight: Math.round(dialog.getBoundingClientRect().height),
+            viewportHeight: globalThis.innerHeight,
+          };
+        }),
+        { backdropHeight: 812, dialogHeight: 812, viewportHeight: 812 },
+      );
+      await page.setViewportSize({ width: 320, height: 568 });
+      assert.deepEqual(
+        await page.evaluate(() => {
+          const backdrop = globalThis.document.querySelector(
+            '[data-siteforge-navigation-backdrop]',
+          );
+          const dialog = globalThis.document.querySelector('[data-siteforge-navigation-dialog]');
+          return {
+            backdropHeight: Math.round(backdrop.getBoundingClientRect().height),
+            desktopNavigation: globalThis.getComputedStyle(
+              globalThis.document.querySelector('[data-siteforge-desktop-navigation]'),
+            ).display,
+            dialogHeight: Math.round(dialog.getBoundingClientRect().height),
+            trigger: globalThis.getComputedStyle(
+              globalThis.document.querySelector('[data-siteforge-menu-trigger]'),
+            ).display,
+          };
+        }),
+        {
+          backdropHeight: 568,
+          desktopNavigation: 'none',
+          dialogHeight: 568,
+          trigger: 'inline-flex',
+        },
+      );
+      await page.setViewportSize({ width: 768, height: 1024 });
+      assert.deepEqual(
+        await page.evaluate(() => ({
+          desktopNavigation: globalThis.getComputedStyle(
+            globalThis.document.querySelector('[data-siteforge-desktop-navigation]'),
+          ).display,
+          trigger: globalThis.getComputedStyle(
+            globalThis.document.querySelector('[data-siteforge-menu-trigger]'),
+          ).display,
+        })),
+        { desktopNavigation: 'none', trigger: 'inline-flex' },
+      );
+      await page.setViewportSize({ width: 769, height: 1024 });
+      assert.deepEqual(
+        await page.evaluate(() => ({
+          desktopNavigation: globalThis.getComputedStyle(
+            globalThis.document.querySelector('[data-siteforge-desktop-navigation]'),
+          ).display,
+          trigger: globalThis.getComputedStyle(
+            globalThis.document.querySelector('[data-siteforge-menu-trigger]'),
+          ).display,
+        })),
+        { desktopNavigation: 'block', trigger: 'none' },
+      );
+      await page.setViewportSize({ width: 1440, height: 900 });
+      assert.deepEqual(
+        await page.evaluate(() => ({
+          desktopNavigation: globalThis.getComputedStyle(
+            globalThis.document.querySelector('[data-siteforge-desktop-navigation]'),
+          ).display,
+          trigger: globalThis.getComputedStyle(
+            globalThis.document.querySelector('[data-siteforge-menu-trigger]'),
+          ).display,
+        })),
+        { desktopNavigation: 'block', trigger: 'none' },
+      );
+      await page.setViewportSize({ width: 375, height: 812 });
       await page.evaluate(() => globalThis.history.pushState(null, '', '/next-route'));
       await page.locator('.sf-brand-intro').waitFor({ state: 'visible' });
       assert.equal(await page.locator('.sf-brand-intro__status').innerText(), 'Made Solid Studio');

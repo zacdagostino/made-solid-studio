@@ -177,6 +177,8 @@ const localCreativeAutonomyPackageId = 'agent-package-local-v7-4-creative-autono
 const localSelectedRouteCompilePackageId = 'agent-package-local-v7-5-selected-route-compile';
 const localCompleteCheckpointRestorePackageId =
   'agent-package-local-v7-6-complete-checkpoint-restore';
+const localReliableCompactNavigationPackageId =
+  'agent-package-local-v7-7-reliable-compact-navigation';
 
 type StoreName =
   | 'activities'
@@ -738,10 +740,28 @@ export class SiteforgeRepository {
         'Lets a stopped test continue from its complete validated source without rerunning Codex or losing generated modules that originally matched its foundation.',
       stagedBehaviourIds: ['framework-quality-gates'],
     };
+    const localReliableCompactNavigationPackage: AgentPackage = {
+      ...localCompleteCheckpointRestorePackage,
+      id: localReliableCompactNavigationPackageId,
+      version: 7.7,
+      basePackageId: localCompleteCheckpointRestorePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v7.7',
+      contractAddendum:
+        'Compact navigation is inclusive through 768 CSS pixels and desktop navigation begins at 769 CSS pixels. Every dismissal path shares state closure and restores focus after the close commits. The locked runtime guarantees the breakpoint, full-height surface, Escape recovery, and navigation motion state.',
+      instructionsAddendum:
+        'Mark the desktop route list, backdrop, trigger, dialog, close control, logo, and sequenced items with their Siteforge hooks. Use one close function for Escape, backdrop, close-control, and route dismissal. Do not author locked navigation state classes. Browser evidence must wait for the brand-introduction handoff before capturing or exercising the page.',
+      summary:
+        'Reliable compact navigation test package: fixes the 768px tablet boundary, full-height side panels, Escape focus restoration, and intro-obscured browser evidence.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Moves the repeated v7.4 navigation failures into the protected foundation so generated sites cannot silently drop tablet navigation, strand keyboard focus, or capture the loading surface instead of the page.',
+      stagedBehaviourIds: ['responsive-sidebar', 'framework-quality-gates'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localReliableCompactNavigationPackage,
           localCompleteCheckpointRestorePackage,
           localSelectedRouteCompilePackage,
           localCreativeAutonomyPackage,
@@ -766,6 +786,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localReliableCompactNavigationPackage,
           localCompleteCheckpointRestorePackage,
           localSelectedRouteCompilePackage,
           localCreativeAutonomyPackage,
@@ -793,6 +814,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localReliableCompactNavigationPackage,
             localCompleteCheckpointRestorePackage,
             localSelectedRouteCompilePackage,
             localCreativeAutonomyPackage,

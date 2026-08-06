@@ -96,6 +96,32 @@ const runtimeStyles = `
     opacity: 1;
     transform: none;
   }
+  @media (max-width: 768px) {
+    .sf-runtime [data-siteforge-menu-trigger] {
+      display: inline-flex !important;
+    }
+    .sf-runtime [data-siteforge-desktop-navigation] {
+      display: none !important;
+    }
+    .sf-runtime [data-siteforge-navigation-backdrop] {
+      position: fixed !important;
+      inset: 0 !important;
+      min-height: 100dvh;
+    }
+    .sf-runtime [data-siteforge-navigation-dialog] {
+      box-sizing: border-box;
+      min-height: 100dvh;
+      max-height: 100dvh;
+      overflow-y: auto;
+    }
+  }
+  @media (min-width: 769px) {
+    .sf-runtime [data-siteforge-menu-trigger],
+    .sf-runtime [data-siteforge-navigation-backdrop],
+    .sf-runtime [data-siteforge-navigation-dialog] {
+      display: none !important;
+    }
+  }
   .sf-brand-intro {
     position: fixed;
     inset: 0;
@@ -506,6 +532,52 @@ function startNavigationMotion() {
   };
 }
 
+function startNavigationInteractions() {
+  const trigger = () =>
+    document.querySelector<HTMLElement>('[data-siteforge-menu-trigger][aria-expanded="true"]');
+  const restoreFocusWhenClosed = (target: HTMLElement, attempt = 0) => {
+    if (target.getAttribute('aria-expanded') === 'false') {
+      target.focus({ preventScroll: true });
+      return;
+    }
+    if (attempt >= 12) return;
+    window.setTimeout(() => restoreFocusWhenClosed(target, attempt + 1), 50);
+  };
+  const requestGeneratedDismissal = (target: HTMLElement) => {
+    window.setTimeout(() => {
+      if (target.getAttribute('aria-expanded') !== 'true') return;
+      const closeControl = document.querySelector<HTMLElement>(
+        '[data-siteforge-navigation-dialog] [data-siteforge-navigation-close]',
+      );
+      (closeControl ?? target).click();
+    });
+  };
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape') return;
+    const target = trigger();
+    if (!target) return;
+    restoreFocusWhenClosed(target);
+    requestGeneratedDismissal(target);
+  };
+  const onClick = (event: MouseEvent) => {
+    if (!(event.target instanceof Element)) return;
+    const target = trigger();
+    if (!target) return;
+    const closeControl = event.target.closest('[data-siteforge-navigation-close]');
+    const backdrop = event.target.closest('[data-siteforge-navigation-backdrop]');
+    const dialog = event.target.closest('[data-siteforge-navigation-dialog]');
+    if (closeControl || (backdrop && !dialog)) restoreFocusWhenClosed(target);
+    const route = event.target.closest('[data-siteforge-navigation-dialog] a[href]');
+    if (route) requestGeneratedDismissal(target);
+  };
+  document.addEventListener('keydown', onKeyDown, true);
+  document.addEventListener('click', onClick, true);
+  return () => {
+    document.removeEventListener('keydown', onKeyDown, true);
+    document.removeEventListener('click', onClick, true);
+  };
+}
+
 function runRouteBrandTransition(reducedMotion: boolean, onComplete: () => void) {
   const marked = document.querySelector<HTMLElement>('[data-siteforge-brand-logo]');
   const logoElement = marked?.matches('img')
@@ -669,7 +741,11 @@ export function SiteRuntime() {
     document.documentElement.classList.add('sf-runtime');
     prioritiseBrandLogos();
     const stopNavigationMotion = startNavigationMotion();
-    return stopNavigationMotion;
+    const stopNavigationInteractions = startNavigationInteractions();
+    return () => {
+      stopNavigationMotion();
+      stopNavigationInteractions();
+    };
   }, []);
 
   useLayoutEffect(() => {
