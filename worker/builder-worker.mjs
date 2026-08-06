@@ -56,6 +56,8 @@ const lockedFoundationPaths = [
 ];
 const maxLogEvents = 400;
 const maxSourceContentBytes = 512 * 1024;
+const builderHeartbeatIntervalMs = 15_000;
+const builderLeaseDurationMs = 2 * 60_000;
 const efficientExecutionInstruction =
   'Work within an efficiency budget. Node.js, rg, sed, and the installed sharp package are available; jq and ImageMagick commands are not. Read each applicable contract once. Use no more than ten bounded inspection commands before the first source edit, combine related reads, and never print a whole asset inventory or unchanged source tree. Run npm run format once immediately before the first npm run verify. Run full verify at most twice: once after implementation and once after fixing concrete failures. Never repeat a passing full verify without intervening source changes; use the narrowest relevant check while diagnosing.';
 const creativeAutonomyInstruction =
@@ -460,7 +462,8 @@ async function updateProgress(client, run, workerId, patch) {
     .from('builder_runs')
     .update({
       ...patch,
-      lease_expires_at: new Date(Date.now() + 45 * 60_000).toISOString(),
+      heartbeat_at: new Date().toISOString(),
+      lease_expires_at: new Date(Date.now() + builderLeaseDurationMs).toISOString(),
     })
     .eq('id', run.id)
     .eq('worker_id', workerId)
@@ -470,6 +473,42 @@ async function updateProgress(client, run, workerId, patch) {
   if (error) throw new Error('The builder worker could not save progress.');
   if (!data?.length) await assertBuildActive(client, run, workerId);
   if (!data?.length) throw new Error('The builder worker lease was lost.');
+}
+
+async function heartbeatBuilderWorker(client, workerId, activeRunId = null) {
+  const { error } = await client.rpc('heartbeat_builder_worker', {
+    worker_identity: workerId,
+    active_builder_run_id: activeRunId,
+  });
+  if (error) throw new Error('The builder worker could not renew its runtime heartbeat.');
+}
+
+function createBuilderHeartbeat(client, run, workerId) {
+  let stopped = false;
+  let heartbeatInFlight = false;
+  const renew = async () => {
+    if (stopped || heartbeatInFlight) return;
+    heartbeatInFlight = true;
+    try {
+      await heartbeatBuilderWorker(client, workerId, run.id);
+    } catch (error) {
+      console.error(
+        '[builder-worker] heartbeat failed',
+        run.id,
+        error instanceof Error ? error.message : error,
+      );
+    } finally {
+      heartbeatInFlight = false;
+    }
+  };
+  const timer = setInterval(() => void renew(), builderHeartbeatIntervalMs);
+  return {
+    renew,
+    stop() {
+      stopped = true;
+      clearInterval(timer);
+    },
+  };
 }
 
 async function runCommand(command, args, options = {}) {
@@ -4590,6 +4629,7 @@ async function markCancelled(client, run, workerId) {
       status: 'cancelled',
       completed_at: new Date().toISOString(),
       lease_expires_at: null,
+      heartbeat_at: null,
       progress_phase: 'cancelled',
       progress_detail: 'Private preview build cancelled. Any saved artifacts remain private.',
       error_summary: 'Private preview build cancelled by a workspace user.',
@@ -4621,6 +4661,7 @@ async function markFailed(client, run, error) {
       status: paused ? 'paused' : 'failed',
       completed_at: paused ? null : new Date().toISOString(),
       lease_expires_at: null,
+      heartbeat_at: null,
       retry_after: retryAt ?? null,
       progress_phase: paused ? 'retry_wait' : 'failed',
       progress_detail: paused
@@ -4660,7 +4701,9 @@ async function processNextBuild(client, workerId, apiKey) {
   if (error) throw new Error('The builder worker could not claim a private preview build.');
   const run = Array.isArray(data) ? data[0] : undefined;
   if (!run) return false;
+  const heartbeat = createBuilderHeartbeat(client, run, workerId);
   try {
+    await heartbeat.renew();
     const quality = await processBuild(client, run, workerId, apiKey);
     const reviewRequired = quality.summary.status !== 'passed';
     const { error: completionError } = await client
@@ -4670,6 +4713,7 @@ async function processNextBuild(client, workerId, apiKey) {
         model: run.model || process.env.SITEFORGE_CODEX_MODEL?.trim() || null,
         completed_at: new Date().toISOString(),
         lease_expires_at: null,
+        heartbeat_at: null,
         progress_phase: 'complete',
         progress_detail:
           quality.summary.status === 'passed'
@@ -4715,6 +4759,8 @@ async function processNextBuild(client, workerId, apiKey) {
       run.id,
       error instanceof Error ? error.message : error,
     );
+  } finally {
+    heartbeat.stop();
   }
   return true;
 }
@@ -4737,14 +4783,22 @@ async function main() {
   process.on('SIGTERM', () => {
     stopping = true;
   });
-  do {
-    const claimed = await processNextBuild(client, workerId, apiKey);
-    if (runOnce || stopping) {
-      if (runOnce && !claimed) console.log('[builder-worker] no queued private preview builds.');
-      break;
-    }
-    if (!claimed) await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-  } while (!stopping);
+  try {
+    do {
+      await heartbeatBuilderWorker(client, workerId);
+      const claimed = await processNextBuild(client, workerId, apiKey);
+      if (runOnce || stopping) {
+        if (runOnce && !claimed) console.log('[builder-worker] no queued private preview builds.');
+        break;
+      }
+      if (!claimed) await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    } while (!stopping);
+  } finally {
+    const { error } = await client.rpc('release_builder_worker', {
+      worker_identity: workerId,
+    });
+    if (error) console.error('[builder-worker] could not release its availability heartbeat.');
+  }
 }
 
 export {

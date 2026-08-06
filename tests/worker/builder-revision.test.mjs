@@ -148,6 +148,10 @@ const reliableCompactNavigationPackageMigrationUrl = new URL(
   '../../supabase/migrations/20260806090000_reliable_compact_navigation_test_package.sql',
   import.meta.url,
 );
+const builderWorkerLivenessMigrationUrl = new URL(
+  '../../supabase/migrations/20260806103000_builder_worker_liveness.sql',
+  import.meta.url,
+);
 const preserveResumeContextMigrationUrl = new URL(
   '../../supabase/migrations/20260731123000_preserve_builder_resume_context.sql',
   import.meta.url,
@@ -1492,6 +1496,41 @@ test('registers reliable compact navigation above checkpoint restoration', async
   assert.match(migration, /"responsive-sidebar"/);
   assert.match(migration, /"framework-quality-gates"/);
   assert.match(migration, /not exists/i);
+});
+
+test('rejects unbounded builder queues and reconciles lost workers promptly', async () => {
+  const migration = await readFile(builderWorkerLivenessMigrationUrl, 'utf8');
+  assert.match(migration, /worker_runtime_heartbeats/);
+  assert.match(migration, /heartbeat_at >= now\(\) - interval '30 seconds'/);
+  assert.match(migration, /protected builder is offline/i);
+  assert.match(migration, /already processing another build/i);
+  assert.match(migration, /builder_runs_guard_queue_liveness/);
+  assert.match(migration, /lease_expires_at = now\(\) \+ interval '2 minutes'/);
+  assert.match(migration, /failure_code = 'builder_worker_unavailable'/);
+  assert.match(migration, /runs\.created_at < now\(\) - interval '2 minutes'/);
+});
+
+test('keeps builder availability and the active run lease alive independently of output', async () => {
+  const worker = await readFile(
+    new URL('../../worker/builder-worker.mjs', import.meta.url),
+    'utf8',
+  );
+  const processStart = worker.indexOf('async function processNextBuild');
+  const processEnd = worker.indexOf('async function main', processStart);
+  const processSource = worker.slice(processStart, processEnd);
+  assert.match(worker, /const builderHeartbeatIntervalMs = 15_000/);
+  assert.match(worker, /heartbeat_builder_worker/);
+  assert.match(worker, /release_builder_worker/);
+  assert.match(processSource, /createBuilderHeartbeat\(client, run, workerId\)/);
+  assert.match(processSource, /await heartbeat\.renew\(\)/);
+  assert.match(processSource, /finally \{\s*heartbeat\.stop\(\)/);
+});
+
+test('reconciles stale builder runs before workspace reads and build requests', async () => {
+  const repository = await readFile(cloudRepositoryUrl, 'utf8');
+  const matches = repository.match(/reconcile_builder_run_lifecycle/g) ?? [];
+  assert.ok(matches.length >= 5);
+  assert.match(repository, /this\.getWorkspace\(business\.id, false\)/);
 });
 
 test('opens page-set previews on their first selected generated route', async () => {

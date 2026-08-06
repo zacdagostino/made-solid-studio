@@ -1053,7 +1053,10 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     return ((data ?? []) as DatabaseRow[]).map(businessFromRow);
   }
 
-  async getWorkspace(businessId: string): Promise<ProspectWorkspace | undefined> {
+  async getWorkspace(
+    businessId: string,
+    reconcileBuilderLifecycle = true,
+  ): Promise<ProspectWorkspace | undefined> {
     const { data: businessRow, error: businessError } = await this.client
       .from('businesses')
       .select('*')
@@ -1062,6 +1065,13 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       .maybeSingle();
     throwIfError(businessError);
     if (!businessRow) return undefined;
+
+    if (reconcileBuilderLifecycle) {
+      const { error: lifecycleError } = await this.client.rpc('reconcile_builder_run_lifecycle', {
+        target_business_id: businessId,
+      });
+      throwIfError(lifecycleError);
+    }
 
     const [
       websites,
@@ -1411,9 +1421,13 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
   }
 
   async listWorkspaces() {
+    const { error: lifecycleError } = await this.client.rpc('reconcile_builder_run_lifecycle', {
+      target_business_id: null,
+    });
+    throwIfError(lifecycleError);
     const businesses = await this.listBusinesses();
     const workspaces = await Promise.all(
-      businesses.map((business) => this.getWorkspace(business.id)),
+      businesses.map((business) => this.getWorkspace(business.id, false)),
     );
     return workspaces.filter((workspace): workspace is ProspectWorkspace => Boolean(workspace));
   }
@@ -2317,6 +2331,10 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     sourceBuilderRunId?: string,
     targetSourceUrls?: string[],
   ) {
+    const { error: lifecycleError } = await this.client.rpc('reconcile_builder_run_lifecycle', {
+      target_business_id: businessId,
+    });
+    throwIfError(lifecycleError);
     const { error } = await this.client.rpc('request_website_build', {
       target_business_id: businessId,
       requested_mode: mode,
@@ -2351,6 +2369,10 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     agentPackageId: string,
     featureId: string,
   ) {
+    const { error: lifecycleError } = await this.client.rpc('reconcile_builder_run_lifecycle', {
+      target_business_id: null,
+    });
+    throwIfError(lifecycleError);
     const { data, error } = await this.client.rpc('request_agent_studio_site_test', {
       target_source_builder_run_id: sourceBuilderRunId,
       requested_build_instruction: buildInstruction.trim(),
@@ -2368,6 +2390,10 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
   }
 
   async resumeWebsiteBuild(builderRunId: string) {
+    const { error: lifecycleError } = await this.client.rpc('reconcile_builder_run_lifecycle', {
+      target_business_id: null,
+    });
+    throwIfError(lifecycleError);
     const { error } = await this.client.rpc('resume_website_build', {
       target_builder_run_id: builderRunId,
     });
