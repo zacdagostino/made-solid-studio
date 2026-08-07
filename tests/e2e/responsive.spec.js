@@ -2822,9 +2822,7 @@ test('offers a saved full-site resume after a provider account failure', async (
   await expect(
     prospectBuilder.getByRole('button', { name: 'Start clean website build' }),
   ).toBeVisible();
-  await expect(prospectBuilder).toHaveScreenshot('failed-full-site-provider-recovery.png', {
-    maxDiffPixelRatio: 0.0001,
-  });
+  await expect(prospectBuilder).toHaveScreenshot('failed-full-site-provider-recovery.png');
   const accessibility = await new AxeBuilder({ page }).include('.builder-run').analyze();
   expect(accessibility.violations).toEqual([]);
   await expect

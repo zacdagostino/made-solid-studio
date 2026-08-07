@@ -33,6 +33,8 @@
   --color-warning: #5e5e5e;
   --color-danger: #d9404d;
   --color-success: #0f7a5a;
+  --color-success-badge-ink: #3f4900;
+  --color-success-badge-bg: #edf2d2;
   --color-sidebar: #f4f4f4;
   --color-sidebar-text: #2f2f2f;
   --color-sidebar-muted: #6e6e6e;
@@ -87,6 +89,8 @@
   --color-warning: #d4d4d4;
   --color-danger: #ff9ba4;
   --color-success: #7dd3ae;
+  --color-success-badge-ink: #e7ff1f;
+  --color-success-badge-bg: #343a18;
   --color-sidebar: #171717;
   --color-sidebar-text: #ececec;
   --color-sidebar-muted: #b4b4b4;
@@ -1366,8 +1370,8 @@ a:focus-visible {
   background: #f0f0f0;
 }
 .status-badge--success {
-  color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 14%, var(--color-panel));
+  color: var(--color-success-badge-ink);
+  background: var(--color-success-badge-bg);
 }
 .status-badge--warning {
   color: var(--color-warning);
@@ -12031,8 +12035,8 @@ a:focus-visible {
   background: #3a3a3a;
 }
 [data-theme='dark'] .status-badge--success {
-  color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 14%, var(--color-panel));
+  color: var(--color-success-badge-ink);
+  background: var(--color-success-badge-bg);
 }
 [data-theme='dark'] .status-badge--warning {
   color: #d4d4d4;
