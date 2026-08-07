@@ -627,6 +627,7 @@ export type BuilderRun = {
   agentStudioSourceAt?: string;
   agentStudioFeatureId?: string;
   sourceCheckpointAvailable?: boolean;
+  localDevelopmentSourceAvailable?: boolean;
   status: BuilderRunStatus;
   templateVersion: string;
   model?: string;
@@ -634,6 +635,8 @@ export type BuilderRun = {
   progressDetail?: string;
   totalItems: number;
   completedItems: number;
+  attemptCount?: number;
+  heartbeatAt?: string;
   cancelRequestedAt?: string;
   errorSummary?: string;
   failureCode?: string;
@@ -679,6 +682,77 @@ export type BuilderEvent = {
 export type BuilderRunEvidence = {
   artifacts: BuilderArtifact[];
   events: BuilderEvent[];
+};
+
+export type ClientPreviewPublicationStatus =
+  'queued' | 'running' | 'ready' | 'failed' | 'cancelled';
+
+export type ClientPreviewPublication = {
+  id: string;
+  businessId: string;
+  builderRunId: string;
+  clientName: string;
+  contactName: string;
+  clientEmail: string;
+  projectName: string;
+  finalBalanceCents?: number;
+  currency: string;
+  handoffNotes: string;
+  status: ClientPreviewPublicationStatus;
+  progressPhase: string;
+  progressDetail?: string;
+  totalItems: number;
+  completedItems: number;
+  cancelRequestedAt?: string;
+  deploymentUrl?: string;
+  clientspaceHandoffId?: string;
+  errorSummary?: string;
+  createdAt: string;
+  completedAt?: string;
+  updatedAt: string;
+};
+
+export type ClientPreviewPublicationInput = {
+  clientName: string;
+  contactName: string;
+  clientEmail: string;
+  projectName: string;
+  finalBalanceCents?: number;
+  currency: string;
+  handoffNotes: string;
+};
+
+export type GithubWorkspacePublicationStatus =
+  'queued' | 'running' | 'ready' | 'failed' | 'cancelled';
+
+export type GithubWorkspacePublication = {
+  id: string;
+  businessId: string;
+  builderRunId: string;
+  repositoryOwner: string;
+  repositoryName: string;
+  repositoryDescription: string;
+  visibility: 'private';
+  status: GithubWorkspacePublicationStatus;
+  progressPhase: string;
+  progressDetail?: string;
+  totalItems: number;
+  completedItems: number;
+  cancelRequestedAt?: string;
+  repositoryUrl?: string;
+  cloneUrl?: string;
+  fullName?: string;
+  defaultBranch?: string;
+  errorSummary?: string;
+  createdAt: string;
+  completedAt?: string;
+  updatedAt: string;
+};
+
+export type GithubWorkspacePublicationInput = {
+  repositoryOwner: string;
+  repositoryName: string;
+  repositoryDescription: string;
 };
 
 export type AiUsageSource = 'asset_analysis' | 'capability_analysis' | 'codex_build';
@@ -834,6 +908,9 @@ export type ProspectWorkspace = {
   builderRuns: BuilderRun[];
   builderArtifacts: BuilderArtifact[];
   builderEvents: BuilderEvent[];
+  clientPreviewPublications: ClientPreviewPublication[];
+  githubWorkspacePublications: GithubWorkspacePublication[];
+  githubWorkspaceWorkerAvailable: boolean;
   aiUsageRecords: AiUsageRecord[];
   previousCapture?: ResearchCapture;
   previousFacts: EvidenceFact[];

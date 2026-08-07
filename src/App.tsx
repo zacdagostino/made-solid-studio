@@ -20,9 +20,11 @@ import {
   FileText,
   FolderTree,
   FormInput,
+  Github,
   Globe2,
   ListChecks,
   LayoutDashboard,
+  Laptop,
   LoaderCircle,
   PackageCheck,
   Play,
@@ -107,6 +109,8 @@ import {
   type BuilderRunMode,
   type BuilderRun,
   type BuilderEvent,
+  type ClientPreviewPublicationInput,
+  type GithubWorkspacePublicationInput,
   type CapturedPage,
   type ProspectStage,
   type ProspectWorkspace,
@@ -1212,9 +1216,11 @@ function WorkspaceLoadingOverlay({
 
 function WorkspaceErrorOverlay({
   message,
+  onRetry,
   onSignOut,
 }: {
   message: string;
+  onRetry: () => void;
   onSignOut?: () => Promise<void>;
 }) {
   return (
@@ -1222,7 +1228,7 @@ function WorkspaceErrorOverlay({
       <LoadingBrand />
       <p>{message}</p>
       <div className="workspace-loading__error-actions">
-        <Button onClick={() => window.location.reload()} variant="secondary">
+        <Button onClick={onRetry} variant="secondary">
           Try again
         </Button>
         {onSignOut ? (
@@ -2751,6 +2757,8 @@ function BuilderFileExplorer({
   const sourceEntries = useMemo(() => builderSourceExplorerEntries(artifacts), [artifacts]);
   const outputEntries = useMemo(() => builderOutputExplorerEntries(artifacts), [artifacts]);
   const sourceBundle = artifacts.find((artifact) => artifact.kind === 'source_bundle');
+  const hasLocalDevelopmentHandoff =
+    typeof sourceBundle?.metadata.localDevelopmentHandoffVersion === 'number';
   const initialCollection = sourceEntries.length ? 'source' : 'output';
   const [collection, setCollection] = useState<'source' | 'output'>(initialCollection);
   const [query, setQuery] = useState('');
@@ -2906,7 +2914,7 @@ function BuilderFileExplorer({
               variant="secondary"
             >
               <Download aria-hidden="true" size={16} />
-              Download source
+              {hasLocalDevelopmentHandoff ? 'Download local workspace' : 'Download source'}
             </ButtonLink>
           ) : null}
         </ButtonGroup>
@@ -3099,8 +3107,9 @@ function BuilderFileExplorerDialog({
           </div>
           <Dialog.Description className="muted-copy" id="builder-file-explorer-dialog-description">
             Source is the editable Next.js project. Compiled site contains the browser-ready files
-            produced from that source. Preview website opens the complete interactive result;
-            selecting a file is only for inspection.
+            produced from that source. New local-workspace downloads also contain approved assets,
+            an agent refinement ledger, and the Studio learning-bundle tools. Preview website opens
+            the complete interactive result; selecting a file is only for inspection.
           </Dialog.Description>
           {loadStatus === 'error' ? (
             <div className="builder-file-explorer__empty">
@@ -6694,7 +6703,7 @@ function builderProgressPhaseLabel(phase: string) {
     building_website: 'Codex is building the website',
     building_output: 'Compiling the private preview',
     quality_checks: 'Running browser quality checks',
-    capturing_preview: 'Capturing responsive previews',
+    capturing_preview: 'Checking responsive viewports',
     saving_outputs: 'Saving private build outputs',
     retry_wait: 'Waiting to retry',
   };
@@ -6891,7 +6900,7 @@ function BuilderRunPageDisclosure({
   );
 }
 
-function buildProgressMilestones(run: BuilderRun, screenshots: BuilderArtifact[]) {
+function buildProgressMilestones(run: BuilderRun) {
   if (!run.totalItems) return [];
 
   const initialMilestones = [
@@ -6904,15 +6913,13 @@ function buildProgressMilestones(run: BuilderRun, screenshots: BuilderArtifact[]
     return initialMilestones.slice(0, run.totalItems);
   }
 
-  const captureCount = Math.max(0, run.totalItems - initialMilestones.length - 1);
-  const captureMilestones = Array.from({ length: captureCount }, (_, index) => {
-    const screenshot = screenshots[index];
-    return screenshot
-      ? `Capture ${screenshot.label.toLowerCase()}`
-      : `Capture responsive preview ${index + 1}`;
-  });
+  const viewportCheckCount = Math.max(0, run.totalItems - initialMilestones.length - 1);
+  const viewportMilestones = Array.from(
+    { length: viewportCheckCount },
+    (_, index) => `Check responsive page and viewport ${index + 1}`,
+  );
 
-  return [...initialMilestones, ...captureMilestones, 'Save outputs and finalise preview'];
+  return [...initialMilestones, ...viewportMilestones, 'Save outputs and finalise preview'];
 }
 
 function builderEventContext(event: BuilderEvent) {
@@ -6994,6 +7001,282 @@ function useBuildElapsedNow(active: boolean) {
   }, [active]);
 
   return now;
+}
+
+const builderProgressStages = [
+  {
+    id: 'preparing_workspace',
+    label: 'Prepare workspace',
+    detail: 'Load the immutable manifest, captured content, and approved assets.',
+  },
+  {
+    id: 'building_website',
+    label: 'Generate website',
+    detail: 'Create the routes, components, content, and responsive design system.',
+  },
+  {
+    id: 'building_output',
+    label: 'Compile preview',
+    detail: 'Format, lint, type-check, and compile the generated website.',
+  },
+  {
+    id: 'quality_checks',
+    label: 'Verify website',
+    detail: 'Check routes, interactions, accessibility, and browser behaviour.',
+  },
+  {
+    id: 'capturing_preview',
+    label: 'Check viewports',
+    detail: 'Run mobile, tablet, and desktop browser checks without storing screenshots.',
+  },
+  {
+    id: 'saving_outputs',
+    label: 'Save private output',
+    detail: 'Persist source, compiled files, logs, and quality results.',
+  },
+] as const;
+
+type BuilderProgressStageId = (typeof builderProgressStages)[number]['id'];
+
+function builderEventTimestamp(
+  events: BuilderEvent[],
+  matches: (event: BuilderEvent) => boolean,
+  direction: 'first' | 'last' = 'first',
+) {
+  const orderedEvents = direction === 'first' ? events : [...events].reverse();
+  const timestamp = Date.parse(orderedEvents.find(matches)?.createdAt ?? '');
+  return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+function builderStageStarts(run: BuilderRun, events: BuilderEvent[]) {
+  const starts = new Map<BuilderProgressStageId, number>();
+  const runStartedAt = Date.parse(run.startedAt ?? '');
+  if (Number.isFinite(runStartedAt)) starts.set('preparing_workspace', runStartedAt);
+
+  const startMatchers: Partial<
+    Record<Exclude<BuilderProgressStageId, 'preparing_workspace' | 'saving_outputs'>, RegExp>
+  > = {
+    building_website: /^Codex has started /i,
+    building_output: /^(Codex finished writing the website|Validated saved generated source\.)/i,
+    quality_checks: /^Private website compiled successfully\./i,
+    capturing_preview: /^Browser checks started /i,
+  };
+  for (const [stageId, matcher] of Object.entries(startMatchers)) {
+    const timestamp = builderEventTimestamp(events, (event) => matcher.test(event.message));
+    if (timestamp) starts.set(stageId as BuilderProgressStageId, timestamp);
+  }
+
+  const hasReachedSaving =
+    run.progressPhase === 'saving_outputs' ||
+    run.progressPhase === 'complete' ||
+    events.some((event) =>
+      /^Private source, generated files, and quality results have been saved/i.test(event.message),
+    );
+  if (hasReachedSaving) {
+    const timestamp = builderEventTimestamp(
+      events,
+      (event) =>
+        event.kind === 'quality' && /^(Checked|Captured) .+ at .+ width\./i.test(event.message),
+      'last',
+    );
+    if (timestamp) starts.set('saving_outputs', timestamp);
+  }
+
+  return starts;
+}
+
+function builderStageTimingLabel({
+  run,
+  stageIndex,
+  state,
+  starts,
+  now,
+}: {
+  run: BuilderRun;
+  stageIndex: number;
+  state: 'complete' | 'active' | 'upcoming';
+  starts: Map<BuilderProgressStageId, number>;
+  now: number;
+}) {
+  if (state === 'upcoming') return 'Not started';
+  const stage = builderProgressStages[stageIndex];
+  const startedAt = starts.get(stage.id);
+  if (startedAt === undefined) return state === 'complete' ? 'Timing unavailable' : 'Starting';
+
+  if (state === 'active') {
+    const runIsActive = run.status === 'queued' || run.status === 'running';
+    const stoppedAt = Date.parse(run.completedAt ?? run.updatedAt);
+    const finishedAt = runIsActive || !Number.isFinite(stoppedAt) ? now : stoppedAt;
+    return `${formatBuildElapsedTime(finishedAt - startedAt)}${runIsActive ? ' so far' : ' before stop'}`;
+  }
+
+  const nextStage = builderProgressStages[stageIndex + 1];
+  const nextStageStartedAt = nextStage ? starts.get(nextStage.id) : undefined;
+  const runCompletedAt = Date.parse(run.completedAt ?? '');
+  const finishedAt =
+    nextStageStartedAt ??
+    (!nextStage && Number.isFinite(runCompletedAt) ? runCompletedAt : undefined);
+  return finishedAt === undefined
+    ? 'Timing unavailable'
+    : `Took ${formatBuildElapsedTime(finishedAt - startedAt)}`;
+}
+
+function formatBuildUpdateAge(value: string | undefined, now: number) {
+  const timestamp = Date.parse(value ?? '');
+  if (!Number.isFinite(timestamp)) return 'Not reported yet';
+  const seconds = Math.max(0, Math.floor((now - timestamp) / 1_000));
+  if (seconds < 10) return 'Just now';
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m ago`;
+}
+
+function builderWorkerSignal(run: BuilderRun, now: number) {
+  if (run.status === 'queued') {
+    return { label: 'Waiting for a worker', tone: 'queued' as const };
+  }
+  if (run.status === 'paused') {
+    return { label: 'Retry is scheduled', tone: 'retry' as const };
+  }
+  if (run.status !== 'running') {
+    return {
+      label: run.status === 'ready' ? 'Build complete' : builderRunLabel(run.status),
+      tone: run.status === 'ready' ? ('complete' as const) : ('stopped' as const),
+    };
+  }
+
+  const heartbeat = Date.parse(run.heartbeatAt ?? run.updatedAt);
+  const age = Number.isFinite(heartbeat) ? Math.max(0, now - heartbeat) : Number.POSITIVE_INFINITY;
+  if (age <= 60_000) return { label: 'Worker connected', tone: 'live' as const };
+  if (age <= 120_000) return { label: 'Worker update delayed', tone: 'delayed' as const };
+  return { label: 'Worker heartbeat overdue', tone: 'stale' as const };
+}
+
+function BuilderLiveProgress({ run, events }: { run: BuilderRun; events: BuilderEvent[] }) {
+  const isActive = run.status === 'queued' || run.status === 'running';
+  const now = useBuildElapsedNow(isActive);
+  const reportedStageIndex = builderProgressStages.findIndex(
+    (stage) => stage.id === run.progressPhase,
+  );
+  const stageStarts = builderStageStarts(run, events);
+  const latestStartedStageIndex = builderProgressStages.reduce(
+    (latest, stage, index) => (stageStarts.has(stage.id) ? index : latest),
+    -1,
+  );
+  const currentStageIndex = Math.max(reportedStageIndex, latestStartedStageIndex);
+  const signal = builderWorkerSignal(run, now);
+  const elapsed = builderRunElapsedTime(run, now);
+  const latestEvent = events.at(-1);
+  const latestSavedAt = latestEvent?.createdAt ?? run.updatedAt;
+  const nextStage =
+    currentStageIndex >= 0 ? builderProgressStages[currentStageIndex + 1] : undefined;
+
+  return (
+    <section
+      aria-labelledby="builder-live-progress-title"
+      aria-live="polite"
+      className={`builder-live-progress builder-live-progress--${signal.tone}`}
+    >
+      <header className="builder-live-progress__header">
+        <div>
+          <Eyebrow>Live build progress</Eyebrow>
+          <h4 id="builder-live-progress-title">{builderProgressPhaseLabel(run.progressPhase)}</h4>
+        </div>
+        <span className="builder-live-progress__signal">
+          <span aria-hidden="true" className="builder-live-progress__signal-dot" />
+          {signal.label}
+        </span>
+      </header>
+
+      <div className="builder-live-progress__current">
+        <LoaderCircle aria-hidden="true" className="builder-live-progress__spinner" size={20} />
+        <div>
+          <strong>{run.progressDetail || 'Waiting for the next saved worker checkpoint.'}</strong>
+          <p>
+            {nextStage
+              ? `Next: ${nextStage.label}.`
+              : run.status === 'running'
+                ? 'The worker will save the finished private preview next.'
+                : 'The next action will appear here when the run changes state.'}
+          </p>
+        </div>
+      </div>
+
+      <dl className="builder-live-progress__facts">
+        <div>
+          <dt>Working time</dt>
+          <dd>{elapsed === undefined ? 'Waiting to start' : formatBuildElapsedTime(elapsed)}</dd>
+        </div>
+        <div>
+          <dt>Worker signal</dt>
+          <dd>{formatBuildUpdateAge(run.heartbeatAt ?? run.updatedAt, now)}</dd>
+        </div>
+        <div>
+          <dt>Build attempt</dt>
+          <dd>{run.attemptCount ? `Attempt ${run.attemptCount}` : 'Not started'}</dd>
+        </div>
+        <div>
+          <dt>Saved activity</dt>
+          <dd>{events.length ? `${events.length} updates` : 'Waiting for first update'}</dd>
+        </div>
+      </dl>
+
+      <ol className="builder-live-progress__stages" aria-label="Build stages">
+        {builderProgressStages.map((stage, index) => {
+          const state =
+            currentStageIndex > index || run.progressPhase === 'complete'
+              ? 'complete'
+              : currentStageIndex === index
+                ? 'active'
+                : 'upcoming';
+          return (
+            <li className={`is-${state}`} key={stage.id}>
+              <span aria-hidden="true" className="builder-live-progress__stage-marker">
+                {state === 'complete' ? <Check size={14} /> : index + 1}
+              </span>
+              <span>
+                <strong>{stage.label}</strong>
+                <small>{stage.detail}</small>
+                <small aria-live="off" className="builder-live-progress__stage-time">
+                  <Clock3 aria-hidden="true" size={13} />
+                  {builderStageTimingLabel({
+                    run,
+                    stageIndex: index,
+                    state,
+                    starts: stageStarts,
+                    now,
+                  })}
+                </small>
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+
+      <footer className="builder-live-progress__latest">
+        <span>Latest saved activity</span>
+        <strong>{latestEvent?.message ?? 'Waiting for the first persisted worker event.'}</strong>
+        <time dateTime={latestSavedAt} title={formatDateTime(latestSavedAt)}>
+          {formatBuildUpdateAge(latestSavedAt, now)}
+        </time>
+      </footer>
+    </section>
+  );
+}
+
+function builderQualityStatusLabel(run: BuilderRun) {
+  if (run.qualitySummary.status !== 'not_run') {
+    return run.qualitySummary.status.replaceAll('_', ' ');
+  }
+  if (
+    (run.status === 'running' || run.status === 'paused') &&
+    ['quality_checks', 'capturing_preview', 'saving_outputs'].includes(run.progressPhase)
+  ) {
+    return 'checks running';
+  }
+  return 'not started';
 }
 
 function buildUsageSummary(records: AiUsageRecord[], builderRunId: string) {
@@ -7640,9 +7923,9 @@ function BuilderRunPanel({
                 : 'package-behaviour',
             title: `Package ${agentPackageVersionLabel(selectedAgentPackage.version)} testing behaviour`,
             detail: selectedAgentPackage.capabilityProposal || selectedAgentPackage.summary,
-            revision: `v${selectedAgentPackage.version}.0.18`,
+            revision: `v${selectedAgentPackage.version}.0.21`,
             change:
-              'Latest edit: package v8.6 keeps mobile navigation on the leading edge without nested scrollbar chrome and verifies that the complete hero proposition and primary action fit the first viewport.',
+              'Latest edit: completed builds now export a complete local Git workspace with approved assets, origin metadata, a structured refinement ledger, and a reviewed learning-bundle handoff.',
           },
           {
             id: 'hero-handoff',
@@ -7712,9 +7995,9 @@ function BuilderRunPanel({
             title: 'Framework and responsive quality gates',
             detail:
               'Generated source must pass formatting, lint, strict typing, production build, route and provenance checks, browser interactions, accessibility, and exact responsive evidence.',
-            revision: `v${selectedAgentPackage.version}.51`,
+            revision: `v${selectedAgentPackage.version}.55`,
             change:
-              'Latest edit: responsive checks now reject broken intrinsic image loads, clipped or below-fold first-viewport hero content, wrong-way drawer entry, nested drawer scrollbar chrome, and delayed navigation items.',
+              'Latest edit: quality-reviewed source can now move into local development with its approved assets and an auditable refinement ledger, without mutating the production agent automatically.',
           },
         ]
       : [];
@@ -7983,7 +8266,7 @@ function BuilderRunPanel({
   const previewFiles = currentArtifacts.filter((artifact) => artifact.kind === 'site_file');
   const sourceFiles = builderSourceExplorerEntries(currentArtifacts);
   const screenshots = currentArtifacts.filter((artifact) => artifact.kind === 'screenshot');
-  const progressMilestones = run ? buildProgressMilestones(run, screenshots) : [];
+  const progressMilestones = run ? buildProgressMilestones(run) : [];
   const { urls: screenshotUrls, loadError } = usePrivateArtifactUrls(
     screenshots,
     'Private preview screenshots could not be loaded. Refresh and check storage access.',
@@ -8024,7 +8307,9 @@ function BuilderRunPanel({
       artifact.kind === 'checkpoint' && artifact.label === 'Latest private source checkpoint',
   );
   const savedSourceAvailable =
-    checkpointAvailable || currentArtifacts.some((artifact) => isWorkingSourceArtifact(artifact));
+    run?.sourceCheckpointAvailable === true ||
+    checkpointAvailable ||
+    currentArtifacts.some((artifact) => isWorkingSourceArtifact(artifact));
   const homepageSelected =
     targetSourceUrls.length === 1 && targetSourceUrls[0] === homepageTestOption?.url;
   const selectedPageCanBuild = targetSourceUrls.length > 0;
@@ -8058,7 +8343,6 @@ function BuilderRunPanel({
     (event) => !isCodexStreamEvent(event) && event.kind !== 'diagnostic',
   );
   const newActivityIds = useNewBuilderActivityIds(currentEvents, runId);
-  const latestSavedWorkerEvent = currentEvents[currentEvents.length - 1];
   const failedOutputPath =
     typeof run?.failureContext.path === 'string' ? run.failureContext.path : undefined;
   const failedStorageOperation =
@@ -8319,7 +8603,7 @@ function BuilderRunPanel({
           <p className="muted-copy">
             {isTestBuild
               ? 'Tests one approved page or one feature across a moved whole-site source, then saves a private draft and logs for agent refinement. It does not publish or contact anyone.'
-              : 'Builds this prospect’s complete private website from its immutable Build Manifest, then saves source, responsive captures, and automated checks for review. It does not publish or contact anyone.'}
+              : 'Builds this prospect’s complete private website from its immutable Build Manifest, then saves source and automated browser checks for review. It does not publish or contact anyone.'}
           </p>
         </div>
         {run ? (
@@ -9084,14 +9368,33 @@ function BuilderRunPanel({
                   starting this build.
                 </p>
               )}
-              <Button
-                disabled={isRequesting || !homepageTestReady || !publishedPackage}
-                onClick={() => void requestBuild('full_site')}
-                type="button"
-              >
-                <Play aria-hidden="true" size={16} />
-                {isRequesting ? 'Queueing prospect build' : 'Build complete prospect website'}
-              </Button>
+              <ButtonGroup>
+                {run?.status === 'failed' && savedSourceAvailable && onResumeBuild ? (
+                  <Button
+                    disabled={isResuming}
+                    onClick={() => void resumeBuild(run.id)}
+                    type="button"
+                  >
+                    <RotateCcw aria-hidden="true" size={16} />
+                    {isResuming ? 'Resuming saved website' : 'Resume saved website build'}
+                  </Button>
+                ) : null}
+                <Button
+                  disabled={isRequesting || !homepageTestReady || !publishedPackage}
+                  onClick={() => void requestBuild('full_site')}
+                  type="button"
+                  variant={
+                    run?.status === 'failed' && savedSourceAvailable ? 'secondary' : 'primary'
+                  }
+                >
+                  <Play aria-hidden="true" size={16} />
+                  {isRequesting
+                    ? 'Queueing prospect build'
+                    : run?.status === 'failed' && savedSourceAvailable
+                      ? 'Start clean website build'
+                      : 'Build complete prospect website'}
+                </Button>
+              </ButtonGroup>
               <small>{homepageRequirementDetail}</small>
             </div>
           </div>
@@ -9404,29 +9707,7 @@ function BuilderRunPanel({
             </>
           ) : (
             <>
-              {active ? (
-                <section
-                  aria-live="polite"
-                  aria-labelledby="builder-current-step-title"
-                  className="builder-current-step"
-                >
-                  <div>
-                    <Eyebrow>Live worker status</Eyebrow>
-                    <h4 id="builder-current-step-title">Current step</h4>
-                  </div>
-                  <StatusBadge tone="warning">Live updates</StatusBadge>
-                  <strong>{builderProgressPhaseLabel(run.progressPhase)}</strong>
-                  <p>
-                    {run.progressDetail || 'Waiting for the builder worker to save its first step.'}
-                  </p>
-                  <small>
-                    {latestSavedWorkerEvent
-                      ? `Last saved worker update: ${latestSavedWorkerEvent.message}`
-                      : 'Listening for the first saved worker update.'}
-                  </small>
-                  <small>Live stream checks for new saved worker activity every second.</small>
-                </section>
-              ) : null}
+              {active ? <BuilderLiveProgress events={currentEvents} run={run} /> : null}
               <section
                 className="builder-run-overview"
                 aria-labelledby="builder-run-overview-title"
@@ -9455,7 +9736,7 @@ function BuilderRunPanel({
                   </div>
                   <div>
                     <dt>Quality status</dt>
-                    <dd>{run.qualitySummary.status.replaceAll('_', ' ')}</dd>
+                    <dd>{builderQualityStatusLabel(run)}</dd>
                   </div>
                   {!isTestBuild ? (
                     <div>
@@ -11832,7 +12113,7 @@ const agentPackageFeatures: AgentFeature[] = [
     id: 'framework-quality-gates',
     title: 'Framework, interaction & responsive quality gates',
     detail:
-      'Runs formatting, ESLint, strict type checks, production compilation against the exact selected route outputs, route validation, exact responsive captures, creative-direction signals, compact-navigation interaction and motion checks, image-loading checks, overflow checks, browser errors, and axe while keeping private test inspection and verification credit-efficient.',
+      'Runs formatting, ESLint, strict type checks, production compilation against the exact selected route outputs, route validation, responsive viewport checks without screenshot storage, creative-direction signals, compact-navigation interaction and motion checks, image-loading checks, overflow checks, browser errors, and axe while keeping private test inspection and verification credit-efficient.',
     files: [
       {
         label: 'Template packages',
@@ -13340,8 +13621,8 @@ function AgentPackageConfiguration({
             <p>
               The server-side builder worker creates a disposable workspace from the locked
               foundation, supplies the selected package and build direction to Codex, then saves
-              source, logs, screenshots, and quality results against that run. It never publishes a
-              prospect site.
+              source, logs, and quality results against that run. It never publishes a prospect
+              site.
             </p>
           </section>
 
@@ -14037,6 +14318,7 @@ function BuildManifestPanel({
   agentPackages,
   onCreate,
   onRequestBuild,
+  onResumeBuild,
   onCancelBuild,
   onDeleteBuild,
   onOpenPreview,
@@ -14052,6 +14334,7 @@ function BuildManifestPanel({
     buildInstruction?: string,
     agentPackageId?: string,
   ) => Promise<void>;
+  onResumeBuild: (builderRunId: string) => Promise<void>;
   onCancelBuild: () => Promise<void>;
   onDeleteBuild: (businessId: string) => Promise<void>;
   onOpenPreview: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
@@ -14319,9 +14602,606 @@ function BuildManifestPanel({
         onLoadBuildEvidence={onLoadBuildEvidence}
         onMoveToAgentStudio={onMoveToAgentStudio}
         onOpenPreview={onOpenPreview}
+        onResumeBuild={onResumeBuild}
         onRequestBuild={onRequestBuild}
         workspace={workspace}
       />
+    </Card>
+  );
+}
+
+function githubRepositoryName(value: string) {
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, '-')
+      .replace(/^[.-]+|[.-]+$/g, '')
+      .slice(0, 100) || 'made-solid-website'
+  );
+}
+
+function LocalDevelopmentPublicationPanel({
+  workspace,
+  onPublish,
+  onCancel,
+}: {
+  workspace: ProspectWorkspace;
+  onPublish: (builderRunId: string, input: GithubWorkspacePublicationInput) => Promise<void>;
+  onCancel: (publicationId: string) => Promise<void>;
+}) {
+  const latestCompletedBuild = workspace.builderRuns.find(
+    (run) =>
+      run.buildMode === 'full_site' && (run.status === 'ready' || run.status === 'review_required'),
+  );
+  const completedBuild = latestCompletedBuild?.localDevelopmentSourceAvailable
+    ? latestCompletedBuild
+    : undefined;
+  const publication = completedBuild
+    ? workspace.githubWorkspacePublications.find(
+        (candidate) => candidate.builderRunId === completedBuild.id,
+      )
+    : undefined;
+  const [repositoryOwner, setRepositoryOwner] = useState(publication?.repositoryOwner ?? '');
+  const [repositoryName, setRepositoryName] = useState(
+    publication?.repositoryName ?? githubRepositoryName(workspace.business.name),
+  );
+  const [repositoryDescription, setRepositoryDescription] = useState(
+    publication?.repositoryDescription ?? `${workspace.business.name} website development`,
+  );
+  const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [message, setMessage] = useState('');
+  const [copiedValue, setCopiedValue] = useState<'export' | 'clone'>();
+  const publishButtonRef = useRef<HTMLButtonElement>(null);
+  const active = publication?.status === 'queued' || publication?.status === 'running';
+  const canPublish = Boolean(completedBuild && workspace.githubWorkspaceWorkerAvailable);
+  const normalizedOwner = repositoryOwner.trim();
+  const normalizedName = repositoryName.trim();
+  const repositoryTarget = `${normalizedOwner || 'owner'}/${normalizedName || 'repository'}`;
+  const exportCommand = completedBuild
+    ? `npm run export:local-build -- --run ${completedBuild.id} --destination /path/to/project`
+    : '';
+  const cloneCommand = publication?.cloneUrl ? `git clone ${publication.cloneUrl}` : '';
+
+  async function copyCommand(kind: 'export' | 'clone', value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedValue(kind);
+      window.setTimeout(
+        () => setCopiedValue((current) => (current === kind ? undefined : current)),
+        2_000,
+      );
+    } catch {
+      setMessage('The command could not be copied. Select it and copy it manually.');
+    }
+  }
+
+  function requestConfirmation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage('');
+    if (!completedBuild || submitting) return;
+    if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(normalizedOwner)) {
+      setMessage('Enter a valid GitHub account or organization name.');
+      return;
+    }
+    if (!/^[A-Za-z0-9._-]+$/.test(normalizedName) || normalizedName.length > 100) {
+      setMessage('Enter a valid GitHub repository name.');
+      return;
+    }
+    setConfirmationOpen(true);
+  }
+
+  async function publish() {
+    if (!completedBuild || submitting) return;
+    setSubmitting(true);
+    setMessage('');
+    try {
+      await onPublish(completedBuild.id, {
+        repositoryOwner: normalizedOwner,
+        repositoryName: normalizedName,
+        repositoryDescription: repositoryDescription.trim(),
+      });
+      setConfirmationOpen(false);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'GitHub publishing could not be queued.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function cancel() {
+    if (!publication || cancelling) return;
+    setCancelling(true);
+    setMessage('');
+    try {
+      await onCancel(publication.id);
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : 'GitHub publishing could not be cancelled.',
+      );
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  const statusTone =
+    publication?.status === 'ready'
+      ? 'success'
+      : publication?.status === 'failed'
+        ? 'danger'
+        : active
+          ? 'warning'
+          : completedBuild
+            ? 'success'
+            : 'neutral';
+  const statusLabel =
+    publication?.status === 'ready'
+      ? 'Repository ready'
+      : (publication?.status.replaceAll('_', ' ') ??
+        (completedBuild ? 'Ready to export' : 'Not ready'));
+
+  return (
+    <Card className="workspace-panel local-development" data-testid="local-development-publication">
+      <div className="local-development__header">
+        <div>
+          <Eyebrow>Development handoff</Eyebrow>
+          <h2>Continue locally or on GitHub</h2>
+          <p className="muted-copy">
+            Take the complete editable project out of Studio without losing its approved assets,
+            build origin, or structured refinement log.
+          </p>
+        </div>
+        <StatusBadge tone={statusTone}>{statusLabel}</StatusBadge>
+      </div>
+
+      {completedBuild ? (
+        <section className="local-development__ready" aria-labelledby="local-workspace-ready">
+          <Laptop aria-hidden="true" size={24} />
+          <div>
+            <h3 id="local-workspace-ready">Local workspace ready to export</h3>
+            <p>
+              Build {completedBuild.id.slice(0, 8)} has editable source, approved assets, local
+              setup notes, and the Made Solid refinement ledger.
+            </p>
+            {completedBuild.status === 'review_required' ? (
+              <p className="local-development__quality-note">
+                Quality review still has findings. That does not block private development, but it
+                still blocks client publishing.
+              </p>
+            ) : null}
+            <div className="local-development__command">
+              <code>{exportCommand}</code>
+              <Button
+                aria-label="Copy local export command"
+                onClick={() => void copyCommand('export', exportCommand)}
+                size="small"
+                variant="secondary"
+              >
+                <ClipboardCheck aria-hidden="true" size={16} />
+                {copiedValue === 'export' ? 'Copied' : 'Copy command'}
+              </Button>
+            </div>
+          </div>
+        </section>
+      ) : (
+        <div className="local-development__empty">
+          <Laptop aria-hidden="true" size={24} />
+          <div>
+            <strong>
+              {latestCompletedBuild
+                ? 'Editable source package unavailable'
+                : 'Complete a full website first'}
+            </strong>
+            <p>
+              {latestCompletedBuild
+                ? 'This completed build has no safe local-development source evidence. Create a clean full-site rebuild before exporting it.'
+                : 'A finished full-site build creates the source package used for local development.'}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {publication?.status === 'ready' ? (
+        <section
+          className="local-development__repository"
+          aria-labelledby="github-repository-ready"
+        >
+          <Github aria-hidden="true" size={24} />
+          <div>
+            <h3 id="github-repository-ready">Private GitHub repository ready</h3>
+            <p>
+              <strong>
+                {publication.fullName ??
+                  `${publication.repositoryOwner}/${publication.repositoryName}`}
+              </strong>{' '}
+              is ready on <code>{publication.defaultBranch ?? 'main'}</code>.
+            </p>
+            {cloneCommand ? (
+              <div className="local-development__command">
+                <code>{cloneCommand}</code>
+                <Button
+                  aria-label="Copy GitHub clone command"
+                  onClick={() => void copyCommand('clone', cloneCommand)}
+                  size="small"
+                  variant="secondary"
+                >
+                  <ClipboardCheck aria-hidden="true" size={16} />
+                  {copiedValue === 'clone' ? 'Copied' : 'Copy clone command'}
+                </Button>
+              </div>
+            ) : null}
+            {publication.repositoryUrl ? (
+              <ButtonLink
+                href={publication.repositoryUrl}
+                rel="noreferrer"
+                target="_blank"
+                variant="primary"
+              >
+                <Github aria-hidden="true" size={16} />
+                Open GitHub repository
+              </ButtonLink>
+            ) : null}
+          </div>
+        </section>
+      ) : active ? (
+        <section className="local-development__progress" aria-live="polite">
+          <IndeterminateProgress
+            detail={publication.progressDetail || 'Preparing the private development repository.'}
+            label={publication.progressPhase.replaceAll('_', ' ')}
+          />
+          {publication.totalItems > 0 ? (
+            <p>
+              {publication.completedItems} of {publication.totalItems} saved checkpoints complete.
+            </p>
+          ) : null}
+          <Button
+            disabled={cancelling || Boolean(publication.cancelRequestedAt)}
+            onClick={() => void cancel()}
+            variant="secondary"
+          >
+            <Ban aria-hidden="true" size={16} />
+            {cancelling || publication.cancelRequestedAt
+              ? 'Stopping GitHub publish'
+              : 'Cancel GitHub publish'}
+          </Button>
+        </section>
+      ) : (
+        <form className="local-development__form" onSubmit={requestConfirmation}>
+          <div className="local-development__form-heading">
+            <Github aria-hidden="true" size={22} />
+            <div>
+              <h3>Create a private GitHub repository</h3>
+              <p>Studio creates the repository only after you confirm the exact destination.</p>
+            </div>
+          </div>
+          <div className="local-development__fields">
+            <label>
+              <span>GitHub account or organization</span>
+              <input
+                autoComplete="off"
+                maxLength={39}
+                onChange={(event) => setRepositoryOwner(event.target.value)}
+                placeholder="your-github-name"
+                required
+                value={repositoryOwner}
+              />
+            </label>
+            <label>
+              <span>Repository name</span>
+              <input
+                autoComplete="off"
+                maxLength={100}
+                onChange={(event) => setRepositoryName(event.target.value)}
+                required
+                value={repositoryName}
+              />
+            </label>
+            <label className="local-development__description">
+              <span>Description (optional)</span>
+              <input
+                maxLength={350}
+                onChange={(event) => setRepositoryDescription(event.target.value)}
+                value={repositoryDescription}
+              />
+            </label>
+          </div>
+          <p className="local-development__privacy">
+            <ShieldAlert aria-hidden="true" size={17} />
+            Private only. Studio never exposes the GitHub token to this browser and never creates a
+            public repository from this action.
+          </p>
+          {completedBuild && !workspace.githubWorkspaceWorkerAvailable ? (
+            <p className="form-message form-message--error" role="status">
+              GitHub publishing is not connected yet. Configure the protected Studio worker with a
+              GitHub token; local export remains ready now.
+            </p>
+          ) : null}
+          {publication?.status === 'failed' ? (
+            <div className="local-development__failure" role="alert">
+              <strong>GitHub publishing did not finish</strong>
+              <p>{publication.errorSummary ?? 'Review the destination and try again.'}</p>
+              {publication.repositoryUrl ? (
+                <ButtonLink
+                  href={publication.repositoryUrl}
+                  rel="noreferrer"
+                  target="_blank"
+                  variant="secondary"
+                >
+                  <ExternalLink aria-hidden="true" size={16} />
+                  Inspect partial private repository
+                </ButtonLink>
+              ) : null}
+            </div>
+          ) : null}
+          {message ? (
+            <p className="form-message form-message--error" role="alert">
+              {message}
+            </p>
+          ) : null}
+          <Button disabled={!canPublish || submitting} ref={publishButtonRef} type="submit">
+            <Github aria-hidden="true" size={16} />
+            {publication?.status === 'failed'
+              ? 'Retry with this destination'
+              : 'Create private repository'}
+          </Button>
+          {!completedBuild ? (
+            <small>
+              {latestCompletedBuild
+                ? 'Create a clean full-site rebuild with editable source before creating its development repository.'
+                : 'Complete a full-site build before creating its development repository.'}
+            </small>
+          ) : null}
+        </form>
+      )}
+
+      <ConfirmationDialog
+        confirmLabel="Create private repository"
+        confirmingLabel="Queueing repository"
+        confirmVariant="primary"
+        detail={`Made Solid Studio will create ${repositoryTarget} as a private GitHub repository and push build ${completedBuild?.id.slice(0, 8) ?? ''} to its main branch. No public repository or deployment will be created.`}
+        error={message || undefined}
+        isConfirming={submitting}
+        onConfirm={() => void publish()}
+        onOpenChange={setConfirmationOpen}
+        open={confirmationOpen}
+        returnFocusRef={publishButtonRef}
+        title={`Create ${repositoryTarget}?`}
+      />
+    </Card>
+  );
+}
+
+function ClientPreviewPublicationPanel({
+  workspace,
+  onPublish,
+  onCancel,
+}: {
+  workspace: ProspectWorkspace;
+  onPublish: (builderRunId: string, input: ClientPreviewPublicationInput) => Promise<void>;
+  onCancel: (publicationId: string) => Promise<void>;
+}) {
+  const completedBuild = workspace.builderRuns.find((run) => run.buildMode === 'full_site');
+  const publication = completedBuild
+    ? workspace.clientPreviewPublications.find(
+        (candidate) => candidate.builderRunId === completedBuild.id,
+      )
+    : undefined;
+  const preferredContact = workspace.contacts.find((contact) => Boolean(contact.email));
+  const [clientName, setClientName] = useState(workspace.business.name);
+  const [contactName, setContactName] = useState(preferredContact?.name ?? '');
+  const [clientEmail, setClientEmail] = useState(preferredContact?.email ?? '');
+  const [projectName, setProjectName] = useState(`${workspace.business.name} website`);
+  const [finalBalance, setFinalBalance] = useState('');
+  const [handoffNotes, setHandoffNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [message, setMessage] = useState('');
+  const active = publication?.status === 'queued' || publication?.status === 'running';
+  const canPublish =
+    completedBuild?.status === 'ready' && completedBuild.qualitySummary.status === 'passed';
+
+  async function publish(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!completedBuild || !canPublish || submitting) return;
+    const dollars = finalBalance.trim() ? Number(finalBalance) : undefined;
+    if (dollars !== undefined && (!Number.isFinite(dollars) || dollars < 0)) {
+      setMessage('Enter a valid final balance or leave it blank.');
+      return;
+    }
+    setSubmitting(true);
+    setMessage('');
+    try {
+      await onPublish(completedBuild.id, {
+        clientName: clientName.trim(),
+        contactName: contactName.trim(),
+        clientEmail: clientEmail.trim(),
+        projectName: projectName.trim(),
+        finalBalanceCents: dollars === undefined ? undefined : Math.round(dollars * 100),
+        currency: 'AUD',
+        handoffNotes: handoffNotes.trim(),
+      });
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : 'The client preview could not be queued.',
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function cancel() {
+    if (!publication || cancelling) return;
+    setCancelling(true);
+    setMessage('');
+    try {
+      await onCancel(publication.id);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Publishing could not be cancelled.');
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  return (
+    <Card className="workspace-panel client-publication" data-testid="client-preview-publication">
+      <div className="client-publication__header">
+        <div>
+          <Eyebrow>Client delivery</Eyebrow>
+          <h2>Publish for client review</h2>
+          <p className="muted-copy">
+            Deploy the latest quality-approved full website to Vercel, then place a pending handoff
+            in Clientspace admin. This does not email the client.
+          </p>
+        </div>
+        <StatusBadge
+          tone={
+            publication?.status === 'ready'
+              ? 'success'
+              : publication?.status === 'failed'
+                ? 'danger'
+                : active
+                  ? 'warning'
+                  : 'neutral'
+          }
+        >
+          {publication?.status.replaceAll('_', ' ') ?? 'Not published'}
+        </StatusBadge>
+      </div>
+
+      {publication?.status === 'ready' ? (
+        <section className="client-publication__result" aria-labelledby="client-publication-ready">
+          <Globe2 aria-hidden="true" size={24} />
+          <div>
+            <h3 id="client-publication-ready">Waiting in Clientspace admin</h3>
+            <p>
+              The Vercel preview and client details were transferred. Review them in admin, create
+              Clientspace, then edit and send the invitation.
+            </p>
+            {publication.deploymentUrl ? (
+              <ButtonLink href={publication.deploymentUrl} target="_blank" variant="secondary">
+                <ExternalLink aria-hidden="true" size={16} />
+                Open hosted preview
+              </ButtonLink>
+            ) : null}
+          </div>
+        </section>
+      ) : active ? (
+        <section className="client-publication__progress" aria-live="polite">
+          <IndeterminateProgress
+            detail={publication.progressDetail || 'Preparing the client preview.'}
+            label={publication.progressPhase.replaceAll('_', ' ')}
+          />
+          {publication.totalItems > 0 ? (
+            <p>
+              {publication.completedItems} of {publication.totalItems} saved checkpoints complete.
+            </p>
+          ) : null}
+          <Button
+            disabled={cancelling || Boolean(publication.cancelRequestedAt)}
+            onClick={() => void cancel()}
+            type="button"
+            variant="secondary"
+          >
+            <Ban aria-hidden="true" size={16} />
+            {cancelling || publication.cancelRequestedAt ? 'Stopping publish' : 'Cancel publish'}
+          </Button>
+        </section>
+      ) : (
+        <form className="client-publication__form" onSubmit={publish}>
+          <div className="client-publication__fields">
+            <label>
+              <span>Client or business name</span>
+              <input
+                maxLength={160}
+                onChange={(event) => setClientName(event.target.value)}
+                required
+                value={clientName}
+              />
+            </label>
+            <label>
+              <span>Contact name</span>
+              <input
+                maxLength={160}
+                onChange={(event) => setContactName(event.target.value)}
+                value={contactName}
+              />
+            </label>
+            <label>
+              <span>Client email</span>
+              <input
+                autoComplete="email"
+                maxLength={254}
+                onChange={(event) => setClientEmail(event.target.value)}
+                required
+                type="email"
+                value={clientEmail}
+              />
+            </label>
+            <label>
+              <span>Project name</span>
+              <input
+                maxLength={200}
+                onChange={(event) => setProjectName(event.target.value)}
+                required
+                value={projectName}
+              />
+            </label>
+            <label>
+              <span>Final balance in AUD (optional)</span>
+              <input
+                inputMode="decimal"
+                min="0"
+                onChange={(event) => setFinalBalance(event.target.value)}
+                placeholder="3800.00"
+                step="0.01"
+                type="number"
+                value={finalBalance}
+              />
+            </label>
+            <label className="client-publication__notes">
+              <span>Internal handoff notes (optional)</span>
+              <textarea
+                maxLength={4000}
+                onChange={(event) => setHandoffNotes(event.target.value)}
+                rows={3}
+                value={handoffNotes}
+              />
+            </label>
+          </div>
+          {!canPublish ? (
+            <p className="form-message form-message--error" role="alert">
+              {completedBuild
+                ? completedBuild.status === 'review_required'
+                  ? 'Resolve the build’s quality-review findings before publishing it to a client.'
+                  : 'Complete a full-site build with passed quality checks before publishing.'
+                : 'Build the complete prospect website before publishing it to a client.'}
+            </p>
+          ) : null}
+          {publication?.status === 'failed' && publication.errorSummary ? (
+            <p className="form-message form-message--error" role="alert">
+              {publication.errorSummary}
+            </p>
+          ) : null}
+          {message ? (
+            <p className="form-message form-message--error" role="alert">
+              {message}
+            </p>
+          ) : null}
+          <Button disabled={!canPublish || submitting} type="submit">
+            <Globe2 aria-hidden="true" size={16} />
+            {submitting
+              ? 'Queueing client preview'
+              : publication?.status === 'failed'
+                ? 'Retry client preview'
+                : 'Publish to Vercel and Clientspace'}
+          </Button>
+          <small>
+            The protected worker receives deployment credentials. No Vercel or Clientspace secret is
+            exposed to this browser.
+          </small>
+        </form>
+      )}
     </Card>
   );
 }
@@ -14762,11 +15642,16 @@ function WorkspaceContent({
   approveRedesignBrief,
   createBuildManifest,
   requestProspectBuild,
+  resumeProspectBuild,
   cancelProspectBuild,
   deleteProspectBuilds,
   moveBuilderRunToAgentStudio,
   openBuilderPreview,
   loadBuilderRunEvidence,
+  publishClientPreview,
+  cancelClientPreviewPublication,
+  publishGithubWorkspace,
+  cancelGithubWorkspacePublication,
   approveAllAuditFindings,
   updateAuditFinding,
 }: {
@@ -14840,11 +15725,22 @@ function WorkspaceContent({
     buildInstruction?: string,
     agentPackageId?: string,
   ) => Promise<void>;
+  resumeProspectBuild: (builderRunId: string) => Promise<void>;
   cancelProspectBuild: () => Promise<void>;
   deleteProspectBuilds: (businessId: string) => Promise<void>;
   moveBuilderRunToAgentStudio: (builderRunId: string) => Promise<void>;
   openBuilderPreview: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
   loadBuilderRunEvidence: (builderRunId: string) => Promise<BuilderRunEvidence>;
+  publishClientPreview: (
+    builderRunId: string,
+    input: ClientPreviewPublicationInput,
+  ) => Promise<void>;
+  cancelClientPreviewPublication: (publicationId: string) => Promise<void>;
+  publishGithubWorkspace: (
+    builderRunId: string,
+    input: GithubWorkspacePublicationInput,
+  ) => Promise<void>;
+  cancelGithubWorkspacePublication: (publicationId: string) => Promise<void>;
   approveAllAuditFindings: () => Promise<void>;
   updateAuditFinding: (
     finding: AuditFinding,
@@ -15031,7 +15927,18 @@ function WorkspaceContent({
           onLoadBuildEvidence={loadBuilderRunEvidence}
           onMoveToAgentStudio={moveBuilderRunToAgentStudio}
           onOpenPreview={openBuilderPreview}
+          onResumeBuild={resumeProspectBuild}
           onRequestBuild={requestProspectBuild}
+          workspace={workspace}
+        />
+        <LocalDevelopmentPublicationPanel
+          onCancel={cancelGithubWorkspacePublication}
+          onPublish={publishGithubWorkspace}
+          workspace={workspace}
+        />
+        <ClientPreviewPublicationPanel
+          onCancel={cancelClientPreviewPublication}
+          onPublish={publishClientPreview}
           workspace={workspace}
         />
       </div>
@@ -15119,11 +16026,16 @@ function WorkspacePage({
   onApproveRedesignBrief,
   onCreateBuildManifest,
   onRequestProspectBuild,
+  onResumeProspectBuild,
   onCancelProspectBuild,
   onDeleteProspectBuilds,
   onMoveBuilderRunToAgentStudio,
   onOpenBuilderPreview,
   onLoadBuilderRunEvidence,
+  onPublishClientPreview,
+  onCancelClientPreviewPublication,
+  onPublishGithubWorkspace,
+  onCancelGithubWorkspacePublication,
   onApproveAllAuditFindings,
   onUpdateAuditFinding,
   onVersionChange,
@@ -15202,11 +16114,22 @@ function WorkspacePage({
     buildInstruction?: string,
     agentPackageId?: string,
   ) => Promise<void>;
+  onResumeProspectBuild: (builderRunId: string) => Promise<void>;
   onCancelProspectBuild: () => Promise<void>;
   onDeleteProspectBuilds: (businessId: string) => Promise<void>;
   onMoveBuilderRunToAgentStudio: (builderRunId: string) => Promise<void>;
   onOpenBuilderPreview: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
   onLoadBuilderRunEvidence: (builderRunId: string) => Promise<BuilderRunEvidence>;
+  onPublishClientPreview: (
+    builderRunId: string,
+    input: ClientPreviewPublicationInput,
+  ) => Promise<void>;
+  onCancelClientPreviewPublication: (publicationId: string) => Promise<void>;
+  onPublishGithubWorkspace: (
+    builderRunId: string,
+    input: GithubWorkspacePublicationInput,
+  ) => Promise<void>;
+  onCancelGithubWorkspacePublication: (publicationId: string) => Promise<void>;
   onApproveAllAuditFindings: () => Promise<void>;
   onUpdateAuditFinding: (
     finding: AuditFinding,
@@ -15370,11 +16293,16 @@ function WorkspacePage({
           refreshRedesignBriefArchitecture={onRefreshRedesignBriefArchitecture}
           createBuildManifest={onCreateBuildManifest}
           requestProspectBuild={onRequestProspectBuild}
+          resumeProspectBuild={onResumeProspectBuild}
           cancelProspectBuild={onCancelProspectBuild}
           deleteProspectBuilds={onDeleteProspectBuilds}
           moveBuilderRunToAgentStudio={onMoveBuilderRunToAgentStudio}
           openBuilderPreview={onOpenBuilderPreview}
           loadBuilderRunEvidence={onLoadBuilderRunEvidence}
+          publishClientPreview={onPublishClientPreview}
+          cancelClientPreviewPublication={onCancelClientPreviewPublication}
+          publishGithubWorkspace={onPublishGithubWorkspace}
+          cancelGithubWorkspacePublication={onCancelGithubWorkspacePublication}
           requestAssetAnalysis={onRequestAssetAnalysis}
           requestEditableLogoRetry={onRequestEditableLogoRetry}
           deleteLogoAsset={onDeleteLogoAsset}
@@ -15429,6 +16357,7 @@ function WorkspaceApp({
   const [loadingPresentation, setLoadingPresentation] = useState(true);
   const [isHydrating, setIsHydrating] = useState(false);
   const [storageError, setStorageError] = useState('');
+  const [loadRequest, setLoadRequest] = useState(0);
   const [notice, setNotice] = useState<ToastNotice>();
   const dataFingerprintRef = useRef('');
   const lastBackgroundRefreshAtRef = useRef(0);
@@ -15547,6 +16476,10 @@ function WorkspaceApp({
             workspace.latestBuilderRun?.completedItems,
             workspace.builderArtifacts.length,
             workspace.builderEvents.length,
+            workspace.clientPreviewPublications[0]?.id,
+            workspace.clientPreviewPublications[0]?.status,
+            workspace.clientPreviewPublications[0]?.updatedAt,
+            workspace.clientPreviewPublications[0]?.completedItems,
           ]),
         });
         const changed = Boolean(
@@ -15591,87 +16524,109 @@ function WorkspaceApp({
 
   useEffect(() => {
     let active = true;
+    async function loadWorkspaceData() {
+      await repository.bootstrap();
+      const [nextBusinesses, nextWorkspaces, nextAgentPackages, nextAgentPackageProposals] =
+        await Promise.all([
+          repository.listBusinesses(),
+          repository.listWorkspaces(),
+          repository.listAgentPackages(),
+          repository.listAgentPackageProposals(),
+        ]);
+      if (!active) return;
+      setBusinesses(nextBusinesses);
+      setWorkspaces(nextWorkspaces);
+      setAgentPackages(nextAgentPackages);
+      setAgentPackageProposals(nextAgentPackageProposals);
+      dataFingerprintRef.current = JSON.stringify({
+        businesses: nextBusinesses.map((business) => [business.id, business.updatedAt]),
+        agentPackages: nextAgentPackages.map((agentPackage) => [
+          agentPackage.id,
+          agentPackage.version,
+          agentPackage.status,
+          agentPackage.updatedAt,
+        ]),
+        agentPackageProposals: nextAgentPackageProposals.map((proposal) => [
+          proposal.id,
+          proposal.status,
+          proposal.updatedAt,
+          proposal.draftPackageId,
+        ]),
+        captures: nextWorkspaces.map((workspace) => [
+          workspace.business.id,
+          workspace.latestCapture?.id,
+          workspace.latestCapture?.status,
+          workspace.latestCapture?.completedAt,
+          workspace.latestCapture?.progressPhase,
+          workspace.latestCapture?.progressDetail,
+          workspace.latestCapture?.currentUrl,
+          workspace.latestCapture?.cancelRequestedAt,
+          workspace.artifacts.length,
+          workspace.facts.length,
+          workspace.audit?.id,
+          workspace.audit?.status,
+          workspace.audit?.updatedAt,
+          workspace.audit?.findings.length,
+          workspace.audit?.progressPhase,
+          workspace.audit?.progressDetail,
+          workspace.audit?.completedItems,
+          workspace.audit?.cancelRequestedAt,
+          workspace.assetAnalysis?.id,
+          workspace.assetAnalysis?.status,
+          workspace.assetAnalysis?.updatedAt,
+          workspace.assetAnalysis?.progressPhase,
+          workspace.assetAnalysis?.progressDetail,
+          workspace.assetAnalysis?.completedItems,
+          workspace.assetAnalysis?.cancelRequestedAt,
+          workspace.assetAnnotations.length,
+          workspace.latestBuilderRun?.id,
+          workspace.latestBuilderRun?.status,
+          workspace.latestBuilderRun?.updatedAt,
+          workspace.latestBuilderRun?.progressPhase,
+          workspace.latestBuilderRun?.progressDetail,
+          workspace.latestBuilderRun?.completedItems,
+          workspace.builderArtifacts.length,
+          workspace.builderEvents.length,
+          workspace.clientPreviewPublications[0]?.id,
+          workspace.clientPreviewPublications[0]?.status,
+          workspace.clientPreviewPublications[0]?.updatedAt,
+          workspace.clientPreviewPublications[0]?.completedItems,
+        ]),
+      });
+    }
+
     async function initialise() {
-      try {
-        await repository.bootstrap();
-        const [nextBusinesses, nextWorkspaces, nextAgentPackages, nextAgentPackageProposals] =
-          await Promise.all([
-            repository.listBusinesses(),
-            repository.listWorkspaces(),
-            repository.listAgentPackages(),
-            repository.listAgentPackageProposals(),
-          ]);
-        if (!active) return;
-        setBusinesses(nextBusinesses);
-        setWorkspaces(nextWorkspaces);
-        setAgentPackages(nextAgentPackages);
-        setAgentPackageProposals(nextAgentPackageProposals);
-        dataFingerprintRef.current = JSON.stringify({
-          businesses: nextBusinesses.map((business) => [business.id, business.updatedAt]),
-          agentPackages: nextAgentPackages.map((agentPackage) => [
-            agentPackage.id,
-            agentPackage.version,
-            agentPackage.status,
-            agentPackage.updatedAt,
-          ]),
-          agentPackageProposals: nextAgentPackageProposals.map((proposal) => [
-            proposal.id,
-            proposal.status,
-            proposal.updatedAt,
-            proposal.draftPackageId,
-          ]),
-          captures: nextWorkspaces.map((workspace) => [
-            workspace.business.id,
-            workspace.latestCapture?.id,
-            workspace.latestCapture?.status,
-            workspace.latestCapture?.completedAt,
-            workspace.latestCapture?.progressPhase,
-            workspace.latestCapture?.progressDetail,
-            workspace.latestCapture?.currentUrl,
-            workspace.latestCapture?.cancelRequestedAt,
-            workspace.artifacts.length,
-            workspace.facts.length,
-            workspace.audit?.id,
-            workspace.audit?.status,
-            workspace.audit?.updatedAt,
-            workspace.audit?.findings.length,
-            workspace.audit?.progressPhase,
-            workspace.audit?.progressDetail,
-            workspace.audit?.completedItems,
-            workspace.audit?.cancelRequestedAt,
-            workspace.assetAnalysis?.id,
-            workspace.assetAnalysis?.status,
-            workspace.assetAnalysis?.updatedAt,
-            workspace.assetAnalysis?.progressPhase,
-            workspace.assetAnalysis?.progressDetail,
-            workspace.assetAnalysis?.completedItems,
-            workspace.assetAnalysis?.cancelRequestedAt,
-            workspace.assetAnnotations.length,
-            workspace.latestBuilderRun?.id,
-            workspace.latestBuilderRun?.status,
-            workspace.latestBuilderRun?.updatedAt,
-            workspace.latestBuilderRun?.progressPhase,
-            workspace.latestBuilderRun?.progressDetail,
-            workspace.latestBuilderRun?.completedItems,
-            workspace.builderArtifacts.length,
-            workspace.builderEvents.length,
-          ]),
-        });
-      } catch (error) {
-        console.error('Made Solid Studio workspace load failed.', error);
-        if (active)
-          setStorageError(
-            'Made Solid Studio could not load workspace data. Check your connection and organization access, then try again.',
-          );
-      } finally {
-        if (active) setLoading(false);
+      setStorageError('');
+      setLoading(true);
+      let finalError: unknown;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          await loadWorkspaceData();
+          finalError = undefined;
+          break;
+        } catch (error) {
+          finalError = error;
+          if (!active || attempt === 2) break;
+          await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
+        }
       }
+      if (!active) return;
+      if (finalError) {
+        console.error(
+          'Made Solid Studio workspace load failed after automatic retries.',
+          finalError,
+        );
+        setStorageError(
+          'Made Solid Studio could not load workspace data. Check your connection and organization access, then try again.',
+        );
+      }
+      setLoading(false);
     }
     void initialise();
     return () => {
       active = false;
     };
-  }, [repository]);
+  }, [loadRequest, repository]);
 
   useEffect(() => {
     if (loading) return;
@@ -15768,6 +16723,12 @@ function WorkspaceApp({
     workspace?.latestBuilderRun?.status === 'queued' ||
     workspace?.latestBuilderRun?.status === 'running' ||
     workspace?.latestBuilderRun?.status === 'paused';
+  const activeClientPublication = workspace?.clientPreviewPublications.some(
+    (publication) => publication.status === 'queued' || publication.status === 'running',
+  );
+  const activeGithubPublication = workspace?.githubWorkspacePublications.some(
+    (publication) => publication.status === 'queued' || publication.status === 'running',
+  );
   const awaitingPreferredLogo =
     Boolean(workspace?.website) &&
     !workspace?.artifacts.some(
@@ -15783,6 +16744,8 @@ function WorkspaceApp({
       !activeAssetRefresh &&
       !activeVisualContent &&
       !activeBuilder &&
+      !activeClientPublication &&
+      !activeGithubPublication &&
       !awaitingPreferredLogo
     )
       return;
@@ -15796,6 +16759,8 @@ function WorkspaceApp({
     activeVisualContent,
     activeAudit,
     activeBuilder,
+    activeClientPublication,
+    activeGithubPublication,
     activeCapture,
     awaitingPreferredLogo,
     refreshData,
@@ -16550,6 +17515,56 @@ function WorkspaceApp({
     return repository.createBuilderPreviewUrl(builderRunId, mode);
   }
 
+  async function publishClientPreview(builderRunId: string, input: ClientPreviewPublicationInput) {
+    const publication = await repository.requestClientPreviewPublication(builderRunId, input);
+    if (!publication) throw new Error('The client preview could not be queued.');
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Client preview queued',
+      detail:
+        'The protected worker will deploy the quality-approved website to Vercel, then send a pending handoff to Clientspace admin. No client email will be sent.',
+      tone: 'success',
+    });
+  }
+
+  async function cancelClientPreviewPublication(publicationId: string) {
+    await repository.cancelClientPreviewPublication(publicationId);
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Client preview cancellation requested',
+      detail: 'The publishing worker will stop at its next safe checkpoint.',
+      tone: 'warning',
+    });
+  }
+
+  async function publishGithubWorkspace(
+    builderRunId: string,
+    input: GithubWorkspacePublicationInput,
+  ) {
+    const publication = await repository.requestGithubWorkspacePublication(builderRunId, input);
+    if (!publication) throw new Error('The private GitHub repository could not be queued.');
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Private GitHub repository queued',
+      detail: `The protected worker will create ${input.repositoryOwner}/${input.repositoryName} privately and push the complete local-development workspace.`,
+      tone: 'success',
+    });
+  }
+
+  async function cancelGithubWorkspacePublication(publicationId: string) {
+    await repository.cancelGithubWorkspacePublication(publicationId);
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'GitHub publishing cancellation requested',
+      detail: 'The protected worker will stop at its next safe checkpoint.',
+      tone: 'warning',
+    });
+  }
+
   async function approveAllAuditFindings() {
     const pendingFindings = workspace?.audit?.findings.filter(
       (finding) => finding.reviewState === 'needs_review',
@@ -16592,7 +17607,18 @@ function WorkspaceApp({
   const activePage: AppPage = route.page === 'prospects' ? 'prospects' : route.page;
 
   if (!loadingPresentation && storageError) {
-    return <WorkspaceErrorOverlay message={storageError} onSignOut={onSignOut} />;
+    return (
+      <WorkspaceErrorOverlay
+        message={storageError}
+        onRetry={() => {
+          setStorageError('');
+          setLoading(true);
+          setLoadingPresentation(true);
+          setLoadRequest((request) => request + 1);
+        }}
+        onSignOut={onSignOut}
+      />
+    );
   }
 
   return (
@@ -16716,9 +17742,14 @@ function WorkspaceApp({
                 agentPackageId,
               )
             }
+            onResumeProspectBuild={resumeWebsiteBuildForBusiness}
             onCancelProspectBuild={() => cancelWebsiteBuildForBusiness(workspace.business.id)}
             onDeleteProspectBuilds={deleteWebsiteBuild}
             onOpenBuilderPreview={createBuilderPreviewUrl}
+            onPublishClientPreview={publishClientPreview}
+            onCancelClientPreviewPublication={cancelClientPreviewPublication}
+            onPublishGithubWorkspace={publishGithubWorkspace}
+            onCancelGithubWorkspacePublication={cancelGithubWorkspacePublication}
             onLoadBuilderRunEvidence={(builderRunId) =>
               repository.getBuilderRunEvidence(builderRunId)
             }

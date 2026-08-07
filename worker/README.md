@@ -141,6 +141,55 @@ Process one queued private website build:
 npm run worker:builder -- --once
 ```
 
+## Client preview publishing
+
+After a complete full-site build reaches `ready` with every quality check
+passed, the prospect workspace can queue a separate **Publish for client
+review** job. The protected publishing worker uploads the saved static export
+to a dedicated Vercel project, optionally assigns a Made Solid preview
+subdomain, injects Clientspace's own capture bridge, adds no-index and
+frame restrictions, and submits a pending handoff to Clientspace admin. It
+never sends the client email.
+
+Configure these values only in the protected worker runtime:
+
+```bash
+VERCEL_ACCESS_TOKEN=...
+# Optional when deploying into a Vercel team
+VERCEL_TEAM_ID=team_...
+# Optional after preview.madesolid.com.au is configured for aliases in Vercel
+VERCEL_PREVIEW_DOMAIN=preview.madesolid.com.au
+CLIENTSPACE_PUBLIC_ORIGIN=https://madesolid.com.au
+CLIENTSPACE_HANDOFF_URL=https://madesolid.com.au/api/integrations/studio/handoffs
+CLIENTSPACE_HANDOFF_SECRET=the-same-long-random-secret-as-clientspace
+```
+
+Run the publisher independently with `npm run worker:publish`, or let the
+worker supervisor include it automatically when the required Vercel and
+Clientspace values exist. Apply
+`supabase/migrations/20260806160000_client_preview_publication.sql` first.
+
+## Private GitHub development repositories
+
+Apply `supabase/migrations/20260807160000_github_workspace_publication.sql`, then provide the
+protected worker with a GitHub token. The token is never sent to the Studio browser.
+
+Prefer a fine-grained personal access token owned by the target account or organization, with
+repository access that includes newly created repositories plus **Administration: write** and
+**Contents: write**. An organization may require an owner to approve the token before it can create
+or push a private repository. A classic token requires the broader `repo` scope.
+
+```bash
+GITHUB_TOKEN=github-token-with-private-repository-access
+GITHUB_ALLOWED_OWNERS=your-account,approved-organization
+```
+
+`GITHUB_ALLOWED_OWNERS` is optional but recommended. When present, Studio can publish only to the
+listed personal accounts or organizations. The worker always creates a private repository and
+pushes the complete local-development workspace to its `main` branch. Start it directly with
+`npm run worker:github`; the worker supervisor starts it automatically whenever `GITHUB_TOKEN` is
+available.
+
 Run the private website builder continuously:
 
 ```bash
@@ -179,7 +228,8 @@ replaces the starter.
 
 Codex may improve and condense captured copy, but must retain material services, operations,
 actions, forms/tools, legal content, and resources without strengthening claims. The worker saves
-finished source, exported files, screenshots, event logs, and quality results privately. It never
+finished source, exported files, event logs, and quality results privately. Responsive browser
+checks run at the required viewports without generating or storing final screenshots. It never
 deploys the generated site, sends outreach, submits preview forms, or grants a prospect access.
 Production runners must be isolated containers with no deployment credentials and no outbound
 access except the Codex request path; the local worker is for trusted development only.
@@ -191,3 +241,23 @@ Next.js runtime intact, and denies form submission, remote connections, framing,
 Studio retains the Supabase `srcDoc` viewer as a compatibility fallback.
 
 The worker needs an isolated runtime with outbound network controls, memory and CPU limits, a read-only filesystem, no production deployment credentials, and access only to the private `siteforge-artifacts` bucket. The URL checks in code are a defense-in-depth layer, not a replacement for network egress policy.
+
+## Local website refinement handoff
+
+New completed builds save a **Local development workspace** archive. It contains the editable
+source, approved local assets, Studio origin metadata, local-agent instructions, an append-only
+refinement ledger, and a private learning-bundle generator. Local corrections never modify the
+Studio production agent automatically; they return through a separate reviewed distillation step.
+
+Historic completed builds can be reconstructed from immutable final-source and compiled asset
+artifacts without another website generation pass:
+
+```bash
+npm run export:local-build -- \
+  --run latest \
+  --destination ../made-solid-projects/example-site
+```
+
+Pass a specific builder run UUID instead of `latest` when required. The destination must be new or
+empty. The exporter creates a generated baseline Git commit, installs the refinement workflow in a
+second commit, and makes no change to the original Studio build.

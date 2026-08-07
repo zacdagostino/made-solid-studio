@@ -21,6 +21,10 @@ import type {
   BuilderRunEvidence,
   BuilderRun,
   BuilderRunMode,
+  ClientPreviewPublication,
+  ClientPreviewPublicationInput,
+  GithubWorkspacePublication,
+  GithubWorkspacePublicationInput,
   CapturedPage,
   Business,
   Contact,
@@ -717,6 +721,17 @@ function builderRunFromRow(row: DatabaseRow): BuilderRun {
     sourceCheckpointAvailable: builderArtifacts
       ? builderArtifacts.some((artifact) => readString(artifact, 'kind') === 'checkpoint')
       : undefined,
+    localDevelopmentSourceAvailable: builderArtifacts
+      ? builderArtifacts.some((artifact) => {
+          const kind = readString(artifact, 'kind');
+          const metadata = recordValue(artifact.metadata);
+          return (
+            (kind === 'source_bundle' &&
+              typeof metadata.localDevelopmentHandoffVersion === 'number') ||
+            (kind === 'draft_file' && metadata.state === 'final_source')
+          );
+        })
+      : undefined,
     status:
       status === 'queued' ||
       status === 'running' ||
@@ -733,6 +748,8 @@ function builderRunFromRow(row: DatabaseRow): BuilderRun {
     progressDetail: readOptionalString(row, 'progress_detail'),
     totalItems: readNumber(row, 'total_items'),
     completedItems: readNumber(row, 'completed_items'),
+    attemptCount: readNumber(row, 'attempt_count'),
+    heartbeatAt: readOptionalString(row, 'heartbeat_at'),
     cancelRequestedAt: readOptionalString(row, 'cancel_requested_at'),
     errorSummary: readOptionalString(row, 'error_summary'),
     failureCode: readOptionalString(row, 'failure_code'),
@@ -761,6 +778,67 @@ function builderArtifactFromRow(row: DatabaseRow): BuilderArtifact {
     byteSize: typeof row.byte_size === 'number' ? row.byte_size : undefined,
     metadata: recordValue(row.metadata),
     createdAt: readString(row, 'created_at'),
+  };
+}
+
+function clientPreviewPublicationFromRow(row: DatabaseRow): ClientPreviewPublication {
+  const status = readString(row, 'status');
+  return {
+    id: readString(row, 'id'),
+    businessId: readString(row, 'business_id'),
+    builderRunId: readString(row, 'builder_run_id'),
+    clientName: readString(row, 'client_name'),
+    contactName: readString(row, 'contact_name'),
+    clientEmail: readString(row, 'client_email'),
+    projectName: readString(row, 'project_name'),
+    finalBalanceCents: readOptionalNumber(row, 'final_balance_cents'),
+    currency: readString(row, 'currency') || 'AUD',
+    handoffNotes: readString(row, 'handoff_notes'),
+    status:
+      status === 'running' || status === 'ready' || status === 'failed' || status === 'cancelled'
+        ? status
+        : 'queued',
+    progressPhase: readString(row, 'progress_phase') || 'queued',
+    progressDetail: readOptionalString(row, 'progress_detail'),
+    totalItems: readNumber(row, 'total_items'),
+    completedItems: readNumber(row, 'completed_items'),
+    cancelRequestedAt: readOptionalString(row, 'cancel_requested_at'),
+    deploymentUrl: readOptionalString(row, 'deployment_url'),
+    clientspaceHandoffId: readOptionalString(row, 'clientspace_handoff_id'),
+    errorSummary: readOptionalString(row, 'error_summary'),
+    createdAt: readString(row, 'created_at'),
+    completedAt: readOptionalString(row, 'completed_at'),
+    updatedAt: readString(row, 'updated_at'),
+  };
+}
+
+function githubWorkspacePublicationFromRow(row: DatabaseRow): GithubWorkspacePublication {
+  const status = readString(row, 'status');
+  return {
+    id: readString(row, 'id'),
+    businessId: readString(row, 'business_id'),
+    builderRunId: readString(row, 'builder_run_id'),
+    repositoryOwner: readString(row, 'repository_owner'),
+    repositoryName: readString(row, 'repository_name'),
+    repositoryDescription: readString(row, 'repository_description'),
+    visibility: 'private',
+    status:
+      status === 'running' || status === 'ready' || status === 'failed' || status === 'cancelled'
+        ? status
+        : 'queued',
+    progressPhase: readString(row, 'progress_phase') || 'queued',
+    progressDetail: readOptionalString(row, 'progress_detail'),
+    totalItems: readNumber(row, 'total_items'),
+    completedItems: readNumber(row, 'completed_items'),
+    cancelRequestedAt: readOptionalString(row, 'cancel_requested_at'),
+    repositoryUrl: readOptionalString(row, 'github_repository_url'),
+    cloneUrl: readOptionalString(row, 'github_clone_url'),
+    fullName: readOptionalString(row, 'github_full_name'),
+    defaultBranch: readOptionalString(row, 'github_default_branch'),
+    errorSummary: readOptionalString(row, 'error_summary'),
+    createdAt: readString(row, 'created_at'),
+    completedAt: readOptionalString(row, 'completed_at'),
+    updatedAt: readString(row, 'updated_at'),
   };
 }
 
@@ -1071,6 +1149,11 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         target_business_id: businessId,
       });
       throwIfError(lifecycleError);
+      const { error: githubLifecycleError } = await this.client.rpc(
+        'reconcile_github_workspace_publications',
+        { target_business_id: businessId },
+      );
+      throwIfError(githubLifecycleError);
     }
 
     const [
@@ -1088,6 +1171,9 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       tasks,
       activity,
       aiUsageRecords,
+      clientPreviewPublications,
+      githubWorkspacePublications,
+      githubWorkspaceWorkerAvailable,
     ] = await Promise.all([
       this.client.from('websites').select('*').eq('business_id', businessId).limit(1),
       this.client.from('contacts').select('*').eq('business_id', businessId),
@@ -1121,7 +1207,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         .order('generated_at', { ascending: false }),
       this.client
         .from('builder_runs')
-        .select('*, agent_packages(version), builder_artifacts(kind, label)')
+        .select('*, agent_packages(version), builder_artifacts(kind, label, metadata)')
         .eq('business_id', businessId)
         .order('created_at', { ascending: false }),
       this.client
@@ -1152,6 +1238,17 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         .select('*')
         .eq('business_id', businessId)
         .order('created_at', { ascending: false }),
+      this.client
+        .from('client_preview_publications')
+        .select('*')
+        .eq('business_id', businessId)
+        .order('created_at', { ascending: false }),
+      this.client
+        .from('github_workspace_publications')
+        .select('*')
+        .eq('business_id', businessId)
+        .order('created_at', { ascending: false }),
+      this.client.rpc('github_workspace_worker_available'),
     ]);
     [
       websites,
@@ -1168,6 +1265,9 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       tasks,
       activity,
       aiUsageRecords,
+      clientPreviewPublications,
+      githubWorkspacePublications,
+      githubWorkspaceWorkerAvailable,
     ].forEach((result) => throwIfError(result.error));
 
     const website = (websites.data ?? [])[0]
@@ -1299,16 +1399,38 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
           .eq('builder_run_id', readString(latestBuilderRun, 'id'))
           .order('created_at')
       : { data: [], error: null };
-    const builderEventsResult = latestBuilderRun
-      ? await this.client
-          .from('builder_events')
-          .select('*')
-          .eq('builder_run_id', readString(latestBuilderRun, 'id'))
-          .order('sequence', { ascending: false })
-          .limit(180)
-      : { data: [], error: null };
+    const [builderEventsResult, builderStageEventsResult, firstQualityEventResult] =
+      latestBuilderRun
+        ? await Promise.all([
+            this.client
+              .from('builder_events')
+              .select('*')
+              .eq('builder_run_id', readString(latestBuilderRun, 'id'))
+              .order('sequence', { ascending: false })
+              .limit(180),
+            this.client
+              .from('builder_events')
+              .select('*')
+              .eq('builder_run_id', readString(latestBuilderRun, 'id'))
+              .eq('kind', 'stage')
+              .order('sequence'),
+            this.client
+              .from('builder_events')
+              .select('*')
+              .eq('builder_run_id', readString(latestBuilderRun, 'id'))
+              .eq('kind', 'quality')
+              .order('sequence')
+              .limit(1),
+          ])
+        : [
+            { data: [], error: null },
+            { data: [], error: null },
+            { data: [], error: null },
+          ];
     throwIfError(builderArtifactsResult.error);
     throwIfError(builderEventsResult.error);
+    throwIfError(builderStageEventsResult.error);
+    throwIfError(firstQualityEventResult.error);
     const latestBriefRow = (briefs.data ?? [])[0] as DatabaseRow | undefined;
     const briefDraft = recordValue(latestBriefRow?.draft);
     const briefGuidance = Array.isArray(briefDraft.assetGuidance) ? briefDraft.assetGuidance : [];
@@ -1388,9 +1510,26 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       builderArtifacts: ((builderArtifactsResult.data ?? []) as DatabaseRow[]).map(
         builderArtifactFromRow,
       ),
-      builderEvents: ((builderEventsResult.data ?? []) as DatabaseRow[])
-        .map(builderEventFromRow)
-        .reverse(),
+      builderEvents: (
+        [
+          ...new Map(
+            [
+              ...((builderEventsResult.data ?? []) as DatabaseRow[]),
+              ...((builderStageEventsResult.data ?? []) as DatabaseRow[]),
+              ...((firstQualityEventResult.data ?? []) as DatabaseRow[]),
+            ].map((event) => [readString(event, 'id'), event]),
+          ).values(),
+        ] as DatabaseRow[]
+      )
+        .sort((left, right) => readNumber(left, 'sequence') - readNumber(right, 'sequence'))
+        .map(builderEventFromRow),
+      clientPreviewPublications: ((clientPreviewPublications.data ?? []) as DatabaseRow[]).map(
+        clientPreviewPublicationFromRow,
+      ),
+      githubWorkspacePublications: ((githubWorkspacePublications.data ?? []) as DatabaseRow[]).map(
+        githubWorkspacePublicationFromRow,
+      ),
+      githubWorkspaceWorkerAvailable: githubWorkspaceWorkerAvailable.data === true,
       aiUsageRecords: ((aiUsageRecords.data ?? []) as DatabaseRow[]).map(aiUsageRecordFromRow),
       previousCapture,
       previousFacts: previousCapture
@@ -2525,6 +2664,54 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     }
     const sourceUrl = `${supabaseUrl}/functions/v1/siteforge-preview/${builderRunId}/${token}/${draftPath}${entryPath}`;
     return `${window.location.origin}${window.location.pathname}#/preview?source=${encodeURIComponent(sourceUrl)}`;
+  }
+
+  async requestClientPreviewPublication(
+    builderRunId: string,
+    input: ClientPreviewPublicationInput,
+  ) {
+    const { data, error } = await this.client.rpc('request_client_preview_publication', {
+      target_builder_run_id: builderRunId,
+      target_client_name: input.clientName,
+      target_contact_name: input.contactName,
+      target_client_email: input.clientEmail,
+      target_project_name: input.projectName,
+      target_final_balance_cents: input.finalBalanceCents ?? null,
+      target_currency: input.currency,
+      target_handoff_notes: input.handoffNotes,
+    });
+    throwIfError(error);
+    const row = Array.isArray(data) ? data[0] : data;
+    return row ? clientPreviewPublicationFromRow(row as DatabaseRow) : undefined;
+  }
+
+  async cancelClientPreviewPublication(publicationId: string) {
+    const { error } = await this.client.rpc('cancel_client_preview_publication', {
+      target_publication_id: publicationId,
+    });
+    throwIfError(error);
+  }
+
+  async requestGithubWorkspacePublication(
+    builderRunId: string,
+    input: GithubWorkspacePublicationInput,
+  ) {
+    const { data, error } = await this.client.rpc('request_github_workspace_publication', {
+      target_builder_run_id: builderRunId,
+      target_repository_owner: input.repositoryOwner,
+      target_repository_name: input.repositoryName,
+      target_repository_description: input.repositoryDescription,
+    });
+    throwIfError(error);
+    const row = Array.isArray(data) ? data[0] : data;
+    return row ? githubWorkspacePublicationFromRow(row as DatabaseRow) : undefined;
+  }
+
+  async cancelGithubWorkspacePublication(publicationId: string) {
+    const { error } = await this.client.rpc('cancel_github_workspace_publication', {
+      target_publication_id: publicationId,
+    });
+    throwIfError(error);
   }
 
   async setTaskState(task: Task, state: Task['state']) {

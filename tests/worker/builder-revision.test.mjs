@@ -6,6 +6,9 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 import ts from 'typescript';
 import {
+  BuilderAssetError,
+  BuilderInputError,
+  BuilderManifestError,
   activateCompactNavigationTrigger,
   approvedAssetDescriptor,
   approvedImageUsageProblems,
@@ -17,6 +20,7 @@ import {
   builderExecutionProfile,
   canContinueWithoutCodex,
   checkpointSourceBody,
+  codexFailureFromEvent,
   collectBrowsableSourceFiles,
   contentTypeFor,
   contextualLogoProblems,
@@ -25,6 +29,8 @@ import {
   designSystemRhythmProblems,
   enforceBrandPaletteTokens,
   expressiveNavigationMotionProblems,
+  failureDetails,
+  fetchWithRequestTimeout,
   inconsistentHeaderNavigationProblems,
   lockedFoundationPaths,
   meaningfulPageNamingProblems,
@@ -172,6 +178,22 @@ const mobileViewportIntegrityMigrationUrl = new URL(
   '../../supabase/migrations/20260806170000_mobile_viewport_integrity_test_package.sql',
   import.meta.url,
 );
+const actionableBuilderFailureMigrationUrl = new URL(
+  '../../supabase/migrations/20260806180000_actionable_builder_failure_test_package.sql',
+  import.meta.url,
+);
+const boundedBuilderRequestsMigrationUrl = new URL(
+  '../../supabase/migrations/20260806203000_bounded_builder_requests_test_package.sql',
+  import.meta.url,
+);
+const viewportChecksOnlyMigrationUrl = new URL(
+  '../../supabase/migrations/20260807113000_viewport_checks_without_captures_test_package.sql',
+  import.meta.url,
+);
+const localRefinementHandoffMigrationUrl = new URL(
+  '../../supabase/migrations/20260807143000_local_refinement_handoff_test_package.sql',
+  import.meta.url,
+);
 const preserveResumeContextMigrationUrl = new URL(
   '../../supabase/migrations/20260731123000_preserve_builder_resume_context.sql',
   import.meta.url,
@@ -215,6 +237,16 @@ test('classifies restored generated files against the clean template for durable
       { path: 'components/foundation/site-runtime.tsx', source: 'template' },
     ],
   );
+});
+
+test('rejects stale checkpoint manifests and stores future manifests immutably', async () => {
+  const worker = await readFile(
+    new URL('../../worker/builder-worker.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.match(worker, /files\.length !== recordedFileCount/);
+  assert.match(worker, /restoreLegacyDraftFiles\(/);
+  assert.match(worker, /checkpoint\/\$\{hash\}\/source-manifest\.json/);
 });
 
 function compiledPreviewFunction(source, name, firstName = name) {
@@ -1744,6 +1776,97 @@ test('registers mobile viewport integrity above immediate compact navigation', a
   assert.match(migration, /not exists/i);
 });
 
+test('registers actionable builder failures above mobile viewport integrity', async () => {
+  const migration = await readFile(actionableBuilderFailureMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Actionable builder failure test package:/);
+  assert.match(migration, /structured Codex failure reason/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('classifies exhausted Codex credits with a checkpoint recovery action', () => {
+  const providerMessage = 'You have no credits remaining. Add credits to continue using the API.';
+  assert.equal(
+    codexFailureFromEvent({ type: 'turn.failed', error: { message: providerMessage } }),
+    providerMessage,
+  );
+  const details = failureDetails(
+    new Error(`Codex CLI could not finish the build: ${providerMessage}`),
+  );
+  assert.equal(details.code, 'codex_api_credits_exhausted');
+  assert.equal(details.stage, 'worker_configuration');
+  assert.equal(details.retryable, false);
+  assert.match(details.summary, /no credits remaining/i);
+  assert.match(details.action, /resume this build from its saved private source checkpoint/i);
+  assert.deepEqual(details.context, { provider: 'openai', reason: 'credits_exhausted' });
+});
+
+test('registers bounded builder requests above actionable provider failures', async () => {
+  const migration = await readFile(boundedBuilderRequestsMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Bounded builder request test package:/);
+  assert.match(migration, /bounded deadline/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers screenshot-free viewport checks above bounded builder requests', async () => {
+  const migration = await readFile(viewportChecksOnlyMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Viewport checks only test package:/);
+  assert.match(migration, /without generating, uploading, or retaining final viewport screenshots/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers the local refinement handoff above screenshot-free viewport checks', async () => {
+  const migration = await readFile(localRefinementHandoffMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Local refinement handoff test package:/);
+  assert.match(migration, /append-only structured refinement ledger/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('packages complete local-development source without generated output or dependencies', async () => {
+  const worker = await readFile(
+    new URL('../../worker/builder-worker.mjs', import.meta.url),
+    'utf8',
+  );
+  const handoff = await readFile(
+    new URL('../../worker/local-development-handoff.mjs', import.meta.url),
+    'utf8',
+  );
+  const saveStart = worker.indexOf('async function saveOutputs');
+  const saveEnd = worker.indexOf('function resumeFailureCode', saveStart);
+  const saveSource = worker.slice(saveStart, saveEnd);
+  assert.match(saveSource, /applyLocalDevelopmentHandoff/);
+  assert.match(saveSource, /includesApprovedAssets: true/);
+  assert.match(saveSource, /refinementLedger: '\.made-solid\/refinement-log\.jsonl'/);
+  assert.doesNotMatch(saveSource, /--exclude=website\/public\/assets/);
+  assert.match(handoff, /node_modules\|\\\.next\|out\|\\\.git/);
+});
+
+test('runs responsive browser checks without creating screenshot artifacts', async () => {
+  const worker = await readFile(
+    new URL('../../worker/builder-worker.mjs', import.meta.url),
+    'utf8',
+  );
+  const qualityStart = worker.indexOf('async function runQualityChecks');
+  const qualityEnd = worker.indexOf('async function saveOutputs', qualityStart);
+  const qualitySource = worker.slice(qualityStart, qualityEnd);
+  assert.match(qualitySource, /progress_phase: 'quality_checks'/);
+  assert.match(qualitySource, /Responsive viewport checks/);
+  assert.match(qualitySource, /without storing screenshots/);
+  assert.doesNotMatch(qualitySource, /page\.screenshot|kind: 'screenshot'|screenshots\//);
+  assert.doesNotMatch(worker, /openNavigationBody|screenshotArtifacts/);
+});
+
 test('rejects unbounded builder queues and reconciles lost workers promptly', async () => {
   const migration = await readFile(builderWorkerLivenessMigrationUrl, 'utf8');
   assert.match(migration, /worker_runtime_heartbeats/);
@@ -1777,6 +1900,34 @@ test('reconciles stale builder runs before workspace reads and build requests', 
   const matches = repository.match(/reconcile_builder_run_lifecycle/g) ?? [];
   assert.ok(matches.length >= 5);
   assert.match(repository, /this\.getWorkspace\(business\.id, false\)/);
+});
+
+test('shows persisted build stages and worker freshness without fabricating progress', async () => {
+  const [app, repository] = await Promise.all([
+    readFile(appUrl, 'utf8'),
+    readFile(cloudRepositoryUrl, 'utf8'),
+  ]);
+  assert.match(repository, /attemptCount: readNumber\(row, 'attempt_count'\)/);
+  assert.match(repository, /heartbeatAt: readOptionalString\(row, 'heartbeat_at'\)/);
+  assert.match(repository, /\.eq\('kind', 'stage'\)/);
+  assert.match(repository, /firstQualityEventResult/);
+  assert.match(app, /function BuilderLiveProgress/);
+  assert.match(app, /function builderStageStarts/);
+  assert.match(app, /function builderStageTimingLabel/);
+  assert.match(app, /Worker heartbeat overdue/);
+  assert.match(app, /Next: \$\{nextStage\.label\}/);
+  assert.match(app, /aria-label="Build stages"/);
+  assert.match(app, /Took \$\{formatBuildElapsedTime/);
+  assert.match(app, /' so far'/);
+  assert.match(app, /Not started/);
+  assert.match(app, /return 'checks running'/);
+  assert.doesNotMatch(
+    app.slice(
+      app.indexOf('function BuilderLiveProgress'),
+      app.indexOf('function buildUsageSummary'),
+    ),
+    /%/,
+  );
 });
 
 test('opens page-set previews on their first selected generated route', async () => {
@@ -2060,6 +2211,65 @@ test('applies exact reviewed brand colours to generated CSS tokens', async () =>
 test('recognises minified CSS equivalents of reviewed brand colours', () => {
   assert.deepEqual(cssColourRepresentations('#FF0000'), ['#ff0000', '#f00', 'red']);
   assert.deepEqual(cssColourRepresentations('#306090'), ['#306090']);
+});
+
+test('bounds protected builder requests so a stalled upload cannot stop heartbeats', async () => {
+  const stalledFetch = (_input, init) =>
+    new Promise((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+    });
+  const keepEventLoopActive = setTimeout(() => undefined, 50);
+  try {
+    await assert.rejects(
+      fetchWithRequestTimeout('https://example.invalid', {}, 5, stalledFetch),
+      (error) => error?.name === 'TimeoutError',
+    );
+  } finally {
+    clearTimeout(keepEventLoopActive);
+  }
+});
+
+test('keeps a timed-out manifest read recoverable instead of reporting missing input', () => {
+  const details = failureDetails(new BuilderManifestError({ code: 'UND_ERR_CONNECT_TIMEOUT' }));
+  assert.equal(details.code, 'build_manifest_temporarily_unavailable');
+  assert.equal(details.stage, 'manifest_lookup');
+  assert.equal(details.retryable, true);
+  assert.match(details.action, /retry once automatically/i);
+});
+
+test('keeps an unclassified protected workspace timeout recoverable', () => {
+  const details = failureDetails(new Error('The operation was aborted due to timeout'));
+  assert.equal(details.code, 'protected_workspace_temporary_failure');
+  assert.equal(details.stage, 'protected_workspace');
+  assert.equal(details.retryable, true);
+  assert.match(details.action, /saved source checkpoint/i);
+});
+
+test('classifies captured page lookup failures as recoverable input staging', () => {
+  const details = failureDetails(new BuilderInputError('captured_content_lookup', { status: 544 }));
+  assert.equal(details.code, 'builder_input_temporary_failure');
+  assert.equal(details.stage, 'input_staging');
+  assert.equal(details.retryable, true);
+  assert.equal(details.context.operation, 'captured_content_lookup');
+});
+
+test('classifies approved asset transport failures as recoverable staging', () => {
+  const details = failureDetails(
+    new BuilderAssetError('approved_asset_download', { status: 544 }, 'asset-1'),
+  );
+  assert.equal(details.code, 'approved_asset_temporary_failure');
+  assert.equal(details.stage, 'asset_staging');
+  assert.equal(details.retryable, true);
+  assert.equal(details.context.assetId, 'asset-1');
+});
+
+test('retries protected workspace polling without restarting the builder process', async () => {
+  const worker = await readFile(
+    new URL('../../worker/builder-worker.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.match(worker, /protected workspace request failed; retrying without restarting/);
+  assert.match(worker, /await wait\(pollIntervalMs\)/);
 });
 
 test('accepts locked-runtime logo sequencing while still requiring a navigation logo', async () => {

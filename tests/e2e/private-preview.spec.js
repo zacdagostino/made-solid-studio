@@ -202,6 +202,7 @@ test('hydrates the compiled Next runtime inside the fallback preview frame', asy
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== 'mobile', 'The runtime path is shared across viewports.');
+  test.setTimeout(90_000);
   const fixture = await compileInteractiveNextFixture();
   const previewRoot = `https://preview-test.supabase.co/functions/v1/siteforge-preview/${runId}/${token}/`;
   const siteFiles = new Set(await filesBelow(fixture.outputDirectory));

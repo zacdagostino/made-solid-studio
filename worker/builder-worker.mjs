@@ -25,6 +25,11 @@ import AxeBuilder from '@axe-core/playwright';
 import { chromium } from 'playwright';
 import { createDiagnosticWriter, diagnosticText } from './diagnostics.mjs';
 import { codexUsage, recordAiUsage } from './ai-usage.mjs';
+import {
+  applyLocalDevelopmentHandoff,
+  copyLocalDevelopmentSource,
+  localDevelopmentHandoffVersion,
+} from './local-development-handoff.mjs';
 import { normaliseSourceUrl, sourcePagePlan } from './source-page-plan.mjs';
 
 const artifactBucket = 'siteforge-artifacts';
@@ -58,6 +63,7 @@ const maxLogEvents = 400;
 const maxSourceContentBytes = 512 * 1024;
 const builderHeartbeatIntervalMs = 15_000;
 const builderLeaseDurationMs = 2 * 60_000;
+const builderRequestTimeoutMs = 30_000;
 const efficientExecutionInstruction =
   'Work within an efficiency budget. Node.js, rg, sed, and the installed sharp package are available; jq and ImageMagick commands are not. Read each applicable contract once. Use no more than ten bounded inspection commands before the first source edit, combine related reads, and never print a whole asset inventory or unchanged source tree. Run npm run format once immediately before the first npm run verify. Run full verify at most twice: once after implementation and once after fixing concrete failures. Never repeat a passing full verify without intervening source changes; use the narrowest relevant check while diagnosing.';
 const creativeAutonomyInstruction =
@@ -96,6 +102,61 @@ class BuilderStorageError extends Error {
       // Raw provider messages can contain implementation details and must not
       // be surfaced in the product. A stable status/code is enough to diagnose.
       providerCode,
+    };
+  }
+}
+
+class BuilderManifestError extends Error {
+  constructor(cause) {
+    super('The approved Build Manifest could not be read temporarily.');
+    this.name = 'BuilderManifestError';
+    this.retryable = true;
+    this.context = {
+      operation: 'manifest_lookup',
+      providerCode:
+        typeof cause?.code === 'string'
+          ? cause.code
+          : typeof cause?.status === 'number' || typeof cause?.status === 'string'
+            ? String(cause.status)
+            : undefined,
+    };
+  }
+}
+
+class BuilderInputError extends Error {
+  constructor(operation, cause, sourceUrl) {
+    super('The builder worker could not load captured page content temporarily.');
+    this.name = 'BuilderInputError';
+    const providerCode =
+      typeof cause?.code === 'string'
+        ? cause.code
+        : typeof cause?.status === 'number' || typeof cause?.status === 'string'
+          ? String(cause.status)
+          : undefined;
+    this.retryable = storageErrorIsRetryable(providerCode);
+    this.context = {
+      operation,
+      providerCode,
+      ...(sourceUrl ? { sourceUrl } : {}),
+    };
+  }
+}
+
+class BuilderAssetError extends Error {
+  constructor(operation, cause, assetId) {
+    super('The builder worker could not load approved visual assets temporarily.');
+    this.name = 'BuilderAssetError';
+    const providerCode =
+      typeof cause?.code === 'string'
+        ? cause.code
+        : typeof cause?.status === 'number' || typeof cause?.status === 'string'
+          ? String(cause.status)
+          : undefined;
+    this.retryable = storageErrorIsRetryable(providerCode);
+    this.context = {
+      operation,
+      providerCode,
+      ...(assetId ? { assetId } : {}),
     };
   }
 }
@@ -276,12 +337,33 @@ function safeDiagnosticDetail(value) {
   return diagnosticText(value, 320) || 'No additional diagnostic detail was available.';
 }
 
+function codexFailureFromEvent(event) {
+  const record = recordValue(event);
+  const type = typeof record.type === 'string' ? record.type : '';
+  if (type === 'turn.failed') {
+    const failure = recordValue(record.error);
+    return typeof failure.message === 'string' ? failure.message : '';
+  }
+  return type === 'error' && typeof record.message === 'string' ? record.message : '';
+}
+
 function failureDetails(error) {
   const message = error instanceof Error ? error.message : '';
   const base = {
     retryable: false,
     context: {},
   };
+  if (/Codex CLI.*(?:no credits remaining|add credits to continue)/i.test(message)) {
+    return {
+      ...base,
+      code: 'codex_api_credits_exhausted',
+      stage: 'worker_configuration',
+      summary: 'The protected Codex API account has no credits remaining.',
+      action:
+        'Add credits to the worker API account, then resume this build from its saved private source checkpoint.',
+      context: { provider: 'openai', reason: 'credits_exhausted' },
+    };
+  }
   if (error instanceof BuilderStorageError) {
     const retryable = error.retryable;
     return {
@@ -295,6 +377,49 @@ function failureDetails(error) {
       action: retryable
         ? 'The builder will retry once automatically. Check storage access if the retry also fails.'
         : 'Review the saved path and MIME type in Build diagnostics, then resume after correcting the output rule.',
+      context: error.context,
+    };
+  }
+  if (error instanceof BuilderManifestError) {
+    return {
+      ...base,
+      retryable: true,
+      code: 'build_manifest_temporarily_unavailable',
+      stage: 'manifest_lookup',
+      summary: 'The approved Build Manifest could not be read from protected storage temporarily.',
+      action: 'The builder will retry once automatically from the saved source checkpoint.',
+      context: error.context,
+    };
+  }
+  if (error instanceof BuilderInputError) {
+    const retryable = error.retryable;
+    return {
+      ...base,
+      retryable,
+      code: retryable ? 'builder_input_temporary_failure' : 'builder_input_unavailable',
+      stage: 'input_staging',
+      summary: retryable
+        ? 'Captured website content could not be loaded from protected storage temporarily.'
+        : 'Protected storage rejected required captured website content.',
+      action: retryable
+        ? 'The builder will retry once automatically from the saved source checkpoint.'
+        : 'Review the captured page artifact, then retry from the same approved manifest.',
+      context: error.context,
+    };
+  }
+  if (error instanceof BuilderAssetError) {
+    const retryable = error.retryable;
+    return {
+      ...base,
+      retryable,
+      code: retryable ? 'approved_asset_temporary_failure' : 'approved_asset_unavailable',
+      stage: 'asset_staging',
+      summary: retryable
+        ? 'Approved visual assets could not be loaded from protected storage temporarily.'
+        : 'Protected storage rejected a required approved visual asset.',
+      action: retryable
+        ? 'The builder will retry once automatically from the saved source checkpoint.'
+        : 'Review the approved asset selection, then retry from the same approved manifest.',
       context: error.context,
     };
   }
@@ -345,6 +470,17 @@ function failureDetails(error) {
       stage: 'manifest_validation',
       summary: 'The approved Build Manifest was no longer available when the builder started.',
       action: 'Review and prepare a new Build Manifest before retrying.',
+    };
+  }
+  if (/timeout|timed out|aborted|fetch failed|connection terminated|network/i.test(message)) {
+    return {
+      ...base,
+      retryable: true,
+      code: 'protected_workspace_temporary_failure',
+      stage: 'protected_workspace',
+      summary: 'A protected workspace request could not complete temporarily.',
+      action: 'The builder will retry once automatically from the saved source checkpoint.',
+      context: { operation: 'protected_workspace_request' },
     };
   }
   if (/retired builder foundation/.test(message)) {
@@ -616,6 +752,17 @@ async function collectBrowsableSourceFiles(directory, relativeDirectory = '') {
 
 function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function fetchWithRequestTimeout(
+  input,
+  init = {},
+  timeoutMs = builderRequestTimeoutMs,
+  fetchImplementation = globalThis.fetch,
+) {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
+  return fetchImplementation(input, { ...init, signal });
 }
 
 async function uploadArtifact(client, run, artifact) {
@@ -928,6 +1075,31 @@ async function restoreSourceCheckpoint(client, run, sourceDirectory, sourceRun =
       },
     });
   }
+  const recordedFileCount = Number(recordValue(checkpoint.metadata).fileCount);
+  if (
+    Number.isFinite(recordedFileCount) &&
+    recordedFileCount > 0 &&
+    files.length !== recordedFileCount
+  ) {
+    const immutableDraftRestore = await restoreLegacyDraftFiles(client, sourceRun, sourceDirectory);
+    if (immutableDraftRestore.restored) {
+      return {
+        ...immutableDraftRestore,
+        restoredFromLegacyDrafts: false,
+        checkpointState: recordValue(checkpoint.metadata).state,
+      };
+    }
+    throw new BuilderCheckpointError(
+      'The private checkpoint manifest did not match its recorded source file count.',
+      {
+        context: {
+          operation: 'checkpoint_manifest_validation',
+          recordedFileCount,
+          manifestFileCount: files.length,
+        },
+      },
+    );
+  }
 
   const expectedFiles = new Map();
   for (const entry of files) {
@@ -1064,7 +1236,7 @@ async function saveSourceCheckpoint(client, run, workspace, currentFiles, event,
     await uploadArtifact(client, run, {
       kind: 'checkpoint',
       label: 'Latest private source checkpoint',
-      relativePath: 'checkpoint/source-manifest.json',
+      relativePath: `checkpoint/${hash}/source-manifest.json`,
       body,
       contentType: 'application/json',
       metadata: {
@@ -1292,7 +1464,7 @@ async function stageApprovedAssets(client, manifest, siteDirectory, selectedPage
     .from('artifacts')
     .select('*')
     .in('id', [...assetIds]);
-  if (error) throw new Error('The builder worker could not load approved visual assets.');
+  if (error) throw new BuilderAssetError('approved_asset_lookup', error);
 
   await mkdir(assetsDirectory, { recursive: true });
   await chmod(assetsDirectory, 0o755);
@@ -1303,10 +1475,21 @@ async function stageApprovedAssets(client, manifest, siteDirectory, selectedPage
   for (const asset of (assets ?? []).filter((candidate) =>
     assetMatchesSelectedPages(candidate, selectedPageUrls, primaryLogoAssetId),
   )) {
-    const { data: blob, error: downloadError } = await client.storage
-      .from(asset.storage_bucket || artifactBucket)
-      .download(asset.storage_path);
-    if (downloadError || !blob) {
+    let blob;
+    let downloadError;
+    try {
+      const result = await client.storage
+        .from(asset.storage_bucket || artifactBucket)
+        .download(asset.storage_path);
+      blob = result.data;
+      downloadError = result.error;
+    } catch (error) {
+      throw new BuilderAssetError('approved_asset_download', error, asset.id);
+    }
+    if (downloadError) {
+      throw new BuilderAssetError('approved_asset_download', downloadError, asset.id);
+    }
+    if (!blob) {
       throw new Error('An approved visual asset could not be loaded into the private workspace.');
     }
     index += 1;
@@ -1434,7 +1617,7 @@ async function stageSelectedPageContent(
     .select('storage_bucket, storage_path, metadata, content_type, byte_size')
     .eq('crawl_run_id', manifest.crawl_run_id)
     .eq('kind', 'content');
-  if (error) throw new Error('The builder worker could not load captured page content.');
+  if (error) throw new BuilderInputError('captured_content_lookup', error);
 
   const contentBySourceUrl = new Map();
   for (const artifact of artifacts ?? []) {
@@ -1462,10 +1645,21 @@ async function stageSelectedPageContent(
         `The captured content for ${page.sourceUrl} exceeds the private builder input limit.`,
       );
     }
-    const { data: blob, error: downloadError } = await client.storage
-      .from(artifact.storage_bucket || artifactBucket)
-      .download(artifact.storage_path);
-    if (downloadError || !blob || blob.size > maxSourceContentBytes) {
+    let blob;
+    let downloadError;
+    try {
+      const result = await client.storage
+        .from(artifact.storage_bucket || artifactBucket)
+        .download(artifact.storage_path);
+      blob = result.data;
+      downloadError = result.error;
+    } catch (error) {
+      throw new BuilderInputError('captured_content_download', error, page.sourceUrl);
+    }
+    if (downloadError) {
+      throw new BuilderInputError('captured_content_download', downloadError, page.sourceUrl);
+    }
+    if (!blob || blob.size > maxSourceContentBytes) {
       throw new Error(`The captured content for ${page.sourceUrl} could not be staged privately.`);
     }
     const content = Buffer.from(await blob.arrayBuffer());
@@ -2747,6 +2941,7 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
   let syncingDraft = false;
   let lastCodexStreamText = '';
   let lastCodexCommandSignature = '';
+  let codexFailureMessage = '';
   let codexStreamEventCount = 0;
   const maxCodexStreamEvents = 120;
   function writeCodexStream(message, metadata = {}) {
@@ -2834,6 +3029,8 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
         if (events.length < maxLogEvents) events.push(event);
         const item = recordValue(event.item);
         const type = typeof event.type === 'string' ? event.type : '';
+        const failureMessage = codexFailureFromEvent(event);
+        if (failureMessage) codexFailureMessage = failureMessage;
         if (type.includes('command_execution') || item.type === 'command_execution') {
           latestDetail = 'Codex is validating website changes.';
           const command = codexItemField(item, ['command', 'cmd']);
@@ -2918,7 +3115,10 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
     scope: 'codex_cli',
     title: exit.code === 0 ? 'Codex process completed' : 'Codex process stopped',
     status: exit.code === 0 ? 'completed' : 'failed',
-    detail: exit.code === 0 ? undefined : `Exit: ${exit.signal || exit.code || 'unknown'}.`,
+    detail:
+      exit.code === 0
+        ? undefined
+        : `Exit: ${exit.signal || exit.code || 'unknown'}. ${diagnosticText(codexFailureMessage, 480) || ''}`.trim(),
     stderr,
     metadata: { eventCount: events.length, exitCode: exit.code, signal: exit.signal ?? undefined },
   });
@@ -2942,7 +3142,7 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
   await assertBuildActive(client, run, workerId);
   if (exit.code !== 0) {
     throw new Error(
-      `Codex CLI could not finish the build: ${stderr.slice(-500) || exit.signal || exit.code}`,
+      `Codex CLI could not finish the build: ${diagnosticText(codexFailureMessage, 500) || stderr.slice(-500) || exit.signal || exit.code}`,
     );
   }
   await assertLockedFiles(workspace.siteDirectory, workspace.lockedFiles);
@@ -3840,7 +4040,6 @@ async function responsiveInteractionEvidence(
   page,
   viewport,
   htmlFile,
-  captureOpenNavigation,
   enforceLogoAlignment = false,
   enforceLogoReadiness = false,
   enforceLogoSequence = false,
@@ -4274,9 +4473,6 @@ async function responsiveInteractionEvidence(
     }
   }
 
-  const openNavigationBody = captureOpenNavigation
-    ? await page.screenshot({ fullPage: true, type: 'png' })
-    : undefined;
   await page.keyboard.press('Escape');
   await page.waitForFunction(
     () =>
@@ -4310,7 +4506,7 @@ async function responsiveInteractionEvidence(
       `${htmlFile.relativePath} compact navigation trigger could not be activated with reduced motion after ${reducedMotionAttempt.attempts} attempts at ${viewport.width}px: ${reducedMotionAttempt.detail}`,
     );
     await page.emulateMedia({ reducedMotion: 'no-preference' });
-    return { problems, openNavigationBody };
+    return { problems };
   }
   await page.waitForFunction(
     () =>
@@ -4321,7 +4517,7 @@ async function responsiveInteractionEvidence(
   );
   await page.keyboard.press('Escape');
   await page.emulateMedia({ reducedMotion: 'no-preference' });
-  return { problems, openNavigationBody };
+  return { problems };
 }
 
 async function runQualityChecks(
@@ -4363,15 +4559,8 @@ async function runQualityChecks(
             ),
           )
         : generatedRouteHtmlFiles;
-  const openNavigationViewports = new Set(['mobile-small', 'mobile', 'tablet']);
-  const expectedOpenNavigationCaptures = scopedHtmlFiles.some(
-    (file) => file.relativePath === 'index.html',
-  )
-    ? openNavigationViewports.size
-    : 0;
-  const totalPreviewCaptures =
-    scopedHtmlFiles.length * previewViewports.length + expectedOpenNavigationCaptures;
-  const totalItems = 8 + totalPreviewCaptures;
+  const totalViewportChecks = scopedHtmlFiles.length * previewViewports.length;
+  const totalItems = 8 + totalViewportChecks;
   const structuralProblems = structuralCheck(scopedHtmlFiles);
   const meaningfulNamingPackage = Number(workspace.agentPackage.version) >= 6.6;
   const pageNamingProblems = meaningfulNamingPackage
@@ -4688,10 +4877,10 @@ async function runQualityChecks(
     title: 'Private preview server started',
     metadata: { generatedPageCount: scopedHtmlFiles.length },
   });
-  const screenshotArtifacts = [];
   const axeViolations = [];
   const interactionProblems = [];
   const consoleProblems = [];
+  let completedViewportChecks = 0;
   try {
     let browser;
     try {
@@ -4711,20 +4900,19 @@ async function runQualityChecks(
       metadata: { engine: 'chromium' },
     });
     try {
-      let completedCaptures = 0;
       for (const htmlFile of scopedHtmlFiles) {
         for (const viewport of previewViewports) {
           await assertBuildActive(client, run, workerId);
           await updateProgress(client, run, workerId, {
-            progress_phase: 'capturing_preview',
-            progress_detail: `Capturing ${htmlFile.relativePath} at ${viewport.label.toLowerCase()} width.`,
+            progress_phase: 'quality_checks',
+            progress_detail: `Checking ${htmlFile.relativePath} at ${viewport.label.toLowerCase()} width.`,
             total_items: totalItems,
-            completed_items: 4 + completedCaptures,
+            completed_items: 4 + completedViewportChecks,
           });
           let browserContext;
           let page;
           let qualityOperation = 'page_open';
-          const captureStartedAt = Date.now();
+          const viewportCheckStartedAt = Date.now();
           try {
             browserContext = await browser.newContext({
               viewport: { width: viewport.width, height: viewport.height },
@@ -4780,31 +4968,9 @@ async function runQualityChecks(
                 })),
               );
             }
-            qualityOperation = 'screenshot';
-            const body = await page.screenshot({ fullPage: true, type: 'png' });
-            const pageStem = htmlFile.relativePath
-              .replace(/\.html$/i, '')
-              .replace(/[^a-z0-9]+/gi, '-')
-              .replace(/^-+|-+$/g, '');
-            screenshotArtifacts.push({
-              kind: 'screenshot',
-              label: `${viewport.label}: ${htmlFile.relativePath}`,
-              relativePath: `screenshots/${pageStem || 'index'}-${viewport.id}.png`,
-              body,
-              contentType: 'image/png',
-              metadata: {
-                viewport: viewport.id,
-                width: viewport.width,
-                height: viewport.height,
-                page: htmlFile.relativePath,
-              },
-            });
-            const screenshot = screenshotArtifacts[screenshotArtifacts.length - 1];
-            qualityOperation = 'screenshot_storage';
-            await uploadArtifact(client, run, screenshot);
             await eventWriter(
               'quality',
-              `Captured ${viewport.label.toLowerCase()} preview for ${htmlFile.relativePath}.`,
+              `Checked ${htmlFile.relativePath} at ${viewport.label.toLowerCase()} width.`,
               {
                 page: htmlFile.relativePath,
                 viewport: viewport.id,
@@ -4812,12 +4978,11 @@ async function runQualityChecks(
             );
             await diagnostics.record({
               scope: 'browser_quality',
-              title: 'Responsive preview captured',
-              durationMs: Date.now() - captureStartedAt,
+              title: 'Responsive viewport checked',
+              durationMs: Date.now() - viewportCheckStartedAt,
               metadata: {
                 page: htmlFile.relativePath,
                 viewport: viewport.id,
-                screenshotBytes: body.byteLength,
               },
             });
             await disableFinalStateEvidence(page);
@@ -4826,7 +4991,6 @@ async function runQualityChecks(
               page,
               viewport,
               htmlFile,
-              htmlFile.relativePath === 'index.html' && openNavigationViewports.has(viewport.id),
               responsiveCraftPackage,
               immediateBrandPackage,
               decodedNavigationPackage,
@@ -4835,26 +4999,7 @@ async function runQualityChecks(
               firstViewportPackage,
             );
             interactionProblems.push(...interaction.problems);
-            if (interaction.openNavigationBody) {
-              const openScreenshot = {
-                kind: 'screenshot',
-                label: `${viewport.label} open navigation: ${htmlFile.relativePath}`,
-                relativePath: `screenshots/${pageStem || 'index'}-${viewport.id}-navigation-open.png`,
-                body: interaction.openNavigationBody,
-                contentType: 'image/png',
-                metadata: {
-                  viewport: viewport.id,
-                  width: viewport.width,
-                  height: viewport.height,
-                  page: htmlFile.relativePath,
-                  state: 'navigation_open',
-                },
-              };
-              screenshotArtifacts.push(openScreenshot);
-              await uploadArtifact(client, run, openScreenshot);
-              completedCaptures += 1;
-            }
-            completedCaptures += 1;
+            completedViewportChecks += 1;
           } catch (error) {
             if (error instanceof BuilderCancelledError || error instanceof BuilderStorageError) {
               throw error;
@@ -4877,7 +5022,7 @@ async function runQualityChecks(
               title: 'Responsive preview check failed',
               status: 'failed',
               detail: qualityError.context.detail,
-              durationMs: Date.now() - captureStartedAt,
+              durationMs: Date.now() - viewportCheckStartedAt,
               metadata: qualityError.context,
             });
             throw qualityError;
@@ -4925,10 +5070,10 @@ async function runQualityChecks(
     },
   });
   checks.push({
-    id: 'responsive-preview',
-    label: 'Responsive preview captures',
-    status: screenshotArtifacts.length === totalPreviewCaptures ? 'passed' : 'failed',
-    detail: `${screenshotArtifacts.length}/${totalPreviewCaptures} desktop, tablet, and mobile page captures completed.`,
+    id: 'responsive-viewports',
+    label: 'Responsive viewport checks',
+    status: completedViewportChecks === totalViewportChecks ? 'passed' : 'failed',
+    detail: `${completedViewportChecks}/${totalViewportChecks} desktop, tablet, and mobile page checks completed without storing screenshots.`,
   });
   const status = checks.some((check) => check.status === 'failed')
     ? 'failed'
@@ -4937,7 +5082,6 @@ async function runQualityChecks(
       : 'passed';
   return {
     summary: { status, checks, generatedAt: new Date().toISOString() },
-    screenshotArtifacts,
     allFiles,
     totalItems,
   };
@@ -4955,26 +5099,28 @@ async function saveOutputs(
 ) {
   await updateProgress(client, run, workerId, {
     progress_phase: 'saving_outputs',
-    progress_detail: 'Saving private source, preview files, screenshots, and quality results.',
+    progress_detail: 'Saving private source, preview files, and quality results.',
     total_items: quality.totalItems,
     completed_items: quality.totalItems - 1,
+  });
+  const localDevelopmentDirectory = join(workspace.runDirectory, 'local-development', 'website');
+  await copyLocalDevelopmentSource(workspace.siteDirectory, localDevelopmentDirectory);
+  await applyLocalDevelopmentHandoff(localDevelopmentDirectory, {
+    studioBuildId: run.id,
+    businessId: run.business_id,
+    buildManifestId: run.build_manifest_id,
+    agentPackageId: workspace.agentPackage.id,
+    agentPackageVersion: Number(workspace.agentPackage.version),
+    buildMode: run.build_mode,
+    templateVersion: run.template_version,
+    baselineCommit: null,
   });
   const sourceArchivePath = join(workspace.runDirectory, 'website-source.tgz');
   await runDiagnosticCommand(
     diagnostics,
     'source_archive',
     'tar',
-    [
-      '--exclude=website/node_modules',
-      '--exclude=website/.next',
-      '--exclude=website/out',
-      '--exclude=website/public/assets',
-      '-czf',
-      sourceArchivePath,
-      '-C',
-      workspace.runDirectory,
-      'website',
-    ],
+    ['-czf', sourceArchivePath, '-C', join(workspace.runDirectory, 'local-development'), 'website'],
     {
       cwd: workspace.runDirectory,
       env: process.env,
@@ -4982,19 +5128,16 @@ async function saveOutputs(
   );
   await uploadArtifact(client, run, {
     kind: 'source_bundle',
-    label: 'Generated website source',
+    label: 'Local development workspace',
     relativePath: 'source/website-source.tgz',
     body: await readFile(sourceArchivePath),
     contentType: 'application/gzip',
     metadata: {
       templateVersion: run.template_version,
-      excludedPaths: [
-        'website/node_modules',
-        'website/.next',
-        'website/out',
-        'website/public/assets',
-      ],
-      assetHandling: 'Approved assets are already persisted as individual private draft files.',
+      localDevelopmentHandoffVersion,
+      includesApprovedAssets: true,
+      refinementLedger: '.made-solid/refinement-log.jsonl',
+      learningBundle: '.made-solid/learning-bundle.json',
     },
   });
   const sourceFiles = await collectBrowsableSourceFiles(workspace.siteDirectory);
@@ -5024,9 +5167,6 @@ async function saveOutputs(
       contentType: contentTypeFor(file),
       metadata: { previewPath: relativePath },
     });
-  }
-  for (const screenshot of quality.screenshotArtifacts) {
-    await uploadArtifact(client, run, screenshot);
   }
   await uploadArtifact(client, run, {
     kind: 'quality',
@@ -5078,6 +5218,10 @@ function canContinueWithoutCodex(run, workspace) {
     'compiled_route_missing',
     'private_storage_rejected',
     'private_storage_temporary_failure',
+    'build_manifest_temporarily_unavailable',
+    'protected_workspace_temporary_failure',
+    'builder_input_temporary_failure',
+    'approved_asset_temporary_failure',
   ].includes(resumeFailureCode(run));
 }
 
@@ -5087,7 +5231,8 @@ async function processBuild(client, run, workerId, apiKey) {
     .select('*')
     .eq('id', run.build_manifest_id)
     .single();
-  if (error || !manifest || manifest.status !== 'ready') {
+  if (error) throw new BuilderManifestError(error);
+  if (!manifest || manifest.status !== 'ready') {
     throw new Error('The approved Build Manifest is no longer available.');
   }
   const brandKit = recordValue(recordValue(manifest.data).brandKit);
@@ -5379,6 +5524,7 @@ async function main() {
   const pollIntervalMs = Number(process.env.SITEFORGE_BUILDER_POLL_MS ?? 5_000);
   const client = createClient(supabaseUrl, serviceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false },
+    global: { fetch: fetchWithRequestTimeout },
   });
   const runOnce = process.argv.includes('--once');
   let stopping = false;
@@ -5390,13 +5536,23 @@ async function main() {
   });
   try {
     do {
-      await heartbeatBuilderWorker(client, workerId);
-      const claimed = await processNextBuild(client, workerId, apiKey);
-      if (runOnce || stopping) {
-        if (runOnce && !claimed) console.log('[builder-worker] no queued private preview builds.');
-        break;
+      try {
+        await heartbeatBuilderWorker(client, workerId);
+        const claimed = await processNextBuild(client, workerId, apiKey);
+        if (runOnce || stopping) {
+          if (runOnce && !claimed)
+            console.log('[builder-worker] no queued private preview builds.');
+          break;
+        }
+        if (!claimed) await wait(pollIntervalMs);
+      } catch (error) {
+        if (runOnce) throw error;
+        console.error(
+          '[builder-worker] protected workspace request failed; retrying without restarting',
+          error instanceof Error ? error.message : error,
+        );
+        await wait(pollIntervalMs);
       }
-      if (!claimed) await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
     } while (!stopping);
   } finally {
     const { error } = await client.rpc('release_builder_worker', {
@@ -5407,6 +5563,9 @@ async function main() {
 }
 
 export {
+  BuilderAssetError,
+  BuilderInputError,
+  BuilderManifestError,
   activateCompactNavigationTrigger,
   approvedAssetDescriptor,
   approvedImageUsageProblems,
@@ -5418,6 +5577,7 @@ export {
   builderExecutionProfile,
   canContinueWithoutCodex,
   checkpointSourceBody,
+  codexFailureFromEvent,
   collectBrowsableSourceFiles,
   contentTypeFor,
   contextualLogoProblems,
@@ -5425,6 +5585,8 @@ export {
   cssColourRepresentations,
   designSystemRhythmProblems,
   enforceBrandPaletteTokens,
+  failureDetails,
+  fetchWithRequestTimeout,
   expressiveNavigationMotionProblems,
   inconsistentHeaderNavigationProblems,
   lockedFoundationPaths,

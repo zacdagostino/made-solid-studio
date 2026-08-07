@@ -148,6 +148,8 @@ export function ConfirmationDialog({
   confirmLabel,
   onConfirm,
   isConfirming = false,
+  confirmingLabel = 'Working',
+  confirmVariant = 'danger',
   error,
   returnFocusRef,
 }: {
@@ -158,6 +160,8 @@ export function ConfirmationDialog({
   confirmLabel: string;
   onConfirm: () => void;
   isConfirming?: boolean;
+  confirmingLabel?: string;
+  confirmVariant?: 'primary' | 'danger';
   error?: string;
   returnFocusRef?: RefObject<HTMLButtonElement>;
 }) {
@@ -186,8 +190,8 @@ export function ConfirmationDialog({
                 Cancel
               </Button>
             </Dialog.Close>
-            <Button disabled={isConfirming} onClick={onConfirm} variant="danger">
-              {isConfirming ? 'Deleting' : confirmLabel}
+            <Button disabled={isConfirming} onClick={onConfirm} variant={confirmVariant}>
+              {isConfirming ? confirmingLabel : confirmLabel}
             </Button>
           </ButtonGroup>
         </Dialog.Content>

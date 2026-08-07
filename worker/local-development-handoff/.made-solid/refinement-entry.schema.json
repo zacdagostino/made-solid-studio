@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://madesolid.com.au/schemas/refinement-entry-v1.json",
+  "title": "Made Solid local refinement entry",
+  "type": "object",
+  "required": ["schemaVersion", "id", "recordedAt", "classification", "title", "problem", "fix"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "minLength": 3 },
+    "recordedAt": { "type": "string", "format": "date-time" },
+    "classification": {
+      "enum": ["strict_invariant", "flexible_principle", "project_specific", "unclassified"]
+    },
+    "title": { "type": "string", "minLength": 4 },
+    "problem": { "type": "string", "minLength": 8 },
+    "rootCause": { "type": "string" },
+    "fix": { "type": "string", "minLength": 8 },
+    "pattern": { "type": "string" },
+    "paths": { "type": "array", "items": { "type": "string" } },
+    "pages": { "type": "array", "items": { "type": "string" } },
+    "viewports": { "type": "array", "items": { "type": "string" } },
+    "evidence": { "type": "array", "items": { "type": "string" } },
+    "verification": { "type": "array", "items": { "type": "string" } },
+    "gitCommit": { "type": "string" }
+  },
+  "additionalProperties": false
+}

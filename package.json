@@ -27,8 +27,11 @@
     "worker:visual-content": "node worker/visual-content-worker.mjs",
     "worker:agent-package": "node worker/agent-package-worker.mjs",
     "worker:builder": "node worker/builder-worker.mjs",
+    "worker:publish": "node worker/client-preview-worker.mjs",
+    "worker:github": "node worker/github-workspace-worker.mjs",
     "setup:builder": "npm ci --prefix worker/builder-template",
     "workers": "node worker/supervisor.mjs",
+    "export:local-build": "node scripts/export-local-build.mjs",
     "test:worker": "node --test tests/worker/*.test.mjs",
     "verify": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run test:e2e"
   },

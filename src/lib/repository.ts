@@ -15,6 +15,10 @@ import type {
   BuilderRunEvidence,
   BuilderRunMode,
   BuilderRun,
+  ClientPreviewPublication,
+  ClientPreviewPublicationInput,
+  GithubWorkspacePublication,
+  GithubWorkspacePublicationInput,
   CapturedPage,
   Business,
   Contact,
@@ -154,6 +158,16 @@ export type WorkspaceRepository = {
   ): Promise<void>;
   deleteBuildPackage(businessId: string, redesignBriefId: string): Promise<void>;
   createBuilderPreviewUrl(builderRunId: string, mode?: BuilderPreviewMode): Promise<string>;
+  requestClientPreviewPublication(
+    builderRunId: string,
+    input: ClientPreviewPublicationInput,
+  ): Promise<ClientPreviewPublication | undefined>;
+  cancelClientPreviewPublication(publicationId: string): Promise<void>;
+  requestGithubWorkspacePublication(
+    builderRunId: string,
+    input: GithubWorkspacePublicationInput,
+  ): Promise<GithubWorkspacePublication | undefined>;
+  cancelGithubWorkspacePublication(publicationId: string): Promise<void>;
   setTaskState(task: Task, state: Task['state']): Promise<void>;
   approveForOutreach(businessId: string): Promise<boolean>;
   deleteProspect(businessId: string): Promise<boolean>;
@@ -195,6 +209,11 @@ const localSettledFactualEvidencePackageId = 'agent-package-local-v8-4-settled-f
 const localImmediateNavigationSequencePackageId =
   'agent-package-local-v8-5-immediate-navigation-sequence';
 const localMobileViewportIntegrityPackageId = 'agent-package-local-v8-6-mobile-viewport-integrity';
+const localActionableBuilderFailurePackageId =
+  'agent-package-local-v8-7-actionable-builder-failures';
+const localBoundedBuilderRequestsPackageId = 'agent-package-local-v8-8-bounded-builder-requests';
+const localViewportChecksOnlyPackageId = 'agent-package-local-v8-9-viewport-checks-only';
+const localRefinementHandoffPackageId = 'agent-package-local-v9-refinement-handoff';
 
 type StoreName =
   | 'activities'
@@ -934,10 +953,82 @@ export class SiteforgeRepository {
         'framework-quality-gates',
       ],
     };
+    const localActionableBuilderFailurePackage: AgentPackage = {
+      ...localMobileViewportIntegrityPackage,
+      id: localActionableBuilderFailurePackageId,
+      version: 8.7,
+      basePackageId: localMobileViewportIntegrityPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v8.7',
+      contractAddendum:
+        'The protected builder preserves the final structured Codex failure reason, classifies exhausted API credits separately from source or quality failures, and retains the complete private source checkpoint for an explicit resume after billing is restored.',
+      instructionsAddendum:
+        'Do not discard generated source when the model provider stops a run. Persist the structured provider failure, provide a specific recovery action, and resume from the saved checkpoint only after the external account condition has been corrected.',
+      summary:
+        'Actionable builder failure test package: exposes the real Codex provider failure and preserves generated source for a safe checkpoint resume.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents a provider billing failure from appearing as an unexplained permanent website-generation failure or forcing completed route work to be discarded.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localBoundedBuilderRequestsPackage: AgentPackage = {
+      ...localActionableBuilderFailurePackage,
+      id: localBoundedBuilderRequestsPackageId,
+      version: 8.8,
+      basePackageId: localActionableBuilderFailurePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v8.8',
+      contractAddendum:
+        'Every protected builder storage and lifecycle request has a bounded deadline. A stalled artifact upload enters the existing retry and checkpoint recovery lifecycle instead of blocking worker heartbeats indefinitely. Checkpoint manifests use immutable content-hashed storage and a recorded file-count mismatch restores from immutable per-file source records rather than compiling a partial draft.',
+      instructionsAddendum:
+        'Bound protected storage requests, classify timeout and input-staging failures as temporary, verify checkpoint manifest file counts, and continue from the validated post-Codex source without another model pass after storage recovery.',
+      summary:
+        'Bounded builder request test package: prevents stalled protected requests from wedging a build and rejects stale partial checkpoint manifests.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents a single unresponsive storage request from leaving a website build running without a heartbeat or terminal result.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localViewportChecksOnlyPackage: AgentPackage = {
+      ...localBoundedBuilderRequestsPackage,
+      id: localViewportChecksOnlyPackageId,
+      version: 8.9,
+      basePackageId: localBoundedBuilderRequestsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v8.9',
+      contractAddendum:
+        'Responsive quality verification runs each selected page in isolated mobile, tablet, and desktop browser contexts without generating, uploading, or retaining final viewport screenshots. The worker still checks rendered content, accessibility, console errors, navigation, overflow, touch targets, image readiness, first-viewport hero fit, focus restoration, and reduced motion.',
+      instructionsAddendum:
+        'Keep the required responsive hooks and accessible behaviour. Treat viewport execution as transient verification only: persist structured check results and diagnostics, but do not create screenshot artifacts or open-navigation image evidence.',
+      summary:
+        'Viewport checks only test package: retains responsive browser verification while removing final screenshot generation and storage.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Avoids generating hundreds of unnecessary final viewport images while retaining deterministic responsive and accessibility checks.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localRefinementHandoffPackage: AgentPackage = {
+      ...localViewportChecksOnlyPackage,
+      id: localRefinementHandoffPackageId,
+      version: 9,
+      basePackageId: localViewportChecksOnlyPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v9.0',
+      contractAddendum:
+        'Every completed source export is a complete local-development workspace containing the generated source, approved local assets, immutable Studio origin metadata, local-agent instructions, an append-only structured refinement ledger, and a private learning-bundle generator. Local refinements remain separate from production agent changes until an explicit reviewed distillation step.',
+      instructionsAddendum:
+        'Preserve a clean generated baseline, record meaningful verified corrections by root cause and enforcement strength, group repeated instances, and create a private learning bundle only at a reviewed milestone. Treat the finished local source as reference evidence; replay the immutable original manifest without copying the final site when evaluating an agent change.',
+      summary:
+        'Local refinement handoff test package: exports a complete editable workspace with approved assets and a structured, reviewable agent-learning ledger.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Lets completed websites move into local Git development while preserving a private, auditable path for strict regressions and flexible lessons to improve a later agent package without automatic production mutation.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localRefinementHandoffPackage,
+          localViewportChecksOnlyPackage,
+          localBoundedBuilderRequestsPackage,
+          localActionableBuilderFailurePackage,
           localMobileViewportIntegrityPackage,
           localImmediateNavigationSequencePackage,
           localSettledFactualEvidencePackage,
@@ -972,6 +1063,10 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localRefinementHandoffPackage,
+          localViewportChecksOnlyPackage,
+          localBoundedBuilderRequestsPackage,
+          localActionableBuilderFailurePackage,
           localMobileViewportIntegrityPackage,
           localImmediateNavigationSequencePackage,
           localSettledFactualEvidencePackage,
@@ -1009,6 +1104,10 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localRefinementHandoffPackage,
+            localViewportChecksOnlyPackage,
+            localBoundedBuilderRequestsPackage,
+            localActionableBuilderFailurePackage,
             localMobileViewportIntegrityPackage,
             localImmediateNavigationSequencePackage,
             localSettledFactualEvidencePackage,
@@ -1277,6 +1376,9 @@ export class SiteforgeRepository {
       ),
       builderArtifacts: [],
       builderEvents: [],
+      clientPreviewPublications: [],
+      githubWorkspacePublications: [],
+      githubWorkspaceWorkerAvailable: false,
       latestBuilderRun: builderRuns.sort((left, right) =>
         right.createdAt.localeCompare(left.createdAt),
       )[0],
@@ -1952,6 +2054,22 @@ export class SiteforgeRepository {
 
   async createBuilderPreviewUrl(): Promise<string> {
     throw new Error('Private preview builds require the protected Supabase preview service.');
+  }
+
+  async requestClientPreviewPublication(): Promise<ClientPreviewPublication | undefined> {
+    throw new Error('Client preview publishing requires the protected cloud workspace.');
+  }
+
+  async cancelClientPreviewPublication(): Promise<void> {
+    throw new Error('Client preview publishing requires the protected cloud workspace.');
+  }
+
+  async requestGithubWorkspacePublication(): Promise<GithubWorkspacePublication | undefined> {
+    throw new Error('GitHub publishing requires the protected cloud workspace.');
+  }
+
+  async cancelGithubWorkspacePublication(): Promise<void> {
+    throw new Error('GitHub publishing requires the protected cloud workspace.');
   }
 
   async setTaskState(task: Task, state: Task['state']) {

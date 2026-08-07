@@ -10,6 +10,16 @@ const workerScripts = [
   ['agent-packages', 'agent-package-worker.mjs'],
   ['builder', 'builder-worker.mjs'],
 ];
+if (
+  process.env.VERCEL_ACCESS_TOKEN &&
+  process.env.CLIENTSPACE_HANDOFF_URL &&
+  process.env.CLIENTSPACE_HANDOFF_SECRET
+) {
+  workerScripts.push(['client-preview', 'client-preview-worker.mjs']);
+}
+if (process.env.GITHUB_TOKEN) {
+  workerScripts.push(['github-workspace', 'github-workspace-worker.mjs']);
+}
 const restartDelayMs = 2_000;
 let stopping = false;
 const children = new Set();
@@ -41,6 +51,6 @@ process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
 
 console.log(
-  '[worker-supervisor] starting capture, logo, audit, asset-analysis, visual-content, capability-analysis, agent-package, and builder workers.',
+  `[worker-supervisor] starting ${workerScripts.map(([name]) => name).join(', ')} workers.`,
 );
 workerScripts.forEach(([name, script]) => startWorker(name, script));
