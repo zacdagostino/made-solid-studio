@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+studio_directory="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+website_directory="${MADE_SOLID_WEBSITE_DIRECTORY:-$(dirname "$studio_directory")/made-solid-website}"
+website_port="${MADE_SOLID_WEBSITE_PORT:-3001}"
+studio_origin="http://127.0.0.1:5173"
+
+if [[ ! -f "$website_directory/package.json" ]]; then
+  echo "Made Solid website was not found at $website_directory." >&2
+  exit 1
+fi
+
+if [[ -n "${CODESPACE_NAME:-}" && -n "${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-}" ]]; then
+  studio_origin="https://${CODESPACE_NAME}-5173.${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN}"
+fi
+
+cd "$website_directory"
+exec env \
+  PORT="$website_port" \
+  MADE_SOLID_STUDIO_ORIGIN="$studio_origin" \
+  NEXT_PUBLIC_SITE_URL="${NEXT_PUBLIC_SITE_URL:-http://127.0.0.1:${website_port}}" \
+  npm run dev

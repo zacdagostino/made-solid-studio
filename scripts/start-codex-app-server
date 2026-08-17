@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+project_directory="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+source "$project_directory/scripts/configure-codex-runtime"
+
+exec codex app-server \
+  --listen ws://127.0.0.1:4500 \
+  --enable prevent_idle_sleep \
+  --disable shell_snapshot

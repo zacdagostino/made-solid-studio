@@ -253,6 +253,7 @@ async function sendClientspaceHandoff(job, deploymentUrl) {
           }
         : null,
       finalBalanceCents: job.final_balance_cents,
+      pricingSnapshot: job.pricing_snapshot,
       currency: job.currency,
       handoffNotes: job.handoff_notes,
     }),

@@ -1,0 +1,28 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import test from 'node:test';
+
+const root = new URL('../../', import.meta.url);
+
+test('requires a source-aware approved quote locked to the exact revision before handoff', async () => {
+  const [migration, app, pricing, domain] = await Promise.all([
+    readFile(
+      new URL('supabase/migrations/20260817190000_versioned_build_pricing.sql', root),
+      'utf8',
+    ),
+    readFile(new URL('src/App.tsx', root), 'utf8'),
+    readFile(new URL('src/lib/pricing.ts', root), 'utf8'),
+    readFile(new URL('src/lib/domain.ts', root), 'utf8'),
+  ]);
+  assert.match(migration, /request_client_preview_publication_v2/);
+  assert.match(migration, /request_made_solid_handoff_v2/);
+  assert.match(migration, /sourceManifestId/);
+  assert.match(migration, /balanceCents/);
+  assert.match(app, /<PricingCalculator/);
+  assert.match(app, /pricingSnapshot: approvedQuote/);
+  assert.match(pricing, /pricingScheduleVersion = 'made-solid-preview-first-v2\.0'/);
+  assert.match(pricing, /'Preview-first website delivery'/);
+  assert.match(pricing, /sourceScope: scope/);
+  assert.match(pricing, /paymentSchedule: schedule/);
+  assert.match(domain, /pricingSnapshot: import\('\.\/pricing'\)\.PricingQuoteSnapshot/);
+});

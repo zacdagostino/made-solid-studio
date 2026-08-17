@@ -5,6 +5,9 @@ This repository is an editable local handoff from a private Made Solid Studio bu
 
 ## Working contract
 
+- The checked-in Codespace setup may install Codex and start the site automatically. Never place
+  an API key, access token, cached login, or other credential in this repository; use a Codespaces
+  secret or Codex's supported browser sign-in.
 - Treat the first Git commit as the immutable generated baseline. Never rewrite or squash it.
 - Make website changes in this repository first. Do not edit the Made Solid Studio repository or
   its production agent package during ordinary website refinement.

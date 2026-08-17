@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import ts from 'typescript';
+import {
+  applyLocalDevelopmentHandoff,
+  copyLocalDevelopmentSource,
+} from '../../worker/local-development-handoff.mjs';
 import {
   BuilderAssetError,
   BuilderInputError,
@@ -17,6 +21,8 @@ import {
   assetMatchesSelectedPages,
   buildContextSummary,
   buildPrompt,
+  builderCodexAuthentication,
+  builderCodexEnvironment,
   builderExecutionProfile,
   canContinueWithoutCodex,
   checkpointSourceBody,
@@ -31,6 +37,7 @@ import {
   expressiveNavigationMotionProblems,
   failureDetails,
   fetchWithRequestTimeout,
+  groupApprovedAssetsByContent,
   inconsistentHeaderNavigationProblems,
   lockedFoundationPaths,
   meaningfulPageNamingProblems,
@@ -52,6 +59,7 @@ import {
 } from '../../worker/builder-worker.mjs';
 
 const appUrl = new URL('../../src/App.tsx', import.meta.url);
+const repositoryUrl = new URL('../../src/lib/repository.ts', import.meta.url);
 const cloudRepositoryUrl = new URL('../../src/lib/cloud-repository.ts', import.meta.url);
 const agentsInstructionsUrl = new URL('../../AGENTS.md', import.meta.url);
 const componentArchitectureContractUrl = new URL(
@@ -192,6 +200,150 @@ const viewportChecksOnlyMigrationUrl = new URL(
 );
 const localRefinementHandoffMigrationUrl = new URL(
   '../../supabase/migrations/20260807143000_local_refinement_handoff_test_package.sql',
+  import.meta.url,
+);
+const accentOnlyBrandMigrationUrl = new URL(
+  '../../supabase/migrations/20260808120000_accent_only_brand_test_package.sql',
+  import.meta.url,
+);
+const codespaceWorkspaceMigrationUrl = new URL(
+  '../../supabase/migrations/20260808121000_codespace_editing_workspace_test_package.sql',
+  import.meta.url,
+);
+const codespaceStartupReliabilityMigrationUrl = new URL(
+  '../../supabase/migrations/20260808123000_codespace_startup_reliability_test_package.sql',
+  import.meta.url,
+);
+const codespaceSetupOrderingMigrationUrl = new URL(
+  '../../supabase/migrations/20260808124000_codespace_setup_ordering_test_package.sql',
+  import.meta.url,
+);
+const logoAccentRegionsMigrationUrl = new URL(
+  '../../supabase/migrations/20260808122000_logo_accent_regions_test_package.sql',
+  import.meta.url,
+);
+const builderDerivedColoursMigrationUrl = new URL(
+  '../../supabase/migrations/20260808133000_builder_derived_brand_colours.sql',
+  import.meta.url,
+);
+const persistentCodespaceTmuxMigrationUrl = new URL(
+  '../../supabase/migrations/20260808134000_persistent_codespace_tmux_test_package.sql',
+  import.meta.url,
+);
+const optionalSvgGenerationMigrationUrl = new URL(
+  '../../supabase/migrations/20260808140000_optional_svg_generation_test_package.sql',
+  import.meta.url,
+);
+const codespaceResumeStartupMigrationUrl = new URL(
+  '../../supabase/migrations/20260810100000_codespace_resume_startup_test_package.sql',
+  import.meta.url,
+);
+const subscriptionBuilderPackageMigrationUrl = new URL(
+  '../../supabase/migrations/20260817190000_subscription_builder_runtime_test_package.sql',
+  import.meta.url,
+);
+const visibleCodespaceSetupMigrationUrl = new URL(
+  '../../supabase/migrations/20260810110000_visible_codespace_setup_test_package.sql',
+  import.meta.url,
+);
+const noninteractiveCodexInstallMigrationUrl = new URL(
+  '../../supabase/migrations/20260810130000_noninteractive_codex_install_test_package.sql',
+  import.meta.url,
+);
+const embeddedProspectWorkspaceMigrationUrl = new URL(
+  '../../supabase/migrations/20260810140000_embedded_prospect_workspace_test_package.sql',
+  import.meta.url,
+);
+const oneClickProspectWorkspaceMigrationUrl = new URL(
+  '../../supabase/migrations/20260810150000_one_click_prospect_workspace_test_package.sql',
+  import.meta.url,
+);
+const immediateSourceWorkspaceMigrationUrl = new URL(
+  '../../supabase/migrations/20260810160000_immediate_source_workspace_test_package.sql',
+  import.meta.url,
+);
+const automaticWebsiteLaunchMigrationUrl = new URL(
+  '../../supabase/migrations/20260810170000_automatic_website_launch_test_package.sql',
+  import.meta.url,
+);
+const codespacesPreviewUrlMigrationUrl = new URL(
+  '../../supabase/migrations/20260810180000_codespaces_preview_url_test_package.sql',
+  import.meta.url,
+);
+const liveRefinementLedgerMigrationUrl = new URL(
+  '../../supabase/migrations/20260810190000_live_refinement_ledger_test_package.sql',
+  import.meta.url,
+);
+const resilientRefinementLedgerMigrationUrl = new URL(
+  '../../supabase/migrations/20260810200000_resilient_refinement_ledger_test_package.sql',
+  import.meta.url,
+);
+const editingHandoffPagesMigrationUrl = new URL(
+  '../../supabase/migrations/20260810210000_editing_handoff_pages_test_package.sql',
+  import.meta.url,
+);
+const resilientFinalEditMigrationUrl = new URL(
+  '../../supabase/migrations/20260810220000_resilient_final_edit_test_package.sql',
+  import.meta.url,
+);
+const editVersionHistoryMigrationUrl = new URL(
+  '../../supabase/migrations/20260810230000_edit_version_history_test_package.sql',
+  import.meta.url,
+);
+const agentLearningInboxMigrationUrl = new URL(
+  '../../supabase/migrations/20260811100000_agent_learning_inbox_test_package.sql',
+  import.meta.url,
+);
+const agentStudioWebsiteToneMigrationUrl = new URL(
+  '../../supabase/migrations/20260811120000_agent_studio_website_tone_test_package.sql',
+  import.meta.url,
+);
+const madeSolidHandoffMigrationUrl = new URL(
+  '../../supabase/migrations/20260811130000_made_solid_handoff_test_package.sql',
+  import.meta.url,
+);
+const optionalHandoffSchemaMigrationUrl = new URL(
+  '../../supabase/migrations/20260811140000_optional_handoff_schema_test_package.sql',
+  import.meta.url,
+);
+const handoffWorkerLivenessMigrationUrl = new URL(
+  '../../supabase/migrations/20260811150000_made_solid_handoff_worker_liveness_test_package.sql',
+  import.meta.url,
+);
+const cleanAlternateTestMigrationUrl = new URL(
+  '../../supabase/migrations/20260811160000_clean_alternate_test_package.sql',
+  import.meta.url,
+);
+const canonicalAssetHandoffMigrationUrl = new URL(
+  '../../supabase/migrations/20260811170000_canonical_asset_handoff_test_package.sql',
+  import.meta.url,
+);
+const capturedHandoffEmailMigrationUrl = new URL(
+  '../../supabase/migrations/20260811190000_captured_handoff_email_test_package.sql',
+  import.meta.url,
+);
+const automaticClientspacePreviewMigrationUrl = new URL(
+  '../../supabase/migrations/20260811200000_automatic_clientspace_preview_test_package.sql',
+  import.meta.url,
+);
+const automaticProspectDomainMigrationUrl = new URL(
+  '../../supabase/migrations/20260811210000_automatic_prospect_domain_test_package.sql',
+  import.meta.url,
+);
+const editableHandoffRecoveryMigrationUrl = new URL(
+  '../../supabase/migrations/20260811220000_editable_handoff_recovery_test_package.sql',
+  import.meta.url,
+);
+const pageDispositionMigrationUrl = new URL(
+  '../../supabase/migrations/20260813100000_reviewed_page_dispositions_test_package.sql',
+  import.meta.url,
+);
+const websiteToneDirectionMigrationUrl = new URL(
+  '../../supabase/migrations/20260810120000_website_tone_direction_test_package.sql',
+  import.meta.url,
+);
+const codexTranscriptPositionMigrationUrl = new URL(
+  '../../supabase/migrations/20260817150000_codex_transcript_position_test_package.sql',
   import.meta.url,
 );
 const preserveResumeContextMigrationUrl = new URL(
@@ -789,6 +941,20 @@ test('requires every generated page to be reachable through nested internal link
   assert.deepEqual(unreachable, [
     'services/electrical/index.html cannot be reached by following internal links from index.html.',
   ]);
+  assert.deepEqual(
+    unreachableSelectedPageProblems(
+      [
+        { relativePath: 'index.html', contents: '' },
+        { relativePath: 'thank-you/index.html', contents: '' },
+        { relativePath: 'home-1/index.html', contents: '' },
+      ],
+      [
+        { outputPath: 'thank-you/index.html', disposition: 'workflow_state' },
+        { outputPath: 'home-1/index.html', disposition: 'redirect' },
+      ],
+    ),
+    [],
+  );
 });
 
 test('creates a feature-only whole-site Agent Studio prompt', () => {
@@ -858,6 +1024,46 @@ test('uses an economical explicit profile for private route tests', () => {
     if (originalEffort === undefined) delete process.env.SITEFORGE_CODEX_REASONING_EFFORT;
     else process.env.SITEFORGE_CODEX_REASONING_EFFORT = originalEffort;
   }
+});
+
+test('defaults website builds to ChatGPT subscription authentication without forwarding API keys', () => {
+  const authentication = builderCodexAuthentication({
+    HOME: '/tmp/member-home',
+    PATH: '/usr/bin',
+    OPENAI_API_KEY: 'analysis-worker-key',
+  });
+  assert.deepEqual(authentication, {
+    mode: 'chatgpt',
+    billingMode: 'chatgpt_subscription',
+    label: 'ChatGPT subscription',
+  });
+  const environment = builderCodexEnvironment(authentication, {
+    HOME: '/tmp/member-home',
+    PATH: '/usr/bin',
+    OPENAI_API_KEY: 'analysis-worker-key',
+    SITEFORGE_CODEX_API_KEY: 'legacy-builder-key',
+  });
+  assert.equal(environment.HOME, '/tmp/member-home');
+  assert.equal(environment.PATH, '/usr/bin');
+  assert.equal(environment.OPENAI_API_KEY, undefined);
+  assert.equal(environment.SITEFORGE_CODEX_API_KEY, undefined);
+  assert.equal(environment.CODEX_API_KEY, undefined);
+});
+
+test('retains API-key builder authentication only as an explicit opt-in', () => {
+  const authentication = builderCodexAuthentication({
+    SITEFORGE_CODEX_AUTH_MODE: 'api_key',
+    SITEFORGE_CODEX_API_KEY: 'dedicated-builder-key',
+    OPENAI_API_KEY: 'shared-analysis-key',
+  });
+  assert.equal(authentication.mode, 'api_key');
+  assert.equal(authentication.billingMode, 'api_usage');
+  assert.equal(authentication.credential, 'dedicated-builder-key');
+  assert.equal(
+    builderCodexEnvironment(authentication, { HOME: '/tmp/member-home', PATH: '/usr/bin' })
+      .CODEX_API_KEY,
+    'dedicated-builder-key',
+  );
 });
 
 test('keeps prospect-build prerequisites and activity tied to the current package', async () => {
@@ -1227,12 +1433,27 @@ test('projects a narrow test manifest without mutating its immutable source', ()
     permittedFacts: [
       { sourcePageUrl: 'https://example.com/', value: 'Home fact' },
       { sourcePageUrl: 'https://example.com/services', value: 'Service fact' },
+      { sourcePageUrl: 'https://example.com/services-old', value: 'Legacy service fact' },
+    ],
+    pageCoverage: [
+      {
+        sourceUrl: 'https://example.com/services',
+        disposition: 'build',
+        outputRequired: true,
+      },
+      {
+        sourceUrl: 'https://example.com/services-old',
+        disposition: 'merge',
+        targetSourceUrl: 'https://example.com/services',
+        outputRequired: false,
+      },
     ],
     selectedAssets: [{ artifactId: 'home-image' }, { artifactId: 'services-image' }],
     approvedAssetGuidance: [{ assetId: 'home-image' }, { assetId: 'services-image' }],
     pagePlans: [
       { sourcePageUrl: 'https://example.com/' },
       { sourcePageUrl: 'https://example.com/services' },
+      { sourcePageUrl: 'https://example.com/services-old' },
     ],
   };
   const projected = projectManifestData(
@@ -1243,10 +1464,14 @@ test('projects a narrow test manifest without mutating its immutable source', ()
   );
 
   assert.equal(projected.selectedPages.length, 1);
-  assert.equal(projected.permittedFacts[0].value, 'Service fact');
+  assert.deepEqual(
+    projected.permittedFacts.map((fact) => fact.value),
+    ['Service fact', 'Legacy service fact'],
+  );
   assert.deepEqual(projected.selectedAssets, [{ artifactId: 'services-image' }]);
   assert.deepEqual(projected.brandKit.approvedAssetIds, ['services-image']);
-  assert.equal(projected.pagePlans.length, 1);
+  assert.equal(projected.pagePlans.length, 2);
+  assert.equal(projected.pageCoverage.length, 2);
   assert.equal(fullData.selectedPages.length, 2);
 });
 
@@ -1833,6 +2058,396 @@ test('registers the local refinement handoff above screenshot-free viewport chec
   assert.match(migration, /not exists/i);
 });
 
+test('registers accent-only brands once above the retained package ledger', async () => {
+  const migration = await readFile(accentOnlyBrandMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Accent-only brand test package:/);
+  assert.match(migration, /without inventing a primary brand colour/);
+  assert.match(migration, /"contextual-logo-selection"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers the Codespace editing workspace once above retained package versions', async () => {
+  const migration = await readFile(codespaceWorkspaceMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Codespace editing workspace test package:/);
+  assert.match(migration, /without storing authentication credentials in source/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers reliable Codespace startup once above retained package versions', async () => {
+  const migration = await readFile(codespaceStartupReliabilityMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Codespace startup reliability test package:/);
+  assert.match(migration, /explicit npm development command/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers Codespace setup ordering once above retained package versions', async () => {
+  const migration = await readFile(codespaceSetupOrderingMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Codespace setup-ordering test package:/);
+  assert.match(migration, /concurrency-safe, idempotent setup gate/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers persistent Codespace tmux startup once above retained package versions', async () => {
+  const migration = await readFile(persistentCodespaceTmuxMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Persistent Codespace tmux test package:/);
+  assert.match(migration, /persistent tmux session/);
+  assert.match(migration, /postStartCommand/);
+  assert.match(migration, /directly from GitHub/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers default-off SVG generation once above retained package versions', async () => {
+  const migration = await readFile(optionalSvgGenerationMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Optional SVG generation test package:/);
+  assert.match(migration, /defaults off/);
+  assert.match(migration, /preserves an existing editable SVG/);
+  assert.match(migration, /"contextual-logo-selection"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers archive-safe Codespace resume startup once above retained package versions', async () => {
+  const migration = await readFile(codespaceResumeStartupMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Codespace resume startup test package:/);
+  assert.match(migration, /including archived source bundles/);
+  assert.match(migration, /respawn a dead pane/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers visible non-blocking Codespace setup once above retained package versions', async () => {
+  const migration = await readFile(visibleCodespaceSetupMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Visible Codespace setup test package:/);
+  assert.match(migration, /background startup job/);
+  assert.match(migration, /failure without fabricated percentages/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers non-interactive Codex installation once above retained package versions', async () => {
+  const migration = await readFile(noninteractiveCodexInstallMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Non-interactive Codex install test package:/);
+  assert.match(migration, /CODEX_NON_INTERACTIVE/);
+  assert.match(migration, /Start Codex now terminal prompt/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers the embedded prospect workspace once above retained package versions', async () => {
+  const migration = await readFile(embeddedProspectWorkspaceMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Embedded prospect workspace test package:/);
+  assert.match(migration, /prospect-workspaces directory/);
+  assert.match(migration, /clones or fast-forwards/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers one-click prospect workspace setup once above retained package versions', async () => {
+  const migration = await readFile(oneClickProspectWorkspaceMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /One-click prospect workspace test package:/);
+  assert.match(migration, /same-origin, validated local action/);
+  assert.match(migration, /without fabricated percentages/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers immediate workspace setup from ready source once above retained versions', async () => {
+  const migration = await readFile(immediateSourceWorkspaceMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Immediate source workspace test package:/);
+  assert.match(migration, /Editable source is ready section/);
+  assert.match(migration, /without first creating or locating a separate GitHub repository/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers persistent automatic website launch once above retained versions', async () => {
+  const migration = await readFile(automaticWebsiteLaunchMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Automatic website launch test package:/);
+  assert.match(migration, /persistent tmux terminal session/);
+  assert.match(migration, /Never claim readiness before the server responds/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers Codespaces-aware preview URLs once above retained versions', async () => {
+  const migration = await readFile(codespacesPreviewUrlMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Codespaces preview URL test package:/);
+  assert.match(migration, /CODESPACE_NAME/);
+  assert.match(migration, /Ordinary local development retains localhost URLs/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers the live refinement ledger once above retained versions', async () => {
+  const migration = await readFile(liveRefinementLedgerMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Live refinement ledger test package:/);
+  assert.match(migration, /append-only workspace record/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers resilient refinement-ledger responses once above retained versions', async () => {
+  const migration = await readFile(resilientRefinementLedgerMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Resilient refinement ledger test package:/);
+  assert.match(migration, /HTML application fallback/);
+  assert.match(migration, /restart Made Solid Studio/i);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers routed editing and handoff pages once above retained versions', async () => {
+  const migration = await readFile(editingHandoffPagesMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Editing and handoff pages test package:/);
+  assert.match(migration, /complete website verification/);
+  assert.match(migration, /block Made Solid transfer/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers resilient final-edit verification once above retained versions', async () => {
+  const migration = await readFile(resilientFinalEditMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Resilient final edit test package:/);
+  assert.match(migration, /export-worker or global-error failure/);
+  assert.match(migration, /one bounded complete-verification retry/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers Git-backed edit version history once above retained versions', async () => {
+  const migration = await readFile(editVersionHistoryMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Edit version history test package:/);
+  assert.match(migration, /ordered immutable Git checkpoint/);
+  assert.match(migration, /detached Git worktrees/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers the reviewed agent-learning inbox once above retained versions', async () => {
+  const migration = await readFile(agentLearningInboxMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Agent learning inbox test package:/);
+  assert.match(
+    migration,
+    /project-specific decisions and unclassified observations remain excluded by default/i,
+  );
+  assert.match(migration, /immutable original manifest/i);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers Agent Studio website tone once above retained package versions', async () => {
+  const migration = await readFile(agentStudioWebsiteToneMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Agent Studio website tone test package:/);
+  assert.match(migration, /page tests and whole-site revisions/);
+  assert.match(migration, /Agent decides remains the default/);
+  assert.match(migration, /"website-tone-direction"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers the exact Made Solid source handoff once above retained package versions', async () => {
+  const migration = await readFile(madeSolidHandoffMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Made Solid source handoff test package:/);
+  assert.match(migration, /exact, immutable Git revision/i);
+  assert.match(migration, /without confusing a builder artifact/i);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers optional handoff schema resilience above retained package versions', async () => {
+  const migration = await readFile(optionalHandoffSchemaMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Optional handoff schema test package:/);
+  assert.match(migration, /cannot block prospect workspaces, Agent Studio tests, or builder runs/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers handoff worker liveness once above retained package versions', async () => {
+  const migration = await readFile(handoffWorkerLivenessMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Made Solid handoff worker liveness test package:/);
+  assert.match(migration, /fresh persisted heartbeat/i);
+  assert.match(migration, /no older than 45 seconds/i);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers clean alternate tests once above retained package versions', async () => {
+  const migration = await readFile(cleanAlternateTestMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Clean alternate-test package:/);
+  assert.match(migration, /exact run identifier returned/i);
+  assert.match(migration, /only Continue this test may reuse failed source/i);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers canonical asset handoff once above retained package versions', async () => {
+  const migration = await readFile(canonicalAssetHandoffMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Canonical asset handoff test package:/);
+  assert.match(migration, /sourcePageUrls and sourceUrls as provenance/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers captured handoff email once above retained package versions', async () => {
+  const migration = await readFile(capturedHandoffEmailMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Captured handoff email test package:/);
+  assert.match(migration, /first valid public email from the immutable Research Packet/);
+  assert.match(migration, /recording a handoff never sends email/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers automatic Clientspace preview once above retained package versions', async () => {
+  const migration = await readFile(automaticClientspacePreviewMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Automatic Clientspace preview test package:/);
+  assert.match(migration, /deploys and checks that commit on Vercel/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers automatic prospect domains once above retained package versions', async () => {
+  const migration = await readFile(automaticProspectDomainMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Automatic prospect-domain test package:/);
+  assert.match(migration, /first-level hostname from the source repository/);
+  assert.match(migration, /never substitute a provider URL/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers editable handoff recovery once above retained package versions', async () => {
+  const migration = await readFile(editableHandoffRecoveryMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Editable handoff recovery test package:/);
+  assert.match(migration, /owner-writable local workspace/);
+  assert.match(migration, /"contextual-logo-selection"/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers Codex transcript position once above retained package versions', async () => {
+  const migration = await readFile(codexTranscriptPositionMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Codex transcript position test package:/);
+  assert.match(migration, /manual upward scroll disables following/);
+  assert.match(migration, /Back to latest/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers reviewed page dispositions once above retained package versions', async () => {
+  const migration = await readFile(pageDispositionMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Reviewed page-disposition test package:/);
+  assert.match(migration, /merge, redirect, workflow state, contextual route, or exclusion/i);
+  assert.match(migration, /"site-navigation-architecture"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('classifies editable-source permission failures after successful quality checks', () => {
+  const details = failureDetails(
+    new Error(
+      "EACCES: permission denied, open '/tmp/siteforge-builder-run/local-development/website/package.json'",
+    ),
+  );
+  assert.equal(details.code, 'editable_source_packaging_failed');
+  assert.equal(details.stage, 'saving_outputs');
+  assert.equal(details.retryable, false);
+});
+
+test('registers website tone direction once above retained package versions', async () => {
+  const migration = await readFile(websiteToneDirectionMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Website tone direction test package:/);
+  assert.match(migration, /rather than requiring pure white or pure black backgrounds/);
+  assert.match(migration, /green, blue, brown, or black/);
+  assert.match(migration, /"website-tone-direction"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers corrected logo accent regions once above retained package versions', async () => {
+  const migration = await readFile(logoAccentRegionsMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Logo accent-region test package:/);
+  assert.match(migration, /must never recolour a smaller verified accent/);
+  assert.match(migration, /"contextual-logo-selection"/);
+  assert.match(migration, /not exists/i);
+});
+
+test('registers independently delegated colour roles once above retained package versions', async () => {
+  const migration = await readFile(builderDerivedColoursMigrationUrl, 'utf8');
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Builder-derived colour roles test package:/);
+  assert.match(migration, /primary_only derives accent/);
+  assert.match(migration, /builder_derived derives both/);
+  assert.match(migration, /"contextual-logo-selection"/);
+  assert.match(migration, /not exists/i);
+});
+
 test('packages complete local-development source without generated output or dependencies', async () => {
   const worker = await readFile(
     new URL('../../worker/builder-worker.mjs', import.meta.url),
@@ -1850,6 +2465,40 @@ test('packages complete local-development source without generated output or dep
   assert.match(saveSource, /refinementLedger: '\.made-solid\/refinement-log\.jsonl'/);
   assert.doesNotMatch(saveSource, /--exclude=website\/public\/assets/);
   assert.match(handoff, /node_modules\|\\\.next\|out\|\\\.git/);
+});
+
+test('turns protected builder source into a writable editable handoff', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'siteforge-editable-handoff-'));
+  const source = join(directory, 'source');
+  const destination = join(directory, 'destination');
+  try {
+    await mkdir(source, { recursive: true });
+    await writeFile(
+      join(source, 'package.json'),
+      JSON.stringify({ scripts: { dev: 'next dev' }, dependencies: { next: '16.2.12' } }),
+    );
+    await chmod(join(source, 'package.json'), 0o444);
+
+    await copyLocalDevelopmentSource(source, destination);
+    assert.ok((await stat(join(destination, 'package.json'))).mode & 0o200);
+    await applyLocalDevelopmentHandoff(destination, {
+      studioBuildId: 'build-1',
+      businessId: 'business-1',
+      buildManifestId: 'manifest-1',
+      agentPackageId: 'package-1',
+      agentPackageVersion: 12.3,
+      buildMode: 'homepage_test',
+      templateVersion: 'template-1',
+      baselineCommit: null,
+    });
+    const packageDocument = JSON.parse(await readFile(join(destination, 'package.json'), 'utf8'));
+    assert.equal(
+      packageDocument.scripts['made-solid:log'],
+      'node .made-solid/scripts/refinement-log.mjs add',
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('runs responsive browser checks without creating screenshot artifacts', async () => {
@@ -1953,6 +2602,17 @@ test('queues chooser requests as new tests and reserves resume for the explicit 
   const resumeStart = app.indexOf('async function resumeWebsiteBuildForBusiness');
   const resumeEnd = app.indexOf('async function deleteWebsiteBuild', resumeStart);
   assert.match(app.slice(resumeStart, resumeEnd), /repository\.resumeWebsiteBuild\(builderRunId\)/);
+
+  const repository = await readFile(cloudRepositoryUrl, 'utf8');
+  const cloudRequestStart = repository.indexOf('async requestWebsiteBuild(');
+  const cloudRequestEnd = repository.indexOf(
+    'async requestBuilderQualityRecheck',
+    cloudRequestStart,
+  );
+  const cloudRequestSource = repository.slice(cloudRequestStart, cloudRequestEnd);
+  assert.match(cloudRequestSource, /const \{ data, error \} = await this\.client\.rpc/);
+  assert.match(cloudRequestSource, /\.eq\('id', data\)/);
+  assert.doesNotMatch(cloudRequestSource, /latestBuilderRun/);
 });
 
 test('requires every future builder-package change to register a visible version', async () => {
@@ -2066,6 +2726,45 @@ test('keeps reviewed asset roles and reuse guidance beside staged public paths',
   assert.equal(descriptor.safeReuseNote, 'Approved as homepage service imagery.');
   assert.deepEqual(descriptor.cautions, ['Do not identify the worker.']);
   assert.deepEqual(descriptor.visibleText, ['Main switch']);
+});
+
+test('stages byte-identical approved images once while preferring the primary logo record', () => {
+  const groups = groupApprovedAssetsByContent(
+    [
+      { id: 'duplicate-logo', sha256: 'same-content' },
+      { id: 'primary-logo', sha256: 'same-content' },
+      { id: 'worksite', sha256: 'different-content' },
+    ],
+    'primary-logo',
+  );
+
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].asset.id, 'primary-logo');
+  assert.deepEqual(
+    groups[0].assets.map((asset) => asset.id),
+    ['duplicate-logo', 'primary-logo'],
+  );
+});
+
+test('keeps all duplicate discovery locations beside the one staged asset', () => {
+  const descriptor = approvedAssetDescriptor(
+    { id: 'hero', metadata: {} },
+    '',
+    'public/assets/hero.jpg',
+    'image/jpeg',
+    {},
+    {
+      sourcePageUrls: ['https://example.com/', 'https://example.com/services'],
+      sourceUrls: ['https://cdn.example.com/hero.jpg'],
+      duplicateArtifactIds: ['hero-copy'],
+    },
+  );
+
+  assert.deepEqual(descriptor.sourcePageUrls, [
+    'https://example.com/',
+    'https://example.com/services',
+  ]);
+  assert.deepEqual(descriptor.duplicateArtifactIds, ['hero-copy']);
 });
 
 test('normalises the hexadecimal apostrophe entity emitted by Next static HTML', () => {
@@ -2208,6 +2907,66 @@ test('applies exact reviewed brand colours to generated CSS tokens', async () =>
   }
 });
 
+test('applies an accent-only palette without inventing a primary token', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'siteforge-accent-only-tokens-'));
+  const stylesheet = join(directory, 'src/app/globals.css');
+  try {
+    await mkdir(dirname(stylesheet), { recursive: true });
+    await writeFile(stylesheet, ':root {\n  --brand-primary: #162423;\n}\n');
+    const applied = await enforceBrandPaletteTokens(
+      { data: { brandKit: { palette: { accent: '#E85D24', mode: 'accent_only' } } } },
+      directory,
+    );
+    const result = await readFile(stylesheet, 'utf8');
+    assert.deepEqual(applied, [{ token: '--brand-accent', value: '#e85d24' }]);
+    assert.match(result, /--brand-primary: #162423;/);
+    assert.match(result, /--brand-accent: #e85d24;/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('applies a primary-only palette without replacing the builder accent token', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'siteforge-primary-only-tokens-'));
+  const stylesheet = join(directory, 'src/app/globals.css');
+  try {
+    await mkdir(dirname(stylesheet), { recursive: true });
+    await writeFile(stylesheet, ':root {\n  --brand-accent: #E85D24;\n}\n');
+    const applied = await enforceBrandPaletteTokens(
+      { data: { brandKit: { palette: { primary: '#306090', mode: 'primary_only' } } } },
+      directory,
+    );
+    const result = await readFile(stylesheet, 'utf8');
+    assert.deepEqual(applied, [{ token: '--brand-primary', value: '#306090' }]);
+    assert.match(result, /--brand-primary: #306090;/);
+    assert.match(result, /--brand-accent: #E85D24;/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('leaves both builder tokens untouched when both colour roles are delegated', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'siteforge-builder-derived-tokens-'));
+  const stylesheet = join(directory, 'src/app/globals.css');
+  try {
+    await mkdir(dirname(stylesheet), { recursive: true });
+    await writeFile(
+      stylesheet,
+      ':root {\n  --brand-primary: #162423;\n  --brand-accent: #E85D24;\n}\n',
+    );
+    const applied = await enforceBrandPaletteTokens(
+      { data: { brandKit: { palette: { mode: 'builder_derived' } } } },
+      directory,
+    );
+    const result = await readFile(stylesheet, 'utf8');
+    assert.deepEqual(applied, []);
+    assert.match(result, /--brand-primary: #162423;/);
+    assert.match(result, /--brand-accent: #E85D24;/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('recognises minified CSS equivalents of reviewed brand colours', () => {
   assert.deepEqual(cssColourRepresentations('#FF0000'), ['#ff0000', '#f00', 'red']);
   assert.deepEqual(cssColourRepresentations('#306090'), ['#306090']);
@@ -2336,4 +3095,42 @@ test('flags a light logo selected for a declared light surface', () => {
 
   assert.equal(problems.length, 1);
   assert.match(problems[0], /white logo on a declared light surface/);
+});
+
+test('registers the subscription tmux builder once above retained package versions', async () => {
+  const [migration, repository, app, worker, cloudRepository, launcher, supervisor] =
+    await Promise.all([
+      readFile(subscriptionBuilderPackageMigrationUrl, 'utf8'),
+      readFile(repositoryUrl, 'utf8'),
+      readFile(appUrl, 'utf8'),
+      readFile(new URL('../../worker/builder-worker.mjs', import.meta.url), 'utf8'),
+      readFile(cloudRepositoryUrl, 'utf8'),
+      readFile(new URL('../../scripts/codespace-work', import.meta.url), 'utf8'),
+      readFile(new URL('../../worker/supervisor.mjs', import.meta.url), 'utf8'),
+    ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /Subscription builder runtime test package:/);
+  assert.match(migration, /persistent named tmux builder runtime/);
+  assert.match(migration, /ChatGPT sign-in for subscription access/);
+  assert.match(migration, /"framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 14\.2,/);
+  assert.match(repository, /basePackageId: localCompactCodexComposerPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localSubscriptionBuilderPackage,') <
+      packageLedger.indexOf('localCompactCodexComposerPackage,'),
+  );
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.88`/);
+  assert.match(app, /saved conversations stay attached to the build/);
+  assert.match(app, /Build conversation/);
+  assert.match(app, /separate\s+from Studio chat/);
+  assert.match(worker, /billingMode: 'chatgpt_subscription'/);
+  assert.match(worker, /logged in using chatgpt/i);
+  assert.match(cloudRepository, /contains\('metadata', \{ stream: 'codex' \}\)/);
+  assert.match(launcher, /-n builds/);
+  assert.match(launcher, /scripts\/start-subscription-builder/);
+  assert.match(launcher, /SITEFORGE_EXTERNAL_BUILDER=1 npm run start:local/);
+  assert.match(supervisor, /SITEFORGE_EXTERNAL_BUILDER/);
 });

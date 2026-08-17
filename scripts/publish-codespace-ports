@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ "${CODESPACES:-false}" != "true" || -z "${CODESPACE_NAME:-}" ]]; then
+  exit 0
+fi
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "GitHub CLI is unavailable; browser ports could not be made public." >&2
+  exit 1
+fi
+
+read -r -a public_ports <<<"${MADE_SOLID_PUBLIC_PORTS:-3000 3001 5173 6006 8788}"
+declare -A published=()
+declare -A announced=()
+refresh_cycle=0
+
+port_is_listening() {
+  local port="$1"
+  ss -H -ltn "sport = :$port" 2>/dev/null | grep -q .
+}
+
+publish_port() {
+  local port="$1"
+  if gh codespace ports visibility "${port}:public" -c "$CODESPACE_NAME" >/dev/null 2>&1; then
+    published["$port"]=1
+    if [[ "${announced[$port]:-0}" != "1" ]]; then
+      announced["$port"]=1
+      echo "Port $port is public: https://${CODESPACE_NAME}-${port}.${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN}/"
+    fi
+    return 0
+  fi
+  return 1
+}
+
+while true; do
+  refresh_cycle=$((refresh_cycle + 1))
+  if ((refresh_cycle >= 8)); then
+    for port in "${public_ports[@]}"; do published["$port"]=0; done
+    refresh_cycle=0
+  fi
+  for port in "${public_ports[@]}"; do
+    if port_is_listening "$port"; then
+      if [[ "${published[$port]:-0}" != "1" ]]; then
+        publish_port "$port" || true
+      fi
+    else
+      published["$port"]=0
+    fi
+  done
+  [[ "${1:-}" == "--once" ]] && exit 0
+  sleep 2
+done

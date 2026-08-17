@@ -1,12 +1,25 @@
-import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const localDevelopmentHandoffVersion = 1;
+export const localDevelopmentHandoffVersion = 7;
 
 const handoffTemplateDirectory = fileURLToPath(
   new URL('./local-development-handoff/', import.meta.url),
 );
+
+async function makeLocalDevelopmentSourceWritable(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  for (const entry of entries) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await chmod(path, (await stat(path)).mode | 0o700);
+      await makeLocalDevelopmentSourceWritable(path);
+    } else if (entry.isFile()) {
+      await chmod(path, (await stat(path)).mode | 0o600);
+    }
+  }
+}
 
 export async function applyLocalDevelopmentHandoff(projectDirectory, origin) {
   await cp(handoffTemplateDirectory, projectDirectory, { recursive: true, force: true });
@@ -28,8 +41,16 @@ export async function applyLocalDevelopmentHandoff(projectDirectory, origin) {
 
   const packagePath = join(projectDirectory, 'package.json');
   const packageDocument = JSON.parse(await readFile(packagePath, 'utf8'));
+  const existingScripts = packageDocument.scripts ?? {};
+  const developmentCommand =
+    existingScripts.dev ??
+    (typeof packageDocument.dependencies?.next === 'string' ? 'next dev' : undefined);
+  if (!developmentCommand) {
+    throw new Error('The editable workspace has no supported website development command.');
+  }
   packageDocument.scripts = {
-    ...(packageDocument.scripts ?? {}),
+    dev: developmentCommand,
+    ...existingScripts,
     'made-solid:log': 'node .made-solid/scripts/refinement-log.mjs add',
     'made-solid:summary': 'node .made-solid/scripts/refinement-log.mjs summary',
     'made-solid:bundle': 'node .made-solid/scripts/refinement-log.mjs bundle',
@@ -47,6 +68,10 @@ export async function copyLocalDevelopmentSource(sourceDirectory, destinationDir
       return !/(?:^|\/)(?:node_modules|\.next|out|\.git)(?:\/|$)/.test(relativePath);
     },
   });
+  // Builder inputs are deliberately read-only while Codex runs. The exported
+  // handoff is an editable workspace, so do not preserve that protection in
+  // the copied source (it also prevents the handoff from extending package.json).
+  await makeLocalDevelopmentSourceWritable(destinationDirectory);
 }
 
 export async function writeDownloadedBuildFile(projectDirectory, relativePath, body) {

@@ -6,6 +6,27 @@ storage links.
 
 ## Start
 
+### GitHub Codespaces
+
+Open the repository in Codespaces. Its checked-in development container will install the locked
+website dependencies and official Codex tools, forward the website preview, and start the website
+and Codex in the persistent `made-solid-editable` tmux session. The editor attaches to its Codex
+window automatically. Setup runs as a background startup job, while the editor terminal streams its
+real dependency, Codex, and tmux checkpoints before attaching. The container start hook runs the
+same launcher when the Codespace is opened directly from GitHub, even if the editor's automatic
+folder task has not run.
+
+If this Codespace was created before automatic resume startup was added, pull the latest `main`
+branch and rebuild its container once. New Codespaces and all later resumes use the checked-in start
+hook automatically.
+
+Codex and its editor extension share the same cached login. For unattended sign-in, add either
+`CODEX_ACCESS_TOKEN` or `OPENAI_API_KEY` as a Codespaces secret for this repository. Never save a
+token in this repository. Without either secret, follow the normal Codex browser sign-in once when
+the Codex terminal opens.
+
+### Other local environments
+
 1. Activate Node 22: `nvm use` (the included `.nvmrc` pins it).
 2. Confirm the generated baseline is committed: `git log --oneline --max-count=2`.
 3. Install the locked dependencies: `npm ci`.

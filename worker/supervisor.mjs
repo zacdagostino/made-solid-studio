@@ -8,8 +8,13 @@ const workerScripts = [
   ['visual-content', 'visual-content-worker.mjs'],
   ['capabilities', 'capability-analysis-worker.mjs'],
   ['agent-packages', 'agent-package-worker.mjs'],
-  ['builder', 'builder-worker.mjs'],
 ];
+if (process.env.SITEFORGE_EXTERNAL_BUILDER !== '1') {
+  workerScripts.push(['builder', 'builder-worker.mjs']);
+}
+if (process.env.MADE_SOLID_HANDOFF_URL && process.env.MADE_SOLID_HANDOFF_SECRET) {
+  workerScripts.push(['made-solid-handoffs', 'made-solid-handoff-worker.mjs']);
+}
 if (
   process.env.VERCEL_ACCESS_TOKEN &&
   process.env.CLIENTSPACE_HANDOFF_URL &&
@@ -17,7 +22,7 @@ if (
 ) {
   workerScripts.push(['client-preview', 'client-preview-worker.mjs']);
 }
-if (process.env.GITHUB_TOKEN) {
+if (process.env.SITEFORGE_GITHUB_TOKEN || process.env.GITHUB_TOKEN) {
   workerScripts.push(['github-workspace', 'github-workspace-worker.mjs']);
 }
 const restartDelayMs = 2_000;

@@ -1,0 +1,35 @@
+{
+  "task.allowAutomaticTasks": "on",
+  "workbench.startupEditor": "none",
+  "remote.restoreForwardedPorts": false,
+  "remote.portsAttributes": {
+    "3000": {
+      "label": "Prospect website preview",
+      "onAutoForward": "silent"
+    },
+    "3001": {
+      "label": "Made Solid website",
+      "onAutoForward": "openBrowser"
+    },
+    "4173-4176": {
+      "label": "Automated test preview",
+      "onAutoForward": "ignore"
+    },
+    "4500": {
+      "label": "Codex app server (internal)",
+      "onAutoForward": "ignore"
+    },
+    "5173": {
+      "label": "Made Solid Studio",
+      "onAutoForward": "silent"
+    },
+    "6006": {
+      "label": "Studio Storybook",
+      "onAutoForward": "silent"
+    },
+    "8788": {
+      "label": "Preview and API host",
+      "onAutoForward": "silent"
+    }
+  }
+}

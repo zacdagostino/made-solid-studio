@@ -36,7 +36,19 @@ Set these only in the worker runtime or Codespaces secret store. Do not put eith
 SITEFORGE_SUPABASE_URL=https://your-project.supabase.co
 SITEFORGE_SUPABASE_SERVICE_ROLE_KEY=your-server-only-key
 OPENAI_API_KEY=your-server-only-openai-key
-# Optional dedicated key for Codex build jobs. OPENAI_API_KEY is used when this is absent.
+# Website builds default to the trusted worker's cached ChatGPT subscription login.
+SITEFORGE_CODEX_AUTH_MODE=chatgpt
+```
+
+Run `codex login --device-auth` once in the trusted Codespace or local worker environment before
+starting the builder. The named `builds` tmux window created by `scripts/codespace-work` verifies
+that the active login is ChatGPT-backed. It never copies or stores the cached credential in Studio.
+`OPENAI_API_KEY` remains required for the separate API-backed analysis workers.
+
+For a deliberately usage-billed deployment worker, opt in explicitly:
+
+```bash
+SITEFORGE_CODEX_AUTH_MODE=api_key
 SITEFORGE_CODEX_API_KEY=your-server-only-openai-key
 ```
 
@@ -55,10 +67,10 @@ SITEFORGE_AGENT_PACKAGE_MODEL=gpt-5.6
 SITEFORGE_AI_PRICING_JSON='{"gpt-5.6":{"inputPerMillion":5,"cachedInputPerMillion":0.5,"outputPerMillion":30}}'
 ```
 
-The worker always records provider token usage. It automatically prices the standard `gpt-5.6`
-Codex test-builder alias at the published OpenAI standard rate current on 2026-07-24. Configure a
-reviewed rate card for any other model, non-standard processing tier, subscription, or invoice
-adjustment so the in-app total never treats an unknown amount as a real cost.
+The worker always records provider token usage. ChatGPT-backed builds are labelled as subscription
+usage and never turned into estimated API spend. Explicit `api_key` builds are priced from the
+reviewed rate card or documented standard rate, so the in-app total never treats an unknown amount
+as a real cost.
 
 Without overrides, private homepage and page-set tests use GPT-5.6 Terra at medium reasoning;
 whole-site revisions and complete builds retain GPT-5.6 Sol at high reasoning. Every named profile
@@ -164,6 +176,31 @@ CLIENTSPACE_HANDOFF_URL=https://madesolid.com.au/api/integrations/studio/handoff
 CLIENTSPACE_HANDOFF_SECRET=the-same-long-random-secret-as-clientspace
 ```
 
+Committed editable-source handoffs use a separate protected worker so they can never fall back to
+an older generated artifact. Configure the exact Made Solid receiving endpoint and the same
+server-only secret used by the website:
+
+```bash
+MADE_SOLID_HANDOFF_URL=https://madesolid.com.au/api/integrations/studio/handoffs
+MADE_SOLID_HANDOFF_SECRET=the-same-long-random-secret-as-the-website
+VERCEL_TEAM_SLUG=made-solid
+VERCEL_CLI_VERSION=58.9.2
+MADE_SOLID_PROSPECT_DOMAIN=madesolid.com.au
+SITEFORGE_PROSPECT_WORKSPACES_DIR=/absolute/path/to/prospect-workspaces
+```
+
+Apply `supabase/migrations/20260811110000_made_solid_source_handoffs.sql`. The worker records only
+the repository, branch, full commit SHA, edit version and immutable build lineage. Before sending
+that handoff, it verifies the local repository is clean and on the exact commit, deploys that commit
+through the server-only authenticated Vercel CLI session, and includes the ready preview URL.
+The worker assigns the repository slug as a first-level Made Solid subdomain, waits for that exact
+HTTPS hostname to become ready, and sends the verified `https://{slug}.madesolid.com.au` URL rather
+than leaving Clientspace on a provider URL. The apex domain must use Vercel nameservers so each
+project domain receives its DNS record and certificate automatically.
+Clientspace creation remains separate and no email is sent. Its persisted heartbeat keeps the
+Studio button disabled whenever protected delivery is not connected, and the database refuses to
+create an unattended queue if the worker heartbeat is stale.
+
 Run the publisher independently with `npm run worker:publish`, or let the
 worker supervisor include it automatically when the required Vercel and
 Clientspace values exist. Apply
@@ -208,7 +245,10 @@ The audit worker does not crawl the public web or contact a business. It can onl
 
 The builder worker reads only an approved Build Manifest, a private dossier for every selected
 captured page, and human-approved source assets. It copies a pinned Next.js App Router foundation
-into a temporary Git workspace and invokes `codex exec --json --sandbox workspace-write`. The
+into a temporary Git workspace and invokes `codex exec --json --sandbox workspace-write` from the
+named persistent `builds` tmux worker. Test and proper builds share this runtime and the cached
+ChatGPT subscription sign-in. Their safe user/assistant transcript is stored against the build run
+and stays out of Studio's general Codex chat. The
 foundation fixes the framework, strict TypeScript, Tailwind, Base UI, Lucide, formatting, linting,
 typing, and export mechanics. Codex creates the business-specific tokens, UI primitives, patterns,
 sections, navigation, layouts, and pages rather than selecting a pre-themed component library.

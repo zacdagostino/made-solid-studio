@@ -9,6 +9,7 @@ export default [
       'node_modules/**',
       'test-results/**',
       'playwright-report/**',
+      'prospect-workspaces/**',
       'storybook-static/**',
       'worker/builder-template/**',
     ],

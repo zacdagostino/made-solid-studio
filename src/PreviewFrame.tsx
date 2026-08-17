@@ -1,16 +1,34 @@
 import { useEffect, useState } from 'react';
 
+function codespaceName(hostname: string) {
+  return /^(.+)-\d+\.app\.github\.dev$/.exec(hostname)?.[1];
+}
+
+function isAllowedDevelopmentPreview(url: URL) {
+  if (url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1')) {
+    return true;
+  }
+  if (url.protocol !== 'https:' || !url.hostname.endsWith('.app.github.dev')) return false;
+  const sourceCodespace = codespaceName(url.hostname);
+  const studioCodespace = codespaceName(window.location.hostname);
+  return Boolean(sourceCodespace && studioCodespace && sourceCodespace === studioCodespace);
+}
+
+function isSavedPreview(url: URL) {
+  return (
+    url.protocol === 'https:' &&
+    url.hostname.endsWith('.supabase.co') &&
+    url.pathname.startsWith('/functions/v1/siteforge-preview/')
+  );
+}
+
 function previewSourceUrl() {
   const query = window.location.hash.slice('#/preview?'.length);
   const source = new URLSearchParams(query).get('source');
   if (!source) return undefined;
   try {
     const url = new URL(source);
-    if (
-      url.protocol !== 'https:' ||
-      !url.hostname.endsWith('.supabase.co') ||
-      !url.pathname.startsWith('/functions/v1/siteforge-preview/')
-    ) {
+    if (!isSavedPreview(url) && !isAllowedDevelopmentPreview(url)) {
       return undefined;
     }
     return url;
@@ -97,6 +115,11 @@ export function PreviewFrame() {
 
   useEffect(() => {
     if (!source) return;
+    if (isAllowedDevelopmentPreview(source)) {
+      setDocument(undefined);
+      setIsLoading(true);
+      return;
+    }
     const controller = new AbortController();
     void fetch(previewDocumentUrl(source), { signal: controller.signal })
       .then(async (response) => {
@@ -177,6 +200,15 @@ export function PreviewFrame() {
           sandbox="allow-scripts allow-top-navigation-by-user-activation"
           srcDoc={document}
           title="Private website preview"
+        />
+      ) : isAllowedDevelopmentPreview(source) ? (
+        <iframe
+          className="private-preview-frame"
+          onError={() => setError('The development website preview is unavailable.')}
+          onLoad={() => setIsLoading(false)}
+          sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
+          src={source.href}
+          title="Prospect development website preview"
         />
       ) : null}
     </main>

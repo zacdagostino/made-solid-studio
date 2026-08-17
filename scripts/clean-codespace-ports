@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ "${CODESPACES:-false}" != "true" || -z "${CODESPACE_NAME:-}" ]]; then
+  exit 0
+fi
+
+if ! command -v gh >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+  exit 0
+fi
+
+if ! codespace_json="$(gh api "/user/codespaces/${CODESPACE_NAME}?internal=true&refresh=true" 2>/dev/null)"; then
+  exit 0
+fi
+
+readarray -t tunnel_details < <(
+  printf '%s' "$codespace_json" | node -e '
+    let source = "";
+    process.stdin.on("data", (chunk) => (source += chunk));
+    process.stdin.on("end", () => {
+      const tunnel = JSON.parse(source).connection?.tunnelProperties;
+      if (!tunnel?.clusterId || !tunnel?.tunnelId || !tunnel?.managePortsAccessToken) process.exit(1);
+      process.stdout.write(`${tunnel.clusterId}\n${tunnel.tunnelId}\n${tunnel.managePortsAccessToken}\n`);
+    });
+  '
+)
+
+if [[ "${#tunnel_details[@]}" -ne 3 ]]; then
+  exit 0
+fi
+
+cluster_id="${tunnel_details[0]}"
+tunnel_id="${tunnel_details[1]}"
+manage_token="${tunnel_details[2]}"
+
+# These ports belong to old ad-hoc previews, automated browser runs, or the
+# loopback-only Codex server. Active workspace ports are deliberately excluded.
+for port in 3002 3010 3100 4173 4174 4175 4176 4500; do
+  status="$(
+    curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+      --max-time 10 \
+      --request DELETE \
+      --header "Authorization: tunnel ${manage_token}" \
+      "https://${cluster_id}.rel.tunnels.api.visualstudio.com/tunnels/${tunnel_id}/ports/${port}?api-version=2023-09-27-preview" || true
+  )"
+  if [[ "$status" != "204" && "$status" != "404" ]]; then
+    echo "Could not remove stale Codespace port $port (HTTP $status)." >&2
+  fi
+done

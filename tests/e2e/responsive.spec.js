@@ -17,6 +17,7 @@ const mobileNavigationContract = new URL(
   import.meta.url,
 );
 const studioStyles = new URL('../../src/styles.css', import.meta.url);
+const studioApp = new URL('../../src/App.tsx', import.meta.url);
 
 async function mountPopulatedBuilderActivity(page) {
   const codexItems = Array.from(
@@ -48,30 +49,84 @@ async function mountPopulatedBuilderActivity(page) {
   await page.goto('/');
   await page.setContent(`
     <main style="height: auto">
-      <section class="builder-codex-stream" aria-labelledby="builder-codex-stream-title">
-        <div class="builder-codex-stream__header">
-          <div>
-            <p class="eyebrow">Codex activity</p>
-            <h4 id="builder-codex-stream-title">Live build stream</h4>
-          </div>
-          <span class="status-badge">Live</span>
-        </div>
-        <ol>${codexItems}</ol>
+      <section aria-labelledby="builder-codex-stream-title">
+        <details class="builder-codex-stream builder-evidence-disclosure" open>
+          <summary class="builder-evidence-disclosure__summary">
+            <span>
+              <p class="eyebrow">Build conversation</p>
+              <strong id="builder-codex-stream-title">Codex is working on this build</strong>
+              <small>25 messages · separate from Studio chat</small>
+            </span>
+            <span class="builder-evidence-disclosure__aside">
+              <span class="status-badge">Live</span>
+              <span class="status-badge">Build only</span>
+              <span aria-hidden="true">⌄</span>
+            </span>
+          </summary>
+          <ol aria-label="Build conversation messages" aria-live="polite" aria-relevant="additions text" tabindex="0">
+            <li class="builder-new-activity builder-conversation__message builder-conversation__message--user">
+              <strong>You</strong>
+              <div class="markdown-content"><p>Build a complete responsive website from the approved manifest.</p></div>
+              <time>11:59</time>
+            </li>
+            ${codexItems}
+          </ol>
+        </details>
       </section>
-      <section class="builder-diagnostics" aria-labelledby="builder-diagnostics-title">
-        <div class="builder-diagnostics__header">
-          <div>
+      <details class="builder-diagnostics builder-evidence-disclosure" open>
+        <summary class="builder-evidence-disclosure__summary">
+          <span>
             <p class="eyebrow">Build diagnostics</p>
-            <h4 id="builder-diagnostics-title">Worker, terminal, and browser output</h4>
-          </div>
-          <span class="status-badge">Private</span>
-        </div>
+            <strong>Worker, terminal, and browser output</strong>
+            <small>32 private entries</small>
+          </span>
+          <span class="builder-evidence-disclosure__aside"><span class="status-badge">Private</span><span aria-hidden="true">⌄</span></span>
+        </summary>
         <ol>${diagnosticItems}</ol>
-      </section>
+      </details>
     </main>
   `);
   await page.addStyleTag({ path: studioStyles.pathname });
   await page.addStyleTag({ content: '[hidden] { display: none !important; }' });
+}
+
+async function mountCompletedBuilderEvidence(page) {
+  const evidence = [
+    [
+      'builder-diagnostics',
+      'Build diagnostics',
+      'Worker, terminal, and browser output',
+      '12 private entries',
+    ],
+    [
+      'builder-timeline',
+      'Latest build timeline',
+      'What the builder has completed',
+      '8 saved updates',
+    ],
+    [
+      'builder-quality',
+      'Quality checks',
+      'Generated preview review',
+      '14 checks · review required',
+    ],
+    ['builder-screenshots', 'Responsive captures', 'Generated website', '3 screenshots'],
+  ]
+    .map(
+      ([className, eyebrow, title, count]) => `
+        <details class="${className} builder-evidence-disclosure">
+          <summary class="builder-evidence-disclosure__summary">
+            <span><p class="eyebrow">${eyebrow}</p><strong>${title}</strong><small>${count}</small></span>
+            <span class="builder-evidence-disclosure__aside"><span aria-hidden="true">⌄</span></span>
+          </summary>
+          <div class="builder-evidence-test-content">Saved finished-build evidence</div>
+        </details>`,
+    )
+    .join('');
+
+  await page.goto('/');
+  await page.setContent(`<main style="height: auto">${evidence}</main>`);
+  await page.addStyleTag({ path: studioStyles.pathname });
 }
 
 async function mountLiveBuilderProgress(page) {
@@ -445,42 +500,254 @@ async function mountLocalDevelopmentPublication(page) {
       <section class="card workspace-panel local-development" data-testid="local-development-publication">
         <div class="local-development__header">
           <div>
-            <p class="eyebrow">Development handoff</p>
-            <h2>Continue locally or on GitHub</h2>
-            <p class="muted-copy">Take the complete editable project out of Studio without losing its approved assets, build origin, or structured refinement log.</p>
+            <p class="eyebrow">Editable workspace</p>
+            <h2>Work in a local prospect workspace</h2>
+            <p class="muted-copy">Keep each editable prospect repository in this Studio Codespace under an ignored local directory, with approved assets, build origin, and refinement history intact.</p>
           </div>
           <span class="status-badge status-badge--success">Ready to export</span>
         </div>
         <section class="local-development__ready" aria-labelledby="local-workspace-ready">
           <span aria-hidden="true">▣</span>
           <div>
-            <h3 id="local-workspace-ready">Local workspace ready to export</h3>
-            <p>Build f906bbf7 has editable source, approved assets, local setup notes, and the Made Solid refinement ledger.</p>
+            <h3 id="local-workspace-ready">Editable source is ready</h3>
+            <p>Build f906bbf7 can become a separate private workspace with editable source, approved assets, setup notes, and the Made Solid refinement ledger.</p>
             <p class="local-development__quality-note">Quality review still has findings. That does not block private development, but it still blocks client publishing.</p>
-            <div class="local-development__command">
-              <code>npm run export:local-build -- --run f906bbf7-a333-4bfa-bcfb-f667e7f1259b --destination /path/to/project</code>
-              <button class="button button--secondary button--small" type="button">Copy command</button>
-            </div>
+            <button aria-label="Open local prospect workspace" class="button button--primary" type="button">Open local workspace</button>
+            <section class="local-refinement-ledger" aria-labelledby="local-refinement-ledger-title">
+              <header>
+                <div><span class="local-refinement-ledger__icon" aria-hidden="true">✓</span><div><h4 id="local-refinement-ledger-title">Refinement ledger</h4><p>Open the local workspace to start its live refinement ledger.</p></div></div>
+                <span class="local-refinement-ledger__live"><span aria-hidden="true"></span>Live</span>
+              </header>
+              <div class="local-refinement-ledger__state" role="status"><span aria-hidden="true">◷</span>Entries appear here automatically after Codex records a verified change.</div>
+            </section>
+            <details class="local-development__manual">
+              <summary>Manual command fallback</summary>
+              <p>Use this only if the local workspace service cannot run the setup automatically.</p>
+              <div class="local-development__command">
+                <code>npm run export:local-build -- --run f906bbf7-a333-4bfa-bcfb-f667e7f1259b --destination prospect-workspaces/lecegroup</code>
+                <button aria-label="Copy local workspace command" class="button button--secondary button--small" type="button">Copy command</button>
+              </div>
+            </details>
           </div>
         </section>
         <form class="local-development__form">
           <div class="local-development__form-heading">
             <span aria-hidden="true">◉</span>
-            <div><h3>Create a private GitHub repository</h3><p>Studio creates the repository only after you confirm the exact destination.</p></div>
+            <div><h3>Create the private editing workspace</h3><p>Studio has filled in the destination. One click creates the separate private repository and pushes the complete editable handoff.</p></div>
           </div>
-          <div class="local-development__fields">
-            <label><span>GitHub account or organization</span><input value="made-solid-studio"></label>
-            <label><span>Repository name</span><input value="lece-electrical-website"></label>
-            <label class="local-development__description"><span>Description (optional)</span><input value="LECE Electrical website development"></label>
-          </div>
-          <p class="local-development__privacy"><span aria-hidden="true">◇</span>Private only. Studio never exposes the GitHub token to this browser and never creates a public repository from this action.</p>
-          <button class="button button--primary" type="submit">Create private repository</button>
+          <p class="local-development__target">Private destination: <strong>zacdagostino/lecegroup</strong></p>
+          <details class="local-development__destination-settings">
+            <summary>Change GitHub destination</summary>
+            <div class="local-development__fields">
+              <label><span>GitHub account or organization</span><input value="zacdagostino"></label>
+              <label><span>Repository name</span><input value="lecegroup"></label>
+              <label class="local-development__description"><span>Description (optional)</span><input value="Lecegroup website development"></label>
+            </div>
+          </details>
+          <p class="local-development__privacy"><span aria-hidden="true">◇</span>Private only. Studio never exposes the GitHub token to this browser, never creates a public repository, and never changes the Made Solid Studio repository from this action.</p>
+          <button class="button button--primary" type="submit">Create editable workspace</button>
         </form>
       </section>
     </div>
   `);
   await page.addStyleTag({ path: studioStyles.pathname });
   await page.addStyleTag({ content: 'body { height: auto; overflow: auto; }' });
+}
+
+async function mountEditableWorkspaceCreation(page) {
+  const stages = [
+    [
+      'complete',
+      'Connect the protected worker',
+      'Reserve this request without exposing GitHub credentials to the browser.',
+    ],
+    [
+      'complete',
+      'Assemble the editable source',
+      'Load the finished source, approved assets, setup notes, and refinement history.',
+    ],
+    [
+      'complete',
+      'Prepare a clean Git history',
+      'Verify the project, add its agent instructions, and create the initial main commit.',
+    ],
+    [
+      'current',
+      'Create the private repository',
+      'Create the named GitHub repository with public access disabled.',
+    ],
+    [
+      'upcoming',
+      'Push the complete handoff',
+      'Send the editable source and confirm the main branch is available for development.',
+    ],
+  ]
+    .map(
+      ([state, label, detail], index) => `
+        <li class="is-${state}">
+          <span class="local-development__progress-marker" aria-hidden="true">${state === 'complete' ? '✓' : state === 'current' ? '◌' : index + 1}</span>
+          <span><strong>${label}</strong><small>${detail}</small></span>
+          <span class="status-badge status-badge--${state === 'complete' ? 'success' : state === 'current' ? 'warning' : 'neutral'}">${state}</span>
+        </li>`,
+    )
+    .join('');
+
+  await page.goto('/');
+  await page.setContent(`
+    <main style="height: auto">
+      <section class="card workspace-panel local-development" data-testid="editable-workspace-creation">
+        <div class="local-development__header">
+          <div><p class="eyebrow">Editable workspace</p><h2>Work in a local prospect workspace</h2></div>
+          <span class="status-badge status-badge--warning">running</span>
+        </div>
+        <section class="local-development__progress" aria-labelledby="editable-workspace-progress-title" aria-live="polite">
+          <div class="local-development__progress-header">
+            <span class="local-development__progress-icon" aria-hidden="true">◌</span>
+            <div>
+              <p class="eyebrow">Creating editable workspace</p>
+              <h3 id="editable-workspace-progress-title">Preparing zacdagostino/lecegroup</h3>
+              <p>Studio is turning the finished website into a separate private development repository. You can leave this page; persisted status will still be here when you return.</p>
+            </div>
+          </div>
+          <div class="indeterminate-progress" role="status">
+            <div aria-label="creating private repository" aria-valuetext="Creating the private GitHub repository zacdagostino/lecegroup." class="indeterminate-progress__track" role="progressbar"><span class="indeterminate-progress__bar"></span></div>
+            <span>Creating the private GitHub repository zacdagostino/lecegroup.</span>
+          </div>
+          <ol class="local-development__progress-stages" aria-label="Workspace creation stages">${stages}</ol>
+          <dl class="local-development__progress-facts">
+            <div><dt>Destination</dt><dd>zacdagostino/lecegroup</dd></div>
+            <div><dt>Visibility</dt><dd>Private only</dd></div>
+            <div><dt>Source build</dt><dd>f906bbf7</dd></div>
+            <div><dt>Files and setup items</dt><dd>124 of 126 prepared</dd></div>
+          </dl>
+          <p class="local-development__progress-note"><span aria-hidden="true">◇</span>The protected worker performs these steps server-side. It will not alter the Made Solid Studio repository, publish the website, or make the client repository public.</p>
+          <button class="button button--secondary" type="button">Cancel workspace creation</button>
+        </section>
+      </section>
+    </main>
+  `);
+  await page.addStyleTag({ path: studioStyles.pathname });
+  await page.addStyleTag({ content: 'body { height: auto; overflow: auto; }' });
+}
+
+async function mountReadyEditableWorkspace(page) {
+  await page.goto('/');
+  await page.setContent(`
+    <div class="workspace-content-stack">
+      <section class="card workspace-panel local-development" data-testid="editable-workspace-ready">
+        <div class="local-development__header">
+          <div>
+            <p class="eyebrow">Editable workspace</p>
+            <h2>Work in a local prospect workspace</h2>
+            <p class="muted-copy">The private client repository is stored in an ignored directory inside this Studio Codespace.</p>
+          </div>
+          <span class="status-badge status-badge--success">Repository ready</span>
+        </div>
+        <section class="local-development__ready" aria-labelledby="local-workspace-ready">
+          <span aria-hidden="true">◉</span>
+          <div>
+            <h3 id="local-workspace-ready">Editable source is ready</h3>
+            <p>Build f906bbf7 can become a private repository and a local folder inside <code>prospect-workspaces</code>, with its Made Solid refinement ledger.</p>
+            <div class="button-group local-development__repository-actions">
+              <button aria-label="Open local prospect workspace" class="button button--primary" type="button">Open local workspace</button>
+            </div>
+            <div class="local-workspace-setup local-workspace-setup--complete" hidden role="status" aria-live="polite">
+              <strong class="local-workspace-setup__detail"></strong>
+              <ol aria-label="Local workspace setup stages">
+                ${[
+                  'Check private GitHub access',
+                  'Clone or safely update the repository',
+                  'Verify refinement logging',
+                  'Prepare website dependencies',
+                  'Launch the website server',
+                  'Open the website preview',
+                ]
+                  .map(
+                    (label, index) =>
+                      `<li class="${index === 0 ? 'is-current' : 'is-upcoming'}"><span aria-hidden="true">${index + 1}</span><span>${label}</span></li>`,
+                  )
+                  .join('')}
+              </ol>
+            </div>
+            <section class="local-refinement-ledger" aria-labelledby="local-refinement-ledger-title">
+              <header>
+                <div><span class="local-refinement-ledger__icon" aria-hidden="true">✓</span><div><h4 id="local-refinement-ledger-title">Refinement ledger</h4><p>1 verified refinement recorded.</p></div></div>
+                <span class="local-refinement-ledger__live"><span aria-hidden="true"></span>Live</span>
+              </header>
+              <div aria-live="polite" aria-relevant="additions text">
+                <ol class="local-refinement-ledger__entries">
+                  <li>
+                    <div class="local-refinement-ledger__entry-heading"><strong>Resources appear immediately</strong><time datetime="2026-08-10T14:00:00.000Z">Aug 10, 02:00 PM</time></div>
+                    <p><span>Problem</span>The resource library left a large blank area below the hero.</p>
+                    <p><span>Fix</span>Kept the complete resource collection visible without a section-sized reveal delay.</p>
+                    <div class="local-refinement-ledger__entry-meta"><span>project specific</span><span>/news/</span><span>375x812 · 768x1024 · 1440x900</span></div>
+                  </li>
+                </ol>
+              </div>
+            </section>
+            <details class="local-development__manual">
+              <summary>Manual command fallback</summary>
+              <p>Use this only if the local workspace service cannot run the setup automatically.</p>
+              <div class="local-development__command">
+                <code>npm run workspace:open -- --repository made-solid-studio/lece-electrical-website</code>
+                <button aria-label="Copy local workspace command" class="button button--secondary button--small" type="button">Copy command</button>
+              </div>
+            </details>
+          </div>
+        </section>
+        <section class="local-development__repository" aria-labelledby="github-repository-ready">
+          <span aria-hidden="true">◉</span>
+          <div>
+            <h3 id="github-repository-ready">Local prospect workspace</h3>
+            <p><strong>made-solid-studio/lece-electrical-website</strong> is ready on <code>main</code>.</p>
+            <p class="local-development__separation-note">Use <code>prospect-workspaces/lece-electrical-website</code> inside this Codespace.</p>
+            <div class="button-group local-development__repository-actions">
+              <a class="button button--secondary" href="https://github.com/made-solid-studio/lece-electrical-website">Open GitHub repository</a>
+            </div>
+          </div>
+        </section>
+      </section>
+    </div>
+  `);
+  await page.addStyleTag({ path: studioStyles.pathname });
+  await page.addStyleTag({ content: 'body { height: auto; overflow: auto; }' });
+  await page.getByRole('button', { name: 'Open local prospect workspace' }).evaluate((button) => {
+    button.addEventListener('click', async () => {
+      button.setAttribute('disabled', '');
+      button.textContent = 'Preparing local workspace';
+      const setup = document.querySelector('.local-workspace-setup');
+      const detail = document.querySelector('.local-workspace-setup__detail');
+      if (setup instanceof HTMLElement) setup.hidden = false;
+      if (detail) detail.textContent = 'Connecting to the local Studio workspace service.';
+      const response = await fetch('/__made-solid/local-workspace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          repository: 'made-solid-studio/lece-electrical-website',
+        }),
+      });
+      const events = (await response.text())
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line));
+      const finalEvent = events.at(-1);
+      if (detail) detail.textContent = finalEvent.detail;
+      setup?.querySelectorAll('li').forEach((item) => {
+        item.className = 'is-complete';
+        const marker = item.firstElementChild;
+        if (marker) marker.textContent = '✓';
+      });
+      if (finalEvent.previewUrl) {
+        const previewLink = document.createElement('a');
+        previewLink.className = 'button button--secondary';
+        previewLink.href = finalEvent.previewUrl;
+        previewLink.textContent = 'Open website preview';
+        setup?.after(previewLink);
+      }
+      button.textContent = 'Website launched';
+      button.removeAttribute('disabled');
+    });
+  });
 }
 
 async function mountBrandIntro(page) {
@@ -528,9 +795,29 @@ async function waitForWorkspaceSync(page) {
   await syncStatus.waitFor({ state: 'hidden', timeout: 10000 });
 }
 
+async function waitForStudioObjectStores(page, expectedStores) {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async (stores) => {
+          const database = await new Promise((resolve, reject) => {
+            const request = window.indexedDB.open('siteforge-os');
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          });
+          const ready = stores.every((store) => database.objectStoreNames.contains(store));
+          database.close();
+          return ready;
+        }, expectedStores),
+      { timeout: 10000 },
+    )
+    .toBe(true);
+}
+
 async function openReadyBuildManifest(page) {
   await page.goto('/');
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+  await waitForStudioObjectStores(page, ['briefs', 'buildManifests']);
 
   await page.evaluate(async () => {
     const database = await new Promise((resolve, reject) => {
@@ -660,6 +947,92 @@ async function openReadyBuildManifest(page) {
   const dismissNotification = page.getByRole('button', { name: 'Dismiss notification' });
   if (await dismissNotification.isVisible().catch(() => false)) await dismissNotification.click();
 }
+
+test('reviews captured page outcomes before brief approval', async ({ page }) => {
+  await openReadyBuildManifest(page);
+  await page.evaluate(async () => {
+    const database = await new Promise((resolve, reject) => {
+      const request = window.indexedDB.open('siteforge-os');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const transaction = database.transaction('briefs', 'readwrite');
+    const store = transaction.objectStore('briefs');
+    const brief = await new Promise((resolve, reject) => {
+      const request = store.get('brief-manifest-layout-check');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    brief.status = 'draft';
+    delete brief.approvedAt;
+    brief.draft.capabilityInventory = [];
+    brief.draft.proposedSitemap = [
+      {
+        label: 'Home',
+        purpose: 'Primary visitor introduction',
+        route: '/',
+        sourceUrl: 'https://example.com/',
+      },
+      {
+        label: 'Thank you',
+        purpose: 'Form confirmation state',
+        route: '/thank-you/',
+        sourceUrl: 'https://example.com/thank-you',
+      },
+    ];
+    brief.draft.pagePlans = [
+      {
+        title: 'Home',
+        sourceUrl: 'https://example.com/',
+        structure: ['Primary visitor introduction'],
+        disposition: 'build',
+        dispositionReason: 'The captured evidence supports a standalone visitor-facing page.',
+      },
+      {
+        title: 'Alternate home',
+        sourceUrl: 'https://example.com/home-1',
+        structure: ['Review unique content'],
+        disposition: 'needs_review',
+        dispositionReason:
+          'The URL resembles a CMS placeholder or legacy duplicate. Review its unique content before retaining a public route.',
+        targetSourceUrl: 'https://example.com/',
+      },
+      {
+        title: 'Thank you',
+        sourceUrl: 'https://example.com/thank-you',
+        structure: ['Confirmation state'],
+        disposition: 'workflow_state',
+        dispositionReason:
+          'Confirmation pages belong to an approved form or booking flow, not global navigation.',
+      },
+    ];
+    store.put(brief);
+    await new Promise((resolve, reject) => {
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    });
+    database.close();
+  });
+
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await page.goto('/#/prospects/business-demo-local-services/brief');
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+  await waitForWorkspaceSync(page);
+  await page.getByText('View 3 selected page plans').click();
+  const decisions = page.getByLabel('Coverage outcome');
+  await expect(decisions).toHaveCount(3);
+  await decisions.nth(1).selectOption('redirect');
+  await expect(page.getByLabel('Canonical destination')).toHaveValue('https://example.com/');
+  await expect(page.getByRole('button', { name: 'Approve brief' })).toBeEnabled();
+
+  const architecture = page.getByRole('region', { name: 'Sitemap and page plan' });
+  await expect(architecture).toHaveScreenshot('reviewed-page-dispositions.png');
+  const accessibility = await new AxeBuilder({ page }).include('.brief-architecture').analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+});
 
 async function seedPublishedProductionFeatures(page, stagedBehaviourIds) {
   await page.evaluate(async (featureIds) => {
@@ -897,6 +1270,241 @@ test('renders without unintended horizontal overflow', async ({ page }) => {
   expect(hasHorizontalOverflow).toBe(false);
 });
 
+test('keeps generation, website editing, and Made Solid handoff in separate routed pages', async ({
+  page,
+}) => {
+  const businessId = 'business-demo-local-services';
+  const commit = 'd5e37351969f9503a8e0d9bde323f23f547483b6';
+  let committedPreviewRequest;
+  await page.route('**/__made-solid/final-edit?*', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'finalised',
+        detail: 'The verified edit is committed and synced.',
+        branch: 'main',
+        commit,
+        synced: true,
+        finalCommit: true,
+        changedFiles: [],
+        bundleReady: true,
+        refinementCount: 4,
+        sourceBuild: { buildId: 'f906bbf7-a333-4bfa-bcfb-f667e7f1259b' },
+        versions: [
+          {
+            version: 1,
+            commit,
+            committedAt: '2026-08-10T16:11:10Z',
+            subject: 'Finalize Made Solid edit: demo-local-services',
+          },
+        ],
+        committedVersion: {
+          version: 1,
+          commit,
+          committedAt: '2026-08-10T16:11:10Z',
+          subject: 'Finalize Made Solid edit: demo-local-services',
+        },
+        workingVersion: 2,
+      }),
+    });
+  });
+  await page.route('**/__made-solid/committed-preview', async (route) => {
+    committedPreviewRequest = route.request().postDataJSON();
+    await route.fulfill({
+      contentType: 'application/x-ndjson',
+      body: `${JSON.stringify({ status: 'complete', phase: 'ready', detail: 'Committed edit v1 is ready.', previewUrl: '/#/today' })}\n`,
+    });
+  });
+  await page.route('**/__made-solid/learning-bundle?*', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'ready',
+        detail: '4 refinement lessons ready for review.',
+        generatedAt: '2026-08-10T22:50:09.320Z',
+        origin: {
+          studioBuildId: 'f906bbf7-a333-4bfa-bcfb-f667e7f1259b',
+          buildManifestId: 'manifest-1',
+          agentPackageId: 'package-1',
+          agentPackageVersion: 11.2,
+        },
+        entries: [
+          {
+            id: 'route-coverage',
+            recordedAt: '2026-08-10T14:28:57.522Z',
+            classification: 'strict_invariant',
+            title: 'Selected routes remain reachable',
+            problem: 'A generated navigation group omitted approved routes.',
+            rootCause: 'Navigation coverage was not checked against selected output routes.',
+            fix: 'Added deterministic route coverage and keyboard interaction checks.',
+            pattern: 'selected-route-navigation-coverage',
+          },
+          {
+            id: 'progressive-footer',
+            recordedAt: '2026-08-10T14:28:57.853Z',
+            classification: 'flexible_principle',
+            title: 'Long footer groups use progressive disclosure',
+            problem: 'Long navigation lists overwhelmed compact layouts.',
+            fix: 'Collapsed only secondary groups on compact screens.',
+            pattern: 'mobile-progressive-disclosure',
+          },
+          {
+            id: 'blue-logo-strip',
+            recordedAt: '2026-08-10T18:18:49.484Z',
+            classification: 'project_specific',
+            title: 'LECE uses a dark blue logo strip',
+            problem: 'The first treatment did not match this prospect preference.',
+            fix: 'Used the approved LECE dark blue treatment.',
+          },
+          {
+            id: 'unclassified-motion',
+            recordedAt: '2026-08-10T19:00:00.000Z',
+            classification: 'unclassified',
+            title: 'Animation timing observation',
+            problem: 'Evidence is not yet sufficient to generalise the timing.',
+            fix: 'Retained the observation for review.',
+          },
+        ],
+      }),
+    });
+  });
+  await page.goto(`/#/prospects/${businessId}/redesign`);
+  await expectWorkspaceSectionSelected(page, 'Build & preview');
+  await expect(page.getByTestId('local-development-publication')).toHaveCount(0);
+
+  await page.goto(`/#/prospects/${businessId}/editing`);
+  await expectWorkspaceSectionSelected(page, 'Website editing');
+  await expect(page.getByTestId('website-editing-page')).toBeVisible();
+  await expect(page.getByText('Editing version').locator('..')).toContainText('v2');
+  await expect(page.getByText('Current committed', { exact: true }).locator('..')).toContainText(
+    'v1',
+  );
+  await expect(page.getByText('Derived from build').locator('..')).toContainText('f906bbf7');
+  await expect(page.getByRole('button', { name: 'Edit v1 committed' })).toBeDisabled();
+  const popupPromise = page.context().waitForEvent('page');
+  await page.getByRole('button', { name: 'Open website' }).click();
+  const committedPreview = await popupPromise;
+  await expect
+    .poll(() => committedPreviewRequest)
+    .toEqual({ directory: 'demo-local-services', commit });
+  await committedPreview.close();
+  await page.reload();
+  await expectWorkspaceSectionSelected(page, 'Website editing');
+
+  await page.goto(`/#/prospects/${businessId}/handoff`);
+  await expectWorkspaceSectionSelected(page, 'Made Solid handoff');
+  await expect(page.getByTestId('made-solid-handoff-page')).toBeVisible();
+  await expect(page.getByText('v1 · d5e37351')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open website' })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Push committed edit to Made Solid' }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText(/create and sync the private editable source repository first/i),
+  ).toBeVisible();
+  await expect(page.getByLabel('Client email (review before Clientspace)')).toBeVisible();
+  await expect(page.getByText(/it does not publish the website/i)).toBeVisible();
+  const sourceTransfer = page.locator('.handoff-submit');
+  await sourceTransfer.scrollIntoViewIfNeeded();
+  await expect(sourceTransfer).toHaveScreenshot('made-solid-handoff-transfer.png');
+  const learningHandoff = page.getByTestId('agent-learning-handoff');
+  await expect(learningHandoff).toBeVisible();
+  await expect(learningHandoff.getByText('2 selected', { exact: true })).toBeVisible();
+  await expect(
+    learningHandoff.getByRole('button', { name: 'Send 2 approved lessons to Agent Studio' }),
+  ).toBeEnabled();
+  await expect(learningHandoff.getByText('Prospect-specific decisions')).toBeVisible();
+  await expect(learningHandoff.getByLabel('LECE uses a dark blue logo strip')).not.toBeChecked();
+  await learningHandoff.scrollIntoViewIfNeeded();
+  await expect(page).toHaveScreenshot('agent-learning-handoff-page.png');
+
+  const results = await new AxeBuilder({ page })
+    .include('[data-testid="made-solid-handoff-page"]')
+    .analyze();
+  expect(results.violations).toEqual([]);
+  const hasHorizontalOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > window.innerWidth,
+  );
+  expect(hasHorizontalOverflow).toBe(false);
+});
+
+test('keeps committed learning handoffs in a dedicated Agent Studio inbox', async ({ page }) => {
+  await page.goto('/#/agent-studio/learning');
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+  await expect(page.getByRole('heading', { name: 'Agent learning inbox' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Learning inbox' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  await expect(page.getByRole('heading', { name: 'No learning handoffs yet' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Package versions' }).last()).toBeVisible();
+  const results = await new AxeBuilder({ page }).include('.agent-learning-inbox').analyze();
+  expect(results.violations).toEqual([]);
+  const hasHorizontalOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > window.innerWidth,
+  );
+  expect(hasHorizontalOverflow).toBe(false);
+  await expect(page.locator('.agent-learning-inbox')).toHaveScreenshot('agent-learning-inbox.png');
+});
+
+test('closes the website edit dialog and reports verification failures on the page', async ({
+  page,
+}) => {
+  const businessId = 'business-demo-local-services';
+
+  await page.route('**/__made-solid/final-edit?*', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'changes_pending',
+        detail: 'There are saved website changes ready to commit.',
+        branch: 'main',
+        changedFiles: ['src/App.tsx'],
+        bundleReady: false,
+        refinementCount: 4,
+        sourceBuild: { buildId: 'f906bbf7-a333-4bfa-bcfb-f667e7f1259b' },
+        versions: [],
+        workingVersion: 1,
+      }),
+    });
+  });
+  await page.route('**/__made-solid/final-edit', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      contentType: 'application/x-ndjson',
+      body: `${JSON.stringify({
+        status: 'failed',
+        phase: 'failed',
+        detail: 'Next.js build worker exited before verification completed.',
+      })}\n`,
+    });
+  });
+
+  await page.goto(`/#/prospects/${businessId}/editing`);
+  await expectWorkspaceSectionSelected(page, 'Website editing');
+  const commitButton = page.getByRole('button', { name: 'Commit edit v1' });
+  await commitButton.click();
+  const dialog = page.getByRole('dialog', { name: 'Commit website edit v1?' });
+  await dialog.getByRole('button', { name: 'Verify, commit and push' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('alert')).toContainText(
+    'Next.js build worker exited before verification completed.',
+  );
+  await expect(page.getByRole('button', { name: 'Commit edit v1' })).toBeEnabled();
+
+  const results = await new AxeBuilder({ page })
+    .include('[data-testid="final-edit-checkpoint"]')
+    .analyze();
+  expect(results.violations).toEqual([]);
+  const hasHorizontalOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > window.innerWidth,
+  );
+  expect(hasHorizontalOverflow).toBe(false);
+});
+
 test('records, edits, and downloads a responsive tax expense ledger', async ({
   page,
 }, testInfo) => {
@@ -1004,7 +1612,8 @@ test('keeps dense live build and diagnostic output readable and scrollable', asy
   const firstCodexItem = codexLog.locator('li').first();
   const firstDiagnosticItem = diagnosticLog.locator('li').first();
 
-  await expect(firstCodexItem).toContainText('Saved a complete responsive build update');
+  await expect(page.getByText('separate from Studio chat')).toBeVisible();
+  await expect(firstCodexItem).toContainText('Build a complete responsive website');
   await expect(firstDiagnosticItem).toContainText('Verified browser output');
   await expect
     .poll(async () => (await firstCodexItem.boundingBox())?.height ?? 0)
@@ -1031,7 +1640,42 @@ test('keeps dense live build and diagnostic output readable and scrollable', asy
       .toBeGreaterThanOrEqual(44);
     await page.setViewportSize(expectedViewports.mobile);
   }
+  const accessibility = await new AxeBuilder({ page }).include('main').analyze();
+  expect(accessibility.violations).toEqual([]);
   await expect(page.locator('main')).toHaveScreenshot('builder-activity-output.png');
+});
+
+test('collapses finished build evidence while keeping every section keyboard accessible', async ({
+  page,
+}) => {
+  await mountCompletedBuilderEvidence(page);
+  const disclosures = page.locator('.builder-evidence-disclosure');
+  await expect(disclosures).toHaveCount(4);
+  for (const disclosure of await disclosures.all()) {
+    await expect(disclosure).not.toHaveAttribute('open', '');
+  }
+  const savedEvidence = page.getByText('Saved finished-build evidence');
+  for (const evidence of await savedEvidence.all()) {
+    await expect(evidence).toBeHidden();
+  }
+  const diagnostics = page.locator('.builder-diagnostics');
+  const diagnosticsSummary = diagnostics.locator('summary');
+  await diagnosticsSummary.focus();
+  await page.keyboard.press('Enter');
+  await expect(diagnostics).toHaveAttribute('open', '');
+  await expect(diagnostics.getByText('Saved finished-build evidence')).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(diagnostics).not.toHaveAttribute('open', '');
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  });
+  await page.mouse.move(0, 0);
+  const accessibility = await new AxeBuilder({ page }).include('main').analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  await expect(page.locator('main')).toHaveScreenshot('completed-builder-evidence-collapsed.png');
 });
 
 test('shows concrete live build stages and worker freshness without invented progress', async ({
@@ -1546,7 +2190,7 @@ test('uses a workspace section picker on mobile', async ({ page }, testInfo) => 
     await expect(tabs).toBeHidden();
     await picker.click();
     const options = page.getByRole('menu', { name: 'Workspace section' });
-    await expect(options.getByRole('menuitemradio')).toHaveCount(9);
+    await expect(options.getByRole('menuitemradio')).toHaveCount(11);
     await page.keyboard.press('Escape');
     await expect(options).toBeHidden();
     await expect(picker).toBeFocused();
@@ -1567,12 +2211,13 @@ test('uses a workspace section picker on mobile', async ({ page }, testInfo) => 
 test('lays out asset selections as a responsive image grid', async ({ page }, testInfo) => {
   await page.goto('/');
   await page.evaluate(() => {
+    document.querySelector('#root')?.setAttribute('hidden', '');
     document.body.insertAdjacentHTML(
       'beforeend',
       `<section class="asset-analysis-selection"><fieldset class="brief-assets">
-        <label class="brief-source-option brief-source-option--asset"><input type="checkbox"><span class="brief-source-option__preview">Image</span><span class="brief-source-option__content">One</span></label>
-        <label class="brief-source-option brief-source-option--asset"><input type="checkbox"><span class="brief-source-option__preview">Image</span><span class="brief-source-option__content">Two</span></label>
-        <label class="brief-source-option brief-source-option--asset"><input type="checkbox"><span class="brief-source-option__preview">Image</span><span class="brief-source-option__content">Three</span></label>
+        <label class="brief-source-option brief-source-option--asset"><input type="checkbox" checked><span class="brief-source-option__preview">Image</span><span class="brief-source-option__content"><strong>Project image</strong><small>Found on 3 pages</small><small class="brief-source-option__location">/</small><small class="brief-source-option__location">/commercial-electrical-installations-and-maintenance</small><small class="brief-source-option__location">/contact</small></span></label>
+        <label class="brief-source-option brief-source-option--asset"><input type="checkbox"><span class="brief-source-option__preview">Image</span><span class="brief-source-option__content"><strong>Organisation logo</strong><small>Found on 2 pages</small><small class="brief-source-option__location">/</small><small class="brief-source-option__location">/about-us</small></span></label>
+        <label class="brief-source-option brief-source-option--asset"><input type="checkbox"><span class="brief-source-option__preview">Image</span><span class="brief-source-option__content"><strong>Team image</strong><small>Found on 1 page</small><small class="brief-source-option__location">/our-team</small></span></label>
       </fieldset></section>`,
     );
   });
@@ -1591,6 +2236,253 @@ test('lays out asset selections as a responsive image grid', async ({ page }, te
   if (testInfo.project.name === 'mobile') {
     expect(second.x + second.width).toBeLessThanOrEqual(375);
   }
+  await expect(page.locator('.asset-analysis-selection')).toHaveScreenshot(
+    'asset-grouped-locations.png',
+  );
+  const accessibility = await new AxeBuilder({ page })
+    .include('.asset-analysis-selection')
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+test('shows active asset analysis as a staged incremental handoff', async ({ page }, testInfo) => {
+  const [appSource, styleSource] = await Promise.all([
+    readFile(studioApp, 'utf8'),
+    readFile(studioStyles, 'utf8'),
+  ]);
+  expect(appSource).toContain('annotation.analysisRunToken === job?.runToken');
+  expect(appSource).toContain('assets.length && !workflowActive ? <VisualAssetCatalog');
+  expect(appSource).toContain('Only newly saved output from this run appears below.');
+  expect(styleSource).toContain('.asset-analysis-live .spin');
+
+  await page.goto('/');
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+  await page.evaluate(() => {
+    document.body.innerHTML = `<main class="page-shell"><div class="workspace-content-stack">
+      <section class="card workspace-panel asset-review-panel asset-review-panel--active">
+        <div class="brief-panel__header"><div><p class="eyebrow">Private asset enrichment</p><h2>Asset review</h2><p class="muted-copy">The selected images are being processed as private evidence.</p></div><div class="brief-panel__actions"><span class="status-badge">Analysis running</span><button class="button button--secondary button--default" type="button">Cancel analysis</button></div></div>
+        <section aria-labelledby="asset-analysis-live-title" class="asset-analysis-live" data-testid="asset-analysis-live">
+          <div class="asset-analysis-live__intro"><div><p class="eyebrow">Live private run</p><h3 id="asset-analysis-live-title">Asset analysis is unfolding now</h3><p class="muted-copy">Earlier results and editing controls are hidden until this replacement run finishes. Only newly saved output from this run appears below.</p></div><span aria-label="Saved asset output count" class="asset-analysis-live__count"><strong>1</strong><span>saved for review</span></span></div>
+          <div class="capture-progress capture-progress--running"><div aria-label="Visual asset analysis progress" aria-valuetext="Visual suggestion saved. Continuing with the remaining assets." class="capture-progress__track" role="progressbar"><span class="capture-progress__bar"></span></div><span role="status">Visual suggestion saved. Continuing with the remaining assets. 1 of 6 persisted items complete.</span></div>
+          <div class="asset-analysis-live__layout">
+            <ol aria-label="Asset analysis stages" class="asset-analysis-live__stages">
+              <li data-state="complete"><span aria-hidden="true" class="asset-analysis-live__stage-icon">✓</span><span><strong>Queue private run</strong><small>Secure the selected source assets for the protected worker.</small></span></li>
+              <li data-state="complete"><span aria-hidden="true" class="asset-analysis-live__stage-icon">✓</span><span><strong>Prepare source evidence</strong><small>Load the selected files and their saved page provenance.</small></span></li>
+              <li aria-current="step" data-state="active"><span aria-hidden="true" class="asset-analysis-live__stage-icon">●</span><span><strong>Analyse and save each asset</strong><small>Describe observable content and save each review card as it becomes ready.</small></span></li>
+              <li data-state="next"><span aria-hidden="true" class="asset-analysis-live__stage-icon">○</span><span><strong>Detect brand-colour evidence</strong><small>Inspect supported logo, stylesheet, and repeated interface colour evidence.</small></span></li>
+              <li data-state="next"><span aria-hidden="true" class="asset-analysis-live__stage-icon">○</span><span><strong>Finish the review handoff</strong><small>Make the new run available for human review without reusing stale results.</small></span></li>
+            </ol>
+            <div aria-label="Current analysis item" class="asset-analysis-live__current"><span class="asset-analysis-live__current-label">Working on now</span><div class="asset-analysis-live__asset"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Crect width='96' height='96' fill='%23edf2ed'/%3E%3Cpath d='M20 68L42 35l14 18 10-12 14 27z' fill='%23385f4b'/%3E%3C/svg%3E"><span><strong>Project photo</strong><small>/commercial-services</small></span></div></div>
+          </div>
+          <section aria-labelledby="asset-analysis-output-title" class="asset-analysis-live__output"><div><p class="eyebrow">Saved output from this run</p><h4 id="asset-analysis-output-title">1 asset ready to review</h4></div><div class="asset-review-queue__grid"><article class="asset-review-loader__card"><span class="asset-review-loader__image evidence-skeleton"></span><strong>New review card saved</strong><span class="muted-copy">The next persisted asset will appear below without waiting for the run to finish.</span></article></div></section>
+        </section>
+      </section>
+      <section class="card workspace-panel" data-testid="stale-asset-panel"><h2>Earlier Brand Kit</h2></section>
+    </div></main>`;
+  });
+
+  const live = page.getByTestId('asset-analysis-live');
+  await expect(live).toBeVisible();
+  await expect(page.getByTestId('stale-asset-panel')).toBeHidden();
+  await expect(
+    page.getByRole('list', { name: 'Asset analysis stages' }).getByRole('listitem'),
+  ).toHaveCount(5);
+  await expect(page.getByText('1 asset ready to review')).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  const accessibility = await new AxeBuilder({ page }).include('main').analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect(live).toHaveScreenshot('asset-analysis-live-progress.png');
+
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    await expect(live).toHaveScreenshot('asset-analysis-live-progress-320.png');
+    await page.getByText('Finish the review handoff').scrollIntoViewIfNeeded();
+    await expect(page.getByText('Finish the review handoff')).toBeVisible();
+    await page.getByText('1 asset ready to review').scrollIntoViewIfNeeded();
+    await expect(page.getByText('1 asset ready to review')).toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+  }
+});
+
+test('keeps asset-analysis failures beside the retry action', async ({ page }, testInfo) => {
+  const appSource = await readFile(studioApp, 'utf8');
+  expect(appSource).toContain('Analysis did not start');
+  expect(appSource).toContain('Last run stopped');
+  expect(appSource).toContain('Last run completed');
+
+  await page.goto('/');
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+  await page.evaluate(() => {
+    document.body.innerHTML = `<main class="page-shell"><section class="card workspace-panel asset-review-panel" data-testid="asset-analysis-failure">
+      <div class="brief-panel__header"><div><p class="eyebrow">Private asset enrichment</p><h2>Asset review</h2><p class="muted-copy">Analyse the selected private source assets.</p></div><div class="brief-panel__actions"><span class="status-badge">Analysis failed</span><button class="button button--default" type="button">Analyse assets &amp; detect colours</button></div></div>
+      <div class="asset-analysis-feedback" data-tone="danger" role="alert"><span aria-hidden="true">!</span><span><strong>Last run stopped during analysing asset</strong><span>The vision provider could not analyse one selected image. Review the selected assets, then use the analysis button above to retry.</span></span></div>
+    </section></main>`;
+  });
+
+  const panel = page.getByTestId('asset-analysis-failure');
+  await expect(page.getByRole('alert')).toContainText('vision provider');
+  const retry = page.getByRole('button', { name: 'Analyse assets & detect colours' });
+  await expect(retry).toBeEnabled();
+  await retry.focus();
+  await expect(retry).toBeFocused();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  const accessibility = await new AxeBuilder({ page }).include('main').analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect(panel).toHaveScreenshot('asset-analysis-failure.png');
+
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    expect((await retry.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  }
+});
+
+test('keeps asset exclusion and independent colour controls explicit and responsive', async ({
+  page,
+}, testInfo) => {
+  const [appSource, workerSource, migrationSource] = await Promise.all([
+    readFile(studioApp, 'utf8'),
+    readFile(new URL('../../worker/asset-analysis-worker.mjs', import.meta.url), 'utf8'),
+    readFile(
+      new URL(
+        '../../supabase/migrations/20260808132000_targeted_brand_colour_refresh.sql',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+  ]);
+  expect(appSource).toContain('Redo from original logo');
+  expect(appSource).toContain('Original-logo colours are being rechecked');
+  expect(appSource).toContain('Other assets, pages, and existing review cards are unchanged.');
+  expect(appSource).toContain('Use a reviewed {role} colour');
+  expect(appSource).toContain('Codex will choose an accessible ${role} value');
+  expect(workerSource).toContain("analysisScope === 'brand_colours'");
+  expect(migrationSource).toContain('request_brand_colour_refresh');
+  await page.goto('/');
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+  await page.evaluate(() => {
+    document.querySelector('main')?.insertAdjacentHTML(
+      'beforeend',
+      `<section class="workspace-panel" data-testid="asset-workflow-controls">
+        <article class="audit-finding asset-suggestion"><details class="asset-suggestion__evidence" open><summary>AI analysis and reuse guidance</summary><div><p>Electrical technicians working beside industrial control equipment.</p><div class="audit-finding__recommendation"><strong>Safe reuse guidance</strong><p>Confirm the business association before reuse.</p></div></div></details></article>
+        <div class="asset-suggestion__quick-actions"><button class="button button--danger button--default" type="button">Exclude from agent</button><small>Excluded images stay as private evidence but are removed from agent handoff.</small></div>
+        <section class="brand-kit__evidence" aria-labelledby="brand-evidence-test-title"><div><p class="eyebrow">Automatic evidence</p><h3 id="brand-evidence-test-title">Suggested brand colours</h3></div><div class="brand-kit__evidence-colours"><div><span aria-hidden="true" class="brand-kit__colour-swatch" style="background:#585759"></span><strong>Primary</strong><code>#585759</code><small>logo image</small></div><div><span aria-hidden="true" class="brand-kit__colour-swatch" style="background:#8EAC55"></span><strong>Accent</strong><code>#8EAC55</code><small>logo image</small></div></div><p>These are private suggestions from the selected original logo.</p><div class="button-row"><button class="button button--secondary button--default" type="button">Use suggested colours</button><button class="button button--secondary button--default" type="button">Redo from original logo</button></div></section>
+        <div class="brand-kit__palette" aria-label="Reviewed brand colours">
+          <div class="brand-kit__palette-role"><label class="brand-kit__palette-mode"><input data-colour-toggle="primary" type="checkbox" checked><span><strong>Use a reviewed primary colour</strong><small>This exact primary value is locked into the builder tokens.</small></span></label><label data-colour-value="primary">primary<span class="brand-kit__colour-input"><input aria-label="primary colour" value="#585759"><span class="brand-kit__colour-swatch" style="background:#585759"></span></span></label><p class="muted-copy" data-colour-derived="primary" hidden>No reviewed primary colour will be handed to Codex.</p></div>
+          <div class="brand-kit__palette-role"><label class="brand-kit__palette-mode"><input data-colour-toggle="accent" type="checkbox" checked><span><strong>Use a reviewed accent colour</strong><small>This exact accent value is locked into the builder tokens.</small></span></label><label data-colour-value="accent">accent<span class="brand-kit__colour-input"><input aria-label="accent colour" value="#8EAC55"><span class="brand-kit__colour-swatch" style="background:#8EAC55"></span></span></label><p class="muted-copy" data-colour-derived="accent" hidden>No reviewed accent colour will be handed to Codex.</p></div>
+        </div>
+      </section>`,
+    );
+    document.querySelectorAll('[data-colour-toggle]').forEach((control) => {
+      control.addEventListener('change', () => {
+        const role = control.getAttribute('data-colour-toggle');
+        const enabled = control.checked;
+        if (!enabled) document.querySelector(`[data-colour-value="${role}"]`)?.remove();
+        document.querySelector(`[data-colour-derived="${role}"]`).hidden = enabled;
+        control.parentElement.querySelector('small').textContent = enabled
+          ? `This exact ${role} value is locked into the builder tokens.`
+          : `Codex will choose an accessible ${role} value for the new design.`;
+      });
+    });
+  });
+
+  const controls = page.getByTestId('asset-workflow-controls');
+  await expect(page.getByRole('button', { name: 'Exclude from agent' })).toBeVisible();
+  const redoColours = page.getByRole('button', { name: 'Redo from original logo' });
+  await expect(redoColours).toBeVisible();
+  await expect(page.getByText('Use a reviewed primary colour')).toBeVisible();
+  await expect(page.getByText('Use a reviewed accent colour')).toBeVisible();
+  await expect(page.getByText('Electrical technicians working beside')).toBeVisible();
+  await expect(page.getByText('AI analysis and reuse guidance')).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  const analysisSummary = page.getByText('AI analysis and reuse guidance');
+  await analysisSummary.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText('Electrical technicians working beside')).toBeHidden();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText('Electrical technicians working beside')).toBeVisible();
+  const primaryControl = page.getByRole('checkbox', { name: /Use a reviewed primary colour/ });
+  const accentControl = page.getByRole('checkbox', { name: /Use a reviewed accent colour/ });
+  await primaryControl.focus();
+  await page.keyboard.press('Space');
+  await expect(primaryControl).not.toBeChecked();
+  await accentControl.focus();
+  await page.keyboard.press('Space');
+  await expect(accentControl).not.toBeChecked();
+  await expect(page.getByRole('textbox', { name: 'primary colour' })).toBeHidden();
+  await expect(page.getByRole('textbox', { name: 'accent colour' })).toBeHidden();
+  await expect(page.getByText('No reviewed primary colour will be handed to Codex.')).toBeVisible();
+  await expect(page.getByText('No reviewed accent colour will be handed to Codex.')).toBeVisible();
+  const accessibility = await new AxeBuilder({ page })
+    .include('[data-testid="asset-workflow-controls"]')
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect(controls).toHaveScreenshot('asset-workflow-controls.png');
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    const exclusionButton = await page
+      .getByRole('button', { name: 'Exclude from agent' })
+      .boundingBox();
+    expect(exclusionButton?.height).toBeGreaterThanOrEqual(44);
+    expect((await redoColours.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    expect((await primaryControl.locator('..').boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    expect((await accentControl.locator('..').boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  }
+});
+
+test('makes approved briefs unmistakable and folds saving into manifest approval', async ({
+  page,
+}, testInfo) => {
+  const appSource = await readFile(studioApp, 'utf8');
+  expect(appSource).toContain("{isApproving ? 'Approving brief' : 'Approve brief'}");
+  expect(appSource).not.toContain("{isSaving ? 'Saving brief' : 'Save brief'}");
+  expect(appSource).toMatch(
+    /async function approveRedesignBrief[\s\S]*approveRedesignBrief\(brief\)[\s\S]*createBuildManifest\(brief\.businessId\)/,
+  );
+
+  await page.goto('/');
+  await page.evaluate(() => {
+    document.body.innerHTML = `<main class="page-shell"><section class="card workspace-panel brief-panel" data-testid="approved-brief-state">
+      <div class="brief-panel__header"><div><p class="eyebrow">Strategy handoff</p><h2>Redesign brief</h2><p class="muted-copy">This reviewed strategy is locked for the future builder.</p></div><div class="brief-panel__actions"><span class="status-badge status-badge--success">Brief approved</span></div></div>
+      <div class="brief-panel__approval-state" role="status"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"></circle><path d="m8 12 3 3 5-6" fill="none" stroke="currentColor" stroke-width="2"></path></svg><span><strong>Brief approved</strong><small>This version is locked. Its Build Manifest was prepared automatically for the builder.</small></span></div>
+      <div class="brief-panel__source-summary"><span>4 page sources selected</span><span>6 visual assets selected</span><span>0 capability decisions pending</span><span>1 uncertainty flagged</span></div>
+    </section></main>`;
+  });
+
+  const panel = page.getByTestId('approved-brief-state');
+  await expect(page.getByRole('status')).toContainText('Build Manifest was prepared automatically');
+  await expect(page.getByText('Brief approved')).toHaveCount(2);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  const accessibility = await new AxeBuilder({ page })
+    .include('[data-testid="approved-brief-state"]')
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect(panel).toHaveScreenshot('approved-brief-state.png');
+
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+  }
 });
 
 test('keeps post-capture image content recovery clear and contained', async ({ page }) => {
@@ -1602,8 +2494,9 @@ test('keeps post-capture image content recovery clear and contained', async ({ p
     .locator('..')
     .locator('..');
   await expect(panel).toContainText('website is not visited again');
+  await expect(panel).toContainText('starts automatically');
   await expect(panel).toContainText('Tables and lists keep their structure');
-  await expect(page.getByRole('button', { name: 'Recover structured content' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Recover structured content' })).toHaveCount(0);
   await expect(page.getByText('Image analysis is needed')).toBeVisible();
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
@@ -1613,11 +2506,12 @@ test('keeps post-capture image content recovery clear and contained', async ({ p
 test('keeps transparent logo versions responsive while the SVG converter stays collapsed', async ({
   page,
 }, testInfo) => {
+  const appSource = await readFile(studioApp, 'utf8');
+  expect(appSource).toContain('const [createEditableSvg, setCreateEditableSvg] = useState(false)');
+  expect(appSource).toContain('<strong>Create SVG versions</strong>');
   await page.goto('/');
   await page.evaluate(() => {
-    document.body.insertAdjacentHTML(
-      'beforeend',
-      `<main class="page-shell"><section class="brand-kit__logo-versions" aria-labelledby="logo-versions-test-title">
+    document.body.innerHTML = `<main class="page-shell"><section class="brand-kit__logo-versions" aria-labelledby="logo-versions-test-title">
         <div><p class="eyebrow">Normal logo workflow</p><h3 id="logo-versions-test-title">High-fidelity logo versions</h3><p>Transparent logo versions.</p></div>
         <div class="brand-kit__alpha-matte"><button class="brand-kit__logo-version-preview" aria-label="Open saved alpha matte"><img alt="Saved black and white alpha matte" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='96'%3E%3Crect width='240' height='96' fill='white'/%3E%3Crect x='48' y='24' width='144' height='48' fill='black'/%3E%3C/svg%3E"></button><span><strong>Saved alpha matte</strong><small>Black is logo coverage; white is removed background.</small></span></div>
         <div class="brand-kit__logo-version-grid">
@@ -1629,8 +2523,7 @@ test('keeps transparent logo versions responsive while the SVG converter stays c
           <div><button class="button" type="button">Push &amp; update build assets</button><p class="muted-copy">Approves these transparent logo versions and refreshes the Brand Kit, Brief, and Build Manifest in one step. The alpha matte is never included.</p></div>
           <button class="button" type="button">Refresh logo versions</button>
         </div>
-      </section><details class="brand-kit__svg-beta"><summary>Experimental SVG converter <span class="brand-kit__beta-tag">Beta</span></summary><fieldset class="brand-kit__editable-logo"><legend>Editable SVG logo</legend></fieldset></details></main>`,
-    );
+      </section><details class="brand-kit__svg-beta"><summary>Experimental SVG converter <span class="brand-kit__beta-tag">Beta</span></summary><fieldset class="brand-kit__editable-logo"><legend>Editable SVG logo</legend><div class="brand-kit__conversion-controls"><label class="brand-kit__conversion-option"><input type="checkbox"><span><strong>Create SVG versions</strong><small>Off by default. Turn this on only when this logo run should also create a new editable SVG.</small></span></label><fieldset disabled><legend>SVG conversion engine</legend><label><input type="radio" name="svg-test">Current tracer</label></fieldset><button class="button" type="button" disabled>Convert to SVG</button></div></fieldset></details></main>`;
   });
 
   const versions = page.locator('.brand-kit__logo-version');
@@ -1671,6 +2564,15 @@ test('keeps transparent logo versions responsive while the SVG converter stays c
   await beta.locator('summary').click();
   await expect(beta).toHaveAttribute('open', '');
   await expect(beta.locator('.brand-kit__editable-logo')).toBeVisible();
+  const svgToggle = page.getByRole('checkbox', { name: /Create SVG versions/ });
+  await expect(svgToggle).not.toBeChecked();
+  await expect(page.getByRole('button', { name: 'Convert to SVG' })).toBeDisabled();
+  const svgAccessibility = await new AxeBuilder({ page }).include('.brand-kit__svg-beta').analyze();
+  expect(svgAccessibility.violations).toEqual([]);
+  await expect(beta).toHaveScreenshot('svg-converter-default-off.png');
+  await svgToggle.focus();
+  await page.keyboard.press('Space');
+  await expect(svgToggle).toBeChecked();
 });
 
 test('supports keyboard navigation', async ({ page }) => {
@@ -1791,7 +2693,9 @@ test('centres the workspace loading brand for each viewport', async ({ page }, t
   expect(descriptionGap).toBeLessThanOrEqual(56);
 });
 
-test('hydrates workspace data without interrupting the current view', async ({ page }) => {
+test('refreshes workspace data without interrupting the current view or flashing sync chrome', async ({
+  page,
+}) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/#/prospects');
   const launchLoader = page.getByLabel('Loading Made Solid Studio workspace');
@@ -1807,8 +2711,8 @@ test('hydrates workspace data without interrupting the current view', async ({ p
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
 
   const syncStatus = page.getByLabel('Refreshing workspace data');
-  await expect(syncStatus).toBeVisible();
-  await expect(syncStatus).toContainText('Syncing workspace');
+  await page.waitForTimeout(450);
+  await expect(syncStatus).toBeHidden();
   await expect(launchLoader).toBeHidden();
   await expect(websiteUrl).toBeFocused();
   await expect(websiteUrl).toHaveValue(
@@ -1820,16 +2724,8 @@ test('hydrates workspace data without interrupting the current view', async ({ p
     true,
   );
 
-  const statusBox = await syncStatus.boundingBox();
   const viewport = page.viewportSize();
-  expect(statusBox).not.toBeNull();
   expect(viewport).not.toBeNull();
-  if (statusBox && viewport) {
-    expect(statusBox.x).toBeGreaterThanOrEqual(0);
-    expect(statusBox.y).toBeGreaterThanOrEqual(0);
-    expect(statusBox.x + statusBox.width).toBeLessThanOrEqual(viewport.width);
-    expect(statusBox.y + statusBox.height).toBeLessThanOrEqual(viewport.height);
-  }
 
   await expect(page).toHaveScreenshot('workspace-background-hydration.png', {
     animations: 'disabled',
@@ -1841,7 +2737,8 @@ test('hydrates workspace data without interrupting the current view', async ({ p
     await page.reload();
     await expect(launchLoader).toBeHidden();
     await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-    await expect(syncStatus).toBeVisible();
+    await page.waitForTimeout(450);
+    await expect(syncStatus).toBeHidden();
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
     ).toBe(true);
@@ -1849,6 +2746,41 @@ test('hydrates workspace data without interrupting the current view', async ({ p
       animations: 'disabled',
     });
   }
+});
+
+test('restores the last workspace immediately while its saved data refreshes', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/#/prospects/business-demo-local-services/assets');
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+  await expectWorkspaceSectionSelected(page, 'Assets');
+
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const cacheDatabase = await new Promise((resolve, reject) => {
+          const request = window.indexedDB.open('made-solid-studio-workspace-cache', 1);
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        return new Promise((resolve, reject) => {
+          const request = cacheDatabase
+            .transaction('snapshots', 'readonly')
+            .objectStore('snapshots')
+            .get('local-workspace');
+          request.onsuccess = () => resolve(request.result?.workspaces?.length ?? 0);
+          request.onerror = () => reject(request.error);
+        });
+      }),
+    )
+    .toBeGreaterThan(0);
+
+  await page.reload();
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden({ timeout: 750 });
+  await expectWorkspaceSectionSelected(page, 'Assets');
+  await expect(page).toHaveURL(/#\/prospects\/business-demo-local-services\/assets$/);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
 });
 
 test('leaves scroll-boundary gestures entirely native', async ({ page }) => {
@@ -2016,6 +2948,10 @@ test('keeps the persistent sidebar beside content above the compact-navigation b
 test('keeps the build manifest package separate from the Agent Studio test controls', async ({
   page,
 }, testInfo) => {
+  const appSource = await readFile(studioApp, 'utf8');
+  expect(appSource).toContain('buildInstructionWithTone(websiteTone, buildDirections)');
+  expect(appSource).toContain('not a requirement for a pure white background');
+  expect(appSource).toContain('not a requirement for a pure black background');
   await openReadyBuildManifest(page);
 
   await expect(page.locator('.brief-panel')).toHaveScreenshot('build-manifest-ready.png');
@@ -2036,10 +2972,31 @@ test('keeps the build manifest package separate from the Agent Studio test contr
   await expect(prospectBuildAction).toBeDisabled();
   const productionVersion = page.getByText('Production version').locator('..');
   await expect(productionVersion).toContainText('v6.0');
-  await expect(productionVersion.getByLabel(/new agent features awaiting/)).toHaveCount(0);
+  await expect(productionVersion.getByLabel(/new agent features awaiting/)).toHaveText('2');
   await expect(productionVersion).toContainText(
     'This exact published version will be pinned to the build.',
   );
+  const toneGroup = page.getByRole('group', { name: 'Website tone' });
+  const agentDecidesTone = toneGroup.getByRole('radio', { name: /Agent decides/ });
+  const darkTone = toneGroup.getByRole('radio', { name: /Dark/ });
+  await expect(agentDecidesTone).toBeChecked();
+  await darkTone.focus();
+  await page.keyboard.press('Space');
+  await expect(darkTone).toBeChecked();
+  await expect(toneGroup).toContainText('not necessarily black');
+  await agentDecidesTone.check();
+  const toneAccessibility = await new AxeBuilder({ page }).include('.builder-page-test').analyze();
+  expect(toneAccessibility.violations).toEqual([]);
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    for (const tone of await toneGroup.locator('label').all()) {
+      expect((await tone.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    }
+    await page.setViewportSize(expectedViewports.mobile);
+  }
   await expect(
     page.getByText(
       'Complete and review a homepage test in Agent Studio for this Build Manifest before starting the complete prospect build.',
@@ -2152,6 +3109,29 @@ test('keeps the build manifest package separate from the Agent Studio test contr
   await expect(page.locator('.builder-run__action-label')).toHaveText('Test');
   await expect(page.getByRole('radio', { name: 'Create page from scratch' })).toBeChecked();
   await expect(page.getByRole('radio', { name: 'Revise a website' })).toBeVisible();
+  const studioToneGroup = page.getByRole('group', { name: 'Website tone' });
+  const studioAgentDecidesTone = studioToneGroup.getByRole('radio', {
+    name: /Agent decides/,
+  });
+  const studioDarkTone = studioToneGroup.getByRole('radio', { name: /Dark/ });
+  await expect(studioAgentDecidesTone).toBeChecked();
+  await studioDarkTone.focus();
+  await page.keyboard.press('Space');
+  await expect(studioDarkTone).toBeChecked();
+  await expect(studioToneGroup).toContainText('not necessarily black');
+  await studioAgentDecidesTone.check();
+  await expect(studioToneGroup).toHaveScreenshot('agent-studio-website-tone.png', {
+    mask: [studioToneGroup.locator('input[type="radio"]')],
+  });
+  const studioToneAccessibility = await new AxeBuilder({ page })
+    .include('.builder-page-test__tone')
+    .analyze();
+  expect(studioToneAccessibility.violations).toEqual([]);
+  if (testInfo.project.name === 'mobile') {
+    for (const tone of await studioToneGroup.locator('label').all()) {
+      expect((await tone.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+    }
+  }
   await page.getByRole('radio', { name: 'Revise previous page' }).check();
   await expect(page.getByLabel('Previous built page')).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Revise private page' })).toBeDisabled();
@@ -2220,19 +3200,26 @@ test('keeps the build manifest package separate from the Agent Studio test contr
   await expect(testingBehaviour).toBeVisible();
   await expect(testingBehaviour).toContainText('Testing behaviour');
   await expect(testingBehaviour).toContainText('Package v7.0 testing behaviour');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.0.21');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.0.22');
   await expect(testingBehaviour).toContainText(
-    'completed builds now export a complete local Git workspace',
+    'complete builds now offer Light, Dark, and Agent decides tonal direction',
+  );
+  await expect(testingBehaviour).toContainText('Website tone direction');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.2');
+  await expect(testingBehaviour).toContainText(
+    'Agent Studio page tests and whole-site revisions now expose the same Agent decides',
   );
   await expect(testingBehaviour).toContainText('Visible hero entrance after the logo handoff');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.41');
-  await expect(testingBehaviour).toContainText('complete heading and primary action fit');
+  await expect(testingBehaviour).toContainText('the complete heading and primary action fit');
   await expect(testingBehaviour).toContainText('Mobile & tablet sidebar navigation');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.23');
   await expect(testingBehaviour).toContainText('without nested scrollbar chrome');
   await expect(testingBehaviour).toContainText('Context-aware logo selection');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.8');
-  await expect(testingBehaviour).toContainText('applied deterministically before compile');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.11');
+  await expect(testingBehaviour).toContainText(
+    'experimental SVG creation is now an explicit default-off choice',
+  );
   await expect(testingBehaviour).toContainText('Semantic recovery from image-based content');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.15');
   await expect(testingBehaviour).toContainText('excluded from reusable manifest assets');
@@ -2242,9 +3229,9 @@ test('keeps the build manifest package separate from the Agent Studio test contr
   await expect(testingBehaviour).toContainText('proposition before supporting media');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.19');
   await expect(testingBehaviour).toContainText('explicit preview, production service');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.55');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.83');
   await expect(testingBehaviour).toContainText(
-    'quality-reviewed source can now move into local development',
+    'after a failed test, Test something else resets the failed choices',
   );
   await expect(testingBehaviour).toContainText(
     'Select behaviours to stage for the next production draft',
@@ -2303,8 +3290,8 @@ test('keeps the build manifest package separate from the Agent Studio test contr
   await inheritedBehaviour.click();
   await expect(page.getByText('Built-in capability · motion runtime')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Agent architecture' })).toBeVisible();
-  await expect(page.getByText('Codex activity')).toHaveCount(0);
-  await expect(page.getByText('Build diagnostics')).toHaveCount(0);
+  await expect(page.getByText('Build conversation')).toHaveCount(0);
+  await expect(page.locator('.builder-diagnostics')).toHaveCount(0);
   const reviewInputs = page.getByRole('button', { name: 'Review prospect inputs' });
   const prospectPicker = page.locator('.agent-studio__prospect-picker');
   await expect(reviewInputs).toHaveAttribute('title', 'Review prospect inputs');
@@ -2356,8 +3343,9 @@ test('keeps the build manifest package separate from the Agent Studio test contr
   expect(settingsBox).not.toBeNull();
   await expect(studioActions.locator('.status-badge')).toHaveCount(0);
   if (!refineBox || !architectureBox || !settingsBox) return;
-  expect(architectureBox.x).toBeGreaterThan(refineBox.x);
-  if (testInfo.project.name !== 'mobile') {
+  expect(architectureBox.y > refineBox.y || architectureBox.x > refineBox.x).toBeTruthy();
+  expect(settingsBox.y > architectureBox.y || settingsBox.x > architectureBox.x).toBeTruthy();
+  if (testInfo.project.name === 'desktop') {
     expect(
       Math.abs(
         settingsBox.y + settingsBox.height / 2 - (architectureBox.y + architectureBox.height / 2),
@@ -2407,34 +3395,31 @@ test('keeps the build manifest package separate from the Agent Studio test contr
     .toBe(true);
 });
 
-test('keeps the client preview publication handoff responsive and explicit', async ({ page }) => {
-  await openReadyBuildManifest(page);
-  const panel = page.getByTestId('client-preview-publication');
-  await expect(panel).toBeVisible();
-  await expect(panel.getByRole('heading', { name: 'Publish for client review' })).toBeVisible();
-  await expect(
-    panel.getByRole('button', { name: 'Publish to Vercel and Clientspace' }),
-  ).toBeDisabled();
-  await expect(panel).toContainText('This does not email the client.');
-  await expect
-    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
-    .toBe(true);
-  await waitForWorkspaceSync(page);
-  await page.addStyleTag({
-    content: '.workspace-sync-status { display: none !important; }',
-  });
-  await expect(panel).toHaveScreenshot('client-preview-publication.png');
-});
-
 test('shows a truthful responsive local-development and private GitHub handoff', async ({
   page,
 }) => {
   await mountLocalDevelopmentPublication(page);
   const panel = page.getByTestId('local-development-publication');
-  await expect(panel.getByRole('heading', { name: 'Continue locally or on GitHub' })).toBeVisible();
-  await expect(panel.getByText('Local workspace ready to export')).toBeVisible();
-  await expect(panel.getByRole('button', { name: 'Create private repository' })).toBeVisible();
+  await expect(
+    panel.getByRole('heading', { name: 'Work in a local prospect workspace' }),
+  ).toBeVisible();
+  await expect(panel.getByText('Editable source is ready')).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Create editable workspace' })).toBeVisible();
+  await expect(panel).toContainText('Private destination: zacdagostino/lecegroup');
+  await expect(panel.getByLabel('GitHub account or organization')).toBeHidden();
+  await panel.getByText('Change GitHub destination', { exact: true }).click();
+  await expect(panel.getByLabel('GitHub account or organization')).toHaveValue('zacdagostino');
+  await panel.getByText('Change GitHub destination', { exact: true }).click();
+  await expect(panel.getByLabel('GitHub account or organization')).toBeHidden();
   await expect(panel).toContainText('Private only.');
+  await expect(panel).toContainText('never changes the Made Solid Studio repository');
+  await expect(panel.getByRole('button', { name: 'Open local prospect workspace' })).toBeVisible();
+  const localFallback = panel.getByText('Manual command fallback', { exact: true });
+  await localFallback.click();
+  await expect(panel.getByRole('button', { name: 'Copy local workspace command' })).toBeVisible();
+  await expect(panel).toContainText('prospect-workspaces/lecegroup');
+  await localFallback.click();
+  await expect(panel.getByRole('button', { name: 'Copy local workspace command' })).toBeHidden();
   const accessibility = await new AxeBuilder({ page })
     .include('[data-testid="local-development-publication"]')
     .analyze();
@@ -2443,6 +3428,163 @@ test('shows a truthful responsive local-development and private GitHub handoff',
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
     .toBe(true);
   await expect(panel).toHaveScreenshot('local-development-publication.png');
+});
+
+test('opens a finished editable workspace inside the ignored Studio workspace directory', async ({
+  page,
+}, testInfo) => {
+  await page.route('**/__made-solid/local-workspace', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    await route.fulfill({
+      body: [
+        JSON.stringify({
+          status: 'running',
+          phase: 'accessing',
+          detail: 'Checking private GitHub access.',
+        }),
+        JSON.stringify({
+          status: 'running',
+          phase: 'updating',
+          detail:
+            'Fast-forwarding the existing prospect workspace without overwriting local changes.',
+        }),
+        JSON.stringify({
+          status: 'running',
+          phase: 'verifying',
+          detail: 'Made Solid refinement logging is ready.',
+        }),
+        JSON.stringify({
+          status: 'running',
+          phase: 'installing',
+          detail: 'Website dependencies are already installed.',
+        }),
+        JSON.stringify({
+          status: 'running',
+          phase: 'launching',
+          detail: 'Starting the website in a persistent terminal session.',
+        }),
+        JSON.stringify({
+          status: 'complete',
+          phase: 'ready',
+          detail: 'The website is running from prospect-workspaces/lece-electrical-website.',
+          previewUrl: 'https://example.test/lece-electrical-website',
+        }),
+        '',
+      ].join('\n'),
+      contentType: 'application/x-ndjson',
+      status: 200,
+    });
+  });
+  await mountReadyEditableWorkspace(page);
+  const panel = page.getByTestId('editable-workspace-ready');
+  const openWorkspace = panel.getByRole('button', { name: 'Open local prospect workspace' });
+  await expect(openWorkspace).toBeVisible();
+  await expect(panel).toContainText('prospect-workspaces/lece-electrical-website');
+  await expect(panel.getByRole('link', { name: 'Open GitHub repository' })).toHaveAttribute(
+    'href',
+    'https://github.com/made-solid-studio/lece-electrical-website',
+  );
+  await openWorkspace.click();
+  await expect(panel.getByRole('button', { name: 'Open local prospect workspace' })).toContainText(
+    'Preparing local workspace',
+  );
+  await expect(panel.getByRole('list', { name: 'Local workspace setup stages' })).toBeVisible();
+  await expect(panel.locator('.local-workspace-setup .is-current')).toHaveCount(1);
+  await expect(panel.getByRole('button', { name: 'Open local prospect workspace' })).toContainText(
+    'Website launched',
+  );
+  const stages = panel.getByRole('list', { name: 'Local workspace setup stages' });
+  await expect(stages.getByRole('listitem')).toHaveCount(6);
+  await expect(stages.locator('.is-complete')).toHaveCount(6);
+  await expect(panel).toContainText('The website is running from prospect-workspaces');
+  await expect(panel.getByRole('link', { name: 'Open website preview' })).toHaveAttribute(
+    'href',
+    'https://example.test/lece-electrical-website',
+  );
+  await expect(panel.getByRole('heading', { name: 'Refinement ledger' })).toBeVisible();
+  await expect(panel).toContainText('Resources appear immediately');
+  await expect(panel).toContainText('1 verified refinement recorded.');
+  await panel.getByText('Manual command fallback', { exact: true }).click();
+  await expect(panel).toContainText(
+    'npm run workspace:open -- --repository made-solid-studio/lece-electrical-website',
+  );
+  await panel.getByText('Manual command fallback', { exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  const accessibility = await new AxeBuilder({ page })
+    .include('[data-testid="editable-workspace-ready"]')
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect(panel).toHaveScreenshot('editable-workspace-ready.png');
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    await expect(panel.getByRole('heading', { name: 'Refinement ledger' })).toBeVisible();
+    await expect(panel).toContainText('375x812 · 768x1024 · 1440x900');
+  }
+});
+
+test('shows comprehensive persisted progress while creating an editable workspace', async ({
+  page,
+}, testInfo) => {
+  await mountEditableWorkspaceCreation(page);
+  const panel = page.getByTestId('editable-workspace-creation');
+  await expect(
+    panel.getByRole('heading', { name: 'Preparing zacdagostino/lecegroup' }),
+  ).toBeVisible();
+  await expect(panel.getByRole('progressbar')).toHaveAttribute(
+    'aria-valuetext',
+    'Creating the private GitHub repository zacdagostino/lecegroup.',
+  );
+  const stages = panel
+    .getByRole('list', { name: 'Workspace creation stages' })
+    .getByRole('listitem');
+  await expect(stages).toHaveCount(5);
+  await expect(panel.locator('.local-development__progress-stages .is-complete')).toHaveCount(3);
+  await expect(panel.locator('.local-development__progress-stages .is-current')).toHaveCount(1);
+  await expect(panel.locator('.local-development__progress-stages .is-upcoming')).toHaveCount(1);
+  await expect(panel).toContainText('124 of 126 prepared');
+  await expect(panel).toContainText('Private only');
+  await expect(panel).toContainText('will not alter the Made Solid Studio repository');
+  const cancel = panel.getByRole('button', { name: 'Cancel workspace creation' });
+  await expect(cancel).toBeVisible();
+  const cancelBox = await cancel.boundingBox();
+  expect(cancelBox?.height).toBeGreaterThanOrEqual(44);
+  const accessibility = await new AxeBuilder({ page })
+    .include('[data-testid="editable-workspace-creation"]')
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  await expect(panel).toHaveScreenshot('editable-workspace-creation.png');
+  await cancel.focus();
+  await expect(cancel).toBeFocused();
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    await expect(cancel).toBeVisible();
+  }
+});
+
+test('keeps long editable-workspace values contained at 320px', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'mobile');
+  await page.setViewportSize({ width: 320, height: 568 });
+  await mountLocalDevelopmentPublication(page);
+  await page.getByText('Change GitHub destination', { exact: true }).click();
+  await page
+    .getByLabel('Repository name')
+    .fill('lece-electrical-services-and-commercial-project-delivery-website');
+  await page.getByText('Manual command fallback', { exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  await expect(page.getByRole('button', { name: 'Create editable workspace' })).toBeVisible();
 });
 
 test('shows one pending-feature count beside the current production agent version', async ({
@@ -2502,6 +3644,7 @@ test('shows one pending-feature count beside the current production agent versio
 test('keeps the active semantic recovery safeguard with its package version', async ({ page }) => {
   await page.goto('/#/agent-studio/refine/business-demo-local-services');
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+  await waitForStudioObjectStores(page, ['meta']);
 
   const update = page.getByRole('region', {
     name: 'Semantic recovery safeguard · v6.16',
@@ -2530,15 +3673,70 @@ test('keeps the active semantic recovery safeguard with its package version', as
     .toBe(true);
 });
 
-test('displays local refinement handoff above retained package versions', async ({
-  page,
-}, testInfo) => {
+test('displays the newest test package above retained package versions', async ({ page }) => {
   await openReadyBuildManifest(page);
   await page.goto('/#/agent-studio/refine/business-demo-local-services');
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const packagePicker = page.getByLabel('Test agent package');
-  await expect(packagePicker).toHaveValue('agent-package-local-v9-refinement-handoff');
+  await expect(packagePicker).toHaveValue(
+    'agent-package-local-v14-5-codespace-interrupted-chat-recovery',
+  );
+  await expect(packagePicker).toContainText('v14.5 · Approved test');
+  await expect(packagePicker).toContainText('v14.4 · Approved test');
+  await expect(packagePicker).toContainText('v14.3 · Approved test');
+  await expect(packagePicker).toContainText('v14.2 · Approved test');
+  await expect(packagePicker).toContainText('v14.1 · Approved test');
+  await expect(packagePicker).toContainText('v14.0 · Approved test');
+  await expect(packagePicker).toContainText('v13.9 · Approved test');
+  await expect(packagePicker).toContainText('v13.8 · Approved test');
+  await expect(packagePicker).toContainText('v13.7 · Approved test');
+  await expect(packagePicker).toContainText('v13.6 · Approved test');
+  await expect(packagePicker).toContainText('v13.5 · Approved test');
+  await expect(packagePicker).toContainText('v13.4 · Approved test');
+  await expect(packagePicker).toContainText('v13.3 · Approved test');
+  await expect(packagePicker).toContainText('v13.2 · Approved test');
+  await expect(packagePicker).toContainText('v13.1 · Approved test');
+  await expect(packagePicker).toContainText('v13.0 · Approved test');
+  await expect(packagePicker).toContainText('v12.9 · Approved test');
+  await expect(packagePicker).toContainText('v12.8 · Approved test');
+  await expect(packagePicker).toContainText('v12.7 · Approved test');
+  await expect(packagePicker).toContainText('v12.6 · Approved test');
+  await expect(packagePicker).toContainText('v12.5 · Approved test');
+  await expect(packagePicker).toContainText('v12.4 · Approved test');
+  await expect(packagePicker).toContainText('v12.3 · Approved test');
+  await expect(packagePicker).toContainText('v12.2 · Approved test');
+  await expect(packagePicker).toContainText('v12.1 · Approved test');
+  await expect(packagePicker).toContainText('v12.0 · Approved test');
+  await expect(packagePicker).toContainText('v11.9 · Approved test');
+  await expect(packagePicker).toContainText('v11.8 · Approved test');
+  await expect(packagePicker).toContainText('v11.7 · Approved test');
+  await expect(packagePicker).toContainText('v11.6 · Approved test');
+  await expect(packagePicker).toContainText('v11.5 · Approved test');
+  await expect(packagePicker).toContainText('v11.4 · Approved test');
+  await expect(packagePicker).toContainText('v11.3 · Approved test');
+  await expect(packagePicker).toContainText('v11.2 · Approved test');
+  await expect(packagePicker).toContainText('v11.1 · Approved test');
+  await expect(packagePicker).toContainText('v11.0 · Approved test');
+  await expect(packagePicker).toContainText('v10.9 · Approved test');
+  await expect(packagePicker).toContainText('v10.8 · Approved test');
+  await expect(packagePicker).toContainText('v10.7 · Approved test');
+  await expect(packagePicker).toContainText('v10.6 · Approved test');
+  await expect(packagePicker).toContainText('v10.5 · Approved test');
+  await expect(packagePicker).toContainText('v10.4 · Approved test');
+  await expect(packagePicker).toContainText('v10.3 · Approved test');
+  await expect(packagePicker).toContainText('v10.2 · Approved test');
+  await expect(packagePicker).toContainText('v10.1 · Approved test');
+  await expect(packagePicker).toContainText('v10.0 · Approved test');
+  await expect(packagePicker).toContainText('v9.9 · Approved test');
+  await expect(packagePicker).toContainText('v9.8 · Approved test');
+  await expect(packagePicker).toContainText('v9.7 · Approved test');
+  await expect(packagePicker).toContainText('v9.6 · Approved test');
+  await expect(packagePicker).toContainText('v9.5 · Approved test');
+  await expect(packagePicker).toContainText('v9.4 · Approved test');
+  await expect(packagePicker).toContainText('v9.3 · Approved test');
+  await expect(packagePicker).toContainText('v9.2 · Approved test');
+  await expect(packagePicker).toContainText('v9.1 · Approved test');
   await expect(packagePicker).toContainText('v9.0 · Approved test');
   await expect(packagePicker).toContainText('v8.9 · Approved test');
   await expect(packagePicker).toContainText('v8.8 · Approved test');
@@ -2575,6 +3773,61 @@ test('displays local refinement handoff above retained package versions', async 
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v14.5', 'Codespace interrupted-chat recovery'],
+    ['v14.4', 'Recent-prompt chat titles'],
+    ['v14.3', 'Camera-roll photo upload'],
+    ['v14.2', 'Subscription builder runtime'],
+    ['v14.1', 'Compact Codex composer'],
+    ['v14.0', 'Markdown Codex chat'],
+    ['v13.9', 'Concurrent Codex activity'],
+    ['v13.8', 'Codex transcript position'],
+    ['v13.7', 'Public Codespace ports'],
+    ['v13.6', 'Concurrent Codex chats'],
+    ['v13.5', 'Reliable long-page capture'],
+    ['v13.4', 'Exact visual chat'],
+    ['v13.3', 'Mobile Studio capture'],
+    ['v13.2', 'Exact Studio capture'],
+    ['v13.1', 'Reliable Codex new-chat'],
+    ['v13.0', 'Codespace workspace suite'],
+    ['v12.9', 'Codex capture preferences'],
+    ['v12.8', 'Codex IDE chat-surface'],
+    ['v12.7', 'Codex conversation capture'],
+    ['v12.6', 'Codex chat'],
+    ['v12.5', 'Visual Codex feedback'],
+    ['v12.4', 'Reviewed page-disposition'],
+    ['v12.3', 'Editable handoff recovery'],
+    ['v12.2', 'Automatic prospect-domain'],
+    ['v12.1', 'Automatic Clientspace preview'],
+    ['v12.0', 'Captured handoff email'],
+    ['v11.9', 'Canonical asset handoff'],
+    ['v11.8', 'Clean alternate-test'],
+    ['v11.7', 'Made Solid handoff worker liveness'],
+    ['v11.6', 'Optional handoff schema'],
+    ['v11.5', 'Made Solid source handoff'],
+    ['v11.4', 'Agent Studio website tone'],
+    ['v11.3', 'Agent learning inbox'],
+    ['v11.2', 'Edit version history'],
+    ['v11.1', 'Resilient final edit'],
+    ['v11.0', 'Editing and handoff pages'],
+    ['v10.9', 'Resilient refinement ledger'],
+    ['v10.8', 'Live refinement ledger'],
+    ['v10.7', 'Codespaces preview URL'],
+    ['v10.6', 'Automatic website launch'],
+    ['v10.5', 'Immediate source workspace'],
+    ['v10.4', 'One-click prospect workspace'],
+    ['v10.3', 'Embedded prospect workspace'],
+    ['v10.2', 'Non-interactive Codex install'],
+    ['v10.1', 'Website tone direction'],
+    ['v10.0', 'Visible Codespace setup'],
+    ['v9.9', 'Codespace resume startup'],
+    ['v9.8', 'Optional SVG generation'],
+    ['v9.7', 'Persistent Codespace tmux'],
+    ['v9.6', 'Builder-derived colour roles'],
+    ['v9.5', 'Codespace setup-ordering'],
+    ['v9.4', 'Codespace startup reliability'],
+    ['v9.3', 'Logo accent-region'],
+    ['v9.2', 'Codespace editing workspace'],
+    ['v9.1', 'Accent-only brand'],
     ['v9.0', 'Local refinement handoff'],
     ['v8.9', 'Viewport checks only'],
     ['v8.8', 'Bounded builder request'],
@@ -2613,9 +3866,7 @@ test('displays local refinement handoff above retained package versions', async 
     await expect(versions.nth(index)).toContainText(version);
     await expect(versions.nth(index)).toContainText(summary);
   }
-  await expect(testInfo.project.name === 'mobile' ? versions.nth(0) : register).toHaveScreenshot(
-    'local-refinement-handoff-package-register.png',
-  );
+  await expect(versions.nth(0)).toHaveScreenshot('local-refinement-handoff-package-register.png');
 
   const accessibility = await new AxeBuilder({ page })
     .include('.agent-package-version-ledger')
@@ -2682,6 +3933,9 @@ test('offers a responsive saved-source recheck on completed test evidence', asyn
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const quality = page.locator('.builder-quality');
+  await expect(quality).not.toHaveAttribute('open', '');
+  await quality.locator('summary').click();
+  await expect(quality).toHaveAttribute('open', '');
   await expect(quality.getByRole('button', { name: 'Recheck saved source' })).toBeVisible();
   await expect(quality).toContainText('without a Codex page generation pass');
   await expect(quality).toHaveScreenshot('saved-source-quality-recheck.png');
@@ -2744,12 +3998,19 @@ test('keeps a failed test available without blocking another test', async ({ pag
   await expect(stoppedTest.getByRole('button', { name: 'Test something else' })).toBeVisible();
   await expect(stoppedTest).toHaveScreenshot('failed-test-recovery-actions.png');
 
-  await stoppedTest.getByRole('button', { name: 'Test something else' }).click();
+  const alternativeTestButton = stoppedTest.getByRole('button', { name: 'Test something else' });
+  await alternativeTestButton.focus();
+  await alternativeTestButton.press('Enter');
   const chooser = page.locator('.builder-run__tests');
   await expect(chooser).toBeVisible();
   await expect(page.getByLabel('Test agent package')).toHaveValue(
-    'agent-package-local-v6-9-valid-preview-entry',
+    'agent-package-local-v12-9-codex-capture-preferences',
   );
+  await expect(chooser.getByLabel('Create page from scratch')).toBeChecked();
+  await expect(chooser.getByLabel('Previous built page')).toHaveCount(0);
+  await expect(chooser.locator('.builder-page-set__options input:checked')).toHaveCount(1);
+  await expect(chooser.locator('.builder-page-set__group--selected')).toContainText('Home');
+  await expect(chooser.locator('.builder-page-set__group--selected')).not.toContainText('Services');
   await expect(chooser).toHaveScreenshot('failed-test-alternate-test-chooser.png');
 
   const accessibility = await new AxeBuilder({ page }).include('.builder-run').analyze();
@@ -3002,10 +4263,10 @@ test('separates test refinement from the published builder agent package', async
   expect(versionsBox).not.toBeNull();
   expect(settingsBox).not.toBeNull();
   if (refineBox && architectureBox && versionsBox && settingsBox) {
-    expect(architectureBox.x).toBeGreaterThan(refineBox.x);
+    expect(architectureBox.y > refineBox.y || architectureBox.x > refineBox.x).toBeTruthy();
     expect(versionsBox.y > architectureBox.y || versionsBox.x > architectureBox.x).toBeTruthy();
     expect(settingsBox.y > versionsBox.y || settingsBox.x > versionsBox.x).toBeTruthy();
-    if (testInfo.project.name !== 'mobile') {
+    if (testInfo.project.name === 'desktop') {
       const controlCenters = [refineBox, architectureBox, versionsBox, settingsBox].map(
         (box) => box.y + box.height / 2,
       );
@@ -3017,8 +4278,8 @@ test('separates test refinement from the published builder agent package', async
   );
   await expect(page.getByRole('heading', { name: 'Every saved build package' })).toBeVisible();
   const versionCards = page.locator('.agent-package-version-ledger__list article');
-  await expect(versionCards).toHaveCount(32);
-  await expect(versionCards.first().getByRole('heading')).toHaveText('v9.0');
+  await expect(versionCards).toHaveCount(71);
+  await expect(versionCards.first().getByRole('heading')).toHaveText('v12.9');
   const stagedV7Card = versionCards.filter({
     hasText: 'Five tested behaviours staged for the next production package.',
   });
@@ -3145,9 +4406,7 @@ test('separates test refinement from the published builder agent package', async
       .getByRole('list', { name: 'Complete feature inventory for agent package v7.0' })
       .getByRole('listitem'),
   ).toHaveCount(7);
-  await productionVersionSelect.selectOption({
-    label: 'v6.0 · Published · 9 awaiting approval',
-  });
+  await productionVersionSelect.selectOption('agent-package-local-v6');
   await expect(page.getByRole('heading', { name: 'Published v6.0 baseline' })).toBeVisible();
   await expect(
     page
@@ -3199,7 +4458,7 @@ test('separates test refinement from the published builder agent package', async
   await expect(featureDialog.locator('.is-changed')).not.toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(
-    page.getByText('31 unpublished packages derived from this production package.'),
+    page.getByText('60 unpublished packages derived from this production package.'),
   ).toBeVisible();
 
   await page.getByRole('button', { name: 'Agent architecture' }).click();

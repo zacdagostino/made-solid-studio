@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+project_directory="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+cd "$project_directory"
+
+if ! command -v codex >/dev/null 2>&1; then
+  echo "Codex is required for subscription-backed website builds. Run scripts/codespace-work to install it."
+  exit 1
+fi
+
+login_status="$(codex login status 2>&1 || true)"
+if [[ ! "$login_status" =~ [Ll]ogged[[:space:]]in[[:space:]]using[[:space:]][Cc]hat[Gg][Pp][Tt] ]]; then
+  echo "The website builder needs a ChatGPT subscription sign-in."
+  echo "Run 'codex login --device-auth' in a trusted Codespace terminal, then restart this window."
+  exit 1
+fi
+
+echo "Starting the ChatGPT subscription-backed builder worker."
+export SITEFORGE_CODEX_AUTH_MODE=chatgpt
+exec node "$project_directory/worker/builder-worker.mjs"

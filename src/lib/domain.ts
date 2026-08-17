@@ -138,6 +138,7 @@ export type ResearchArtifact = {
   storagePath: string;
   contentType?: string;
   byteSize?: number;
+  sha256?: string;
   metadata: Record<string, unknown>;
   createdAt: string;
 };
@@ -153,6 +154,8 @@ export type ResearchPacket = {
 
 export type AssetAnalysisJob = {
   id: string;
+  runToken?: string;
+  analysisScope?: 'full' | 'logo_versions' | 'brand_colours';
   businessId: string;
   crawlRunId: string;
   status: AssetAnalysisStatus;
@@ -163,6 +166,7 @@ export type AssetAnalysisJob = {
   currentAssetId?: string;
   editableLogoRetryAssetId?: string;
   editableLogoRetryToken?: string;
+  editableLogoGenerationEnabled?: boolean;
   editableLogoSimplificationEnabled?: boolean;
   editableLogoVectorizerProvider?: 'vtracer' | 'vectorizer_ai';
   totalItems: number;
@@ -196,6 +200,7 @@ export type AssetAnnotation = {
   businessId: string;
   crawlRunId: string;
   analysisJobId?: string;
+  analysisRunToken?: string;
   sourceContext: Record<string, unknown>;
   observedDescription: string;
   visibleText: string[];
@@ -334,6 +339,7 @@ export type BrandColourEvidence = {
 export type BrandPalette = {
   primary?: string;
   accent?: string;
+  mode?: 'primary_and_accent' | 'accent_only' | 'primary_only' | 'builder_derived';
 };
 
 export type BrandKit = {
@@ -366,10 +372,16 @@ export type BriefSitemapEntry = {
   sourceUrl?: string;
 };
 
+export type PageDisposition =
+  'needs_review' | 'build' | 'merge' | 'redirect' | 'workflow_state' | 'contextual' | 'exclude';
+
 export type BriefPagePlan = {
   title: string;
   structure: string[];
   sourceUrl?: string;
+  disposition: PageDisposition;
+  dispositionReason: string;
+  targetSourceUrl?: string;
 };
 
 export type BriefAssetGuidance = {
@@ -462,6 +474,19 @@ export type BuildManifestPage = {
   outputPath: string;
   sourcePath: string;
   sourceSelected: boolean;
+  disposition: Exclude<PageDisposition, 'needs_review' | 'merge' | 'exclude'>;
+  targetSourceUrl?: string;
+};
+
+export type BuildManifestPageCoverage = {
+  url: string;
+  title?: string;
+  pageType?: string;
+  canonicalUrl?: string;
+  disposition: Exclude<PageDisposition, 'needs_review'>;
+  dispositionReason: string;
+  targetSourceUrl?: string;
+  outputRequired: boolean;
 };
 
 export type BuildManifestAsset = {
@@ -471,6 +496,9 @@ export type BuildManifestAsset = {
   storageBucket: string;
   storagePath: string;
   sourceSelected: boolean;
+  sourcePageUrls: string[];
+  sourceUrls: string[];
+  duplicateArtifactIds: string[];
 };
 
 export type BuildRuntimeProfile = 'static-marketing' | 'managed-forms' | 'managed-next-runtime';
@@ -522,6 +550,7 @@ export type BuildManifestData = {
   };
   permittedFacts: BuildManifestFact[];
   selectedPages: BuildManifestPage[];
+  pageCoverage: BuildManifestPageCoverage[];
   selectedAssets: BuildManifestAsset[];
   approvedAssetGuidance: BriefAssetGuidance[];
   approvedCapabilities: CapabilityInventoryItem[];
@@ -696,6 +725,7 @@ export type ClientPreviewPublication = {
   clientEmail: string;
   projectName: string;
   finalBalanceCents?: number;
+  pricingSnapshot?: import('./pricing').PricingQuoteSnapshot;
   currency: string;
   handoffNotes: string;
   status: ClientPreviewPublicationStatus;
@@ -718,8 +748,52 @@ export type ClientPreviewPublicationInput = {
   clientEmail: string;
   projectName: string;
   finalBalanceCents?: number;
+  pricingSnapshot: import('./pricing').PricingQuoteSnapshot;
   currency: string;
   handoffNotes: string;
+};
+
+export type MadeSolidHandoffStatus = 'queued' | 'running' | 'ready' | 'failed' | 'cancelled';
+
+export type MadeSolidHandoff = {
+  id: string;
+  businessId: string;
+  builderRunId: string;
+  sourceRepositoryUrl: string;
+  sourceBranch: string;
+  sourceCommit: string;
+  sourceEditVersion: number;
+  clientName: string;
+  contactName: string;
+  clientEmail: string;
+  projectName: string;
+  handoffNotes: string;
+  pricingSnapshot?: import('./pricing').PricingQuoteSnapshot;
+  status: MadeSolidHandoffStatus;
+  progressPhase: string;
+  progressDetail: string;
+  totalItems: number;
+  completedItems: number;
+  cancelRequestedAt?: string;
+  websiteHandoffId?: string;
+  websiteAdminUrl?: string;
+  errorSummary?: string;
+  createdAt: string;
+  completedAt?: string;
+  updatedAt: string;
+};
+
+export type MadeSolidHandoffInput = {
+  sourceRepositoryUrl: string;
+  sourceBranch: string;
+  sourceCommit: string;
+  sourceEditVersion: number;
+  clientName: string;
+  contactName: string;
+  clientEmail: string;
+  projectName: string;
+  handoffNotes: string;
+  pricingSnapshot: import('./pricing').PricingQuoteSnapshot;
 };
 
 export type GithubWorkspacePublicationStatus =
@@ -909,6 +983,8 @@ export type ProspectWorkspace = {
   builderArtifacts: BuilderArtifact[];
   builderEvents: BuilderEvent[];
   clientPreviewPublications: ClientPreviewPublication[];
+  madeSolidHandoffs: MadeSolidHandoff[];
+  madeSolidHandoffWorkerAvailable: boolean;
   githubWorkspacePublications: GithubWorkspacePublication[];
   githubWorkspaceWorkerAvailable: boolean;
   aiUsageRecords: AiUsageRecord[];

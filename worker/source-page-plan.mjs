@@ -59,6 +59,11 @@ export function sourcePagePlan(selectedPages) {
         sourceUrl,
         title: typeof page.title === 'string' ? page.title : '',
         pageType: typeof page.pageType === 'string' ? page.pageType : '',
+        disposition: typeof page.disposition === 'string' ? page.disposition : 'build',
+        dispositionReason: typeof page.dispositionReason === 'string' ? page.dispositionReason : '',
+        targetSourceUrl:
+          typeof page.targetSourceUrl === 'string' ? normaliseSourceUrl(page.targetSourceUrl) : '',
+        outputRequired: page.outputRequired !== false,
         routePath,
         publicPath,
         outputPath,

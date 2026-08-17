@@ -26,7 +26,8 @@ const supabase = createClient(
   requiredEnvironment('SITEFORGE_SUPABASE_SERVICE_ROLE_KEY'),
   { auth: { autoRefreshToken: false, persistSession: false } },
 );
-const githubToken = requiredEnvironment('GITHUB_TOKEN');
+const githubToken =
+  process.env.SITEFORGE_GITHUB_TOKEN?.trim() || requiredEnvironment('GITHUB_TOKEN');
 const allowedOwners = new Set(
   (process.env.GITHUB_ALLOWED_OWNERS || '')
     .split(',')
@@ -56,6 +57,11 @@ async function githubRequest(path, options = {}) {
   const payload = response.status === 204 ? null : await response.json().catch(() => null);
   if (!response.ok) {
     const detail = typeof payload?.message === 'string' ? ` ${payload.message}` : '';
+    if (response.status === 403 && payload?.message === 'Resource not accessible by integration') {
+      throw new Error(
+        'The Codespaces repository token cannot create a separate private repository. Configure SITEFORGE_GITHUB_TOKEN with a GitHub user token that can create private repositories, then retry.',
+      );
+    }
     throw new Error(`GitHub rejected the repository request (${response.status}).${detail}`);
   }
   return payload;
@@ -198,7 +204,19 @@ async function reconstructWorkspace(job, run, temporaryDirectory, artifacts) {
       return downloadArtifact(artifact, projectDirectory, `public/${previewPath}`);
     }),
   ]);
-  await applyLocalDevelopmentHandoff(projectDirectory, {
+  await applyLocalDevelopmentHandoff(projectDirectory, localDevelopmentOrigin(run));
+  await updateJob(job, {
+    completed_items: sourceArtifacts.length + assetArtifacts.length,
+  });
+  return {
+    projectDirectory,
+    completedItems: sourceArtifacts.length + assetArtifacts.length,
+    totalItems: sourceArtifacts.length + assetArtifacts.length + 4,
+  };
+}
+
+function localDevelopmentOrigin(run) {
+  return {
     studioBuildId: run.id,
     businessId: run.business_id,
     buildManifestId: run.build_manifest_id,
@@ -207,14 +225,6 @@ async function reconstructWorkspace(job, run, temporaryDirectory, artifacts) {
     buildMode: run.build_mode,
     templateVersion: run.template_version,
     baselineCommit: null,
-  });
-  await updateJob(job, {
-    completed_items: sourceArtifacts.length + assetArtifacts.length,
-  });
-  return {
-    projectDirectory,
-    completedItems: sourceArtifacts.length + assetArtifacts.length,
-    totalItems: sourceArtifacts.length + assetArtifacts.length + 4,
   };
 }
 
@@ -241,6 +251,7 @@ async function prepareWorkspace(job, run, temporaryDirectory) {
   if (!(await stat(join(projectDirectory, 'package.json')).catch(() => undefined))) {
     throw new Error('The local-development workspace has no package.json.');
   }
+  await applyLocalDevelopmentHandoff(projectDirectory, localDevelopmentOrigin(run));
   await updateJob(job, { completed_items: 1 });
   return { projectDirectory, completedItems: 1, totalItems: 5 };
 }

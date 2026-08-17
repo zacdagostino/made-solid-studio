@@ -7,8 +7,11 @@ import {
   Bot,
   Check,
   CheckCheck,
+  CheckCircle2,
   ChevronDown,
+  Circle,
   CircleAlert,
+  CircleDollarSign,
   CircleHelp,
   ClipboardCheck,
   Clock3,
@@ -70,10 +73,14 @@ import semanticContentRecoveryContractSource from '../worker/builder-template/fe
 import builderPackageSource from '../worker/builder-template/package.json?raw';
 import motionRuntimeSource from '../worker/builder-template/src/components/foundation/site-runtime.tsx?raw';
 import builderWorkerSource from '../worker/builder-worker.mjs?raw';
+import agentPackageWorkerSource from '../worker/agent-package-worker.mjs?raw';
+import madeSolidHandoffWorkerSource from '../worker/made-solid-handoff-worker.mjs?raw';
 import buildManifestSource from './lib/build-manifest.ts?raw';
 import { AppShell, type AppPage } from './components/AppShell';
 import { AgentArchitectureOverview } from './components/AgentArchitectureOverview';
+import { MarkdownContent } from './components/MarkdownContent';
 import { TaxExpensesPage } from './components/TaxExpensesPage';
+import { PricingCalculator } from './components/PricingCalculator';
 import {
   Button,
   ButtonGroup,
@@ -87,6 +94,7 @@ import {
   ToastRegion,
   type ToastNotice,
 } from './components/ui';
+import type { PricingQuoteSnapshot, PricingSourceScope } from './lib/pricing';
 import {
   isOpenTask,
   stageLabels,
@@ -94,6 +102,7 @@ import {
   type Business,
   type AuditFinding,
   type AssetAnnotation,
+  type AssetAnalysisStatus,
   type AiUsageRecord,
   type AgentPackage,
   type AgentPackageProposal,
@@ -110,9 +119,12 @@ import {
   type BuilderRun,
   type BuilderEvent,
   type ClientPreviewPublicationInput,
+  type MadeSolidHandoffInput,
+  type GithubWorkspacePublication,
   type GithubWorkspacePublicationInput,
   type CapturedPage,
   type ProspectStage,
+  type PageDisposition,
   type ProspectWorkspace,
   type RedesignBrief,
   type RedesignBriefDraft,
@@ -121,12 +133,19 @@ import {
   type StructuredVisualContent,
   type VisualContentCandidate,
 } from './lib/domain';
+import { groupVisualAssets } from './lib/visual-asset-groups';
+import { capturedPublicEmail } from './lib/handoff-contact';
 import { SupabaseWorkspaceRepository } from './lib/cloud-repository';
 import { manifestSourceMatchesBrief } from './lib/build-manifest';
 import { brandColourEvidenceSummary, rankBrandColourEvidence } from './lib/brand-colours';
 import { detectCapabilities } from './lib/capability-inventory';
 import { siteforgeRepository, type WorkspaceRepository } from './lib/repository';
 import { getSupabaseClient, isSupabaseConfigured, usesLocalStorage } from './lib/supabase';
+import {
+  clearWorkspaceCache,
+  readWorkspaceCache,
+  writeWorkspaceCache,
+} from './lib/workspace-cache';
 
 type WorkspaceTab =
   | 'overview'
@@ -136,9 +155,11 @@ type WorkspaceTab =
   | 'brief'
   | 'audit'
   | 'redesign'
+  | 'editing'
+  | 'handoff'
   | 'report'
   | 'activity';
-type AgentStudioSection = 'refine' | 'agent' | 'versions';
+type AgentStudioSection = 'refine' | 'learning' | 'agent' | 'versions';
 type Route =
   | { page: 'today' }
   | { page: 'data' }
@@ -150,6 +171,12 @@ type Route =
 
 const lastRouteStorageKey = 'siteforge-os.last-route';
 
+function studioPreviewUrl(source: string) {
+  const shell = new URL(window.location.href);
+  shell.hash = `/preview?source=${encodeURIComponent(source)}`;
+  return shell.href;
+}
+
 const workspaceTabs = [
   { id: 'overview' as const, label: 'Overview', icon: LayoutDashboard },
   { id: 'research' as const, label: 'Research', icon: Search },
@@ -157,6 +184,8 @@ const workspaceTabs = [
   { id: 'assets' as const, label: 'Assets', icon: FileImage },
   { id: 'brief' as const, label: 'Brief', icon: FilePenLine },
   { id: 'redesign' as const, label: 'Build & preview', icon: Wrench },
+  { id: 'editing' as const, label: 'Website editing', icon: Laptop },
+  { id: 'handoff' as const, label: 'Made Solid handoff', icon: PackageCheck },
   { id: 'audit' as const, label: 'Audit', icon: ShieldAlert },
   { id: 'report' as const, label: 'Report', icon: FileText },
   { id: 'activity' as const, label: 'Activity', icon: Clock3 },
@@ -167,7 +196,7 @@ function isWorkspaceTab(value: string | undefined): value is WorkspaceTab {
 }
 
 function isAgentStudioSection(value: string | undefined): value is AgentStudioSection {
-  return value === 'refine' || value === 'agent' || value === 'versions';
+  return value === 'refine' || value === 'learning' || value === 'agent' || value === 'versions';
 }
 
 function routeFromHash(hash: string): Route {
@@ -348,6 +377,7 @@ function EditableSvgLogo({
     setSaving(false);
     setMessage(error ? error.message : 'SVG saved.');
   }
+
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Button type="button" variant="secondary" onClick={() => setOpen(true)}>
@@ -1192,8 +1222,12 @@ function WorkspaceLoadingOverlay({
 
   useEffect(() => {
     if (loading) return;
-    const departure = window.setTimeout(() => setPhase('departing'), 650);
-    const complete = window.setTimeout(onComplete, 1_750);
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      onComplete();
+      return;
+    }
+    const departure = window.setTimeout(() => setPhase('departing'), 220);
+    const complete = window.setTimeout(onComplete, 660);
     return () => {
       window.clearTimeout(departure);
       window.clearTimeout(complete);
@@ -3442,18 +3476,20 @@ function TestDirectionResults({
 }
 
 function VisualAssetCatalog({ assets }: { assets: ResearchArtifact[] }) {
+  const assetGroups = useMemo(() => groupVisualAssets(assets), [assets]);
+  const displayAssets = assetGroups.map((group) => group.asset);
   const { urls, loadError } = usePrivateArtifactUrls(
-    assets,
+    displayAssets,
     'Private visual assets could not be loaded. Refresh and check storage access.',
   );
 
-  if (!assets.length) return null;
+  if (!assetGroups.length) return null;
   return (
     <details className="asset-catalog">
       <summary>
         <span>
           <span className="asset-catalog__eyebrow">Captured source material</span>
-          <strong>Browse all {assets.length} visual assets</strong>
+          <strong>Browse {assetGroups.length} unique visual assets</strong>
         </span>
       </summary>
       <div className="asset-catalog__content">
@@ -3463,14 +3499,13 @@ function VisualAssetCatalog({ assets }: { assets: ResearchArtifact[] }) {
           external use.
         </p>
         <div className="packet-assets__grid">
-          {assets.map((asset) => {
+          {assetGroups.map(({ asset, assets: duplicates, pageUrls }) => {
             const type =
               asset.metadata.logoVariant === 'appearance'
                 ? `transparent ${String(asset.metadata.logoAppearance || 'brand')} logo`
                 : asset.metadata.vectorSuggestion
                   ? 'derived vector suggestion'
                   : recordValue(asset.metadata, 'assetType') || 'image';
-            const pageUrl = recordValue(asset.metadata, 'pageUrl');
             const width = recordValue(asset.metadata, 'width');
             const height = recordValue(asset.metadata, 'height');
             return (
@@ -3489,12 +3524,20 @@ function VisualAssetCatalog({ assets }: { assets: ResearchArtifact[] }) {
                 <strong>{type}</strong>
                 <ImageFileType contentType={asset.contentType} path={asset.storagePath} />
                 <small>
-                  {pageUrl
-                    ? new URL(pageUrl).pathname || '/'
+                  {pageUrls.length
+                    ? `Found on ${pageUrls.length} ${pageUrls.length === 1 ? 'page' : 'pages'}`
                     : asset.metadata.logoVariant === 'appearance'
                       ? 'Generated from the selected organisation logo'
                       : 'Captured website asset'}
                 </small>
+                {pageUrls.map((pageUrl) => (
+                  <small className="packet-assets__location" key={pageUrl}>
+                    {new URL(pageUrl).pathname || '/'}
+                  </small>
+                ))}
+                {duplicates.length > 1 ? (
+                  <small>{duplicates.length} identical captures combined</small>
+                ) : null}
                 {width && height ? <small>{`${width} x ${height}`}</small> : null}
               </ExpandableImage>
             );
@@ -3541,6 +3584,7 @@ function ResearchPacketPanel({ workspace }: { workspace: ProspectWorkspace }) {
     () => workspace.artifacts.filter((artifact) => artifact.kind === 'asset'),
     [workspace.artifacts],
   );
+  const uniqueAssetCount = useMemo(() => groupVisualAssets(assets).length, [assets]);
   const visiblePages = pages.slice(0, 4);
   const remainingPages = pages.slice(4);
 
@@ -3568,7 +3612,7 @@ function ResearchPacketPanel({ workspace }: { workspace: ProspectWorkspace }) {
         </div>
         <div>
           <dt>Visual assets</dt>
-          <dd>{assets.length}</dd>
+          <dd>{uniqueAssetCount}</dd>
         </div>
         <div>
           <dt>Generated</dt>
@@ -3650,7 +3694,25 @@ function normaliseBriefDraft(draft?: Partial<RedesignBriefDraft>): RedesignBrief
   return {
     strategy: typeof draft?.strategy === 'string' ? draft.strategy : '',
     proposedSitemap: Array.isArray(draft?.proposedSitemap) ? draft.proposedSitemap : [],
-    pagePlans: Array.isArray(draft?.pagePlans) ? draft.pagePlans : [],
+    pagePlans: Array.isArray(draft?.pagePlans)
+      ? draft.pagePlans.map((plan) => ({
+          ...plan,
+          disposition: [
+            'needs_review',
+            'build',
+            'merge',
+            'redirect',
+            'workflow_state',
+            'contextual',
+            'exclude',
+          ].includes(plan.disposition)
+            ? plan.disposition
+            : 'build',
+          dispositionReason:
+            plan.dispositionReason ||
+            'Legacy brief retained this selected source as a standalone page.',
+        }))
+      : [],
     assetGuidance: Array.isArray(draft?.assetGuidance) ? draft.assetGuidance : [],
     assumptions: Array.isArray(draft?.assumptions) ? draft.assumptions : [],
     openQuestions: Array.isArray(draft?.openQuestions) ? draft.openQuestions : [],
@@ -3676,6 +3738,11 @@ function normaliseBriefDraft(draft?: Partial<RedesignBriefDraft>): RedesignBrief
                   : undefined,
               accent:
                 typeof brandKit.palette?.accent === 'string' ? brandKit.palette.accent : undefined,
+              mode: ['accent_only', 'primary_only', 'builder_derived'].includes(
+                String(brandKit.palette?.mode),
+              )
+                ? brandKit.palette?.mode
+                : 'primary_and_accent',
             },
           }
         : undefined,
@@ -3697,6 +3764,297 @@ function assetAnalysisLabel(status: NonNullable<ProspectWorkspace['assetAnalysis
   if (status === 'failed') return 'Analysis failed';
   if (status === 'cancelled') return 'Analysis cancelled';
   return 'Not analysed';
+}
+
+const assetAnalysisStages = [
+  {
+    id: 'queued',
+    label: 'Queue private run',
+    detail: 'Secure the selected source assets for the protected worker.',
+  },
+  {
+    id: 'preparing',
+    label: 'Prepare source evidence',
+    detail: 'Load the selected files and their saved page provenance.',
+  },
+  {
+    id: 'analysing',
+    label: 'Analyse and save each asset',
+    detail: 'Describe observable content and save each review card as it becomes ready.',
+  },
+  {
+    id: 'colours',
+    label: 'Detect brand-colour evidence',
+    detail: 'Inspect supported logo, stylesheet, and repeated interface colour evidence.',
+  },
+  {
+    id: 'complete',
+    label: 'Finish the review handoff',
+    detail: 'Make the new run available for human review without reusing stale results.',
+  },
+] as const;
+
+const brandColourRefreshStages = [
+  {
+    id: 'queued',
+    label: 'Queue logo-colour refresh',
+    detail: 'Keep this run scoped to the selected original logo.',
+  },
+  {
+    id: 'preparing',
+    label: 'Load the original logo',
+    detail: 'Open the saved source artwork without revisiting the website.',
+  },
+  {
+    id: 'analysing',
+    label: 'Read source colour regions',
+    detail: 'Separate the dominant mark colour from its chromatic accent.',
+  },
+  {
+    id: 'colours',
+    label: 'Save colour evidence',
+    detail: 'Replace the suggestions with evidence from this logo only.',
+  },
+  {
+    id: 'complete',
+    label: 'Finish colour review',
+    detail: 'Return the new primary and accent suggestions for human review.',
+  },
+] as const;
+
+const logoVersionRefreshStages = [
+  {
+    id: 'queued',
+    label: 'Queue logo refresh',
+    detail: 'Keep this run scoped to the selected source logo.',
+  },
+  {
+    id: 'preparing',
+    label: 'Prepare source geometry',
+    detail: 'Load the highest-quality original and its verified colour regions.',
+  },
+  {
+    id: 'analysing',
+    label: 'Create logo versions',
+    detail: 'Save original, black, black + accent, white, and white + accent one by one.',
+  },
+  {
+    id: 'colours',
+    label: 'Refresh logo colours',
+    detail: 'Keep the palette tied to the same selected original logo.',
+  },
+  {
+    id: 'complete',
+    label: 'Finish logo review',
+    detail: 'Return the saved transparent files and editable SVG for review.',
+  },
+] as const;
+
+function assetAnalysisStageIndex(phase?: string, status?: AssetAnalysisStatus) {
+  if (status === 'ready' || phase === 'complete') return assetAnalysisStages.length;
+  if (phase === 'collecting_brand_evidence' || phase === 'saving_brand_evidence') return 3;
+  if (
+    phase === 'analysing_asset' ||
+    phase === 'retaining_asset_review' ||
+    phase?.includes('logo') ||
+    phase?.includes('vector') ||
+    phase?.includes('alpha_matte')
+  )
+    return 2;
+  if (phase === 'preparing') return 1;
+  if (status === 'running') return 2;
+  return 0;
+}
+
+function AssetAnalysisLiveProgress({
+  assets,
+  annotations,
+  job,
+  requesting,
+  urls,
+  onUpdateAnnotation,
+}: {
+  assets: ResearchArtifact[];
+  annotations: AssetAnnotation[];
+  job?: ProspectWorkspace['assetAnalysis'];
+  requesting: boolean;
+  urls: Record<string, string>;
+  onUpdateAnnotation: (
+    annotation: AssetAnnotation,
+    patch: Pick<
+      AssetAnnotation,
+      'suggestedRole' | 'businessAssociation' | 'reviewState' | 'humanNotes'
+    >,
+  ) => Promise<void>;
+}) {
+  const stageIndex = assetAnalysisStageIndex(job?.progressPhase, job?.status);
+  const targetedColourRefresh = job?.analysisScope === 'brand_colours';
+  const targetedLogoRefresh = job?.analysisScope === 'logo_versions';
+  const stages = targetedColourRefresh
+    ? brandColourRefreshStages
+    : targetedLogoRefresh
+      ? logoVersionRefreshStages
+      : assetAnalysisStages;
+  const currentAsset = assets.find((asset) => asset.id === job?.currentAssetId);
+  const totalItems = job?.totalItems || 0;
+  const completedItems = job?.completedItems || 0;
+  const detail = requesting
+    ? 'Submitting the selected assets to the private analysis queue.'
+    : job?.progressDetail || 'Waiting for the protected worker to report its first checkpoint.';
+
+  return (
+    <section
+      aria-labelledby="asset-analysis-live-title"
+      className="asset-analysis-live"
+      data-testid="asset-analysis-live"
+    >
+      <div className="asset-analysis-live__intro">
+        <div>
+          <Eyebrow>Live private run</Eyebrow>
+          <h3 id="asset-analysis-live-title">
+            {targetedColourRefresh
+              ? 'Original-logo colours are being rechecked'
+              : targetedLogoRefresh
+                ? 'Logo versions are being rebuilt'
+                : 'Asset analysis is unfolding now'}
+          </h3>
+          <p className="muted-copy">
+            {targetedColourRefresh
+              ? 'Only the selected original logo is being inspected. Other assets, pages, and existing review cards are unchanged.'
+              : targetedLogoRefresh
+                ? 'Only this logo and its generated versions are changing. Other asset review cards are unchanged.'
+                : 'Earlier results and editing controls are hidden until this replacement run finishes. Only newly saved output from this run appears below.'}
+          </p>
+        </div>
+        <span className="asset-analysis-live__count" aria-label="Saved asset output count">
+          <strong>
+            {targetedColourRefresh || targetedLogoRefresh ? completedItems : annotations.length}
+          </strong>
+          <span>
+            {targetedColourRefresh || targetedLogoRefresh ? 'steps saved' : 'saved for review'}
+          </span>
+        </span>
+      </div>
+
+      <div className="capture-progress capture-progress--running">
+        <div
+          aria-label="Visual asset analysis progress"
+          aria-valuetext={detail}
+          className="capture-progress__track"
+          role="progressbar"
+        >
+          <span className="capture-progress__bar" />
+        </div>
+        <span aria-live="polite" role="status">
+          {detail}
+          {totalItems ? ` ${completedItems} of ${totalItems} persisted items complete.` : ''}
+        </span>
+      </div>
+
+      <div className="asset-analysis-live__layout">
+        <ol className="asset-analysis-live__stages" aria-label="Asset analysis stages">
+          {stages.map((stage, index) => {
+            const state =
+              index < stageIndex ? 'complete' : index === stageIndex ? 'active' : 'next';
+            return (
+              <li
+                aria-current={state === 'active' ? 'step' : undefined}
+                data-state={state}
+                key={stage.id}
+              >
+                <span className="asset-analysis-live__stage-icon" aria-hidden="true">
+                  {state === 'complete' ? (
+                    <Check size={18} />
+                  ) : state === 'active' ? (
+                    <LoaderCircle className="spin" size={18} />
+                  ) : (
+                    <Clock3 size={18} />
+                  )}
+                </span>
+                <span>
+                  <strong>{stage.label}</strong>
+                  <small>{stage.detail}</small>
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+
+        <div className="asset-analysis-live__current" aria-label="Current analysis item">
+          <span className="asset-analysis-live__current-label">Working on now</span>
+          {currentAsset ? (
+            <div className="asset-analysis-live__asset">
+              {urls[currentAsset.id] ? (
+                <img alt="" src={urls[currentAsset.id]} />
+              ) : (
+                <span aria-hidden="true" className="evidence-skeleton" />
+              )}
+              <span>
+                <strong>
+                  {recordValue(currentAsset.metadata, 'assetType') ||
+                    currentAsset.label ||
+                    'Captured image'}
+                </strong>
+                <small>
+                  {recordValue(currentAsset.metadata, 'pageUrl')
+                    ? sourceUrlLabel(
+                        recordValue(currentAsset.metadata, 'pageUrl'),
+                        'Captured source page',
+                      )
+                    : 'Saved private source asset'}
+                </small>
+              </span>
+            </div>
+          ) : (
+            <div className="asset-analysis-live__waiting">
+              <LoaderCircle aria-hidden="true" className="spin" size={20} />
+              <span>{requesting ? 'Creating the run' : 'Preparing the next saved checkpoint'}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <section
+        className="asset-analysis-live__output"
+        aria-labelledby="asset-analysis-output-title"
+      >
+        <div>
+          <Eyebrow>Saved output from this run</Eyebrow>
+          <h4 id="asset-analysis-output-title">
+            {targetedColourRefresh
+              ? 'New logo-only colours will appear when saved'
+              : targetedLogoRefresh
+                ? 'Logo files appear in Brand Kit as each is saved'
+                : annotations.length
+                  ? `${annotations.length} asset${annotations.length === 1 ? '' : 's'} ready to review`
+                  : 'The first asset will appear here'}
+          </h4>
+        </div>
+        {annotations.length ? (
+          <div className="asset-review-queue__grid">
+            {annotations.map((annotation) => (
+              <AssetAnnotationEditor
+                annotation={annotation}
+                asset={assets.find((asset) => asset.id === annotation.assetId)}
+                assetUrl={urls[annotation.assetId]}
+                key={annotation.id}
+                onUpdate={onUpdateAnnotation}
+              />
+            ))}
+          </div>
+        ) : null}
+        {stageIndex < 3 ? (
+          <div aria-hidden="true" className="asset-review-queue__grid">
+            <article className="asset-review-loader__card">
+              <span className="asset-review-loader__image evidence-skeleton" />
+              <span className="evidence-skeleton evidence-skeleton--value" />
+              <span className="evidence-skeleton evidence-skeleton--detail" />
+            </article>
+          </div>
+        ) : null}
+      </section>
+    </section>
+  );
 }
 
 function AssetAnnotationEditor({
@@ -3747,6 +4105,31 @@ function AssetAnnotationEditor({
     }
   }
 
+  async function excludeFromAgent() {
+    const excludedDraft = {
+      ...draft,
+      suggestedRole: 'exclude' as const,
+      reviewState: 'blocked' as const,
+    };
+    setDraft(excludedDraft);
+    setSaving(true);
+    setMessage('');
+    try {
+      await onUpdate(annotation, excludedDraft);
+      setMessage('Excluded. This image will not be handed to the website agent.');
+    } catch (error) {
+      setDraft({
+        suggestedRole: annotation.suggestedRole,
+        businessAssociation: annotation.businessAssociation,
+        reviewState: annotation.reviewState,
+        humanNotes: annotation.humanNotes,
+      });
+      setMessage(error instanceof Error ? error.message : 'The asset could not be excluded.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <article className="audit-finding asset-suggestion">
       <div className="audit-finding__header">
@@ -3758,16 +4141,16 @@ function AssetAnnotationEditor({
         </div>
         <StatusBadge
           tone={
-            annotation.reviewState === 'approved'
+            draft.reviewState === 'approved'
               ? 'success'
-              : annotation.reviewState === 'blocked'
+              : draft.reviewState === 'blocked'
                 ? 'danger'
                 : 'warning'
           }
         >
-          {annotation.reviewState === 'approved'
+          {draft.reviewState === 'approved'
             ? 'Approved'
-            : annotation.reviewState === 'blocked'
+            : draft.reviewState === 'blocked'
               ? 'Excluded'
               : 'Needs review'}
         </StatusBadge>
@@ -3789,10 +4172,13 @@ function AssetAnnotationEditor({
           <span>Loading asset...</span>
         </div>
       ) : null}
-      <details className="asset-suggestion__evidence">
-        <summary>View evidence and reuse guidance</summary>
+      <details className="asset-suggestion__evidence" open>
+        <summary>AI analysis and reuse guidance</summary>
         <div>
-          <p>{annotation.observedDescription}</p>
+          <p>
+            {annotation.observedDescription ||
+              'No visual description was returned. Review the analysis warning below.'}
+          </p>
           {annotation.visibleText.length ? (
             <div className="audit-finding__recommendation">
               <strong>Visible text</strong>
@@ -3806,6 +4192,18 @@ function AssetAnnotationEditor({
           {annotation.cautions.length ? <p>Review: {annotation.cautions.join(' ')}</p> : null}
         </div>
       </details>
+      <div className="asset-suggestion__quick-actions">
+        <Button
+          disabled={saving || draft.reviewState === 'blocked'}
+          onClick={() => void excludeFromAgent()}
+          type="button"
+          variant="danger"
+        >
+          <Ban aria-hidden="true" size={16} />
+          {draft.reviewState === 'blocked' ? 'Excluded from agent' : 'Exclude from agent'}
+        </Button>
+        <small>Excluded images stay as private evidence but are removed from agent handoff.</small>
+      </div>
       <details className="audit-finding__edit">
         <summary>Review asset context</summary>
         <div className="asset-review-form">
@@ -3878,20 +4276,20 @@ function AssetAnnotationEditor({
             <Save aria-hidden="true" size={16} />
             {saving ? 'Saving' : 'Save review'}
           </Button>
-          {message ? (
-            <p
-              className={
-                message === 'Review saved.'
-                  ? 'form-message form-message--success'
-                  : 'form-message form-message--error'
-              }
-              role="status"
-            >
-              {message}
-            </p>
-          ) : null}
         </div>
       </details>
+      {message ? (
+        <p
+          className={
+            message === 'Review saved.' || message.startsWith('Excluded.')
+              ? 'form-message form-message--success'
+              : 'form-message form-message--error'
+          }
+          role="status"
+        >
+          {message}
+        </p>
+      ) : null}
     </article>
   );
 }
@@ -3923,14 +4321,28 @@ function AssetReviewPanel({
   const selectionQueuesRef = useRef<Record<string, Promise<void>>>({});
   const job = workspace.assetAnalysis;
   const assets = workspace.artifacts.filter((artifact) => artifact.kind === 'asset');
+  const assetGroups = groupVisualAssets(assets);
   const { urls, loadError } = usePrivateArtifactUrls(
     assets,
     'Private suggestion images could not be loaded. Refresh and check storage access.',
   );
   const active = job?.status === 'queued' || job?.status === 'running';
-  const reviewAnnotations = active
-    ? workspace.assetAnnotations.filter((annotation) => annotation.analysisJobId === job?.id)
-    : workspace.assetAnnotations;
+  const workflowActive = active || requesting;
+  const runAnnotations = requesting
+    ? []
+    : active
+      ? workspace.assetAnnotations.filter(
+          (annotation) => Boolean(job?.runToken) && annotation.analysisRunToken === job?.runToken,
+        )
+      : workspace.assetAnnotations;
+  const reviewAnnotations = assetGroups.flatMap((group) => {
+    const annotations = runAnnotations.filter((annotation) =>
+      group.assets.some((asset) => asset.id === annotation.assetId),
+    );
+    return annotations.length
+      ? [annotations.find((annotation) => annotation.assetId === group.asset.id) ?? annotations[0]]
+      : [];
+  });
   const pendingAnnotations = reviewAnnotations.filter(
     (annotation) => annotation.reviewState === 'needs_review',
   );
@@ -3943,18 +4355,23 @@ function AssetReviewPanel({
   const analysedAssetIds = new Set(
     workspace.assetAnnotations.map((annotation) => annotation.assetId),
   );
-  const analyzableAssets = assets.filter(
-    (asset) => asset.metadata.vectorSuggestion !== true && !analysedAssetIds.has(asset.id),
+  const analyzableGroups = assetGroups.filter(
+    (group) =>
+      group.assets.every((asset) => asset.metadata.vectorSuggestion !== true) &&
+      group.assets.every((asset) => !analysedAssetIds.has(asset.id)),
   );
+  const analyzableAssets = analyzableGroups.map((group) => group.asset);
   const isAssetSelected = (asset: ResearchArtifact) =>
     selectionOverrides[asset.id] ?? asset.metadata.analysisSelected !== false;
   const selectedAssets = analyzableAssets.filter(isAssetSelected);
+  const selectedSourceAssets = assetGroups.filter(
+    (group) =>
+      group.assets.some((asset) => asset.metadata.vectorSuggestion !== true) &&
+      group.assets.some(isAssetSelected),
+  );
   const selectedAssetCount = selectedAssets.length;
   const visiblePendingAnnotations = pendingAnnotations.slice(0, 2);
   const hiddenPendingAnnotations = pendingAnnotations.slice(2);
-  const reviewLoaderCount = active
-    ? Math.max(0, Math.min(Math.max(job?.totalItems || 2, 1), 2) - visiblePendingAnnotations.length)
-    : 0;
 
   useEffect(() => {
     setSelectionOverrides((current) => {
@@ -3998,6 +4415,10 @@ function AssetReviewPanel({
       });
   }
 
+  function setAssetGroupSelected(groupAssets: ResearchArtifact[], selected: boolean) {
+    for (const asset of groupAssets) setAssetAnalysisSelected(asset, selected);
+  }
+
   async function requestAnalysis() {
     setRequesting(true);
     setMessage('');
@@ -4025,16 +4446,14 @@ function AssetReviewPanel({
   const assetSelectionGrid = (
     <fieldset className="brief-assets" disabled={active || requesting || cancelling}>
       <legend className="sr-only">Assets selected for private AI analysis</legend>
-      {analyzableAssets.map((asset) => {
+      {analyzableGroups.map((group) => {
+        const asset = group.asset;
         const type = recordValue(asset.metadata, 'assetType') || 'image';
-        const pageUrl = recordValue(asset.metadata, 'pageUrl');
         return (
           <label className="brief-source-option brief-source-option--asset" key={asset.id}>
             <input
               checked={isAssetSelected(asset)}
-              onChange={(event) =>
-                void setAssetAnalysisSelected(asset, event.currentTarget.checked)
-              }
+              onChange={(event) => setAssetGroupSelected(group.assets, event.currentTarget.checked)}
               type="checkbox"
             />
             {urls[asset.id] ? (
@@ -4047,7 +4466,15 @@ function AssetReviewPanel({
             <span className="brief-source-option__content">
               <strong>{type}</strong>
               <ImageFileType contentType={asset.contentType} path={asset.storagePath} />
-              <small>{pageUrl ? new URL(pageUrl).pathname || '/' : 'Captured asset'}</small>
+              <small>
+                Found on {group.pageUrls.length || 1}{' '}
+                {group.pageUrls.length === 1 ? 'page' : 'pages'}
+              </small>
+              {group.pageUrls.map((pageUrl) => (
+                <small className="brief-source-option__location" key={pageUrl}>
+                  {new URL(pageUrl).pathname || '/'}
+                </small>
+              ))}
             </span>
           </label>
         );
@@ -4056,15 +4483,18 @@ function AssetReviewPanel({
   );
 
   return (
-    <Card className="workspace-panel">
+    <Card
+      className={`workspace-panel asset-review-panel${workflowActive ? ' asset-review-panel--active' : ''}`}
+    >
       <div className="brief-panel__header">
         <div>
           <Eyebrow>Private asset enrichment</Eyebrow>
           <h2>Asset review</h2>
           <p className="muted-copy">
-            AI suggestions describe visible imagery. The same job also collects reviewable logo and
-            interface colour evidence. Neither output verifies business claims, ownership,
-            partnerships, or qualifications.
+            One run analyses the selected images, reads recoverable image text, and detects
+            reviewable primary and accent colour evidence. Untick an image below before starting if
+            it should never be analysed or handed to the website agent. Nothing here verifies
+            business claims, ownership, partnerships, or qualifications.
           </p>
         </div>
         <div className="brief-panel__actions">
@@ -4076,7 +4506,9 @@ function AssetReviewPanel({
             {assetAnalysisLabel(job?.status ?? 'not_started')}
           </StatusBadge>
           <Button
-            disabled={!selectedAssets.length || active || requesting || pendingSelectionUpdates > 0}
+            disabled={
+              !selectedSourceAssets.length || active || requesting || pendingSelectionUpdates > 0
+            }
             onClick={() => void requestAnalysis()}
             type="button"
           >
@@ -4085,7 +4517,9 @@ function AssetReviewPanel({
               ? 'Queueing analysis'
               : active
                 ? 'Analysis in progress'
-                : 'Analyse selected assets'}
+                : analyzableAssets.length
+                  ? 'Analyse assets & detect colours'
+                  : 'Refresh analysis & detect colours'}
           </Button>
           {active ? (
             <Button
@@ -4100,6 +4534,33 @@ function AssetReviewPanel({
           ) : null}
         </div>
       </div>
+      {message ? (
+        <div className="asset-analysis-feedback" data-tone="danger" role="alert">
+          <CircleAlert aria-hidden="true" size={20} />
+          <span>
+            <strong>Analysis did not start</strong>
+            <span>{message}</span>
+          </span>
+        </div>
+      ) : null}
+      {loadError ? (
+        <div className="asset-analysis-feedback" data-tone="danger" role="alert">
+          <CircleAlert aria-hidden="true" size={20} />
+          <span>
+            <strong>Asset previews could not load</strong>
+            <span>{loadError}</span>
+          </span>
+        </div>
+      ) : null}
+      {pendingSelectionUpdates > 0 ? (
+        <div className="asset-analysis-feedback" data-tone="info" role="status">
+          <LoaderCircle aria-hidden="true" className="spin" size={20} />
+          <span>
+            <strong>Saving asset selection</strong>
+            <span>The analysis button will become available when this save finishes.</span>
+          </span>
+        </div>
+      ) : null}
       {!assets.length ? (
         <EmptyState
           detail="Run an asset-aware website capture before analysing visual material."
@@ -4108,34 +4569,53 @@ function AssetReviewPanel({
         />
       ) : null}
       {job?.status === 'failed' ? (
-        <p className="form-message form-message--error">
-          {job.errorSummary ||
-            'Asset analysis failed. Confirm the server-only model key, then try again.'}
-        </p>
+        <div className="asset-analysis-feedback" data-tone="danger" role="alert">
+          <CircleAlert aria-hidden="true" size={20} />
+          <span>
+            <strong>
+              Last run stopped
+              {job.progressPhase && job.progressPhase !== 'failed'
+                ? ` during ${job.progressPhase.replaceAll('_', ' ')}`
+                : ''}
+            </strong>
+            <span>
+              {job.errorSummary ||
+                job.progressDetail ||
+                'The worker stopped without saving a usable result.'}{' '}
+              Review the selected assets, then use the analysis button above to retry.
+            </span>
+          </span>
+        </div>
       ) : null}
-      {assets.length && !analyzableAssets.length && !active ? (
+      {job?.status === 'ready' && !workflowActive ? (
+        <div className="asset-analysis-feedback" data-tone="success" role="status">
+          <Check aria-hidden="true" size={20} />
+          <span>
+            <strong>Last run completed {formatDateTime(job.updatedAt)}</strong>
+            <span>
+              {job.progressDetail ||
+                'The worker completed, but it did not report which outputs were saved.'}
+            </span>
+          </span>
+        </div>
+      ) : null}
+      {workflowActive ? (
+        <AssetAnalysisLiveProgress
+          annotations={reviewAnnotations}
+          assets={assets}
+          job={job}
+          onUpdateAnnotation={onUpdateAnnotation}
+          requesting={requesting}
+          urls={urls}
+        />
+      ) : null}
+      {assets.length && !analyzableAssets.length && !workflowActive ? (
         <p className="form-message form-message--success" role="status">
           All captured images have been analysed. New images will appear here after an image
           refresh.
         </p>
       ) : null}
-      {active ? (
-        <div className="capture-progress capture-progress--running">
-          <div
-            aria-label="Visual asset analysis progress"
-            aria-valuetext={job?.progressDetail || 'Preparing private visual-asset suggestions.'}
-            className="capture-progress__track"
-            role="progressbar"
-          >
-            <span className="capture-progress__bar" />
-          </div>
-          <span>
-            {job?.progressDetail || 'Preparing private visual-asset suggestions.'}
-            {job?.totalItems ? ` ${job.completedItems} of ${job.totalItems} assets complete.` : ''}
-          </span>
-        </div>
-      ) : null}
-      {analyzableAssets.length ? (
+      {analyzableAssets.length && !workflowActive ? (
         <section
           className="asset-analysis-selection"
           aria-labelledby="asset-analysis-selection-title"
@@ -4143,35 +4623,65 @@ function AssetReviewPanel({
           <div className="brief-panel__header">
             <div>
               <h3 id="asset-analysis-selection-title">Assets to analyse</h3>
+              <p className="muted-copy">
+                Untick any image you do not want analysed or available to the agent.
+              </p>
             </div>
             <span className="muted-copy">
               {selectedAssetCount} of {analyzableAssets.length} selected
             </span>
           </div>
-          <details className="asset-selection-disclosure">
-            <summary>
-              Browse {analyzableAssets.length} captured image
-              {analyzableAssets.length === 1 ? '' : 's'} for analysis
-            </summary>
-            {assetSelectionGrid}
-          </details>
+          {assetSelectionGrid}
         </section>
       ) : null}
-      {active || workspace.assetAnnotations.length ? (
+      {!workflowActive && workspace.assetAnnotations.length ? (
         <section className="asset-review-queue" aria-labelledby="asset-suggestions-title">
           <div>
             <Eyebrow>AI suggestions</Eyebrow>
             <h3 id="asset-suggestions-title">Review before brief use</h3>
           </div>
-          {active ? (
-            <div className="asset-review-loader">
-              <p aria-live="polite" role="status">
-                {job?.progressDetail ||
-                  'Preparing the next private review cards. Earlier suggestions are hidden while this analysis runs.'}
-              </p>
-              {visiblePendingAnnotations.length ? (
+          <>
+            <dl className="asset-review-summary" aria-label="Asset review progress">
+              <div>
+                <dt>Needs review</dt>
+                <dd>{pendingAnnotations.length}</dd>
+              </div>
+              <div>
+                <dt>Approved</dt>
+                <dd>{approvedCount}</dd>
+              </div>
+              <div>
+                <dt>Excluded</dt>
+                <dd>{reviewedAnnotations.length - approvedCount}</dd>
+              </div>
+            </dl>
+            {pendingAnnotations.length ? (
+              <div className="asset-review-queue__grid">
+                {visiblePendingAnnotations.map((annotation) => (
+                  <AssetAnnotationEditor
+                    annotation={annotation}
+                    asset={assets.find((asset) => asset.id === annotation.assetId)}
+                    assetUrl={urls[annotation.assetId]}
+                    key={annotation.id}
+                    onUpdate={onUpdateAnnotation}
+                  />
+                ))}
+              </div>
+            ) : (
+              <EmptyState
+                detail="All analysed assets now have a reuse decision. Use the reviewed history below to revisit one."
+                icon={CheckCheck}
+                title="Review queue clear"
+              />
+            )}
+            {hiddenPendingAnnotations.length ? (
+              <details className="asset-review-overflow">
+                <summary>
+                  View {hiddenPendingAnnotations.length} more asset review
+                  {hiddenPendingAnnotations.length === 1 ? '' : 's'}
+                </summary>
                 <div className="asset-review-queue__grid">
-                  {visiblePendingAnnotations.map((annotation) => (
+                  {hiddenPendingAnnotations.map((annotation) => (
                     <AssetAnnotationEditor
                       annotation={annotation}
                       asset={assets.find((asset) => asset.id === annotation.assetId)}
@@ -4181,57 +4691,16 @@ function AssetReviewPanel({
                     />
                   ))}
                 </div>
-              ) : null}
-              {hiddenPendingAnnotations.length ? (
-                <details className="asset-review-overflow">
-                  <summary>
-                    View {hiddenPendingAnnotations.length} more asset review
-                    {hiddenPendingAnnotations.length === 1 ? '' : 's'}
-                  </summary>
-                  <div className="asset-review-queue__grid">
-                    {hiddenPendingAnnotations.map((annotation) => (
-                      <AssetAnnotationEditor
-                        annotation={annotation}
-                        asset={assets.find((asset) => asset.id === annotation.assetId)}
-                        assetUrl={urls[annotation.assetId]}
-                        key={annotation.id}
-                        onUpdate={onUpdateAnnotation}
-                      />
-                    ))}
-                  </div>
-                </details>
-              ) : null}
-              {reviewLoaderCount ? (
-                <div aria-hidden="true" className="asset-review-queue__grid">
-                  {Array.from({ length: reviewLoaderCount }, (_, index) => (
-                    <article className="asset-review-loader__card" key={index}>
-                      <span className="asset-review-loader__image evidence-skeleton" />
-                      <span className="evidence-skeleton evidence-skeleton--value" />
-                      <span className="evidence-skeleton evidence-skeleton--detail" />
-                    </article>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            <>
-              <dl className="asset-review-summary" aria-label="Asset review progress">
-                <div>
-                  <dt>Needs review</dt>
-                  <dd>{pendingAnnotations.length}</dd>
-                </div>
-                <div>
-                  <dt>Approved</dt>
-                  <dd>{approvedCount}</dd>
-                </div>
-                <div>
-                  <dt>Excluded</dt>
-                  <dd>{reviewedAnnotations.length - approvedCount}</dd>
-                </div>
-              </dl>
-              {pendingAnnotations.length ? (
+              </details>
+            ) : null}
+            {reviewedAnnotations.length ? (
+              <details className="asset-reviewed-history">
+                <summary>
+                  View {reviewedAnnotations.length} reviewed asset decision
+                  {reviewedAnnotations.length === 1 ? '' : 's'}
+                </summary>
                 <div className="asset-review-queue__grid">
-                  {visiblePendingAnnotations.map((annotation) => (
+                  {reviewedAnnotations.map((annotation) => (
                     <AssetAnnotationEditor
                       annotation={annotation}
                       asset={assets.find((asset) => asset.id === annotation.assetId)}
@@ -4241,62 +4710,12 @@ function AssetReviewPanel({
                     />
                   ))}
                 </div>
-              ) : (
-                <EmptyState
-                  detail="All analysed assets now have a reuse decision. Use the reviewed history below to revisit one."
-                  icon={CheckCheck}
-                  title="Review queue clear"
-                />
-              )}
-              {hiddenPendingAnnotations.length ? (
-                <details className="asset-review-overflow">
-                  <summary>
-                    View {hiddenPendingAnnotations.length} more asset review
-                    {hiddenPendingAnnotations.length === 1 ? '' : 's'}
-                  </summary>
-                  <div className="asset-review-queue__grid">
-                    {hiddenPendingAnnotations.map((annotation) => (
-                      <AssetAnnotationEditor
-                        annotation={annotation}
-                        asset={assets.find((asset) => asset.id === annotation.assetId)}
-                        assetUrl={urls[annotation.assetId]}
-                        key={annotation.id}
-                        onUpdate={onUpdateAnnotation}
-                      />
-                    ))}
-                  </div>
-                </details>
-              ) : null}
-              {reviewedAnnotations.length ? (
-                <details className="asset-reviewed-history">
-                  <summary>
-                    View {reviewedAnnotations.length} reviewed asset decision
-                    {reviewedAnnotations.length === 1 ? '' : 's'}
-                  </summary>
-                  <div className="asset-review-queue__grid">
-                    {reviewedAnnotations.map((annotation) => (
-                      <AssetAnnotationEditor
-                        annotation={annotation}
-                        asset={assets.find((asset) => asset.id === annotation.assetId)}
-                        assetUrl={urls[annotation.assetId]}
-                        key={annotation.id}
-                        onUpdate={onUpdateAnnotation}
-                      />
-                    ))}
-                  </div>
-                </details>
-              ) : null}
-            </>
-          )}
+              </details>
+            ) : null}
+          </>
         </section>
       ) : null}
-      {assets.length ? <VisualAssetCatalog assets={assets} /> : null}
-      {message ? (
-        <p className="form-message form-message--error" role="alert">
-          {message}
-        </p>
-      ) : null}
-      {loadError ? <p className="form-message form-message--error">{loadError}</p> : null}
+      {assets.length && !workflowActive ? <VisualAssetCatalog assets={assets} /> : null}
     </Card>
   );
 }
@@ -4732,7 +5151,8 @@ function VisualContentRecoveryPanel({
           <h2>Recover image-based information</h2>
           <p className="muted-copy">
             Turn saved screenshots, tables, testimonials and text graphics into editable semantic
-            information. The current capture is reused; the website is not visited again.
+            information. This starts automatically from “Analyse assets &amp; detect colours” above;
+            the current capture is reused and the website is not visited again.
           </p>
           <div className="visual-content-panel__contract">
             <span>Page and section provenance retained</span>
@@ -4753,21 +5173,17 @@ function VisualContentRecoveryPanel({
                 : `Approve all ${approvableCount} for builds`}
             </Button>
           ) : null}
-          <Button
-            disabled={extracting || active || !workspace.assetAnnotations.length}
-            onClick={() => void extract()}
-            type="button"
-            variant={approvableCount ? 'secondary' : 'primary'}
-          >
-            <Sparkles aria-hidden="true" size={16} />
-            {extracting
-              ? 'Queueing recovery'
-              : active
-                ? 'Recovery in progress'
-                : candidates.length
-                  ? 'Analyse saved images again'
-                  : 'Recover structured content'}
-          </Button>
+          {candidates.length && !active ? (
+            <Button
+              disabled={extracting}
+              onClick={() => void extract()}
+              type="button"
+              variant="secondary"
+            >
+              <RotateCcw aria-hidden="true" size={16} />
+              {extracting ? 'Queueing recovery' : 'Run content recovery again'}
+            </Button>
+          ) : null}
           {active ? (
             <Button
               disabled={cancelling || Boolean(job?.cancelRequestedAt)}
@@ -4883,22 +5299,26 @@ function isHexColour(value?: string) {
 }
 
 function EditableLogoConversionControls({
+  createEditableSvg,
   conversionActive,
   conversionMessage,
   conversionRequesting,
   hasExistingSvg,
   onConvert,
+  onCreateEditableSvgChange,
   onSimplifyGeometryChange,
   onVectorizerProviderChange,
   progressDetail,
   simplifyGeometry,
   vectorizerProvider,
 }: {
+  createEditableSvg: boolean;
   conversionActive: boolean;
   conversionMessage: string;
   conversionRequesting: boolean;
   hasExistingSvg: boolean;
   onConvert: () => void;
+  onCreateEditableSvgChange: (enabled: boolean) => void;
   onSimplifyGeometryChange: (enabled: boolean) => void;
   onVectorizerProviderChange: (provider: 'vtracer' | 'vectorizer_ai') => void;
   progressDetail?: string;
@@ -4910,8 +5330,23 @@ function EditableLogoConversionControls({
     <div className="brand-kit__conversion-controls">
       <label className="brand-kit__conversion-option">
         <input
-          checked={simplifyGeometry}
+          checked={createEditableSvg}
           disabled={converting}
+          onChange={(event) => onCreateEditableSvgChange(event.target.checked)}
+          type="checkbox"
+        />
+        <span>
+          <strong>Create SVG versions</strong>
+          <small>
+            Off by default. Turn this on only when this logo run should also create a new editable
+            SVG.
+          </small>
+        </span>
+      </label>
+      <label className="brand-kit__conversion-option">
+        <input
+          checked={simplifyGeometry}
+          disabled={converting || !createEditableSvg}
           onChange={(event) => onSimplifyGeometryChange(event.target.checked)}
           type="checkbox"
         />
@@ -4923,7 +5358,10 @@ function EditableLogoConversionControls({
           </small>
         </span>
       </label>
-      <fieldset className="brand-kit__vectorizer-choice" disabled={converting}>
+      <fieldset
+        className="brand-kit__vectorizer-choice"
+        disabled={converting || !createEditableSvg}
+      >
         <legend>SVG conversion engine</legend>
         <label>
           <input
@@ -4947,7 +5385,12 @@ function EditableLogoConversionControls({
           Vectorizer.AI traces the original captured logo directly, without ChatGPT remastering.
         </small>
       </fieldset>
-      <Button disabled={converting} onClick={onConvert} type="button" variant="secondary">
+      <Button
+        disabled={converting || !createEditableSvg}
+        onClick={onConvert}
+        type="button"
+        variant="secondary"
+      >
         <FileCode2 aria-hidden="true" size={16} />
         {converting
           ? 'Converting to SVG'
@@ -4968,12 +5411,14 @@ function EditableLogoConversionControls({
 function BrandKitPanel({
   workspace,
   onSave,
+  onRedoBrandColours,
   onPushLogoVersions,
   onCreateRevision,
   onConvertLogo,
   onDeleteLogo,
 }: {
   workspace: ProspectWorkspace;
+  onRedoBrandColours: () => Promise<void>;
   onSave: (
     draft: Pick<
       BrandKit,
@@ -4991,7 +5436,11 @@ function BrandKitPanel({
   onCreateRevision: () => Promise<void>;
   onConvertLogo: (
     asset: ResearchArtifact,
-    options: { simplifyGeometry: boolean; vectorizerProvider: 'vtracer' | 'vectorizer_ai' },
+    options: {
+      createEditableSvg: boolean;
+      simplifyGeometry: boolean;
+      vectorizerProvider: 'vtracer' | 'vectorizer_ai';
+    },
   ) => Promise<void>;
   onDeleteLogo: (asset: ResearchArtifact, onUndo: () => void) => void;
 }) {
@@ -5078,6 +5527,8 @@ function BrandKitPanel({
   const [message, setMessage] = useState('');
   const [conversionMessage, setConversionMessage] = useState('');
   const [conversionRequesting, setConversionRequesting] = useState(false);
+  const [redoingBrandColours, setRedoingBrandColours] = useState(false);
+  const [createEditableSvg, setCreateEditableSvg] = useState(false);
   const [simplifyGeometry, setSimplifyGeometry] = useState(false);
   const [vectorizerProvider, setVectorizerProvider] = useState<'vtracer' | 'vectorizer_ai'>(
     'vtracer',
@@ -5149,12 +5600,24 @@ function BrandKitPanel({
   useEffect(() => {
     if (locked || !colourSuggestions.primary) return;
     const current = draftRef.current;
+    const primaryEnabled = !['accent_only', 'builder_derived'].includes(
+      current.palette.mode ?? 'primary_and_accent',
+    );
+    const accentEnabled = !['primary_only', 'builder_derived'].includes(
+      current.palette.mode ?? 'primary_and_accent',
+    );
     const palette = {
       ...current.palette,
-      ...(current.palette.primary ? {} : { primary: colourSuggestions.primary?.colour }),
-      ...(current.palette.accent || !colourSuggestions.accent
+      ...(!primaryEnabled || current.palette.primary
         ? {}
-        : { accent: colourSuggestions.accent.colour }),
+        : { primary: colourSuggestions.primary?.colour }),
+      ...(!accentEnabled || current.palette.accent
+        ? {}
+        : {
+            accent:
+              colourSuggestions.accent?.colour ??
+              (!primaryEnabled ? colourSuggestions.primary.colour : undefined),
+          }),
     };
     if (palette.primary === current.palette.primary && palette.accent === current.palette.accent) {
       return;
@@ -5224,16 +5687,81 @@ function BrandKitPanel({
       setMessage('Run asset analysis to collect enough brand-colour evidence first.');
       return;
     }
+    const primaryEnabled = !['accent_only', 'builder_derived'].includes(
+      draftRef.current.palette.mode ?? 'primary_and_accent',
+    );
+    const accentEnabled = !['primary_only', 'builder_derived'].includes(
+      draftRef.current.palette.mode ?? 'primary_and_accent',
+    );
     updateDraft({
       ...draftRef.current,
       palette: {
         ...draftRef.current.palette,
-        primary: colourSuggestions.primary?.colour,
-        accent: colourSuggestions.accent?.colour ?? draftRef.current.palette.accent,
+        primary: primaryEnabled ? colourSuggestions.primary?.colour : undefined,
+        accent: accentEnabled
+          ? (colourSuggestions.accent?.colour ??
+            (!primaryEnabled ? colourSuggestions.primary?.colour : draftRef.current.palette.accent))
+          : undefined,
       },
     });
     setMessage(
       'Evidence-backed primary and accent suggestions applied. Review them before approval.',
+    );
+  }
+
+  async function redoBrandColours() {
+    setRedoingBrandColours(true);
+    setMessage('');
+    try {
+      await onRedoBrandColours();
+      setMessage(
+        'Original-logo colour refresh queued. Only the selected source logo will be checked.',
+      );
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : 'The logo colours could not be refreshed.',
+      );
+    } finally {
+      setRedoingBrandColours(false);
+    }
+  }
+
+  function reviewedColourEnabled(role: 'primary' | 'accent') {
+    const mode = draftRef.current.palette.mode ?? 'primary_and_accent';
+    return role === 'primary'
+      ? mode !== 'accent_only' && mode !== 'builder_derived'
+      : mode !== 'primary_only' && mode !== 'builder_derived';
+  }
+
+  function setReviewedColourEnabled(role: 'primary' | 'accent', enabled: boolean) {
+    const primaryEnabled = role === 'primary' ? enabled : reviewedColourEnabled('primary');
+    const accentEnabled = role === 'accent' ? enabled : reviewedColourEnabled('accent');
+    const mode = primaryEnabled
+      ? accentEnabled
+        ? 'primary_and_accent'
+        : 'primary_only'
+      : accentEnabled
+        ? 'accent_only'
+        : 'builder_derived';
+    updateDraft({
+      ...draftRef.current,
+      palette: {
+        ...draftRef.current.palette,
+        mode,
+        primary: primaryEnabled
+          ? (draftRef.current.palette.primary ?? colourSuggestions.primary?.colour)
+          : undefined,
+        accent: accentEnabled
+          ? (draftRef.current.palette.accent ??
+            colourSuggestions.accent?.colour ??
+            colourSuggestions.primary?.colour)
+          : undefined,
+      },
+    });
+    setMessage(
+      enabled
+        ? `${role === 'primary' ? 'Primary' : 'Accent'} is review-controlled again. Confirm its value before approval.`
+        : `${role === 'primary' ? 'Primary' : 'Accent'} will be chosen by Codex as an accessible design token.`,
     );
   }
 
@@ -5321,7 +5849,7 @@ function BrandKitPanel({
     setConversionRequesting(true);
     setConversionMessage('Queueing high-fidelity logo versions…');
     try {
-      await onConvertLogo(logo, { simplifyGeometry, vectorizerProvider });
+      await onConvertLogo(logo, { createEditableSvg, simplifyGeometry, vectorizerProvider });
       setConversionMessage(
         'Logo versions queued. This section updates when the worker saves them.',
       );
@@ -5497,6 +6025,15 @@ function BrandKitPanel({
                 These observations belong to the latest capture. They do not change the approved
                 Brand Kit until you create and approve a deliberate revision.
               </p>
+              <Button
+                disabled={conversionActive || redoingBrandColours || !selectedPrimaryLogo}
+                onClick={() => void redoBrandColours()}
+                type="button"
+                variant="secondary"
+              >
+                <RotateCcw aria-hidden="true" size={15} />
+                {redoingBrandColours ? 'Queueing logo colours' : 'Redo from original logo'}
+              </Button>
             </section>
           ) : null}
           <div className="button-row">
@@ -5606,7 +6143,8 @@ function BrandKitPanel({
                       <h3 id="logo-versions-title">High-fidelity logo versions</h3>
                       <p className="muted-copy">
                         ChatGPT creates the high-resolution black-and-white alpha matte. That exact
-                        matte is saved for review and used for every transparent version.
+                        matte is saved for review and used for every transparent version. The same
+                        run also analyses the logo and refreshes primary and accent colour evidence.
                       </p>
                     </div>
                     {logoConversionFailure ? (
@@ -5706,8 +6244,8 @@ function BrandKitPanel({
                         >
                           <Sparkles aria-hidden="true" size={16} />
                           {conversionInProgress
-                            ? 'Preparing logo versions'
-                            : 'Create high-fidelity logo versions'}
+                            ? 'Preparing logo versions & colours'
+                            : 'Create logo versions & detect colours'}
                         </Button>
                         {conversionMessage && !conversionInProgress ? (
                           <p role="status">{conversionMessage}</p>
@@ -5749,7 +6287,7 @@ function BrandKitPanel({
                           variant="secondary"
                         >
                           <RotateCcw aria-hidden="true" size={16} />
-                          Refresh logo versions
+                          Refresh versions & colours
                         </Button>
                       </div>
                     ) : null}
@@ -5850,11 +6388,13 @@ function BrandKitPanel({
                               conversion if you want a separate version to compare.
                             </p>
                             <EditableLogoConversionControls
+                              createEditableSvg={createEditableSvg}
                               conversionActive={conversionActive}
                               conversionMessage={conversionMessage}
                               conversionRequesting={conversionRequesting}
                               hasExistingSvg
                               onConvert={() => void convertSelectedLogo()}
+                              onCreateEditableSvgChange={setCreateEditableSvg}
                               onSimplifyGeometryChange={setSimplifyGeometry}
                               onVectorizerProviderChange={setVectorizerProvider}
                               progressDetail={workspace.assetAnalysis?.progressDetail}
@@ -5867,11 +6407,13 @@ function BrandKitPanel({
                         <div className="brand-kit__editable-logo-empty">
                           <p>No editable SVG is ready yet.</p>
                           <EditableLogoConversionControls
+                            createEditableSvg={createEditableSvg}
                             conversionActive={conversionActive}
                             conversionMessage={conversionMessage}
                             conversionRequesting={conversionRequesting}
                             hasExistingSvg={false}
                             onConvert={() => void convertSelectedLogo()}
+                            onCreateEditableSvgChange={setCreateEditableSvg}
                             onSimplifyGeometryChange={setSimplifyGeometry}
                             onVectorizerProviderChange={setVectorizerProvider}
                             progressDetail={workspace.assetAnalysis?.progressDetail}
@@ -5941,43 +6483,75 @@ function BrandKitPanel({
                 These are private suggestions from captured logo and interface evidence. They are
                 not approved brand facts.
               </p>
-              <Button onClick={applySuggestedColours} type="button" variant="secondary">
-                <Sparkles aria-hidden="true" size={15} />
-                Use suggested colours
-              </Button>
+              <div className="button-row">
+                <Button onClick={applySuggestedColours} type="button" variant="secondary">
+                  <Sparkles aria-hidden="true" size={15} />
+                  Use suggested colours
+                </Button>
+                <Button
+                  disabled={conversionActive || redoingBrandColours || !selectedPrimaryLogo}
+                  onClick={() => void redoBrandColours()}
+                  type="button"
+                  variant="secondary"
+                >
+                  <RotateCcw aria-hidden="true" size={15} />
+                  {redoingBrandColours ? 'Queueing logo colours' : 'Redo from original logo'}
+                </Button>
+              </div>
             </section>
           ) : null}
           <div className="brand-kit__palette" aria-label="Reviewed brand colours">
             {(['primary', 'accent'] as const).map((role) => (
-              <label key={role}>
-                {role}
-                <span className="brand-kit__colour-input">
+              <div className="brand-kit__palette-role" key={role}>
+                <label className="brand-kit__palette-mode">
                   <input
-                    aria-label={`${role} colour`}
-                    onChange={(event) =>
-                      updateDraft({
-                        ...draftRef.current,
-                        palette: {
-                          ...draftRef.current.palette,
-                          [role]: event.target.value.trim(),
-                        },
-                      })
-                    }
-                    placeholder="#112233"
-                    spellCheck="false"
-                    value={draft.palette[role] ?? ''}
+                    checked={reviewedColourEnabled(role)}
+                    onChange={(event) => setReviewedColourEnabled(role, event.target.checked)}
+                    type="checkbox"
                   />
-                  <span
-                    aria-hidden="true"
-                    className="brand-kit__colour-swatch"
-                    style={
-                      isHexColour(draft.palette[role])
-                        ? ({ background: draft.palette[role] } as CSSProperties)
-                        : undefined
-                    }
-                  />
-                </span>
-              </label>
+                  <span>
+                    <strong>Use a reviewed {role} colour</strong>
+                    <small>
+                      {reviewedColourEnabled(role)
+                        ? `This exact ${role} value is locked into the builder tokens.`
+                        : `Codex will choose an accessible ${role} value for the new design.`}
+                    </small>
+                  </span>
+                </label>
+                {reviewedColourEnabled(role) ? (
+                  <label>
+                    {role}
+                    <span className="brand-kit__colour-input">
+                      <input
+                        aria-label={`${role} colour`}
+                        onChange={(event) =>
+                          updateDraft({
+                            ...draftRef.current,
+                            palette: {
+                              ...draftRef.current.palette,
+                              [role]: event.target.value.trim(),
+                            },
+                          })
+                        }
+                        placeholder="#112233"
+                        spellCheck="false"
+                        value={draft.palette[role] ?? ''}
+                      />
+                      <span
+                        aria-hidden="true"
+                        className="brand-kit__colour-swatch"
+                        style={
+                          isHexColour(draft.palette[role])
+                            ? ({ background: draft.palette[role] } as CSSProperties)
+                            : undefined
+                        }
+                      />
+                    </span>
+                  </label>
+                ) : (
+                  <p className="muted-copy">No reviewed {role} colour will be handed to Codex.</p>
+                )}
+              </div>
             ))}
           </div>
           <label className="brand-kit__notes">
@@ -6114,12 +6688,16 @@ function BriefPanel({
   const [draft, setDraft] = useState<RedesignBriefDraft>(normaliseBriefDraft(brief?.draft));
   const [isCreating, setIsCreating] = useState(false);
   const [isRefreshingArchitecture, setIsRefreshingArchitecture] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
   const [message, setMessage] = useState('');
   const hasCapabilityInventory = Array.isArray(brief?.draft.capabilityInventory);
   const unresolvedCapabilities = (draft.capabilityInventory ?? []).filter(
     (capability) => capability.decision === 'needs_review',
+  );
+  const unresolvedPagePlans = draft.pagePlans.filter(
+    (plan) =>
+      plan.disposition === 'needs_review' ||
+      ((plan.disposition === 'merge' || plan.disposition === 'redirect') && !plan.targetSourceUrl),
   );
   const capturedCapabilities = packet ? detectCapabilities(packet, workspace.capturedPages) : [];
   const guidedAssets = workspace.artifacts.filter(
@@ -6204,18 +6782,40 @@ function BriefPanel({
     }));
   }
 
-  async function saveBrief() {
-    if (!brief) return;
-    setIsSaving(true);
-    setMessage('');
-    try {
-      await onUpdate(brief, { sourceSelections, draft });
-      setMessage('Brief saved.');
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'The brief could not be saved.');
-    } finally {
-      setIsSaving(false);
-    }
+  function setPageDisposition(
+    sourceUrl: string | undefined,
+    disposition: PageDisposition,
+    targetSourceUrl?: string,
+  ) {
+    setDraft((current) => ({
+      ...current,
+      pagePlans: current.pagePlans.map((plan) =>
+        plan.sourceUrl === sourceUrl
+          ? {
+              ...plan,
+              disposition,
+              targetSourceUrl:
+                disposition === 'merge' || disposition === 'redirect'
+                  ? targetSourceUrl || plan.targetSourceUrl
+                  : undefined,
+              dispositionReason:
+                disposition === 'build'
+                  ? 'Reviewed as a standalone visitor-facing page.'
+                  : disposition === 'merge'
+                    ? 'Reviewed for content preservation inside another canonical page.'
+                    : disposition === 'redirect'
+                      ? 'Reviewed as a legacy alias of another canonical page.'
+                      : disposition === 'workflow_state'
+                        ? 'Reviewed as a hidden state belonging to an approved visitor workflow.'
+                        : disposition === 'contextual'
+                          ? 'Reviewed as a supporting route linked only from relevant content.'
+                          : disposition === 'exclude'
+                            ? 'Reviewed as non-public CMS residue with no material content to preserve.'
+                            : plan.dispositionReason,
+            }
+          : plan,
+      ),
+    }));
   }
 
   async function approveBrief() {
@@ -6230,13 +6830,19 @@ function BriefPanel({
       );
       return;
     }
+    if (unresolvedPagePlans.length) {
+      setMessage(
+        `Review ${unresolvedPagePlans.length} page ${unresolvedPagePlans.length === 1 ? 'outcome' : 'outcomes'} before approving the brief. Merge and redirect outcomes also require a destination.`,
+      );
+      return;
+    }
     setIsApproving(true);
     setMessage('');
     const pendingBrief = { ...brief, sourceSelections, draft };
     try {
       await onUpdate(brief, { sourceSelections, draft });
       await onApprove(pendingBrief);
-      setMessage('Brief approved. The redesign builder can now use this strategy.');
+      setMessage('Brief approved and Build Manifest created. The builder handoff is ready.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'The brief could not be approved.');
     } finally {
@@ -6244,7 +6850,7 @@ function BriefPanel({
     }
   }
 
-  if (!packet) {
+  if (!packet && !brief) {
     return (
       <Card className="workspace-panel">
         <Eyebrow>Redesign brief</Eyebrow>
@@ -6304,6 +6910,7 @@ function BriefPanel({
   }
 
   const editable = brief.status === 'draft';
+  const manifestReady = workspace.buildManifest?.redesignBriefId === brief.id;
   const sourceChanged =
     brief.status === 'approved' && !manifestSourceMatchesBrief(workspace, brief);
 
@@ -6336,16 +6943,7 @@ function BriefPanel({
                 </Button>
               ) : null}
               <Button
-                disabled={isSaving || isApproving || isRefreshingArchitecture}
-                onClick={() => void saveBrief()}
-                type="button"
-                variant="secondary"
-              >
-                <Save aria-hidden="true" size={16} />
-                {isSaving ? 'Saving brief' : 'Save brief'}
-              </Button>
-              <Button
-                disabled={isSaving || isApproving || isRefreshingArchitecture}
+                disabled={isApproving || isRefreshingArchitecture}
                 onClick={() => void refreshArchitecture()}
                 type="button"
                 variant="secondary"
@@ -6355,11 +6953,11 @@ function BriefPanel({
               </Button>
               <Button
                 disabled={
-                  isSaving ||
                   isApproving ||
                   isRefreshingArchitecture ||
                   !hasCapabilityInventory ||
-                  Boolean(unresolvedCapabilities.length)
+                  Boolean(unresolvedCapabilities.length) ||
+                  Boolean(unresolvedPagePlans.length)
                 }
                 onClick={() => void approveBrief()}
                 type="button"
@@ -6388,6 +6986,20 @@ function BriefPanel({
           ) : null}
         </div>
       </div>
+
+      {!editable ? (
+        <div className="brief-panel__approval-state" role="status">
+          <CheckCircle2 aria-hidden="true" size={22} />
+          <span>
+            <strong>Brief approved</strong>
+            <small>
+              {manifestReady
+                ? 'This version is locked. Its Build Manifest was prepared automatically for the builder.'
+                : 'This version is locked. Its Build Manifest still needs the retry shown in the builder handoff below.'}
+            </small>
+          </span>
+        </div>
+      ) : null}
 
       <div className="brief-panel__source-summary">
         <span>{sourceSelections.pageUrls.length} page sources selected</span>
@@ -6611,9 +7223,9 @@ function BriefPanel({
         <Eyebrow>Proposed architecture</Eyebrow>
         <h3 id="brief-sitemap-title">Sitemap and page plan</h3>
         <p className="muted-copy">
-          The sitemap models the primary information hierarchy. The page plan preserves the full
-          selected-page scope, including articles, tools, and utility routes that do not belong in
-          primary navigation.
+          The sitemap models the primary information hierarchy. Review every captured page as a
+          standalone route, merged content, redirect, workflow state, contextual page, or excluded
+          source before approval.
         </p>
         <div className="brief-architecture__grid">
           <div>
@@ -6636,9 +7248,52 @@ function BriefPanel({
               </summary>
               <ul>
                 {draft.pagePlans.map((plan) => (
-                  <li key={`${plan.title}-${plan.sourceUrl}`}>
+                  <li className="brief-page-plan" key={`${plan.title}-${plan.sourceUrl}`}>
                     <strong>{plan.title}</strong>
                     <span>{plan.structure.join(' · ')}</span>
+                    <span className="brief-page-plan__reason">{plan.dispositionReason}</span>
+                    <label className="brief-page-plan__decision">
+                      <span>Coverage outcome</span>
+                      <select
+                        disabled={!editable}
+                        onChange={(event) =>
+                          setPageDisposition(plan.sourceUrl, event.target.value as PageDisposition)
+                        }
+                        value={plan.disposition}
+                      >
+                        <option value="needs_review">Needs review</option>
+                        <option value="build">Build standalone page</option>
+                        <option value="merge">Merge into another page</option>
+                        <option value="redirect">Redirect legacy URL</option>
+                        <option value="workflow_state">Workflow state</option>
+                        <option value="contextual">Contextual route</option>
+                        <option value="exclude">Exclude CMS residue</option>
+                      </select>
+                    </label>
+                    {plan.disposition === 'merge' || plan.disposition === 'redirect' ? (
+                      <label className="brief-page-plan__decision">
+                        <span>Canonical destination</span>
+                        <select
+                          disabled={!editable}
+                          onChange={(event) =>
+                            setPageDisposition(plan.sourceUrl, plan.disposition, event.target.value)
+                          }
+                          value={plan.targetSourceUrl ?? ''}
+                        >
+                          <option value="">Choose destination</option>
+                          {draft.pagePlans
+                            .filter(
+                              (candidate) =>
+                                candidate.sourceUrl && candidate.sourceUrl !== plan.sourceUrl,
+                            )
+                            .map((candidate) => (
+                              <option key={candidate.sourceUrl} value={candidate.sourceUrl}>
+                                {candidate.title}
+                              </option>
+                            ))}
+                        </select>
+                      </label>
+                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -7284,12 +7939,16 @@ function buildUsageSummary(records: AiUsageRecord[], builderRunId: string) {
     (record) => record.builderRunId === builderRunId && record.source === 'codex_build',
   );
   const pricedRecords = buildRecords.filter((record) => typeof record.costUsd === 'number');
+  const subscriptionCount = buildRecords.filter(
+    (record) => record.metadata.billingMode === 'chatgpt_subscription',
+  ).length;
 
   return {
     operationCount: buildRecords.length,
     totalTokens: buildRecords.reduce((total, record) => total + record.totalTokens, 0),
     recordedCost: pricedRecords.reduce((total, record) => total + (record.costUsd ?? 0), 0),
     unpricedCount: buildRecords.length - pricedRecords.length,
+    subscriptionBacked: buildRecords.length > 0 && subscriptionCount === buildRecords.length,
   };
 }
 
@@ -7384,10 +8043,12 @@ function BuilderRunUsage({ records, run }: { records: AiUsageRecord[]; run: Buil
         </dd>
       </div>
       <div>
-        <dt>Recorded cost</dt>
+        <dt>{usage.subscriptionBacked ? 'Billing' : 'Recorded cost'}</dt>
         <dd>
           {usage.operationCount ? (
-            usage.unpricedCount ? (
+            usage.subscriptionBacked ? (
+              'Codex subscription'
+            ) : usage.unpricedCount ? (
               usage.recordedCost > 0 ? (
                 <>
                   <AnimatedBuildUsageValue
@@ -7686,6 +8347,89 @@ function BuilderNewActivityItem({ children, isNew }: { children: ReactNode; isNe
   );
 }
 
+function builderConversationRequest(run: BuilderRun) {
+  const direction = run.buildInstruction?.trim();
+  if (direction) return direction;
+  if (run.buildMode === 'full_site') {
+    return 'Create the complete prospect website from the approved Build Manifest and production package.';
+  }
+  if (run.buildMode === 'site_test') {
+    return 'Apply the selected Agent Studio behaviour to the saved private website.';
+  }
+  if (run.buildMode === 'page_test') {
+    return 'Create the selected private page test from the approved Build Manifest.';
+  }
+  return 'Create the private homepage test from the approved Build Manifest.';
+}
+
+function builderConversationEvents(events: BuilderEvent[]) {
+  return events.filter(
+    (event) => isCodexStreamEvent(event) && event.metadata.eventType === 'agent_message',
+  );
+}
+
+function BuilderConversation({
+  active = false,
+  events,
+  newActivityIds = new Set<string>(),
+  run,
+}: {
+  active?: boolean;
+  events: BuilderEvent[];
+  newActivityIds?: Set<string>;
+  run: BuilderRun;
+}) {
+  const assistantEvents = builderConversationEvents(events);
+  return (
+    <details
+      className="builder-codex-stream builder-evidence-disclosure"
+      open={active ? true : undefined}
+    >
+      <summary className="builder-evidence-disclosure__summary">
+        <span>
+          <Eyebrow>Build conversation</Eyebrow>
+          <strong>{active ? 'Codex is working on this build' : 'Saved with this build'}</strong>
+          <small>
+            {assistantEvents.length + 1} message{assistantEvents.length === 0 ? '' : 's'} · separate
+            from Studio chat
+          </small>
+        </span>
+        <span className="builder-evidence-disclosure__aside">
+          {active ? <StatusBadge tone="warning">Live</StatusBadge> : null}
+          <StatusBadge tone="neutral">Build only</StatusBadge>
+          <ChevronDown aria-hidden="true" size={18} />
+        </span>
+      </summary>
+      <ol
+        aria-label="Build conversation messages"
+        aria-live={active ? 'polite' : 'off'}
+        aria-relevant="additions text"
+        tabIndex={0}
+      >
+        <li className="builder-new-activity builder-conversation__message builder-conversation__message--user">
+          <strong>You</strong>
+          <MarkdownContent>{builderConversationRequest(run)}</MarkdownContent>
+          <time dateTime={run.createdAt}>{formatDate(run.createdAt)}</time>
+        </li>
+        {assistantEvents.map((event) => (
+          <BuilderNewActivityItem isNew={newActivityIds.has(event.id)} key={event.id}>
+            <strong>Codex</strong>
+            <MarkdownContent>{event.message}</MarkdownContent>
+            <time dateTime={event.createdAt}>{formatDate(event.createdAt)}</time>
+          </BuilderNewActivityItem>
+        ))}
+      </ol>
+      {!assistantEvents.length ? (
+        <p className="muted-copy builder-conversation__empty">
+          {active
+            ? 'The request is saved. Codex’s first response will appear here without entering the general chat history.'
+            : 'This run saved its request but stopped before Codex recorded a response.'}
+        </p>
+      ) : null}
+    </details>
+  );
+}
+
 function BuilderHistoryEntry({
   run,
   state,
@@ -7709,6 +8453,8 @@ function BuilderHistoryEntry({
     screenshots,
     'Private screenshots from this earlier build could not be loaded.',
   );
+  const savedEvents = state?.status === 'ready' ? state.evidence.events : [];
+  const nonConversationEvents = savedEvents.filter((event) => !isCodexStreamEvent(event));
 
   return (
     <details
@@ -7742,9 +8488,10 @@ function BuilderHistoryEntry({
             label="Browse this build’s files"
             onViewWebsite={onViewWebsite}
           />
-          {state.evidence.events.length ? (
+          <BuilderConversation events={savedEvents} run={run} />
+          {nonConversationEvents.length ? (
             <ol className="builder-history__logs">
-              {[...state.evidence.events].reverse().map((event) => (
+              {[...nonConversationEvents].reverse().map((event) => (
                 <li key={event.id}>
                   <strong>{event.kind}</strong>
                   <span>{event.message}</span>
@@ -7791,6 +8538,89 @@ function BuilderHistoryEntry({
         </div>
       )}
     </details>
+  );
+}
+
+type WebsiteTonePreference = 'agent_decides' | 'light' | 'dark';
+
+const websiteToneInstructions: Record<Exclude<WebsiteTonePreference, 'agent_decides'>, string> = {
+  light:
+    'Website tone: create a light-led visual system. Treat light as the overall tonal character, not a requirement for a pure white background. Use the approved brand colours and choose fitting light surfaces such as warm neutrals or pale colour tints. Codex owns the exact accessible palette and composition.',
+  dark: 'Website tone: create a dark-led visual system. Treat dark as the overall tonal character, not a requirement for a pure black background. Use the approved brand colours and choose fitting deep surfaces such as dark green, blue, brown, or black. Codex owns the exact accessible palette and composition.',
+};
+
+function buildInstructionWithTone(
+  tone: WebsiteTonePreference,
+  directions: string[],
+): string | undefined {
+  const instructions = directions.map((direction) => direction.trim()).filter(Boolean);
+  if (tone !== 'agent_decides') instructions.unshift(websiteToneInstructions[tone]);
+  return instructions.length ? instructions.join('\n\n') : undefined;
+}
+
+function WebsiteToneControl({
+  disabled,
+  helpId,
+  name,
+  onChange,
+  tone,
+}: {
+  disabled: boolean;
+  helpId: string;
+  name: string;
+  onChange: (tone: WebsiteTonePreference) => void;
+  tone: WebsiteTonePreference;
+}) {
+  return (
+    <>
+      <fieldset
+        aria-describedby={helpId}
+        className="builder-page-test__actions builder-page-test__tone"
+        disabled={disabled}
+      >
+        <legend>Website tone</legend>
+        <label>
+          <input
+            checked={tone === 'agent_decides'}
+            name={name}
+            onChange={() => onChange('agent_decides')}
+            type="radio"
+          />
+          <span>
+            <strong>Agent decides</strong>
+            <small>No tonal direction; Codex chooses what fits the brand and content.</small>
+          </span>
+        </label>
+        <label>
+          <input
+            checked={tone === 'light'}
+            name={name}
+            onChange={() => onChange('light')}
+            type="radio"
+          />
+          <span>
+            <strong>Light</strong>
+            <small>Light-led, but not necessarily white; pale brand tints are welcome.</small>
+          </span>
+        </label>
+        <label>
+          <input
+            checked={tone === 'dark'}
+            name={name}
+            onChange={() => onChange('dark')}
+            type="radio"
+          />
+          <span>
+            <strong>Dark</strong>
+            <small>Dark-led, but not necessarily black; deep green or blue can fit.</small>
+          </span>
+        </label>
+      </fieldset>
+      <small id={helpId}>
+        This preference is saved with this build run. It guides the overall visual tone, while Codex
+        still chooses the exact accessible colours and surfaces.
+      </small>
+    </>
   );
 }
 
@@ -7874,6 +8704,7 @@ function BuilderRunPanel({
   const [retainedTestContextId, setRetainedTestContextId] = useState<string>();
   const [dismissedStoppedTestId, setDismissedStoppedTestId] = useState<string>();
   const [buildDirections, setBuildDirections] = useState<string[]>([]);
+  const [websiteTone, setWebsiteTone] = useState<WebsiteTonePreference>('agent_decides');
   const [selectedBehaviourIds, setSelectedBehaviourIds] = useState<string[]>([]);
   const [isStagingBehaviours, setIsStagingBehaviours] = useState(false);
   const [leavingBehaviourIds, setLeavingBehaviourIds] = useState<string[]>([]);
@@ -7923,9 +8754,27 @@ function BuilderRunPanel({
                 : 'package-behaviour',
             title: `Package ${agentPackageVersionLabel(selectedAgentPackage.version)} testing behaviour`,
             detail: selectedAgentPackage.capabilityProposal || selectedAgentPackage.summary,
-            revision: `v${selectedAgentPackage.version}.0.21`,
+            revision: `v${selectedAgentPackage.version}.0.22`,
             change:
-              'Latest edit: completed builds now export a complete local Git workspace with approved assets, origin metadata, a structured refinement ledger, and a reviewed learning-bundle handoff.',
+              'Latest edit: complete builds now offer Light, Dark, and Agent decides tonal direction without equating light with white or dark with black.',
+          },
+          {
+            id: 'website-tone-direction',
+            title: 'Website tone direction',
+            detail:
+              'Before a complete prospect build, a reviewer can choose a light-led or dark-led visual character, or leave the decision to Codex. The choice guides overall tone while Codex still selects the exact accessible, brand-aware surfaces.',
+            revision: `v${selectedAgentPackage.version}.2`,
+            change:
+              'Latest edit: Agent Studio page tests and whole-site revisions now expose the same Agent decides, Light, and Dark direction used by complete prospect builds.',
+          },
+          {
+            id: 'visual-codex-feedback',
+            title: 'Visual feedback to the active Codex thread',
+            detail:
+              'Build, test, private-preview, and website-editing reviews share one compact local Codex chat with an IDE-style conversation hierarchy. Saved builds, tests, committed edits, and validated local or same-Codespace development servers open inside the Studio preview shell so the panel remains above the website. Observable active-thread and queue state appears with a live elapsed timer and no invented percentage.',
+            revision: `v${selectedAgentPackage.version}.24`,
+            change:
+              'Latest edit: app-owned turns now continue independently of the open panel, persist their active turn identity, and recover once from the saved transcript after a Codespace pause.',
           },
           {
             id: 'hero-handoff',
@@ -7949,10 +8798,10 @@ function BuilderRunPanel({
             id: 'contextual-logo-selection',
             title: 'Context-aware logo selection',
             detail:
-              'The builder treats the approved source logo and its transparent versions as one family. It chooses white or white-with-accent on dark surfaces, and original, black-with-accent, or black on light surfaces, with a stable protective surface for photography or mixed backgrounds.',
-            revision: `v${selectedAgentPackage.version}.8`,
+              'The builder treats the approved source logo and its transparent versions as one family. It chooses a contrast-safe logo for each surface, locks each enabled reviewed colour, deliberately derives any colour role switched off in the Brand Kit, and receives a new editable SVG only when its default-off control is enabled.',
+            revision: `v${selectedAgentPackage.version}.12`,
             change:
-              'Latest edit: reviewed primary and accent values are applied deterministically before compile, while approved asset descriptors retain their visual role and safe-reuse guidance.',
+              'Latest edit: every approved transparent version of the primary logo remains available together for contrast-safe header, footer, loading, and surface-specific placement.',
           },
           {
             id: 'visual-content-recovery',
@@ -7968,9 +8817,9 @@ function BuilderRunPanel({
             title: 'Multi-page navigation architecture',
             detail:
               'Every selected output remains a real page. Primary destinations stay consistent while deeper pages are organised through meaningful parent pages, nested navigation, breadcrumbs, cards, or contextual links, and every page remains reachable from the homepage.',
-            revision: `v${selectedAgentPackage.version}.35`,
+            revision: `v${selectedAgentPackage.version}.36`,
             change:
-              'Latest edit: metadata, H1s, navigation, breadcrumbs, cards, and contextual links must use consistent content-derived page names while immutable route paths stay unchanged.',
+              'Latest edit: every selected source now receives a reviewed build, merge, redirect, workflow-state, contextual, or exclusion outcome; legacy aliases and hidden states are no longer forced into navigation.',
           },
           {
             id: 'next-component-architecture',
@@ -7995,9 +8844,9 @@ function BuilderRunPanel({
             title: 'Framework and responsive quality gates',
             detail:
               'Generated source must pass formatting, lint, strict typing, production build, route and provenance checks, browser interactions, accessibility, and exact responsive evidence.',
-            revision: `v${selectedAgentPackage.version}.55`,
+            revision: `v${selectedAgentPackage.version}.88`,
             change:
-              'Latest edit: quality-reviewed source can now move into local development with its approved assets and an auditable refinement ledger, without mutating the production agent automatically.',
+              'Latest edit: test and proper builds now run from the persistent tmux builder with ChatGPT subscription authentication, and their saved conversations stay attached to the build instead of entering Studio chat.',
           },
         ]
       : [];
@@ -8337,7 +9186,6 @@ function BuilderRunPanel({
   const selectedSourceRun = previousTestPages.find(
     (candidate) => candidate.id === sourceBuilderRunId,
   );
-  const codexStreamEvents = currentEvents.filter(isCodexStreamEvent);
   const diagnosticEvents = currentEvents.filter((event) => event.kind === 'diagnostic');
   const timelineEvents = currentEvents.filter(
     (event) => !isCodexStreamEvent(event) && event.kind !== 'diagnostic',
@@ -8395,7 +9243,8 @@ function BuilderRunPanel({
     try {
       await onRequestSiteTest(
         selectedStudioSource.id,
-        siteFeatureDirection.trim(),
+        buildInstructionWithTone(websiteTone, [siteFeatureDirection]) ??
+          siteFeatureDirection.trim(),
         selectedAgentPackageId,
         'site-navigation-architecture',
       );
@@ -8459,10 +9308,7 @@ function BuilderRunPanel({
       await onRequestBuild(
         mode,
         targetSourceUrl,
-        buildDirections
-          .map((direction) => direction.trim())
-          .filter(Boolean)
-          .join('\n\n'),
+        buildInstructionWithTone(websiteTone, buildDirections),
         isTestBuild ? selectedAgentPackageId : publishedPackage?.id,
         sourceBuilderRunId,
         selectedTargetSourceUrls,
@@ -8475,6 +9321,23 @@ function BuilderRunPanel({
     } finally {
       setIsRequesting(false);
     }
+  }
+
+  function startAlternativeTest() {
+    if (!run) return;
+    const alternativePackage =
+      testPackages.find(
+        (candidate) => candidate.status === 'test_ready' && candidate.id !== run.agentPackageId,
+      ) ?? testPackages.find((candidate) => candidate.id !== run.agentPackageId);
+    setSelectedAgentPackageId(alternativePackage?.id ?? run.agentPackageId);
+    setTestPageAction('create');
+    setSourceBuilderRunId('');
+    setTargetSourceUrls(initialPageTestUrl ? [initialPageTestUrl] : []);
+    setPageSearchQuery('');
+    setBuildDirections([]);
+    setWebsiteTone('agent_decides');
+    setMessage('');
+    setDismissedStoppedTestId(run.id);
   }
 
   async function stageSelectedBehaviours() {
@@ -8574,13 +9437,13 @@ function BuilderRunPanel({
     try {
       const previewUrl = await onOpenPreview(builderRunId, mode);
       if (previewTab && !previewTab.closed) {
-        previewTab.location.replace(previewUrl);
+        previewTab.location.replace(studioPreviewUrl(previewUrl));
       } else {
         // A popup can be blocked in browser-hosted environments such as
         // Codespaces. This runs after the asynchronous access-token request,
         // so attempting a second popup would be blocked as well. Navigating
         // the current tab keeps the private preview accessible.
-        window.location.assign(previewUrl);
+        window.location.assign(studioPreviewUrl(previewUrl));
       }
     } catch (error) {
       previewTab?.close();
@@ -8611,7 +9474,9 @@ function BuilderRunPanel({
         ) : null}
       </div>
 
-      <div className="builder-run__actions">
+      <div
+        className={`builder-run__actions${isTestBuild ? '' : ' builder-run__actions--prospect'}`}
+      >
         {isTestBuild && (active || retainedTestContext) ? (
           <section className="builder-active-test" aria-labelledby="builder-active-test-title">
             <div className="builder-active-test__header">
@@ -8687,7 +9552,7 @@ function BuilderRunPanel({
                   ) : null}
                   <Button
                     disabled={isResuming}
-                    onClick={() => run && setDismissedStoppedTestId(run.id)}
+                    onClick={startAlternativeTest}
                     type="button"
                     variant="quiet"
                   >
@@ -8994,19 +9859,6 @@ function BuilderRunPanel({
                           value={siteFeatureDirection}
                         />
                       </label>
-                      <Button
-                        disabled={
-                          isRequestingSiteTest ||
-                          !selectedStudioSource ||
-                          !selectedAgentPackageId ||
-                          !siteFeatureDirection.trim()
-                        }
-                        onClick={() => void requestSiteTest()}
-                        type="button"
-                      >
-                        <Play aria-hidden="true" size={16} />
-                        {isRequestingSiteTest ? 'Creating linked version' : 'Revise website'}
-                      </Button>
                     </div>
                   ) : (
                     <p className="form-message form-message--error" role="alert">
@@ -9016,6 +9868,13 @@ function BuilderRunPanel({
                   )}
                 </section>
               )}
+              <WebsiteToneControl
+                disabled={isRequesting || isRequestingSiteTest}
+                helpId="agent-studio-website-tone-help"
+                name="agent-studio-website-tone"
+                onChange={setWebsiteTone}
+                tone={websiteTone}
+              />
               {testPageAction !== 'website' ? (
                 <>
                   <Button
@@ -9066,7 +9925,21 @@ function BuilderRunPanel({
                           } together from the clean locked foundation. It does not inherit an earlier test or change the prospect’s public website.`}
                   </small>
                 </>
-              ) : null}
+              ) : (
+                <Button
+                  disabled={
+                    isRequestingSiteTest ||
+                    !selectedStudioSource ||
+                    !selectedAgentPackageId ||
+                    !siteFeatureDirection.trim()
+                  }
+                  onClick={() => void requestSiteTest()}
+                  type="button"
+                >
+                  <Play aria-hidden="true" size={16} />
+                  {isRequestingSiteTest ? 'Creating linked version' : 'Revise website'}
+                </Button>
+              )}
               {message ? (
                 <p className="form-message form-message--error" role="alert">
                   {message}
@@ -9368,6 +10241,13 @@ function BuilderRunPanel({
                   starting this build.
                 </p>
               )}
+              <WebsiteToneControl
+                disabled={isRequesting}
+                helpId="website-tone-help"
+                name="website-tone"
+                onChange={setWebsiteTone}
+                tone={websiteTone}
+              />
               <ButtonGroup>
                 {run?.status === 'failed' && savedSourceAvailable && onResumeBuild ? (
                   <Button
@@ -9810,52 +10690,29 @@ function BuilderRunPanel({
             </div>
           ) : null}
           {showCurrentRunLogs ? (
-            <section className="builder-codex-stream" aria-labelledby="builder-codex-stream-title">
-              <div className="builder-codex-stream__header">
-                <div>
-                  <Eyebrow>Codex activity</Eyebrow>
-                  <h4 id="builder-codex-stream-title">
-                    {active ? 'Live build stream' : 'Latest completed build'}
-                  </h4>
-                </div>
-                {active ? <StatusBadge tone="warning">Live</StatusBadge> : null}
-              </div>
-              {codexStreamEvents.length ? (
-                <ol aria-live="polite" aria-relevant="additions text" role="log">
-                  {codexStreamEvents
-                    .slice(0, 24)
-                    .reverse()
-                    .map((event) => (
-                      <BuilderNewActivityItem isNew={newActivityIds.has(event.id)} key={event.id}>
-                        <strong>Codex</strong>
-                        <span>{event.message}</span>
-                        <time dateTime={event.createdAt}>{formatDate(event.createdAt)}</time>
-                      </BuilderNewActivityItem>
-                    ))}
-                </ol>
-              ) : active || currentRunEvidenceLoading ? (
-                <BuilderActivityWaiting
-                  detail={
-                    active
-                      ? 'The working preview appears after Codex saves its first private draft.'
-                      : 'Loading the saved Codex stream for this prospect build.'
-                  }
-                  label={active ? 'Codex is preparing its first update' : 'Loading Codex activity'}
-                />
-              ) : (
-                <p className="muted-copy">No visible Codex activity was recorded for this build.</p>
-              )}
-            </section>
+            <BuilderConversation
+              active={active}
+              events={currentEvents}
+              newActivityIds={newActivityIds}
+              run={run}
+            />
           ) : null}
           {showCurrentRunLogs ? (
-            <section className="builder-diagnostics" aria-labelledby="builder-diagnostics-title">
-              <div className="builder-diagnostics__header">
-                <div>
+            <details
+              className="builder-diagnostics builder-evidence-disclosure"
+              open={active ? true : undefined}
+            >
+              <summary className="builder-evidence-disclosure__summary">
+                <span>
                   <Eyebrow>Build diagnostics</Eyebrow>
-                  <h4 id="builder-diagnostics-title">Worker, terminal, and browser output</h4>
-                </div>
-                <StatusBadge tone="neutral">Private</StatusBadge>
-              </div>
+                  <strong>Worker, terminal, and browser output</strong>
+                  <small>{diagnosticEvents.length} private entries</small>
+                </span>
+                <span className="builder-evidence-disclosure__aside">
+                  <StatusBadge tone="neutral">Private</StatusBadge>
+                  <ChevronDown aria-hidden="true" size={18} />
+                </span>
+              </summary>
               {diagnosticEvents.length ? (
                 <ol aria-live={active ? 'polite' : 'off'}>
                   {diagnosticEvents
@@ -9915,12 +10772,23 @@ function BuilderRunPanel({
                     : 'No private diagnostics were recorded for this build.'}
                 </p>
               )}
-            </section>
+            </details>
           ) : null}
           {showCurrentRunLogs && timelineEvents.length ? (
-            <section className="builder-timeline" aria-labelledby="builder-timeline-title">
-              <Eyebrow>{active ? 'Live build timeline' : 'Latest build timeline'}</Eyebrow>
-              <h4 id="builder-timeline-title">What the builder has completed</h4>
+            <details
+              className="builder-timeline builder-evidence-disclosure"
+              open={active ? true : undefined}
+            >
+              <summary className="builder-evidence-disclosure__summary">
+                <span>
+                  <Eyebrow>{active ? 'Live build timeline' : 'Latest build timeline'}</Eyebrow>
+                  <strong>What the builder has completed</strong>
+                  <small>{timelineEvents.length} saved updates</small>
+                </span>
+                <span className="builder-evidence-disclosure__aside">
+                  <ChevronDown aria-hidden="true" size={18} />
+                </span>
+              </summary>
               <ol>
                 {timelineEvents
                   .slice(-16)
@@ -9931,7 +10799,7 @@ function BuilderRunPanel({
                     </BuilderNewActivityItem>
                   ))}
               </ol>
-            </section>
+            </details>
           ) : null}
           {run.errorSummary ? (
             <p className="form-message form-message--error" role="alert">
@@ -10013,9 +10881,22 @@ function BuilderRunPanel({
           ) : null}
 
           {run.qualitySummary.checks.length ? (
-            <section className="builder-quality" aria-labelledby="builder-quality-title">
-              <Eyebrow>Quality checks</Eyebrow>
-              <h4 id="builder-quality-title">Generated preview review</h4>
+            <details
+              className="builder-quality builder-evidence-disclosure"
+              open={active ? true : undefined}
+            >
+              <summary className="builder-evidence-disclosure__summary">
+                <span>
+                  <Eyebrow>Quality checks</Eyebrow>
+                  <strong>Generated preview review</strong>
+                  <small>
+                    {run.qualitySummary.checks.length} checks · {builderQualityStatusLabel(run)}
+                  </small>
+                </span>
+                <span className="builder-evidence-disclosure__aside">
+                  <ChevronDown aria-hidden="true" size={18} />
+                </span>
+              </summary>
               {isTestBuild &&
               onQualityRecheck &&
               run.sourceCheckpointAvailable &&
@@ -10056,13 +10937,24 @@ function BuilderRunPanel({
                   </li>
                 ))}
               </ul>
-            </section>
+            </details>
           ) : null}
 
           {screenshots.length ? (
-            <section className="builder-screenshots" aria-labelledby="builder-screenshots-title">
-              <Eyebrow>Responsive captures</Eyebrow>
-              <h4 id="builder-screenshots-title">Generated website</h4>
+            <details
+              className="builder-screenshots builder-evidence-disclosure"
+              open={active ? true : undefined}
+            >
+              <summary className="builder-evidence-disclosure__summary">
+                <span>
+                  <Eyebrow>Responsive captures</Eyebrow>
+                  <strong>Generated website</strong>
+                  <small>{screenshots.length} screenshots</small>
+                </span>
+                <span className="builder-evidence-disclosure__aside">
+                  <ChevronDown aria-hidden="true" size={18} />
+                </span>
+              </summary>
               {loadError ? (
                 <p className="form-message form-message--error" role="alert">
                   {loadError}
@@ -10091,7 +10983,7 @@ function BuilderRunPanel({
                   ) : null,
                 )}
               </div>
-            </section>
+            </details>
           ) : null}
           <Dialog.Root
             onOpenChange={(open) => !open && setInspector(undefined)}
@@ -12004,6 +12896,21 @@ const currentAgentPackageFiles = [
     detail: 'Stages private inputs, scopes revisions, runs Codex, and saves live build events.',
     content: builderWorkerSource,
   },
+  {
+    group: 'Protected delivery',
+    path: 'worker/agent-package-worker.mjs',
+    label: 'Agent package worker',
+    detail: 'Distils approved learning evidence into reviewable package proposals.',
+    content: agentPackageWorkerSource,
+  },
+  {
+    group: 'Protected delivery',
+    path: 'worker/made-solid-handoff-worker.mjs',
+    label: 'Made Solid handoff worker',
+    detail:
+      'Transfers an exact committed edit into the private Made Solid admin revision ledger with persisted progress, verification, and cooperative cancellation.',
+    content: madeSolidHandoffWorkerSource,
+  },
 ] as const;
 
 type AgentPackageFile = (typeof currentAgentPackageFiles)[number];
@@ -12113,7 +13020,7 @@ const agentPackageFeatures: AgentFeature[] = [
     id: 'framework-quality-gates',
     title: 'Framework, interaction & responsive quality gates',
     detail:
-      'Runs formatting, ESLint, strict type checks, production compilation against the exact selected route outputs, route validation, responsive viewport checks without screenshot storage, creative-direction signals, compact-navigation interaction and motion checks, image-loading checks, overflow checks, browser errors, and axe while keeping private test inspection and verification credit-efficient.',
+      'Runs deterministic framework and responsive verification, and keeps committed prospect lessons behind human selection, protected distillation, clean-manifest testing, and explicit package release gates.',
     files: [
       {
         label: 'Template packages',
@@ -12147,6 +13054,28 @@ const agentPackageFeatures: AgentFeature[] = [
         detail:
           'Makes framework verification and responsive interaction evidence release requirements.',
         terms: ['Quality and delivery', 'Required viewports'],
+      },
+      {
+        label: 'Agent package worker',
+        detail:
+          'Treats selected prospect lessons as untrusted evidence, preserves classification boundaries, and creates reviewable addenda without mutating production.',
+        terms: [
+          'Agent learning handoff',
+          'human-selected evidence',
+          'immutable original manifest',
+          'foundation_change_required',
+        ],
+      },
+      {
+        label: 'Made Solid handoff worker',
+        detail:
+          'Sends the verified repository, branch, full commit, edit version, manifest, and package lineage to the protected Made Solid admin endpoint without publishing or contacting the prospect.',
+        terms: [
+          "handoffKind: 'source_revision'",
+          'sourceCommit',
+          'sourceEditVersion',
+          'MADE_SOLID_HANDOFF_URL',
+        ],
       },
     ],
   },
@@ -12429,6 +13358,7 @@ const agentBehaviourTitles: Record<string, string> = {
   'next-component-architecture': 'Next.js generated component architecture',
   'runtime-profiles': 'Production runtime and capability profiles',
   'framework-quality-gates': 'Framework and responsive quality gates',
+  'website-tone-direction': 'Website tone direction',
 };
 
 const legacyProductionBehaviourIds = ['motion-runtime', 'scoped-revision'];
@@ -12880,6 +13810,16 @@ function AgentStudioSectionNavigation({
       >
         <SlidersHorizontal aria-hidden="true" size={17} />
         Refine
+      </Button>
+      <Button
+        aria-current={section === 'learning' ? 'page' : undefined}
+        className={section === 'learning' ? 'agent-studio__section-link--active' : undefined}
+        onClick={() => onSelectSection('learning')}
+        type="button"
+        variant="secondary"
+      >
+        <Sparkles aria-hidden="true" size={17} />
+        Learning inbox
       </Button>
       <Button
         aria-current={section === 'agent' ? 'page' : undefined}
@@ -13935,6 +14875,199 @@ function AgentPackageConfiguration({
   );
 }
 
+function AgentLearningInbox({
+  packages,
+  proposals,
+  onApproveForTesting,
+  onOpenRefine,
+  onOpenVersions,
+}: {
+  packages: AgentPackage[];
+  proposals: AgentPackageProposal[];
+  onApproveForTesting: (packageId: string) => Promise<void>;
+  onOpenRefine: () => void;
+  onOpenVersions: () => void;
+}) {
+  const learningProposals = proposals.filter((proposal) =>
+    proposal.direction.startsWith('Agent learning handoff ·'),
+  );
+  const [approvingId, setApprovingId] = useState('');
+  const [message, setMessage] = useState('');
+
+  async function approve(packageId: string) {
+    setApprovingId(packageId);
+    setMessage('');
+    try {
+      await onApproveForTesting(packageId);
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : 'The learning package could not be approved.',
+      );
+    } finally {
+      setApprovingId('');
+    }
+  }
+
+  return (
+    <section className="agent-learning-inbox" aria-labelledby="agent-learning-inbox-title">
+      <div className="agent-learning-inbox__intro">
+        <div>
+          <Eyebrow>Learning inbox</Eyebrow>
+          <h2 id="agent-learning-inbox-title">Distil prospect evidence safely</h2>
+          <p className="muted-copy">
+            Approved refinement lessons arrive here as private proposals. Codex may update policy,
+            feature contracts, foundation code and tests, but production remains unchanged until a
+            tested package is explicitly released.
+          </p>
+        </div>
+        <StatusBadge tone={learningProposals.length ? 'warning' : 'neutral'}>
+          {learningProposals.length} learning handoff{learningProposals.length === 1 ? '' : 's'}
+        </StatusBadge>
+      </div>
+      {learningProposals.length ? (
+        <div className="agent-learning-inbox__list">
+          {learningProposals.map((proposal) => {
+            const draft = packages.find(
+              (agentPackage) => agentPackage.id === proposal.draftPackageId,
+            );
+            const lessonTitles = [...proposal.direction.matchAll(/^\d+\. \[[^\]]+\] (.+)$/gm)].map(
+              (match) => match[1],
+            );
+            const sourceLine = proposal.direction
+              .split('\n')
+              .find((line) => line.startsWith('Source:'))
+              ?.replace(/^Source:\s*/, '');
+            const active = proposal.status === 'queued' || proposal.status === 'running';
+            return (
+              <article className="agent-learning-inbox__item" key={proposal.id}>
+                <header>
+                  <div>
+                    <small>{sourceLine || 'Private refinement bundle'}</small>
+                    <h3>
+                      {proposal.direction.split('\n')[0]?.replace('Agent learning handoff · ', '')}
+                    </h3>
+                  </div>
+                  <StatusBadge
+                    tone={
+                      proposal.status === 'failed' || proposal.status === 'rejected'
+                        ? 'danger'
+                        : proposal.status === 'ready' || proposal.status === 'accepted'
+                          ? 'success'
+                          : 'warning'
+                    }
+                  >
+                    {proposal.status.replaceAll('_', ' ')}
+                  </StatusBadge>
+                </header>
+                {active ? (
+                  <IndeterminateProgress
+                    detail="The protected worker is assessing which agent files and tests are supported by the approved evidence."
+                    label={
+                      proposal.status === 'queued'
+                        ? 'Learning proposal queued'
+                        : 'Distilling lessons'
+                    }
+                  />
+                ) : null}
+                {lessonTitles.length ? (
+                  <details className="agent-learning-inbox__lessons">
+                    <summary>{lessonTitles.length} approved lessons</summary>
+                    <ul>
+                      {lessonTitles.map((title) => (
+                        <li key={title}>{title}</li>
+                      ))}
+                    </ul>
+                  </details>
+                ) : null}
+                {proposal.summary ? <p>{proposal.summary}</p> : null}
+                {draft ? (
+                  <dl>
+                    <div>
+                      <dt>Proposed package</dt>
+                      <dd>{agentPackageVersionLabel(draft.version)}</dd>
+                    </div>
+                    <div>
+                      <dt>Change boundary</dt>
+                      <dd>{draft.capabilityAssessment.replaceAll('_', ' ')}</dd>
+                    </div>
+                  </dl>
+                ) : null}
+                {draft?.contractAddendum || draft?.instructionsAddendum ? (
+                  <details className="agent-learning-inbox__proposal">
+                    <summary>Review proposed agent changes</summary>
+                    {draft.contractAddendum ? (
+                      <div>
+                        <strong>Builder contract</strong>
+                        <pre>{draft.contractAddendum}</pre>
+                      </div>
+                    ) : null}
+                    {draft.instructionsAddendum ? (
+                      <div>
+                        <strong>Codex instructions</strong>
+                        <pre>{draft.instructionsAddendum}</pre>
+                      </div>
+                    ) : null}
+                  </details>
+                ) : null}
+                {draft?.status === 'draft' && draft.capabilityAssessment === 'policy_only' ? (
+                  <Button
+                    disabled={approvingId === draft.id}
+                    onClick={() => void approve(draft.id)}
+                    type="button"
+                  >
+                    <CheckCheck aria-hidden="true" size={16} />
+                    {approvingId === draft.id
+                      ? 'Approving test package'
+                      : `Approve ${agentPackageVersionLabel(draft.version)} for testing`}
+                  </Button>
+                ) : null}
+                {draft?.capabilityAssessment === 'foundation_change_required' &&
+                draft.status === 'draft' ? (
+                  <p className="agent-learning-inbox__review-note">
+                    <Wrench aria-hidden="true" size={17} />
+                    This lesson needs a reviewed source and test change before it can become a test
+                    package. Open Package versions to inspect its implementation boundary.
+                  </p>
+                ) : null}
+                {draft?.status === 'test_ready' ? (
+                  <div className="agent-learning-inbox__next-step">
+                    <CheckCircle2 aria-hidden="true" size={18} />
+                    <span>
+                      Ready for a clean private test using the original immutable manifest.
+                    </span>
+                    <Button onClick={onOpenRefine} type="button" variant="secondary">
+                      Open Refine <ArrowRight aria-hidden="true" size={16} />
+                    </Button>
+                  </div>
+                ) : null}
+                {proposal.errorSummary ? (
+                  <p className="form-message form-message--error" role="alert">
+                    {proposal.errorSummary}
+                  </p>
+                ) : null}
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <EmptyState
+          detail="Commit a prospect edit, review its reusable lessons in Made Solid handoff, then send the approved selection here."
+          icon={Sparkles}
+          title="No learning handoffs yet"
+        />
+      )}
+      {message ? (
+        <p className="form-message form-message--error" role="alert">
+          {message}
+        </p>
+      ) : null}
+      <Button onClick={onOpenVersions} type="button" variant="secondary">
+        <PackageCheck aria-hidden="true" size={16} /> Package versions
+      </Button>
+    </section>
+  );
+}
+
 function AgentStudioPage({
   workspaces,
   agentPackages,
@@ -14026,6 +15159,7 @@ function AgentStudioPage({
       )
     : undefined;
   const isArchitecturePage = section === 'agent';
+  const isLearningPage = section === 'learning';
   const isVersionsPage = section === 'versions';
   const publishedAgentPackage = agentPackages.find((item) => item.status === 'published');
   const semanticRecoveryUpdatePending =
@@ -14051,16 +15185,20 @@ function AgentStudioPage({
           <h1 id="agent-studio-title">
             {isArchitecturePage
               ? 'Builder agent architecture'
-              : isVersionsPage
-                ? 'Build package versions'
-                : 'Refine the builder, not a prospect'}
+              : isLearningPage
+                ? 'Agent learning inbox'
+                : isVersionsPage
+                  ? 'Build package versions'
+                  : 'Refine the builder, not a prospect'}
           </h1>
           <p className="muted-copy">
             {isArchitecturePage
               ? 'See how the builder foundation, built-in capabilities, package contract, build direction, and protected delivery worker fit together.'
-              : isVersionsPage
-                ? 'Review every saved build package, the system that can use it, its release notes, complete feature inventory, and its path from test version to production.'
-                : 'Use a prepared prospect only as a private test harness. Directions refine one test run; the published package remains unchanged until a reviewed release exists.'}
+              : isLearningPage
+                ? 'Review approved evidence from committed prospect refinements before it changes a test package or any future website build.'
+                : isVersionsPage
+                  ? 'Review every saved build package, the system that can use it, its release notes, complete feature inventory, and its path from test version to production.'
+                  : 'Use a prepared prospect only as a private test harness. Directions refine one test run; the published package remains unchanged until a reviewed release exists.'}
           </p>
         </div>
         <div className="agent-studio__header-actions">
@@ -14087,7 +15225,15 @@ function AgentStudioPage({
         />
       ) : null}
 
-      {isArchitecturePage || isVersionsPage ? (
+      {isLearningPage ? (
+        <AgentLearningInbox
+          onApproveForTesting={onApproveAgentPackageForTesting}
+          onOpenRefine={() => onSelectSection('refine')}
+          onOpenVersions={() => onSelectSection('versions')}
+          packages={agentPackages}
+          proposals={agentPackageProposals}
+        />
+      ) : isArchitecturePage || isVersionsPage ? (
         <AgentPackageConfiguration
           architectureMapOpen={architectureMapOpen}
           onApproveForTesting={onApproveAgentPackageForTesting}
@@ -14620,6 +15766,408 @@ function githubRepositoryName(value: string) {
   );
 }
 
+const githubWorkspaceCreationStages = [
+  {
+    phase: 'queued',
+    label: 'Connect the protected worker',
+    detail: 'Reserve this request without exposing GitHub credentials to the browser.',
+  },
+  {
+    phase: 'loading_workspace',
+    label: 'Assemble the editable source',
+    detail: 'Load the finished source, approved assets, setup notes, and refinement history.',
+  },
+  {
+    phase: 'preparing_repository',
+    label: 'Prepare a clean Git history',
+    detail: 'Verify the project, add its agent instructions, and create the initial main commit.',
+  },
+  {
+    phase: 'creating_private_repository',
+    label: 'Create the private repository',
+    detail: 'Create the named GitHub repository with public access disabled.',
+  },
+  {
+    phase: 'pushing_source',
+    label: 'Push the complete handoff',
+    detail: 'Send the editable source and confirm the main branch is available for development.',
+  },
+] as const;
+
+function githubWorkspaceStageIndex(progressPhase: string) {
+  const index = githubWorkspaceCreationStages.findIndex((stage) => stage.phase === progressPhase);
+  return index >= 0 ? index : progressPhase === 'ready' ? githubWorkspaceCreationStages.length : 0;
+}
+
+const githubRepositoryOwnerStorageKey = 'made-solid-studio.github-repository-owner';
+
+type LocalWorkspaceSetup = {
+  status: 'idle' | 'running' | 'complete' | 'failed';
+  phase:
+    | 'idle'
+    | 'accessing'
+    | 'cloning'
+    | 'updating'
+    | 'verifying'
+    | 'installing'
+    | 'launching'
+    | 'ready'
+    | 'failed';
+  detail: string;
+  previewUrl?: string;
+  terminalSession?: string;
+};
+
+type RefinementLedgerEntry = {
+  id: string;
+  recordedAt: string;
+  classification: 'strict_invariant' | 'flexible_principle' | 'project_specific' | 'unclassified';
+  title: string;
+  problem: string;
+  rootCause?: string;
+  fix: string;
+  paths?: string[];
+  pages?: string[];
+  viewports?: string[];
+  verification?: string[];
+};
+
+type RefinementLedgerState = {
+  status: 'loading' | 'ready' | 'empty' | 'unavailable' | 'failed';
+  detail: string;
+  entries: RefinementLedgerEntry[];
+  updatedAt?: string;
+};
+
+type LearningBundleEntry = RefinementLedgerEntry & {
+  pattern?: string;
+};
+
+type LearningBundleState = {
+  status: 'loading' | 'ready' | 'empty' | 'unavailable' | 'failed';
+  detail: string;
+  generatedAt?: string;
+  origin?: {
+    studioBuildId: string;
+    buildManifestId: string;
+    agentPackageId: string;
+    agentPackageVersion?: number;
+  };
+  entries: LearningBundleEntry[];
+};
+
+type FinalEditState = {
+  status: 'loading' | 'unavailable' | 'changes_pending' | 'ready' | 'finalised' | 'failed';
+  detail: string;
+  branch?: string;
+  commit?: string;
+  synced?: boolean;
+  finalCommit?: boolean;
+  changedFiles?: string[];
+  bundleReady?: boolean;
+  refinementCount?: number;
+  sourceBuild?: {
+    buildId: string;
+    manifestId: string;
+    agentPackageVersion?: number;
+    exportedAt?: string;
+  };
+  versions?: EditVersion[];
+  committedVersion?: EditVersion;
+  workingVersion?: number;
+  pricingScope?: PricingSourceScope;
+  updatedAt?: string;
+};
+
+type EditVersion = {
+  version: number;
+  commit: string;
+  committedAt: string;
+  subject: string;
+  commitUrl?: string;
+};
+
+type CommittedPreviewProgress = {
+  status: 'idle' | 'running' | 'complete' | 'failed';
+  phase: string;
+  detail: string;
+  previewUrl?: string;
+};
+
+type FinalEditProgress = {
+  status: 'idle' | 'running' | 'complete' | 'failed';
+  phase: 'idle' | 'verifying' | 'bundling' | 'committing' | 'pushing' | 'ready' | 'failed';
+  detail: string;
+  branch?: string;
+  commit?: string;
+};
+
+const finalEditStages = [
+  { phase: 'verifying', label: 'Verify the complete website' },
+  { phase: 'bundling', label: 'Refresh the refinement bundle' },
+  { phase: 'committing', label: 'Create the final edit commit' },
+  { phase: 'pushing', label: 'Push the prospect branch' },
+  { phase: 'ready', label: 'Lock the handoff checkpoint' },
+] as const;
+
+function prospectWorkspaceDirectoryName(workspace: ProspectWorkspace) {
+  const completedBuild = workspace.builderRuns.find(
+    (run) =>
+      run.buildMode === 'full_site' && (run.status === 'ready' || run.status === 'review_required'),
+  );
+  const publication = completedBuild
+    ? workspace.githubWorkspacePublications.find(
+        (candidate) => candidate.builderRunId === completedBuild.id,
+      )
+    : undefined;
+  return publication?.repositoryName ?? githubRepositoryName(workspace.business.name);
+}
+
+function useFinalEditState(workspace: ProspectWorkspace) {
+  const directory = prospectWorkspaceDirectoryName(workspace);
+  const [state, setState] = useState<FinalEditState>({
+    status: 'loading',
+    detail: 'Checking the editable prospect repository.',
+  });
+  const refresh = useCallback(async () => {
+    try {
+      const response = await fetch(
+        `/__made-solid/final-edit?directory=${encodeURIComponent(directory)}`,
+        { cache: 'no-store' },
+      );
+      const responseType = response.headers.get('content-type')?.toLowerCase() ?? '';
+      if (!responseType.includes('application/json')) {
+        throw new Error('Restart Made Solid Studio to reconnect the final-edit service.');
+      }
+      const nextState = (await response.json()) as FinalEditState;
+      if (!response.ok) throw new Error(nextState.detail || 'The final edit could not be checked.');
+      setState(nextState);
+    } catch (error) {
+      setState({
+        status: 'failed',
+        detail: error instanceof Error ? error.message : 'The final edit could not be checked.',
+      });
+    }
+  }, [directory]);
+  useEffect(() => {
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 10_000);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
+  return { directory, state, refresh };
+}
+
+function useLearningBundle(directory: string, enabled: boolean) {
+  const [state, setState] = useState<LearningBundleState>({
+    status: 'loading',
+    detail: 'Loading the committed agent-learning bundle.',
+    entries: [],
+  });
+  const refresh = useCallback(async () => {
+    if (!enabled) return;
+    setState((current) => ({ ...current, status: 'loading' }));
+    try {
+      const response = await fetch(
+        `/__made-solid/learning-bundle?directory=${encodeURIComponent(directory)}`,
+        { cache: 'no-store' },
+      );
+      const responseType = response.headers.get('content-type')?.toLowerCase() ?? '';
+      if (!responseType.includes('application/json')) {
+        throw new Error('Restart Made Solid Studio to reconnect the agent-learning service.');
+      }
+      const nextState = (await response.json()) as LearningBundleState;
+      if (!response.ok) throw new Error(nextState.detail || 'The learning bundle is unavailable.');
+      setState(nextState);
+    } catch (error) {
+      setState({
+        status: 'failed',
+        detail: error instanceof Error ? error.message : 'The learning bundle could not be loaded.',
+        entries: [],
+      });
+    }
+  }, [directory, enabled]);
+  useEffect(() => {
+    if (enabled) void refresh();
+  }, [enabled, refresh]);
+  return { state, refresh };
+}
+
+function EditVersionHistory({
+  directory,
+  state,
+  compact = false,
+}: {
+  directory: string;
+  state: FinalEditState;
+  compact?: boolean;
+}) {
+  const versions = [...(state.versions ?? [])].reverse();
+  const [openingCommit, setOpeningCommit] = useState('');
+  const [progress, setProgress] = useState<CommittedPreviewProgress>({
+    status: 'idle',
+    phase: 'idle',
+    detail: '',
+  });
+
+  async function openVersion(version: EditVersion) {
+    if (openingCommit) return;
+    const previewWindow = window.open('', '_blank');
+    if (previewWindow) {
+      previewWindow.opener = null;
+      previewWindow.document.title = `Preparing edit v${version.version}`;
+      previewWindow.document.body.textContent = `Preparing committed edit v${version.version}…`;
+    }
+    setOpeningCommit(version.commit);
+    setProgress({
+      status: 'running',
+      phase: 'preparing_snapshot',
+      detail: `Preparing committed edit v${version.version}.`,
+    });
+    try {
+      const response = await fetch('/__made-solid/committed-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ directory, commit: version.commit }),
+      });
+      if (!response.ok || !response.body) {
+        throw new Error((await response.text()) || 'The committed preview service is unavailable.');
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffered = '';
+      let lastEvent: CommittedPreviewProgress | undefined;
+      while (true) {
+        const { done, value } = await reader.read();
+        buffered += decoder.decode(value, { stream: !done });
+        const lines = buffered.split(/\r?\n/);
+        buffered = lines.pop() ?? '';
+        if (done && buffered.trim()) lines.push(buffered);
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          lastEvent = JSON.parse(line) as CommittedPreviewProgress;
+          setProgress(lastEvent);
+          if (lastEvent.status === 'complete' && lastEvent.previewUrl && previewWindow) {
+            previewWindow.location.replace(studioPreviewUrl(lastEvent.previewUrl));
+          }
+        }
+        if (done) break;
+      }
+      if (!lastEvent || lastEvent.status === 'failed') {
+        throw new Error(lastEvent?.detail || 'The committed website version did not open.');
+      }
+    } catch (error) {
+      previewWindow?.close();
+      setProgress({
+        status: 'failed',
+        phase: 'failed',
+        detail:
+          error instanceof Error ? error.message : 'The committed website version did not open.',
+      });
+    } finally {
+      setOpeningCommit('');
+    }
+  }
+
+  if (!versions.length) {
+    return <p className="muted-copy">No website edit has been committed yet.</p>;
+  }
+
+  const renderVersion = (version: EditVersion) => (
+    <article className="edit-version" key={version.commit}>
+      <div className="edit-version__identity">
+        <span>v{version.version}</span>
+        <div>
+          <strong>
+            {version.version === state.committedVersion?.version
+              ? 'Current committed edit'
+              : 'Committed edit'}
+          </strong>
+          <small>
+            {formatDateTime(version.committedAt)} · {version.commit.slice(0, 8)}
+          </small>
+        </div>
+      </div>
+      <ButtonGroup>
+        <Button
+          disabled={Boolean(openingCommit)}
+          onClick={() => void openVersion(version)}
+          size="small"
+          variant="secondary"
+        >
+          {openingCommit === version.commit ? (
+            <LoaderCircle aria-hidden="true" className="spin" size={15} />
+          ) : (
+            <Play aria-hidden="true" size={15} />
+          )}
+          {openingCommit === version.commit ? 'Opening version' : 'Open website'}
+        </Button>
+        {version.commitUrl ? (
+          <ButtonLink
+            href={version.commitUrl}
+            rel="noreferrer"
+            size="small"
+            target="_blank"
+            variant="quiet"
+          >
+            <Github aria-hidden="true" size={15} />
+            View commit
+          </ButtonLink>
+        ) : null}
+      </ButtonGroup>
+    </article>
+  );
+
+  const visible = compact ? versions.slice(0, 1) : versions.slice(0, 3);
+  const older = versions.slice(visible.length);
+  return (
+    <section className="edit-version-history" aria-label="Committed website edit versions">
+      <div className="edit-version-history__list">{visible.map(renderVersion)}</div>
+      {older.length ? (
+        <details>
+          <summary>
+            View {older.length} older committed version{older.length === 1 ? '' : 's'}
+          </summary>
+          <div className="edit-version-history__list">{older.map(renderVersion)}</div>
+        </details>
+      ) : null}
+      {progress.status !== 'idle' ? (
+        <p
+          className={`form-message${progress.status === 'failed' ? ' form-message--error' : ''}`}
+          role={progress.status === 'failed' ? 'alert' : 'status'}
+        >
+          {progress.detail}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+const localWorkspaceSetupStages = [
+  { phase: 'accessing', label: 'Access the private source' },
+  { phase: 'syncing', label: 'Create or safely update the local directory' },
+  { phase: 'verifying', label: 'Verify Made Solid refinement logging' },
+  { phase: 'installing', label: 'Prepare website dependencies' },
+  { phase: 'launching', label: 'Launch the website server' },
+  { phase: 'ready', label: 'Open the website preview' },
+] as const;
+
+function localWorkspaceSetupStageIndex(phase: LocalWorkspaceSetup['phase']) {
+  if (phase === 'cloning' || phase === 'updating') return 1;
+  const index = localWorkspaceSetupStages.findIndex((stage) => stage.phase === phase);
+  return index >= 0 ? index : 0;
+}
+
+function defaultGithubRepositoryOwner(publication?: GithubWorkspacePublication) {
+  if (publication?.repositoryOwner) return publication.repositoryOwner;
+  try {
+    const savedOwner = window.localStorage.getItem(githubRepositoryOwnerStorageKey)?.trim();
+    if (savedOwner) return savedOwner;
+  } catch {
+    // Browser storage is only a convenience; the protected worker remains the source of truth.
+  }
+  return import.meta.env.VITE_GITHUB_REPOSITORY_OWNER?.trim() || 'zacdagostino';
+}
+
 function LocalDevelopmentPublicationPanel({
   workspace,
   onPublish,
@@ -14641,30 +16189,90 @@ function LocalDevelopmentPublicationPanel({
         (candidate) => candidate.builderRunId === completedBuild.id,
       )
     : undefined;
-  const [repositoryOwner, setRepositoryOwner] = useState(publication?.repositoryOwner ?? '');
+  const [repositoryOwner, setRepositoryOwner] = useState(() =>
+    defaultGithubRepositoryOwner(publication),
+  );
   const [repositoryName, setRepositoryName] = useState(
     publication?.repositoryName ?? githubRepositoryName(workspace.business.name),
   );
   const [repositoryDescription, setRepositoryDescription] = useState(
     publication?.repositoryDescription ?? `${workspace.business.name} website development`,
   );
-  const [confirmationOpen, setConfirmationOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [message, setMessage] = useState('');
-  const [copiedValue, setCopiedValue] = useState<'export' | 'clone'>();
-  const publishButtonRef = useRef<HTMLButtonElement>(null);
+  const [copiedValue, setCopiedValue] = useState<'export' | 'workspace'>();
+  const [localWorkspaceSetup, setLocalWorkspaceSetup] = useState<LocalWorkspaceSetup>({
+    status: 'idle',
+    phase: 'idle',
+    detail: '',
+  });
   const active = publication?.status === 'queued' || publication?.status === 'running';
   const canPublish = Boolean(completedBuild && workspace.githubWorkspaceWorkerAvailable);
   const normalizedOwner = repositoryOwner.trim();
   const normalizedName = repositoryName.trim();
   const repositoryTarget = `${normalizedOwner || 'owner'}/${normalizedName || 'repository'}`;
-  const exportCommand = completedBuild
-    ? `npm run export:local-build -- --run ${completedBuild.id} --destination /path/to/project`
-    : '';
-  const cloneCommand = publication?.cloneUrl ? `git clone ${publication.cloneUrl}` : '';
+  const localWorkspaceDirectoryName =
+    publication?.repositoryName ?? githubRepositoryName(workspace.business.name);
+  const localWorkspaceDirectory = `prospect-workspaces/${localWorkspaceDirectoryName}`;
+  const localWorkspaceCommand = publication?.fullName
+    ? `npm run workspace:open -- --repository ${publication.fullName}`
+    : completedBuild
+      ? `npm run export:local-build -- --run ${completedBuild.id} --destination ${localWorkspaceDirectory}`
+      : '';
+  const [refinementLedger, setRefinementLedger] = useState<RefinementLedgerState>({
+    status: 'loading',
+    detail: 'Loading the local refinement ledger.',
+    entries: [],
+  });
 
-  async function copyCommand(kind: 'export' | 'clone', value: string) {
+  useEffect(() => {
+    if (!completedBuild) return;
+    let stopped = false;
+    let pollTimer = 0;
+    let activeRequest: AbortController | undefined;
+    const pollLedger = async () => {
+      activeRequest = new AbortController();
+      try {
+        const response = await fetch(
+          `/__made-solid/refinement-ledger?directory=${encodeURIComponent(localWorkspaceDirectoryName)}`,
+          { cache: 'no-store', signal: activeRequest.signal },
+        );
+        const responseType = response.headers.get('content-type')?.toLowerCase() ?? '';
+        if (!responseType.includes('application/json')) {
+          throw new Error(
+            'The live refinement service is not connected. Restart Made Solid Studio to reconnect it.',
+          );
+        }
+        const ledger = (await response.json().catch(() => {
+          throw new Error(
+            'The live refinement service returned an invalid response. Restart Made Solid Studio to reconnect it.',
+          );
+        })) as RefinementLedgerState;
+        if (!response.ok) throw new Error(ledger.detail || 'The refinement ledger is unavailable.');
+        if (!stopped) setRefinementLedger(ledger);
+      } catch (error) {
+        if (!stopped && !(error instanceof DOMException && error.name === 'AbortError')) {
+          setRefinementLedger({
+            status: 'failed',
+            detail:
+              error instanceof Error ? error.message : 'The refinement ledger could not be loaded.',
+            entries: [],
+          });
+        }
+      } finally {
+        if (!stopped) pollTimer = window.setTimeout(() => void pollLedger(), 2_000);
+      }
+    };
+    void pollLedger();
+    return () => {
+      stopped = true;
+      window.clearTimeout(pollTimer);
+      activeRequest?.abort();
+    };
+  }, [completedBuild, localWorkspaceDirectoryName]);
+
+  async function copyCommand(kind: 'export' | 'workspace', value: string) {
     try {
       await navigator.clipboard.writeText(value);
       setCopiedValue(kind);
@@ -14677,7 +16285,7 @@ function LocalDevelopmentPublicationPanel({
     }
   }
 
-  function requestConfirmation(event: FormEvent<HTMLFormElement>) {
+  async function publish(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMessage('');
     if (!completedBuild || submitting) return;
@@ -14689,20 +16297,18 @@ function LocalDevelopmentPublicationPanel({
       setMessage('Enter a valid GitHub repository name.');
       return;
     }
-    setConfirmationOpen(true);
-  }
-
-  async function publish() {
-    if (!completedBuild || submitting) return;
     setSubmitting(true);
-    setMessage('');
     try {
       await onPublish(completedBuild.id, {
         repositoryOwner: normalizedOwner,
         repositoryName: normalizedName,
         repositoryDescription: repositoryDescription.trim(),
       });
-      setConfirmationOpen(false);
+      try {
+        window.localStorage.setItem(githubRepositoryOwnerStorageKey, normalizedOwner);
+      } catch {
+        // Publishing succeeded; remembering the convenience default is optional.
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'GitHub publishing could not be queued.');
     } finally {
@@ -14722,6 +16328,68 @@ function LocalDevelopmentPublicationPanel({
       );
     } finally {
       setCancelling(false);
+    }
+  }
+
+  async function openLocalWorkspace() {
+    if (!completedBuild || localWorkspaceSetup.status === 'running') return;
+    const previewWindow = window.open('', '_blank');
+    if (previewWindow) {
+      previewWindow.opener = null;
+      previewWindow.document.title = 'Preparing website preview';
+      previewWindow.document.body.textContent = 'Preparing and launching the website…';
+    }
+    setMessage('');
+    setLocalWorkspaceSetup({
+      status: 'running',
+      phase: 'accessing',
+      detail: 'Connecting to the local Studio workspace service.',
+    });
+    try {
+      const response = await fetch('/__made-solid/local-workspace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          repository: publication?.fullName ?? `${normalizedOwner}/${localWorkspaceDirectoryName}`,
+          repositoryReady: publication?.status === 'ready',
+          buildId: completedBuild.id,
+          directory: localWorkspaceDirectoryName,
+        }),
+      });
+      if (!response.ok || !response.body) {
+        const detail = await response.text();
+        throw new Error(detail || 'The local workspace service is unavailable.');
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffered = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        buffered += decoder.decode(value, { stream: !done });
+        const lines = buffered.split(/\r?\n/);
+        buffered = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const event = JSON.parse(line) as LocalWorkspaceSetup;
+          setLocalWorkspaceSetup(event);
+          if (event.status === 'complete' && event.previewUrl && previewWindow) {
+            previewWindow.location.replace(studioPreviewUrl(event.previewUrl));
+          } else if (event.status === 'failed') {
+            previewWindow?.close();
+          }
+        }
+        if (done) break;
+      }
+    } catch (error) {
+      previewWindow?.close();
+      setLocalWorkspaceSetup({
+        status: 'failed',
+        phase: 'failed',
+        detail:
+          error instanceof Error
+            ? error.message
+            : 'The local workspace could not be prepared. Use the manual command below.',
+      });
     }
   }
 
@@ -14745,11 +16413,11 @@ function LocalDevelopmentPublicationPanel({
     <Card className="workspace-panel local-development" data-testid="local-development-publication">
       <div className="local-development__header">
         <div>
-          <Eyebrow>Development handoff</Eyebrow>
-          <h2>Continue locally or on GitHub</h2>
+          <Eyebrow>Editable workspace</Eyebrow>
+          <h2>Work in a local prospect workspace</h2>
           <p className="muted-copy">
-            Take the complete editable project out of Studio without losing its approved assets,
-            build origin, or structured refinement log.
+            Keep each editable prospect repository in this Studio Codespace under an ignored local
+            directory, with approved assets, build origin, and refinement history intact.
           </p>
         </div>
         <StatusBadge tone={statusTone}>{statusLabel}</StatusBadge>
@@ -14759,10 +16427,10 @@ function LocalDevelopmentPublicationPanel({
         <section className="local-development__ready" aria-labelledby="local-workspace-ready">
           <Laptop aria-hidden="true" size={24} />
           <div>
-            <h3 id="local-workspace-ready">Local workspace ready to export</h3>
+            <h3 id="local-workspace-ready">Editable source is ready</h3>
             <p>
-              Build {completedBuild.id.slice(0, 8)} has editable source, approved assets, local
-              setup notes, and the Made Solid refinement ledger.
+              Build {completedBuild.id.slice(0, 8)} can become a private repository and a local
+              folder inside <code>prospect-workspaces</code>, with its Made Solid refinement ledger.
             </p>
             {completedBuild.status === 'review_required' ? (
               <p className="local-development__quality-note">
@@ -14770,18 +16438,157 @@ function LocalDevelopmentPublicationPanel({
                 still blocks client publishing.
               </p>
             ) : null}
-            <div className="local-development__command">
-              <code>{exportCommand}</code>
-              <Button
-                aria-label="Copy local export command"
-                onClick={() => void copyCommand('export', exportCommand)}
-                size="small"
+            <Button
+              aria-label="Open local prospect workspace"
+              disabled={localWorkspaceSetup.status === 'running'}
+              onClick={() => void openLocalWorkspace()}
+              variant="primary"
+            >
+              {localWorkspaceSetup.status === 'running' ? (
+                <LoaderCircle aria-hidden="true" className="spin" size={16} />
+              ) : localWorkspaceSetup.status === 'complete' ? (
+                <Check aria-hidden="true" size={16} />
+              ) : (
+                <FolderTree aria-hidden="true" size={16} />
+              )}
+              {localWorkspaceSetup.status === 'running'
+                ? 'Preparing local workspace'
+                : localWorkspaceSetup.status === 'complete'
+                  ? 'Website launched'
+                  : 'Open local workspace'}
+            </Button>
+            {localWorkspaceSetup.status !== 'idle' ? (
+              <div
+                aria-live="polite"
+                className={`local-workspace-setup local-workspace-setup--${localWorkspaceSetup.status}`}
+                role={localWorkspaceSetup.status === 'failed' ? 'alert' : 'status'}
+              >
+                <strong>{localWorkspaceSetup.detail}</strong>
+                {localWorkspaceSetup.status === 'running' ? (
+                  <IndeterminateProgress
+                    detail={localWorkspaceSetup.detail}
+                    label={localWorkspaceSetup.phase.replaceAll('_', ' ')}
+                  />
+                ) : null}
+                <ol aria-label="Local workspace setup stages">
+                  {localWorkspaceSetupStages.map((stage, index) => {
+                    const currentIndex = localWorkspaceSetupStageIndex(localWorkspaceSetup.phase);
+                    const state =
+                      localWorkspaceSetup.status === 'complete' || index < currentIndex
+                        ? 'complete'
+                        : index === currentIndex && localWorkspaceSetup.status === 'running'
+                          ? 'current'
+                          : 'upcoming';
+                    return (
+                      <li className={`is-${state}`} key={stage.phase}>
+                        {state === 'complete' ? (
+                          <Check aria-hidden="true" size={15} />
+                        ) : state === 'current' ? (
+                          <LoaderCircle aria-hidden="true" className="spin" size={15} />
+                        ) : (
+                          <span aria-hidden="true">{index + 1}</span>
+                        )}
+                        <span>{stage.label}</span>
+                      </li>
+                    );
+                  })}
+                </ol>
+              </div>
+            ) : null}
+            {localWorkspaceSetup.previewUrl ? (
+              <ButtonLink
+                href={studioPreviewUrl(localWorkspaceSetup.previewUrl)}
+                rel="noreferrer"
+                target="_blank"
                 variant="secondary"
               >
-                <ClipboardCheck aria-hidden="true" size={16} />
-                {copiedValue === 'export' ? 'Copied' : 'Copy command'}
-              </Button>
-            </div>
+                <ExternalLink aria-hidden="true" size={16} />
+                Open website preview
+              </ButtonLink>
+            ) : null}
+            <section
+              aria-labelledby="local-refinement-ledger-title"
+              className="local-refinement-ledger"
+            >
+              <header>
+                <div>
+                  <span className="local-refinement-ledger__icon" aria-hidden="true">
+                    <ListChecks size={18} />
+                  </span>
+                  <div>
+                    <h4 id="local-refinement-ledger-title">Refinement ledger</h4>
+                    <p>{refinementLedger.detail}</p>
+                  </div>
+                </div>
+                <span className="local-refinement-ledger__live">
+                  <span aria-hidden="true" /> Live
+                </span>
+              </header>
+              <div aria-live="polite" aria-relevant="additions text">
+                {refinementLedger.status === 'loading' ? (
+                  <div className="local-refinement-ledger__state" role="status">
+                    <LoaderCircle aria-hidden="true" className="spin" size={18} />
+                    Watching for verified refinements…
+                  </div>
+                ) : refinementLedger.status === 'failed' ? (
+                  <div className="local-refinement-ledger__state is-error" role="alert">
+                    <CircleAlert aria-hidden="true" size={18} />
+                    {refinementLedger.detail}
+                  </div>
+                ) : refinementLedger.entries.length ? (
+                  <ol className="local-refinement-ledger__entries">
+                    {refinementLedger.entries.map((entry) => (
+                      <li key={entry.id}>
+                        <div className="local-refinement-ledger__entry-heading">
+                          <strong>{entry.title}</strong>
+                          <time dateTime={entry.recordedAt}>
+                            {formatDateTime(entry.recordedAt)}
+                          </time>
+                        </div>
+                        <p>
+                          <span>Problem</span> {entry.problem}
+                        </p>
+                        <p>
+                          <span>Fix</span> {entry.fix}
+                        </p>
+                        <div className="local-refinement-ledger__entry-meta">
+                          <span>{entry.classification.replaceAll('_', ' ')}</span>
+                          {entry.pages?.length ? <span>{entry.pages.join(', ')}</span> : null}
+                          {entry.viewports?.length ? (
+                            <span>{entry.viewports.join(' · ')}</span>
+                          ) : null}
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <div className="local-refinement-ledger__state" role="status">
+                    <Clock3 aria-hidden="true" size={18} />
+                    Entries appear here automatically after Codex records a verified change.
+                  </div>
+                )}
+              </div>
+            </section>
+            {localWorkspaceCommand ? (
+              <details className="local-development__manual">
+                <summary>Manual command fallback</summary>
+                <p>
+                  Use this only if the local workspace service cannot run the setup automatically.
+                </p>
+                <div className="local-development__command">
+                  <code>{localWorkspaceCommand}</code>
+                  <Button
+                    aria-label="Copy local workspace command"
+                    onClick={() => void copyCommand('workspace', localWorkspaceCommand)}
+                    size="small"
+                    variant="secondary"
+                  >
+                    <ClipboardCheck aria-hidden="true" size={16} />
+                    {copiedValue === 'workspace' ? 'Copied' : 'Copy command'}
+                  </Button>
+                </div>
+              </details>
+            ) : null}
           </div>
         </section>
       ) : (
@@ -14809,7 +16616,7 @@ function LocalDevelopmentPublicationPanel({
         >
           <Github aria-hidden="true" size={24} />
           <div>
-            <h3 id="github-repository-ready">Private GitHub repository ready</h3>
+            <h3 id="github-repository-ready">Local prospect workspace</h3>
             <p>
               <strong>
                 {publication.fullName ??
@@ -14817,44 +16624,118 @@ function LocalDevelopmentPublicationPanel({
               </strong>{' '}
               is ready on <code>{publication.defaultBranch ?? 'main'}</code>.
             </p>
-            {cloneCommand ? (
-              <div className="local-development__command">
-                <code>{cloneCommand}</code>
-                <Button
-                  aria-label="Copy GitHub clone command"
-                  onClick={() => void copyCommand('clone', cloneCommand)}
-                  size="small"
+            <p className="local-development__separation-note">
+              Use <code>{localWorkspaceDirectory}</code> inside this Codespace. Studio can clone it
+              once, fast-forward it later without overwriting local changes, verify the Made Solid
+              logging commands, install dependencies, and keep it in this editor's file tree.
+            </p>
+            <ButtonGroup className="local-development__repository-actions">
+              {publication.repositoryUrl ? (
+                <ButtonLink
+                  href={publication.repositoryUrl}
+                  rel="noreferrer"
+                  target="_blank"
                   variant="secondary"
                 >
-                  <ClipboardCheck aria-hidden="true" size={16} />
-                  {copiedValue === 'clone' ? 'Copied' : 'Copy clone command'}
-                </Button>
-              </div>
-            ) : null}
-            {publication.repositoryUrl ? (
-              <ButtonLink
-                href={publication.repositoryUrl}
-                rel="noreferrer"
-                target="_blank"
-                variant="primary"
-              >
-                <Github aria-hidden="true" size={16} />
-                Open GitHub repository
-              </ButtonLink>
-            ) : null}
+                  <Github aria-hidden="true" size={16} />
+                  Open GitHub repository
+                </ButtonLink>
+              ) : null}
+            </ButtonGroup>
           </div>
         </section>
       ) : active ? (
-        <section className="local-development__progress" aria-live="polite">
+        <section
+          className="local-development__progress"
+          aria-labelledby="editable-workspace-progress-title"
+          aria-live="polite"
+        >
+          <div className="local-development__progress-header">
+            <span className="local-development__progress-icon" aria-hidden="true">
+              <LoaderCircle className="spin" size={22} />
+            </span>
+            <div>
+              <Eyebrow>Creating editable workspace</Eyebrow>
+              <h3 id="editable-workspace-progress-title">
+                {publication.cancelRequestedAt
+                  ? 'Stopping at a safe checkpoint'
+                  : `Preparing ${publication.repositoryOwner}/${publication.repositoryName}`}
+              </h3>
+              <p>
+                {publication.cancelRequestedAt
+                  ? 'Studio has acknowledged the cancellation. The worker will stop before its next independent step and preserve anything already completed.'
+                  : 'Studio is turning the finished website into a separate private development repository. You can leave this page; persisted status will still be here when you return.'}
+              </p>
+            </div>
+          </div>
           <IndeterminateProgress
             detail={publication.progressDetail || 'Preparing the private development repository.'}
             label={publication.progressPhase.replaceAll('_', ' ')}
           />
-          {publication.totalItems > 0 ? (
-            <p>
-              {publication.completedItems} of {publication.totalItems} saved checkpoints complete.
-            </p>
-          ) : null}
+          <ol className="local-development__progress-stages" aria-label="Workspace creation stages">
+            {githubWorkspaceCreationStages.map((stage, index) => {
+              const currentStageIndex = githubWorkspaceStageIndex(publication.progressPhase);
+              const state =
+                index < currentStageIndex
+                  ? 'complete'
+                  : index === currentStageIndex
+                    ? 'current'
+                    : 'upcoming';
+              return (
+                <li className={`is-${state}`} key={stage.phase}>
+                  <span className="local-development__progress-marker" aria-hidden="true">
+                    {state === 'complete' ? (
+                      <Check size={16} />
+                    ) : state === 'current' ? (
+                      <LoaderCircle className="spin" size={16} />
+                    ) : (
+                      index + 1
+                    )}
+                  </span>
+                  <span>
+                    <strong>{stage.label}</strong>
+                    <small>{stage.detail}</small>
+                  </span>
+                  <StatusBadge
+                    tone={
+                      state === 'complete' ? 'success' : state === 'current' ? 'warning' : 'neutral'
+                    }
+                  >
+                    {state}
+                  </StatusBadge>
+                </li>
+              );
+            })}
+          </ol>
+          <dl className="local-development__progress-facts">
+            <div>
+              <dt>Destination</dt>
+              <dd>
+                {publication.repositoryOwner}/{publication.repositoryName}
+              </dd>
+            </div>
+            <div>
+              <dt>Visibility</dt>
+              <dd>Private only</dd>
+            </div>
+            <div>
+              <dt>Source build</dt>
+              <dd>{completedBuild?.id.slice(0, 8)}</dd>
+            </div>
+            <div>
+              <dt>Files and setup items</dt>
+              <dd>
+                {publication.totalItems > 0
+                  ? `${publication.completedItems} of ${publication.totalItems} prepared`
+                  : 'Counting saved source'}
+              </dd>
+            </div>
+          </dl>
+          <p className="local-development__progress-note">
+            <ShieldAlert aria-hidden="true" size={17} />
+            The protected worker performs these steps server-side. It will not alter the Made Solid
+            Studio repository, publish the website, or make the client repository public.
+          </p>
           <Button
             disabled={cancelling || Boolean(publication.cancelRequestedAt)}
             onClick={() => void cancel()}
@@ -14862,54 +16743,62 @@ function LocalDevelopmentPublicationPanel({
           >
             <Ban aria-hidden="true" size={16} />
             {cancelling || publication.cancelRequestedAt
-              ? 'Stopping GitHub publish'
-              : 'Cancel GitHub publish'}
+              ? 'Stopping workspace creation'
+              : 'Cancel workspace creation'}
           </Button>
         </section>
       ) : (
-        <form className="local-development__form" onSubmit={requestConfirmation}>
+        <form className="local-development__form" onSubmit={publish}>
           <div className="local-development__form-heading">
             <Github aria-hidden="true" size={22} />
             <div>
-              <h3>Create a private GitHub repository</h3>
-              <p>Studio creates the repository only after you confirm the exact destination.</p>
+              <h3>Create the private editing workspace</h3>
+              <p>
+                Studio has filled in the destination. One click creates the separate private
+                repository and pushes the complete editable handoff.
+              </p>
             </div>
           </div>
-          <div className="local-development__fields">
-            <label>
-              <span>GitHub account or organization</span>
-              <input
-                autoComplete="off"
-                maxLength={39}
-                onChange={(event) => setRepositoryOwner(event.target.value)}
-                placeholder="your-github-name"
-                required
-                value={repositoryOwner}
-              />
-            </label>
-            <label>
-              <span>Repository name</span>
-              <input
-                autoComplete="off"
-                maxLength={100}
-                onChange={(event) => setRepositoryName(event.target.value)}
-                required
-                value={repositoryName}
-              />
-            </label>
-            <label className="local-development__description">
-              <span>Description (optional)</span>
-              <input
-                maxLength={350}
-                onChange={(event) => setRepositoryDescription(event.target.value)}
-                value={repositoryDescription}
-              />
-            </label>
-          </div>
+          <p className="local-development__target">
+            Private destination: <strong>{repositoryTarget}</strong>
+          </p>
+          <details className="local-development__destination-settings">
+            <summary>Change GitHub destination</summary>
+            <div className="local-development__fields">
+              <label>
+                <span>GitHub account or organization</span>
+                <input
+                  autoComplete="off"
+                  maxLength={39}
+                  onChange={(event) => setRepositoryOwner(event.target.value)}
+                  required
+                  value={repositoryOwner}
+                />
+              </label>
+              <label>
+                <span>Repository name</span>
+                <input
+                  autoComplete="off"
+                  maxLength={100}
+                  onChange={(event) => setRepositoryName(event.target.value)}
+                  required
+                  value={repositoryName}
+                />
+              </label>
+              <label className="local-development__description">
+                <span>Description (optional)</span>
+                <input
+                  maxLength={350}
+                  onChange={(event) => setRepositoryDescription(event.target.value)}
+                  value={repositoryDescription}
+                />
+              </label>
+            </div>
+          </details>
           <p className="local-development__privacy">
             <ShieldAlert aria-hidden="true" size={17} />
-            Private only. Studio never exposes the GitHub token to this browser and never creates a
-            public repository from this action.
+            Private only. Studio never exposes the GitHub token to this browser, never creates a
+            public repository, and never changes the Made Solid Studio repository from this action.
           </p>
           {completedBuild && !workspace.githubWorkspaceWorkerAvailable ? (
             <p className="form-message form-message--error" role="status">
@@ -14939,11 +16828,13 @@ function LocalDevelopmentPublicationPanel({
               {message}
             </p>
           ) : null}
-          <Button disabled={!canPublish || submitting} ref={publishButtonRef} type="submit">
+          <Button disabled={!canPublish || submitting} type="submit">
             <Github aria-hidden="true" size={16} />
-            {publication?.status === 'failed'
-              ? 'Retry with this destination'
-              : 'Create private repository'}
+            {submitting
+              ? 'Creating editable workspace'
+              : publication?.status === 'failed'
+                ? 'Retry editable workspace'
+                : 'Create editable workspace'}
           </Button>
           {!completedBuild ? (
             <small>
@@ -14954,25 +16845,906 @@ function LocalDevelopmentPublicationPanel({
           ) : null}
         </form>
       )}
-
-      <ConfirmationDialog
-        confirmLabel="Create private repository"
-        confirmingLabel="Queueing repository"
-        confirmVariant="primary"
-        detail={`Made Solid Studio will create ${repositoryTarget} as a private GitHub repository and push build ${completedBuild?.id.slice(0, 8) ?? ''} to its main branch. No public repository or deployment will be created.`}
-        error={message || undefined}
-        isConfirming={submitting}
-        onConfirm={() => void publish()}
-        onOpenChange={setConfirmationOpen}
-        open={confirmationOpen}
-        returnFocusRef={publishButtonRef}
-        title={`Create ${repositoryTarget}?`}
-      />
     </Card>
   );
 }
 
-function ClientPreviewPublicationPanel({
+function WebsiteEditingPage({
+  workspace,
+  onPublish,
+  onCancel,
+}: {
+  workspace: ProspectWorkspace;
+  onPublish: (builderRunId: string, input: GithubWorkspacePublicationInput) => Promise<void>;
+  onCancel: (publicationId: string) => Promise<void>;
+}) {
+  const { directory, state, refresh } = useFinalEditState(workspace);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [progress, setProgress] = useState<FinalEditProgress>({
+    status: 'idle',
+    phase: 'idle',
+    detail: '',
+  });
+  const [error, setError] = useState('');
+  const isRunning = progress.status === 'running';
+  const canFinalise = state.status === 'changes_pending' || state.status === 'ready';
+
+  async function finalise() {
+    if (!canFinalise || isRunning) return;
+    setError('');
+    setProgress({
+      status: 'running',
+      phase: 'verifying',
+      detail: 'Starting the complete website verification.',
+    });
+    setConfirmOpen(false);
+    try {
+      const response = await fetch('/__made-solid/final-edit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ directory }),
+      });
+      if (!response.ok || !response.body) {
+        throw new Error((await response.text()) || 'The final-edit service is unavailable.');
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffered = '';
+      let lastEvent: FinalEditProgress | undefined;
+      while (true) {
+        const { done, value } = await reader.read();
+        buffered += decoder.decode(value, { stream: !done });
+        const lines = buffered.split(/\r?\n/);
+        buffered = lines.pop() ?? '';
+        if (done && buffered.trim()) lines.push(buffered);
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          lastEvent = JSON.parse(line) as FinalEditProgress;
+          setProgress(lastEvent);
+        }
+        if (done) break;
+      }
+      if (!lastEvent || lastEvent.status === 'failed') {
+        throw new Error(lastEvent?.detail || 'The final edit did not complete.');
+      }
+      await refresh();
+    } catch (caught) {
+      const detail =
+        caught instanceof Error ? caught.message : 'The final edit could not be saved.';
+      setError(detail);
+      setProgress({ status: 'failed', phase: 'failed', detail });
+    }
+  }
+
+  const currentStage = finalEditStages.findIndex((stage) => stage.phase === progress.phase);
+  return (
+    <div className="workspace-content-stack editing-workflow" data-testid="website-editing-page">
+      <section className="workflow-overview" aria-labelledby="editing-workflow-title">
+        <div className="workflow-overview__heading">
+          <div>
+            <Eyebrow>Website editing</Eyebrow>
+            <h2 id="editing-workflow-title">Take the generated build through its final edit</h2>
+            <p>
+              Launch the real prospect source, inspect every saved refinement, then create one
+              verified Git checkpoint for handoff.
+            </p>
+          </div>
+          <StatusBadge tone={state.status === 'finalised' ? 'success' : 'warning'}>
+            {state.status === 'finalised'
+              ? `Edit v${state.committedVersion?.version ?? 1} committed`
+              : `Editing v${state.workingVersion ?? 1}`}
+          </StatusBadge>
+        </div>
+        <ol className="workflow-overview__steps" aria-label="Website editing workflow">
+          <li className="is-complete">
+            <span>1</span>
+            <div>
+              <strong>Open workspace</strong>
+              <small>Launch source and preview together.</small>
+            </div>
+          </li>
+          <li className={state.refinementCount ? 'is-complete' : undefined}>
+            <span>2</span>
+            <div>
+              <strong>Review refinements</strong>
+              <small>Use the live ledger as evidence.</small>
+            </div>
+          </li>
+          <li className={state.status === 'finalised' ? 'is-complete' : undefined}>
+            <span>3</span>
+            <div>
+              <strong>Commit an edit version</strong>
+              <small>Verify, bundle, commit and push each checkpoint.</small>
+            </div>
+          </li>
+        </ol>
+      </section>
+      <LocalDevelopmentPublicationPanel
+        onCancel={onCancel}
+        onPublish={onPublish}
+        workspace={workspace}
+      />
+      <Card className="workspace-panel final-edit" data-testid="final-edit-checkpoint">
+        <div className="final-edit__header">
+          <div>
+            <Eyebrow>Final checkpoint</Eyebrow>
+            <h2>Commit a website edit version</h2>
+            <p className="muted-copy">{state.detail}</p>
+          </div>
+          <StatusBadge
+            tone={
+              state.status === 'finalised'
+                ? 'success'
+                : state.status === 'failed'
+                  ? 'danger'
+                  : 'warning'
+            }
+          >
+            {state.status.replaceAll('_', ' ')}
+          </StatusBadge>
+        </div>
+        <dl className="final-edit__facts">
+          <div>
+            <dt>Editing version</dt>
+            <dd>v{state.workingVersion ?? 1}</dd>
+          </div>
+          <div>
+            <dt>Current committed</dt>
+            <dd>
+              {state.committedVersion
+                ? `v${state.committedVersion.version} · ${state.committedVersion.commit.slice(0, 8)}`
+                : 'None yet'}
+            </dd>
+          </div>
+          <div>
+            <dt>Derived from build</dt>
+            <dd>
+              {state.sourceBuild?.buildId ? state.sourceBuild.buildId.slice(0, 8) : 'Not available'}
+            </dd>
+          </div>
+          <div>
+            <dt>Local directory</dt>
+            <dd>{directory}</dd>
+          </div>
+          <div>
+            <dt>Edited files</dt>
+            <dd>{state.changedFiles?.length ?? 0}</dd>
+          </div>
+          <div>
+            <dt>Refinements</dt>
+            <dd>{state.refinementCount ?? 0}</dd>
+          </div>
+          <div>
+            <dt>Branch</dt>
+            <dd>{state.branch || 'Not available'}</dd>
+          </div>
+          <div>
+            <dt>Refinement bundle</dt>
+            <dd>{state.bundleReady ? 'Ready' : 'Not created'}</dd>
+          </div>
+          <div>
+            <dt>Remote sync</dt>
+            <dd>{state.synced ? 'Synced' : 'Not synced'}</dd>
+          </div>
+        </dl>
+        {progress.status !== 'idle' ? (
+          <section className="final-edit__progress" aria-live="polite">
+            <IndeterminateProgress
+              detail={progress.detail}
+              label={progress.phase.replaceAll('_', ' ')}
+            />
+            <ol aria-label="Final edit stages">
+              {finalEditStages.map((stage, index) => {
+                const stageState =
+                  progress.status === 'complete' || index < currentStage
+                    ? 'complete'
+                    : index === currentStage && progress.status === 'running'
+                      ? 'current'
+                      : 'upcoming';
+                return (
+                  <li className={`is-${stageState}`} key={stage.phase}>
+                    {stageState === 'complete' ? (
+                      <Check aria-hidden="true" size={16} />
+                    ) : stageState === 'current' ? (
+                      <LoaderCircle aria-hidden="true" className="spin" size={16} />
+                    ) : (
+                      <span aria-hidden="true">{index + 1}</span>
+                    )}
+                    <span>{stage.label}</span>
+                  </li>
+                );
+              })}
+            </ol>
+          </section>
+        ) : null}
+        {error ? (
+          <p className="form-message form-message--error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        {state.status === 'finalised' && state.commit ? (
+          <p className="form-message" role="status">
+            Current commit <code>{state.commit.slice(0, 8)}</code> is synced and ready for handoff.
+          </p>
+        ) : null}
+        <section className="final-edit__versions" aria-labelledby="editing-version-history-title">
+          <div>
+            <Eyebrow>Committed versions</Eyebrow>
+            <h3 id="editing-version-history-title">Open any verified edit checkpoint</h3>
+          </div>
+          <EditVersionHistory directory={directory} state={state} />
+        </section>
+        {state.status === 'unavailable' || state.status === 'failed' ? (
+          <p className="form-message form-message--error" role="alert">
+            {state.detail}
+          </p>
+        ) : null}
+        <Button
+          disabled={!canFinalise || isRunning}
+          onClick={() => {
+            if (progress.status === 'complete') {
+              setProgress({ status: 'idle', phase: 'idle', detail: '' });
+            }
+            setConfirmOpen(true);
+          }}
+          variant="primary"
+        >
+          <CheckCheck aria-hidden="true" size={16} />
+          {isRunning
+            ? `Committing edit v${state.workingVersion ?? 1}`
+            : state.status === 'finalised'
+              ? `Edit v${state.committedVersion?.version ?? 1} committed`
+              : `Commit edit v${state.workingVersion ?? 1}`}
+        </Button>
+      </Card>
+      <ConfirmationDialog
+        confirmLabel="Verify, commit and push"
+        confirmingLabel="Finalising website"
+        confirmVariant="primary"
+        detail={`Create edit v${state.workingVersion ?? 1} by running the complete verification, refreshing the refinement bundle, committing every pending change in ${directory}, and pushing the current prospect branch?`}
+        error={error}
+        isConfirming={isRunning}
+        onConfirm={() => void finalise()}
+        onOpenChange={(open) => {
+          if (!isRunning) {
+            setConfirmOpen(open);
+            if (!open) setError('');
+          }
+        }}
+        open={confirmOpen}
+        title={`Commit website edit v${state.workingVersion ?? 1}?`}
+      />
+    </div>
+  );
+}
+
+const learningClassificationCopy = {
+  strict_invariant: {
+    label: 'Strict safeguards',
+    detail: 'Objective failures that can become automated quality gates.',
+  },
+  flexible_principle: {
+    label: 'Reusable principles',
+    detail: 'Transferable guidance that should preserve creative choice.',
+  },
+  project_specific: {
+    label: 'Prospect-specific decisions',
+    detail: 'Client content and taste that stays excluded unless you deliberately include it.',
+  },
+  unclassified: {
+    label: 'Needs classification',
+    detail: 'Unresolved observations that require an explicit human decision.',
+  },
+} as const;
+
+function compactLearningText(value: string, maximumLength = 260) {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  return compact.length > maximumLength ? `${compact.slice(0, maximumLength - 1)}…` : compact;
+}
+
+function learningProposalDirection({
+  businessName,
+  directory,
+  commit,
+  bundle,
+  entries,
+}: {
+  businessName: string;
+  directory: string;
+  commit?: string;
+  bundle: LearningBundleState;
+  entries: LearningBundleEntry[];
+}) {
+  const header = [
+    `Agent learning handoff · ${businessName}`,
+    `Source: prospect-workspaces/${directory}/.made-solid/learning-bundle.json`,
+    `Committed edit: ${commit?.slice(0, 12) || 'unknown'}`,
+    `Origin build: ${bundle.origin?.studioBuildId || 'unknown'}`,
+    '',
+    'Distil only the human-approved lessons below. Keep project-specific facts and visual taste scoped to this prospect. Update policy, feature contracts, foundation code, and regression tests only where the evidence supports it. Replay the immutable original manifest when testing; do not copy final prospect source.',
+  ];
+  const lessons = entries.flatMap((entry, index) => [
+    '',
+    `${index + 1}. [${entry.classification}] ${compactLearningText(entry.title, 160)}`,
+    `Problem: ${compactLearningText(entry.problem)}`,
+    entry.rootCause ? `Root cause: ${compactLearningText(entry.rootCause)}` : '',
+    `Verified fix: ${compactLearningText(entry.fix)}`,
+    entry.pattern ? `Pattern: ${compactLearningText(entry.pattern, 180)}` : '',
+  ]);
+  return [...header, ...lessons].filter((line) => line !== '').join('\n');
+}
+
+function AgentLearningHandoff({
+  agentPackages,
+  directory,
+  finalEdit,
+  onOpenLearningInbox,
+  onSend,
+  workspace,
+}: {
+  agentPackages: AgentPackage[];
+  directory: string;
+  finalEdit: FinalEditState;
+  onOpenLearningInbox: () => void;
+  onSend: (basePackageId: string, direction: string) => Promise<void>;
+  workspace: ProspectWorkspace;
+}) {
+  const { state: bundle, refresh } = useLearningBundle(
+    directory,
+    finalEdit.status === 'finalised' && Boolean(finalEdit.bundleReady),
+  );
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [message, setMessage] = useState('');
+  const selectionInitialised = useRef(false);
+  const publishedPackage = agentPackages.find(
+    (agentPackage) => agentPackage.status === 'published',
+  );
+
+  useEffect(() => {
+    if (bundle.status !== 'ready' || selectionInitialised.current) return;
+    selectionInitialised.current = true;
+    setSelectedIds(
+      bundle.entries
+        .filter((entry) =>
+          ['strict_invariant', 'flexible_principle'].includes(entry.classification),
+        )
+        .map((entry) => entry.id),
+    );
+  }, [bundle.entries, bundle.status]);
+
+  const selectedEntries = bundle.entries.filter((entry) => selectedIds.includes(entry.id));
+  const direction = learningProposalDirection({
+    businessName: workspace.business.name,
+    directory,
+    commit: finalEdit.commit,
+    bundle,
+    entries: selectedEntries,
+  });
+  const directionTooLong = direction.length > 4_000;
+  const classifications = Object.keys(learningClassificationCopy) as Array<
+    keyof typeof learningClassificationCopy
+  >;
+
+  async function send() {
+    if (!publishedPackage || !selectedEntries.length || directionTooLong || submitting) return;
+    setSubmitting(true);
+    setMessage('');
+    try {
+      await onSend(publishedPackage.id, direction);
+      setSent(true);
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : 'The approved lessons could not be sent.',
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Card className="workspace-panel agent-learning-handoff" data-testid="agent-learning-handoff">
+      <div className="handoff-readiness__header">
+        <div>
+          <Eyebrow>Agent learning</Eyebrow>
+          <h2>Review lessons before they reach Codex</h2>
+        </div>
+        <StatusBadge tone={sent ? 'success' : bundle.status === 'ready' ? 'warning' : 'neutral'}>
+          {sent
+            ? 'Sent to Learning inbox'
+            : bundle.status === 'ready'
+              ? `${selectedEntries.length} selected`
+              : bundle.status.replaceAll('_', ' ')}
+        </StatusBadge>
+      </div>
+      <p className="muted-copy">
+        Select only evidence that should influence future builds. Nothing here edits the production
+        agent directly: the protected worker creates a reviewable test-package proposal first.
+      </p>
+      {bundle.status === 'loading' ? (
+        <IndeterminateProgress
+          detail="Reading the private bundle from the committed prospect workspace."
+          label="Loading agent-learning bundle"
+        />
+      ) : bundle.status === 'failed' || bundle.status === 'unavailable' ? (
+        <div className="agent-learning-handoff__error" role="alert">
+          <p>{bundle.detail}</p>
+          <Button onClick={() => void refresh()} type="button" variant="secondary">
+            <RotateCcw aria-hidden="true" size={16} /> Retry
+          </Button>
+        </div>
+      ) : (
+        <div className="agent-learning-handoff__groups">
+          {classifications.map((classification) => {
+            const entries = bundle.entries.filter(
+              (entry) => entry.classification === classification,
+            );
+            if (!entries.length) return null;
+            const copy = learningClassificationCopy[classification];
+            const selectedCount = entries.filter((entry) => selectedIds.includes(entry.id)).length;
+            return (
+              <details
+                className="agent-learning-handoff__group"
+                key={classification}
+                open={
+                  classification === 'strict_invariant' || classification === 'flexible_principle'
+                }
+              >
+                <summary>
+                  <span>
+                    <strong>{copy.label}</strong>
+                    <small>{copy.detail}</small>
+                  </span>
+                  <StatusBadge tone={selectedCount ? 'warning' : 'neutral'}>
+                    {selectedCount}/{entries.length} selected
+                  </StatusBadge>
+                </summary>
+                <div className="agent-learning-handoff__entries">
+                  {entries.map((entry) => {
+                    const checked = selectedIds.includes(entry.id);
+                    return (
+                      <label className="agent-learning-handoff__entry" key={entry.id}>
+                        <input
+                          checked={checked}
+                          onChange={(event) =>
+                            setSelectedIds((current) =>
+                              event.target.checked
+                                ? [...current, entry.id]
+                                : current.filter((id) => id !== entry.id),
+                            )
+                          }
+                          type="checkbox"
+                        />
+                        <span>
+                          <strong>{entry.title}</strong>
+                          <small>{entry.problem}</small>
+                          {entry.pattern ? <code>{entry.pattern}</code> : null}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </details>
+            );
+          })}
+        </div>
+      )}
+      {directionTooLong ? (
+        <p className="form-message form-message--error" role="alert">
+          This selection exceeds the protected 4,000-character proposal limit. Remove some lessons
+          and send them as a separate reviewed proposal.
+        </p>
+      ) : null}
+      {message ? (
+        <p className="form-message form-message--error" role="alert">
+          {message}
+        </p>
+      ) : null}
+      {sent ? (
+        <div className="agent-learning-handoff__sent" role="status">
+          <CheckCircle2 aria-hidden="true" size={20} />
+          <span>The approved lessons are queued for protected distillation.</span>
+          <Button onClick={onOpenLearningInbox} type="button" variant="secondary">
+            Open Learning inbox <ArrowRight aria-hidden="true" size={16} />
+          </Button>
+        </div>
+      ) : (
+        <Button
+          disabled={
+            finalEdit.status !== 'finalised' ||
+            bundle.status !== 'ready' ||
+            !selectedEntries.length ||
+            !publishedPackage ||
+            directionTooLong ||
+            submitting
+          }
+          onClick={() => void send()}
+          type="button"
+        >
+          <Sparkles aria-hidden="true" size={16} />
+          {submitting
+            ? 'Sending approved lessons'
+            : `Send ${selectedEntries.length || ''} approved lesson${selectedEntries.length === 1 ? '' : 's'} to Agent Studio`}
+        </Button>
+      )}
+      {!publishedPackage ? (
+        <small>No published agent package is available as the proposal base.</small>
+      ) : null}
+    </Card>
+  );
+}
+
+function MadeSolidHandoffPage({
+  agentPackages,
+  onCancelHandoff,
+  onOpenLearningInbox,
+  onPushHandoff,
+  onSendLearning,
+  workspace,
+}: {
+  agentPackages: AgentPackage[];
+  onCancelHandoff: (handoffId: string) => Promise<void>;
+  onOpenLearningInbox: () => void;
+  onPushHandoff: (builderRunId: string, input: MadeSolidHandoffInput) => Promise<void>;
+  onSendLearning: (basePackageId: string, direction: string) => Promise<void>;
+  workspace: ProspectWorkspace;
+}) {
+  const { directory, state } = useFinalEditState(workspace);
+  const completedBuild =
+    workspace.builderRuns.find((run) => run.id === state.sourceBuild?.buildId) ??
+    workspace.builderRuns.find((run) => run.buildMode === 'full_site');
+  const repository = completedBuild
+    ? workspace.githubWorkspacePublications.find((item) => item.builderRunId === completedBuild.id)
+    : undefined;
+  const finalised = state.status === 'finalised';
+  const preferredContact = workspace.contacts.find((contact) => Boolean(contact.email));
+  const capturedClientEmail = capturedPublicEmail(workspace.researchPacket);
+  const initialClientEmail = preferredContact?.email?.trim() || capturedClientEmail;
+  const [clientName, setClientName] = useState(workspace.business.name);
+  const [contactName, setContactName] = useState(preferredContact?.name ?? '');
+  const [clientEmail, setClientEmail] = useState(initialClientEmail);
+  const [projectName, setProjectName] = useState(`${workspace.business.name} website`);
+  const [handoffNotes, setHandoffNotes] = useState('');
+  const [approvedQuote, setApprovedQuote] = useState<PricingQuoteSnapshot>();
+  const [submitting, setSubmitting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [message, setMessage] = useState('');
+  const handoff =
+    state.status === 'finalised'
+      ? workspace.madeSolidHandoffs.find((candidate) => candidate.sourceCommit === state.commit)
+      : undefined;
+  const priorHandoff = workspace.madeSolidHandoffs
+    .filter((candidate) => candidate.status === 'ready')
+    .sort((left, right) => right.sourceEditVersion - left.sourceEditVersion)[0];
+  const active = handoff?.status === 'queued' || handoff?.status === 'running';
+  const canPush = Boolean(
+    finalised &&
+    state.synced &&
+    state.commit?.match(/^[a-f0-9]{40}$/i) &&
+    state.committedVersion &&
+    completedBuild &&
+    repository?.status === 'ready' &&
+    repository.repositoryUrl &&
+    workspace.madeSolidHandoffWorkerAvailable,
+  );
+
+  async function pushHandoff(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (
+      !canPush ||
+      !completedBuild ||
+      !repository?.repositoryUrl ||
+      !state.commit ||
+      !state.committedVersion ||
+      !approvedQuote ||
+      submitting
+    )
+      return;
+    setSubmitting(true);
+    setMessage('');
+    try {
+      await onPushHandoff(completedBuild.id, {
+        sourceRepositoryUrl: repository.repositoryUrl,
+        sourceBranch: state.branch || repository.defaultBranch || 'main',
+        sourceCommit: state.commit,
+        sourceEditVersion: state.committedVersion.version,
+        clientName: clientName.trim(),
+        contactName: contactName.trim(),
+        clientEmail: clientEmail.trim(),
+        projectName: projectName.trim(),
+        handoffNotes: handoffNotes.trim(),
+        pricingSnapshot: approvedQuote,
+      });
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'The handoff could not be queued.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function cancelHandoff() {
+    if (!handoff || cancelling) return;
+    setCancelling(true);
+    setMessage('');
+    try {
+      await onCancelHandoff(handoff.id);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'The handoff could not be cancelled.');
+    } finally {
+      setCancelling(false);
+    }
+  }
+  return (
+    <div className="workspace-content-stack handoff-workflow" data-testid="made-solid-handoff-page">
+      <section className="workflow-overview" aria-labelledby="handoff-workflow-title">
+        <div className="workflow-overview__heading">
+          <div>
+            <Eyebrow>Made Solid handoff</Eyebrow>
+            <h2 id="handoff-workflow-title">Prepare the final source for the client workspace</h2>
+            <p>
+              This gate keeps the edited prospect repository, final commit and future client-admin
+              record tied together.
+            </p>
+          </div>
+          <StatusBadge tone={finalised ? 'success' : 'warning'}>
+            {finalised ? 'Source ready' : 'Waiting for final edit'}
+          </StatusBadge>
+        </div>
+      </section>
+      <Card className="workspace-panel handoff-readiness">
+        <div className="handoff-readiness__header">
+          <div>
+            <Eyebrow>Readiness</Eyebrow>
+            <h2>Final source checkpoint</h2>
+          </div>
+          <StatusBadge tone={finalised ? 'success' : 'warning'}>
+            {finalised ? 'Passed' : 'Blocked'}
+          </StatusBadge>
+        </div>
+        <dl className="final-edit__facts">
+          <div>
+            <dt>Final edit</dt>
+            <dd>{finalised ? 'Committed' : 'Required'}</dd>
+          </div>
+          <div>
+            <dt>Remote sync</dt>
+            <dd>{state.synced ? 'Synced' : 'Required'}</dd>
+          </div>
+          <div>
+            <dt>Commit</dt>
+            <dd>
+              {state.committedVersion
+                ? `v${state.committedVersion.version} · ${state.committedVersion.commit.slice(0, 8)}`
+                : 'Not available'}
+            </dd>
+          </div>
+          <div>
+            <dt>Refinements</dt>
+            <dd>{state.refinementCount ?? 0}</dd>
+          </div>
+          <div>
+            <dt>Derived build</dt>
+            <dd>{state.sourceBuild?.buildId?.slice(0, 8) || 'Not available'}</dd>
+          </div>
+        </dl>
+        <section
+          className="handoff-readiness__version"
+          aria-labelledby="handoff-committed-version-title"
+        >
+          <div>
+            <Eyebrow>Committed website</Eyebrow>
+            <h3 id="handoff-committed-version-title">Review the exact handoff version</h3>
+          </div>
+          <EditVersionHistory compact directory={directory} state={state} />
+        </section>
+        {repository?.repositoryUrl ? (
+          <ButtonLink
+            href={repository.repositoryUrl}
+            rel="noreferrer"
+            target="_blank"
+            variant="secondary"
+          >
+            <Github aria-hidden="true" size={16} />
+            Open final source repository
+          </ButtonLink>
+        ) : null}
+      </Card>
+      <AgentLearningHandoff
+        agentPackages={agentPackages}
+        directory={directory}
+        finalEdit={state}
+        onOpenLearningInbox={onOpenLearningInbox}
+        onSend={onSendLearning}
+        workspace={workspace}
+      />
+      <Card className="workspace-panel handoff-submit">
+        <div className="handoff-readiness__header">
+          <div>
+            <Eyebrow>Client workspace transfer</Eyebrow>
+            <h2>Push to the Made Solid website</h2>
+          </div>
+          <StatusBadge
+            tone={
+              handoff?.status === 'ready'
+                ? 'success'
+                : handoff?.status === 'failed'
+                  ? 'danger'
+                  : active
+                    ? 'warning'
+                    : 'neutral'
+            }
+          >
+            {handoff?.status.replaceAll('_', ' ') ?? 'Ready to queue'}
+          </StatusBadge>
+        </div>
+        <p className="muted-copy">
+          Send the exact committed repository revision into the private Made Solid admin workspace.
+          This deploys the exact editing version to its Made Solid prospect subdomain and records
+          its source lineage. It does not create a client account or send an email.
+        </p>
+        {handoff?.status === 'ready' && handoff.websiteAdminUrl ? (
+          <section className="handoff-submit__ready" aria-labelledby="made-solid-handoff-ready">
+            <CheckCircle2 aria-hidden="true" size={22} />
+            <div>
+              <h3 id="made-solid-handoff-ready">Committed edit recorded in Made Solid</h3>
+              <p>{handoff.progressDetail}</p>
+              <ButtonLink href={handoff.websiteAdminUrl} target="_blank" variant="secondary">
+                Open in Made Solid <ExternalLink aria-hidden="true" size={16} />
+              </ButtonLink>
+            </div>
+          </section>
+        ) : active ? (
+          <section className="handoff-submit__progress" aria-live="polite">
+            <IndeterminateProgress
+              detail={handoff.progressDetail}
+              label={handoff.progressPhase.replaceAll('_', ' ')}
+            />
+            <ol className="handoff-submit__steps" aria-label="Made Solid handoff progress">
+              {[
+                'Verify exact committed source',
+                'Deploy the exact committed website',
+                'Assign and check Made Solid subdomain',
+                'Send source lineage to Made Solid',
+                'Save and verify admin revision',
+                'Unlock Clientspace creation',
+              ].map((label, index) => (
+                <li data-complete={handoff.completedItems > index} key={label}>
+                  {handoff.completedItems > index ? (
+                    <CheckCircle2 aria-hidden="true" size={16} />
+                  ) : (
+                    <Circle aria-hidden="true" size={16} />
+                  )}
+                  {label}
+                </li>
+              ))}
+            </ol>
+            <Button
+              disabled={cancelling || Boolean(handoff.cancelRequestedAt)}
+              onClick={() => void cancelHandoff()}
+              type="button"
+              variant="secondary"
+            >
+              <Ban aria-hidden="true" size={16} />
+              {cancelling || handoff.cancelRequestedAt ? 'Stopping handoff' : 'Cancel handoff'}
+            </Button>
+          </section>
+        ) : (
+          <form className="handoff-submit__form" onSubmit={pushHandoff}>
+            <PricingCalculator
+              manifest={workspace.buildManifest}
+              sourceScope={state.pricingScope}
+              onApprovedQuoteChange={setApprovedQuote}
+            />
+            {state.pricingScope?.source === 'working_source' && priorHandoff ? (
+              <p className="handoff-submit__notice" role="status">
+                <CircleDollarSign aria-hidden="true" size={18} />
+                Clientspace currently holds edit v{priorHandoff.sourceEditVersion}. This draft is
+                priced from {state.pricingScope.revisionLabel.toLowerCase()} and will become a new
+                quote version only after the edit is finalised and transferred.
+              </p>
+            ) : null}
+            <div className="handoff-submit__fields">
+              <label>
+                <span>Business or client name</span>
+                <input
+                  maxLength={160}
+                  onChange={(event) => setClientName(event.target.value)}
+                  required
+                  value={clientName}
+                />
+              </label>
+              <label>
+                <span>Project name</span>
+                <input
+                  maxLength={200}
+                  onChange={(event) => setProjectName(event.target.value)}
+                  required
+                  value={projectName}
+                />
+              </label>
+              <label>
+                <span>Contact name (confirm later if uncertain)</span>
+                <input
+                  maxLength={160}
+                  onChange={(event) => setContactName(event.target.value)}
+                  value={contactName}
+                />
+              </label>
+              <label>
+                <span>Client email (review before Clientspace)</span>
+                <input
+                  autoComplete="email"
+                  maxLength={254}
+                  onChange={(event) => setClientEmail(event.target.value)}
+                  type="email"
+                  value={clientEmail}
+                />
+                {!preferredContact?.email && capturedClientEmail ? (
+                  <small>
+                    Prefilled from the public email captured in this Research Packet. Confirm it is
+                    the right client contact before handoff.
+                  </small>
+                ) : null}
+              </label>
+              <label className="handoff-submit__notes">
+                <span>Internal handoff notes (optional)</span>
+                <textarea
+                  maxLength={4000}
+                  onChange={(event) => setHandoffNotes(event.target.value)}
+                  rows={3}
+                  value={handoffNotes}
+                />
+              </label>
+            </div>
+            {!canPush ? (
+              <p className="handoff-submit__notice" role="alert">
+                <ShieldAlert aria-hidden="true" size={18} />
+                {!finalised
+                  ? 'Commit the final edit on Website editing first.'
+                  : !repository?.repositoryUrl
+                    ? 'Create and sync the private editable source repository first.'
+                    : !workspace.madeSolidHandoffWorkerAvailable
+                      ? 'Made Solid handoff is not connected. Start the protected handoff worker first.'
+                      : 'The exact commit and source lineage must be verified before handoff.'}
+              </p>
+            ) : null}
+            {handoff?.status === 'failed' && handoff.errorSummary ? (
+              <p className="form-message form-message--error" role="alert">
+                {handoff.errorSummary}
+              </p>
+            ) : null}
+            {message ? (
+              <p className="form-message form-message--error" role="alert">
+                {message}
+              </p>
+            ) : null}
+            {!approvedQuote ? (
+              <p className="handoff-submit__notice" role="status">
+                <CircleDollarSign aria-hidden="true" size={18} />
+                Review and approve the build-derived quote before transferring this project.
+              </p>
+            ) : null}
+            <Button disabled={!canPush || !approvedQuote || submitting} type="submit">
+              <PackageCheck aria-hidden="true" size={16} />
+              {submitting
+                ? 'Queueing exact edit'
+                : handoff?.status === 'failed'
+                  ? 'Retry Made Solid handoff'
+                  : 'Push committed edit to Made Solid'}
+            </Button>
+            <small>
+              Source: {state.commit ? state.commit.slice(0, 12) : 'not committed'} · edit v
+              {state.committedVersion?.version ?? '—'}
+            </small>
+          </form>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+export function ClientPreviewPublicationPanel({
   workspace,
   onPublish,
   onCancel,
@@ -14992,7 +17764,7 @@ function ClientPreviewPublicationPanel({
   const [contactName, setContactName] = useState(preferredContact?.name ?? '');
   const [clientEmail, setClientEmail] = useState(preferredContact?.email ?? '');
   const [projectName, setProjectName] = useState(`${workspace.business.name} website`);
-  const [finalBalance, setFinalBalance] = useState('');
+  const [approvedQuote, setApprovedQuote] = useState<PricingQuoteSnapshot>();
   const [handoffNotes, setHandoffNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -15003,12 +17775,7 @@ function ClientPreviewPublicationPanel({
 
   async function publish(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!completedBuild || !canPublish || submitting) return;
-    const dollars = finalBalance.trim() ? Number(finalBalance) : undefined;
-    if (dollars !== undefined && (!Number.isFinite(dollars) || dollars < 0)) {
-      setMessage('Enter a valid final balance or leave it blank.');
-      return;
-    }
+    if (!completedBuild || !canPublish || !approvedQuote || submitting) return;
     setSubmitting(true);
     setMessage('');
     try {
@@ -15017,7 +17784,8 @@ function ClientPreviewPublicationPanel({
         contactName: contactName.trim(),
         clientEmail: clientEmail.trim(),
         projectName: projectName.trim(),
-        finalBalanceCents: dollars === undefined ? undefined : Math.round(dollars * 100),
+        finalBalanceCents: approvedQuote.balanceCents,
+        pricingSnapshot: approvedQuote,
         currency: 'AUD',
         handoffNotes: handoffNotes.trim(),
       });
@@ -15109,6 +17877,10 @@ function ClientPreviewPublicationPanel({
         </section>
       ) : (
         <form className="client-publication__form" onSubmit={publish}>
+          <PricingCalculator
+            manifest={workspace.buildManifest}
+            onApprovedQuoteChange={setApprovedQuote}
+          />
           <div className="client-publication__fields">
             <label>
               <span>Client or business name</span>
@@ -15147,18 +17919,6 @@ function ClientPreviewPublicationPanel({
                 value={projectName}
               />
             </label>
-            <label>
-              <span>Final balance in AUD (optional)</span>
-              <input
-                inputMode="decimal"
-                min="0"
-                onChange={(event) => setFinalBalance(event.target.value)}
-                placeholder="3800.00"
-                step="0.01"
-                type="number"
-                value={finalBalance}
-              />
-            </label>
             <label className="client-publication__notes">
               <span>Internal handoff notes (optional)</span>
               <textarea
@@ -15188,7 +17948,12 @@ function ClientPreviewPublicationPanel({
               {message}
             </p>
           ) : null}
-          <Button disabled={!canPublish || submitting} type="submit">
+          {!approvedQuote ? (
+            <p className="form-message" role="status">
+              Approve the calculated quote before publishing this project to Clientspace.
+            </p>
+          ) : null}
+          <Button disabled={!canPublish || !approvedQuote || submitting} type="submit">
             <Globe2 aria-hidden="true" size={16} />
             {submitting
               ? 'Queueing client preview'
@@ -15612,6 +18377,37 @@ function AuditPanel({
   );
 }
 
+function CommittedEditOverview({ workspace }: { workspace: ProspectWorkspace }) {
+  const { directory, state } = useFinalEditState(workspace);
+  return (
+    <Card className="committed-edit-overview">
+      <div className="committed-edit-overview__header">
+        <div>
+          <Eyebrow>Website editing</Eyebrow>
+          <h2>Committed website version</h2>
+        </div>
+        <StatusBadge tone={state.committedVersion ? 'success' : 'neutral'}>
+          {state.committedVersion
+            ? `v${state.committedVersion.version} committed`
+            : 'Not committed'}
+        </StatusBadge>
+      </div>
+      <p className="muted-copy">
+        {state.committedVersion
+          ? `Commit ${state.committedVersion.commit.slice(0, 8)} is synced from build ${state.sourceBuild?.buildId?.slice(0, 8) || 'unknown'}.`
+          : 'No verified website edit checkpoint is available yet.'}
+      </p>
+      {state.committedVersion ? (
+        <EditVersionHistory compact directory={directory} state={state} />
+      ) : null}
+      <ButtonLink href={`#/prospects/${workspace.business.id}/editing`} variant="secondary">
+        <Laptop aria-hidden="true" size={16} />
+        Open Website editing
+      </ButtonLink>
+    </Card>
+  );
+}
+
 function WorkspaceContent({
   tab,
   workspace,
@@ -15624,6 +18420,7 @@ function WorkspaceContent({
   requestWebsiteAudit,
   cancelWebsiteAudit,
   requestAssetAnalysis,
+  requestBrandColourRefresh,
   requestEditableLogoRetry,
   deleteLogoAsset,
   cancelAssetAnalysis,
@@ -15648,12 +18445,14 @@ function WorkspaceContent({
   moveBuilderRunToAgentStudio,
   openBuilderPreview,
   loadBuilderRunEvidence,
-  publishClientPreview,
-  cancelClientPreviewPublication,
   publishGithubWorkspace,
   cancelGithubWorkspacePublication,
+  pushMadeSolidHandoff,
+  cancelMadeSolidHandoff,
   approveAllAuditFindings,
   updateAuditFinding,
+  requestAgentLearningProposal,
+  openAgentLearningInbox,
 }: {
   tab: WorkspaceTab;
   workspace: ProspectWorkspace;
@@ -15666,9 +18465,14 @@ function WorkspaceContent({
   requestWebsiteAudit: () => Promise<void>;
   cancelWebsiteAudit: () => Promise<void>;
   requestAssetAnalysis: () => Promise<void>;
+  requestBrandColourRefresh: () => Promise<void>;
   requestEditableLogoRetry: (
     asset: ResearchArtifact,
-    options: { simplifyGeometry: boolean; vectorizerProvider: 'vtracer' | 'vectorizer_ai' },
+    options: {
+      createEditableSvg: boolean;
+      simplifyGeometry: boolean;
+      vectorizerProvider: 'vtracer' | 'vectorizer_ai';
+    },
   ) => Promise<void>;
   deleteLogoAsset: (asset: ResearchArtifact, onUndo: () => void) => void;
   cancelAssetAnalysis: () => Promise<void>;
@@ -15731,21 +18535,20 @@ function WorkspaceContent({
   moveBuilderRunToAgentStudio: (builderRunId: string) => Promise<void>;
   openBuilderPreview: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
   loadBuilderRunEvidence: (builderRunId: string) => Promise<BuilderRunEvidence>;
-  publishClientPreview: (
-    builderRunId: string,
-    input: ClientPreviewPublicationInput,
-  ) => Promise<void>;
-  cancelClientPreviewPublication: (publicationId: string) => Promise<void>;
   publishGithubWorkspace: (
     builderRunId: string,
     input: GithubWorkspacePublicationInput,
   ) => Promise<void>;
   cancelGithubWorkspacePublication: (publicationId: string) => Promise<void>;
+  pushMadeSolidHandoff: (builderRunId: string, input: MadeSolidHandoffInput) => Promise<void>;
+  cancelMadeSolidHandoff: (handoffId: string) => Promise<void>;
   approveAllAuditFindings: () => Promise<void>;
   updateAuditFinding: (
     finding: AuditFinding,
     patch: Pick<AuditFinding, 'title' | 'finding' | 'recommendation' | 'severity' | 'reviewState'>,
   ) => Promise<void>;
+  requestAgentLearningProposal: (basePackageId: string, direction: string) => Promise<void>;
+  openAgentLearningInbox: () => void;
 }) {
   if (tab === 'overview') {
     return (
@@ -15777,6 +18580,7 @@ function WorkspaceContent({
           <h2>Next internal actions</h2>
           <TaskList onToggle={toggleTask} tasks={workspace.tasks} />
         </Card>
+        <CommittedEditOverview workspace={workspace} />
       </div>
     );
   }
@@ -15883,6 +18687,7 @@ function WorkspaceContent({
           onCreateRevision={createBrandAwareBriefRevision}
           onDeleteLogo={deleteLogoAsset}
           onPushLogoVersions={pushLogoVersionsToBuilder}
+          onRedoBrandColours={requestBrandColourRefresh}
           onSave={saveBrandKit}
           workspace={workspace}
         />
@@ -15931,17 +18736,30 @@ function WorkspaceContent({
           onRequestBuild={requestProspectBuild}
           workspace={workspace}
         />
-        <LocalDevelopmentPublicationPanel
-          onCancel={cancelGithubWorkspacePublication}
-          onPublish={publishGithubWorkspace}
-          workspace={workspace}
-        />
-        <ClientPreviewPublicationPanel
-          onCancel={cancelClientPreviewPublication}
-          onPublish={publishClientPreview}
-          workspace={workspace}
-        />
       </div>
+    );
+  }
+
+  if (tab === 'editing') {
+    return (
+      <WebsiteEditingPage
+        onCancel={cancelGithubWorkspacePublication}
+        onPublish={publishGithubWorkspace}
+        workspace={workspace}
+      />
+    );
+  }
+
+  if (tab === 'handoff') {
+    return (
+      <MadeSolidHandoffPage
+        agentPackages={agentPackages}
+        onCancelHandoff={cancelMadeSolidHandoff}
+        onOpenLearningInbox={openAgentLearningInbox}
+        onPushHandoff={pushMadeSolidHandoff}
+        onSendLearning={requestAgentLearningProposal}
+        workspace={workspace}
+      />
     );
   }
 
@@ -16008,6 +18826,7 @@ function WorkspacePage({
   onRequestWebsiteAudit,
   onCancelWebsiteAudit,
   onRequestAssetAnalysis,
+  onRequestBrandColourRefresh,
   onRequestEditableLogoRetry,
   onDeleteLogoAsset,
   onCancelAssetAnalysis,
@@ -16032,12 +18851,14 @@ function WorkspacePage({
   onMoveBuilderRunToAgentStudio,
   onOpenBuilderPreview,
   onLoadBuilderRunEvidence,
-  onPublishClientPreview,
-  onCancelClientPreviewPublication,
   onPublishGithubWorkspace,
   onCancelGithubWorkspacePublication,
+  onPushMadeSolidHandoff,
+  onCancelMadeSolidHandoff,
   onApproveAllAuditFindings,
   onUpdateAuditFinding,
+  onRequestAgentLearningProposal,
+  onOpenAgentLearningInbox,
   onVersionChange,
   tab,
   onTabChange,
@@ -16055,9 +18876,14 @@ function WorkspacePage({
   onRequestWebsiteAudit: () => Promise<void>;
   onCancelWebsiteAudit: () => Promise<void>;
   onRequestAssetAnalysis: () => Promise<void>;
+  onRequestBrandColourRefresh: () => Promise<void>;
   onRequestEditableLogoRetry: (
     asset: ResearchArtifact,
-    options: { simplifyGeometry: boolean; vectorizerProvider: 'vtracer' | 'vectorizer_ai' },
+    options: {
+      createEditableSvg: boolean;
+      simplifyGeometry: boolean;
+      vectorizerProvider: 'vtracer' | 'vectorizer_ai';
+    },
   ) => Promise<void>;
   onDeleteLogoAsset: (asset: ResearchArtifact, onUndo: () => void) => void;
   onCancelAssetAnalysis: () => Promise<void>;
@@ -16120,21 +18946,20 @@ function WorkspacePage({
   onMoveBuilderRunToAgentStudio: (builderRunId: string) => Promise<void>;
   onOpenBuilderPreview: (builderRunId: string, mode?: BuilderPreviewMode) => Promise<string>;
   onLoadBuilderRunEvidence: (builderRunId: string) => Promise<BuilderRunEvidence>;
-  onPublishClientPreview: (
-    builderRunId: string,
-    input: ClientPreviewPublicationInput,
-  ) => Promise<void>;
-  onCancelClientPreviewPublication: (publicationId: string) => Promise<void>;
   onPublishGithubWorkspace: (
     builderRunId: string,
     input: GithubWorkspacePublicationInput,
   ) => Promise<void>;
   onCancelGithubWorkspacePublication: (publicationId: string) => Promise<void>;
+  onPushMadeSolidHandoff: (builderRunId: string, input: MadeSolidHandoffInput) => Promise<void>;
+  onCancelMadeSolidHandoff: (handoffId: string) => Promise<void>;
   onApproveAllAuditFindings: () => Promise<void>;
   onUpdateAuditFinding: (
     finding: AuditFinding,
     patch: Pick<AuditFinding, 'title' | 'finding' | 'recommendation' | 'severity' | 'reviewState'>,
   ) => Promise<void>;
+  onRequestAgentLearningProposal: (basePackageId: string, direction: string) => Promise<void>;
+  onOpenAgentLearningInbox: () => void;
   tab: WorkspaceTab;
   onTabChange: (tab: WorkspaceTab) => void;
   onVersionChange?: (versionId: string) => void;
@@ -16299,11 +19124,12 @@ function WorkspacePage({
           moveBuilderRunToAgentStudio={onMoveBuilderRunToAgentStudio}
           openBuilderPreview={onOpenBuilderPreview}
           loadBuilderRunEvidence={onLoadBuilderRunEvidence}
-          publishClientPreview={onPublishClientPreview}
-          cancelClientPreviewPublication={onCancelClientPreviewPublication}
           publishGithubWorkspace={onPublishGithubWorkspace}
           cancelGithubWorkspacePublication={onCancelGithubWorkspacePublication}
+          pushMadeSolidHandoff={onPushMadeSolidHandoff}
+          cancelMadeSolidHandoff={onCancelMadeSolidHandoff}
           requestAssetAnalysis={onRequestAssetAnalysis}
+          requestBrandColourRefresh={onRequestBrandColourRefresh}
           requestEditableLogoRetry={onRequestEditableLogoRetry}
           deleteLogoAsset={onDeleteLogoAsset}
           cancelAssetAnalysis={onCancelAssetAnalysis}
@@ -16326,6 +19152,8 @@ function WorkspacePage({
           pushLogoVersionsToBuilder={onPushLogoVersionsToBuilder}
           createBrandAwareBriefRevision={onCreateBrandAwareBriefRevision}
           updateRedesignBrief={onUpdateRedesignBrief}
+          requestAgentLearningProposal={onRequestAgentLearningProposal}
+          openAgentLearningInbox={onOpenAgentLearningInbox}
           workspace={workspace}
         />
       </section>
@@ -16343,10 +19171,12 @@ function WorkspaceApp({
   repository,
   userEmail,
   onSignOut,
+  workspaceCacheKey,
 }: {
   repository: WorkspaceRepository;
   userEmail?: string;
   onSignOut?: () => Promise<void>;
+  workspaceCacheKey?: string;
 }) {
   const [route, setRoute] = useState<Route>(initialRoute);
   const [businesses, setBusinesses] = useState<Business[]>([]);
@@ -16359,6 +19189,7 @@ function WorkspaceApp({
   const [storageError, setStorageError] = useState('');
   const [loadRequest, setLoadRequest] = useState(0);
   const [notice, setNotice] = useState<ToastNotice>();
+  const routeRef = useRef(route);
   const dataFingerprintRef = useRef('');
   const lastBackgroundRefreshAtRef = useRef(0);
   const refreshInFlightRef = useRef(false);
@@ -16368,6 +19199,22 @@ function WorkspaceApp({
   const pendingLogoDeletionsRef = useRef(
     new Map<string, { onUndo: () => void; timeout: ReturnType<typeof setTimeout> }>(),
   );
+  routeRef.current = route;
+
+  useEffect(() => {
+    if (!workspaceCacheKey || loading) return;
+    const save = window.setTimeout(() => {
+      void writeWorkspaceCache({
+        key: workspaceCacheKey,
+        savedAt: new Date().toISOString(),
+        businesses,
+        workspaces,
+        agentPackages,
+        agentPackageProposals,
+      });
+    }, 250);
+    return () => window.clearTimeout(save);
+  }, [agentPackageProposals, agentPackages, businesses, loading, workspaceCacheKey, workspaces]);
 
   useEffect(
     () => () => {
@@ -16411,22 +19258,42 @@ function WorkspaceApp({
   }, [workspaces]);
 
   const refreshData = useCallback(
-    async ({ announce = false }: { announce?: boolean } = {}) => {
+    async ({ announce = false, full = false }: { announce?: boolean; full?: boolean } = {}) => {
       if (refreshInFlightRef.current) return false;
       refreshInFlightRef.current = true;
       const presentHydration = !loadingPresentationRef.current;
       if (presentHydration) {
         if (hydrationTimerRef.current) window.clearTimeout(hydrationTimerRef.current);
-        setIsHydrating(true);
+        hydrationTimerRef.current = window.setTimeout(() => {
+          setIsHydrating(true);
+          hydrationTimerRef.current = undefined;
+        }, 900);
       }
       try {
-        const [nextBusinesses, nextWorkspaces, nextAgentPackages, nextAgentPackageProposals] =
-          await Promise.all([
-            repository.listBusinesses(),
-            repository.listWorkspaces(),
-            repository.listAgentPackages(),
-            repository.listAgentPackageProposals(),
+        const activeRoute = routeRef.current;
+        const targetBusinessId =
+          !full && (activeRoute.page === 'prospects' || activeRoute.page === 'agent-studio')
+            ? activeRoute.businessId
+            : undefined;
+        if (targetBusinessId) {
+          const nextWorkspace = await repository.getWorkspace(targetBusinessId);
+          if (!nextWorkspace) return false;
+          setBusinesses((current) => [
+            nextWorkspace.business,
+            ...current.filter((business) => business.id !== targetBusinessId),
           ]);
+          setWorkspaces((current) => [
+            nextWorkspace,
+            ...current.filter((workspace) => workspace.business.id !== targetBusinessId),
+          ]);
+          return true;
+        }
+        const [nextWorkspaces, nextAgentPackages, nextAgentPackageProposals] = await Promise.all([
+          repository.listWorkspaces(),
+          repository.listAgentPackages(),
+          repository.listAgentPackageProposals(),
+        ]);
+        const nextBusinesses = nextWorkspaces.map((workspace) => workspace.business);
         const nextFingerprint = JSON.stringify({
           businesses: nextBusinesses.map((business) => [business.id, business.updatedAt]),
           agentPackages: nextAgentPackages.map((agentPackage) => [
@@ -16480,6 +19347,10 @@ function WorkspaceApp({
             workspace.clientPreviewPublications[0]?.status,
             workspace.clientPreviewPublications[0]?.updatedAt,
             workspace.clientPreviewPublications[0]?.completedItems,
+            workspace.madeSolidHandoffs[0]?.id,
+            workspace.madeSolidHandoffs[0]?.status,
+            workspace.madeSolidHandoffs[0]?.updatedAt,
+            workspace.madeSolidHandoffs[0]?.completedItems,
           ]),
         });
         const changed = Boolean(
@@ -16502,10 +19373,11 @@ function WorkspaceApp({
       } finally {
         refreshInFlightRef.current = false;
         if (presentHydration) {
-          hydrationTimerRef.current = window.setTimeout(() => {
-            setIsHydrating(false);
+          if (hydrationTimerRef.current) {
+            window.clearTimeout(hydrationTimerRef.current);
             hydrationTimerRef.current = undefined;
-          }, 1_200);
+          }
+          setIsHydrating(false);
         }
       }
     },
@@ -16526,14 +19398,39 @@ function WorkspaceApp({
     let active = true;
     async function loadWorkspaceData() {
       await repository.bootstrap();
-      const [nextBusinesses, nextWorkspaces, nextAgentPackages, nextAgentPackageProposals] =
-        await Promise.all([
-          repository.listBusinesses(),
-          repository.listWorkspaces(),
+      const activeRoute = routeRef.current;
+      const targetBusinessId =
+        activeRoute.page === 'prospects' || activeRoute.page === 'agent-studio'
+          ? activeRoute.businessId
+          : undefined;
+      if (targetBusinessId) {
+        const [nextWorkspace, nextAgentPackages, nextAgentPackageProposals] = await Promise.all([
+          repository.getWorkspace(targetBusinessId),
           repository.listAgentPackages(),
           repository.listAgentPackageProposals(),
         ]);
-      if (!active) return;
+        if (nextWorkspace) {
+          if (!active) return true;
+          setBusinesses((current) => [
+            nextWorkspace.business,
+            ...current.filter((business) => business.id !== targetBusinessId),
+          ]);
+          setWorkspaces((current) => [
+            nextWorkspace,
+            ...current.filter((workspace) => workspace.business.id !== targetBusinessId),
+          ]);
+          setAgentPackages(nextAgentPackages);
+          setAgentPackageProposals(nextAgentPackageProposals);
+          return true;
+        }
+      }
+      const [nextWorkspaces, nextAgentPackages, nextAgentPackageProposals] = await Promise.all([
+        repository.listWorkspaces(),
+        repository.listAgentPackages(),
+        repository.listAgentPackageProposals(),
+      ]);
+      if (!active) return false;
+      const nextBusinesses = nextWorkspaces.map((workspace) => workspace.business);
       setBusinesses(nextBusinesses);
       setWorkspaces(nextWorkspaces);
       setAgentPackages(nextAgentPackages);
@@ -16591,24 +19488,49 @@ function WorkspaceApp({
           workspace.clientPreviewPublications[0]?.status,
           workspace.clientPreviewPublications[0]?.updatedAt,
           workspace.clientPreviewPublications[0]?.completedItems,
+          workspace.madeSolidHandoffs[0]?.id,
+          workspace.madeSolidHandoffs[0]?.status,
+          workspace.madeSolidHandoffs[0]?.updatedAt,
+          workspace.madeSolidHandoffs[0]?.completedItems,
         ]),
       });
+      return false;
     }
 
     async function initialise() {
       setStorageError('');
       setLoading(true);
       let finalError: unknown;
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        try {
-          await loadWorkspaceData();
-          finalError = undefined;
-          break;
-        } catch (error) {
-          finalError = error;
-          if (!active || attempt === 2) break;
-          await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
+      let needsGlobalHydration = false;
+      let restoredCachedWorkspace = false;
+      if (workspaceCacheKey) {
+        const cached = await readWorkspaceCache(workspaceCacheKey);
+        if (!active) return;
+        if (cached) {
+          restoredCachedWorkspace = true;
+          setBusinesses(cached.businesses);
+          setWorkspaces(cached.workspaces);
+          setAgentPackages(cached.agentPackages);
+          setAgentPackageProposals(cached.agentPackageProposals);
+          setLoading(false);
+          setLoadingPresentation(false);
         }
+      }
+      refreshInFlightRef.current = true;
+      try {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            needsGlobalHydration = await loadWorkspaceData();
+            finalError = undefined;
+            break;
+          } catch (error) {
+            finalError = error;
+            if (!active || attempt === 2) break;
+            await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
+          }
+        }
+      } finally {
+        refreshInFlightRef.current = false;
       }
       if (!active) return;
       if (finalError) {
@@ -16616,26 +19538,39 @@ function WorkspaceApp({
           'Made Solid Studio workspace load failed after automatic retries.',
           finalError,
         );
-        setStorageError(
-          'Made Solid Studio could not load workspace data. Check your connection and organization access, then try again.',
-        );
+        if (restoredCachedWorkspace) {
+          setNotice({
+            id: crypto.randomUUID(),
+            title: 'Using the last saved workspace',
+            detail:
+              'Live organization data could not be refreshed. Your saved view remains usable.',
+            tone: 'warning',
+          });
+        } else {
+          setStorageError(
+            'Made Solid Studio could not load workspace data. Check your connection and organization access, then try again.',
+          );
+        }
       }
       setLoading(false);
+      if (!finalError && needsGlobalHydration) {
+        window.setTimeout(() => void refreshData({ full: true }).catch(() => undefined), 0);
+      }
     }
     void initialise();
     return () => {
       active = false;
     };
-  }, [loadRequest, repository]);
+  }, [loadRequest, refreshData, repository, workspaceCacheKey]);
 
   useEffect(() => {
     if (loading) return;
     function refreshInBackground() {
       if (document.visibilityState === 'hidden') return;
       const now = Date.now();
-      if (now - lastBackgroundRefreshAtRef.current < 20_000) return;
+      if (now - lastBackgroundRefreshAtRef.current < 60_000) return;
       lastBackgroundRefreshAtRef.current = now;
-      void refreshData({ announce: true }).catch(() => undefined);
+      void refreshData().catch(() => undefined);
     }
     window.addEventListener('focus', refreshInBackground);
     document.addEventListener('visibilitychange', refreshInBackground);
@@ -16672,7 +19607,7 @@ function WorkspaceApp({
 
   useEffect(() => {
     if (route.page !== 'agent-studio' || !hasActiveAgentPackageProposal) return;
-    const interval = window.setInterval(() => void refreshData(), 3_000);
+    const interval = window.setInterval(() => void refreshData({ full: true }), 3_000);
     return () => window.clearInterval(interval);
   }, [hasActiveAgentPackageProposal, refreshData, route.page]);
 
@@ -16726,6 +19661,9 @@ function WorkspaceApp({
   const activeClientPublication = workspace?.clientPreviewPublications.some(
     (publication) => publication.status === 'queued' || publication.status === 'running',
   );
+  const activeMadeSolidHandoff = workspace?.madeSolidHandoffs.some(
+    (handoff) => handoff.status === 'queued' || handoff.status === 'running',
+  );
   const activeGithubPublication = workspace?.githubWorkspacePublications.some(
     (publication) => publication.status === 'queued' || publication.status === 'running',
   );
@@ -16745,6 +19683,7 @@ function WorkspaceApp({
       !activeVisualContent &&
       !activeBuilder &&
       !activeClientPublication &&
+      !activeMadeSolidHandoff &&
       !activeGithubPublication &&
       !awaitingPreferredLogo
     )
@@ -16760,6 +19699,7 @@ function WorkspaceApp({
     activeAudit,
     activeBuilder,
     activeClientPublication,
+    activeMadeSolidHandoff,
     activeGithubPublication,
     activeCapture,
     awaitingPreferredLogo,
@@ -16897,6 +19837,20 @@ function WorkspaceApp({
       id: crypto.randomUUID(),
       title: 'Asset analysis queued',
       detail: 'The private worker will save editable visual descriptions for human review.',
+      tone: 'warning',
+    });
+  }
+
+  async function requestBrandColourRefresh() {
+    if (!workspace) return;
+    const job = await repository.requestBrandColourRefresh(workspace.business.id);
+    if (!job) throw new Error('The original-logo colour refresh could not be queued.');
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Original-logo colours queued',
+      detail:
+        'The private worker will check only the selected source logo. Other assets and captured pages will not be reanalysed.',
       tone: 'warning',
     });
   }
@@ -17039,7 +19993,11 @@ function WorkspaceApp({
 
   async function requestEditableLogoRetry(
     asset: ResearchArtifact,
-    options: { simplifyGeometry: boolean; vectorizerProvider: 'vtracer' | 'vectorizer_ai' },
+    options: {
+      createEditableSvg: boolean;
+      simplifyGeometry: boolean;
+      vectorizerProvider: 'vtracer' | 'vectorizer_ai';
+    },
   ) {
     if (!workspace) return;
     const job = await repository.requestEditableLogoRetry(asset, options);
@@ -17048,8 +20006,9 @@ function WorkspaceApp({
     setNotice({
       id: crypto.randomUUID(),
       title: 'SVG conversion retry queued',
-      detail:
-        options.vectorizerProvider === 'vectorizer_ai'
+      detail: !options.createEditableSvg
+        ? 'The private worker will refresh the transparent logo versions and skip SVG creation.'
+        : options.vectorizerProvider === 'vectorizer_ai'
           ? 'The private worker will send the original captured logo directly to Vectorizer.AI for an editable SVG comparison.'
           : options.simplifyGeometry
             ? 'The private worker will reuse or clean up the logo, verify it against the source, then fit straight lines, corners and smooth curves into another editable SVG variant.'
@@ -17241,11 +20200,22 @@ function WorkspaceApp({
 
   async function approveRedesignBrief(brief: RedesignBrief) {
     await repository.approveRedesignBrief(brief);
-    await refreshData();
+    let manifest: BuildManifest | undefined;
+    try {
+      manifest = await repository.createBuildManifest(brief.businessId);
+    } finally {
+      await refreshData();
+    }
+    if (!manifest) {
+      throw new Error(
+        'The brief was approved, but its Build Manifest could not be prepared. Use the builder handoff retry below.',
+      );
+    }
     setNotice({
       id: crypto.randomUUID(),
-      title: 'Redesign brief approved',
-      detail: 'The future builder can now use this reviewed strategy and source selection.',
+      title: 'Brief approved & Build Manifest ready',
+      detail:
+        'The reviewed strategy is locked and its private builder handoff was created automatically.',
       tone: 'success',
     });
   }
@@ -17515,30 +20485,6 @@ function WorkspaceApp({
     return repository.createBuilderPreviewUrl(builderRunId, mode);
   }
 
-  async function publishClientPreview(builderRunId: string, input: ClientPreviewPublicationInput) {
-    const publication = await repository.requestClientPreviewPublication(builderRunId, input);
-    if (!publication) throw new Error('The client preview could not be queued.');
-    await refreshData();
-    setNotice({
-      id: crypto.randomUUID(),
-      title: 'Client preview queued',
-      detail:
-        'The protected worker will deploy the quality-approved website to Vercel, then send a pending handoff to Clientspace admin. No client email will be sent.',
-      tone: 'success',
-    });
-  }
-
-  async function cancelClientPreviewPublication(publicationId: string) {
-    await repository.cancelClientPreviewPublication(publicationId);
-    await refreshData();
-    setNotice({
-      id: crypto.randomUUID(),
-      title: 'Client preview cancellation requested',
-      detail: 'The publishing worker will stop at its next safe checkpoint.',
-      tone: 'warning',
-    });
-  }
-
   async function publishGithubWorkspace(
     builderRunId: string,
     input: GithubWorkspacePublicationInput,
@@ -17561,6 +20507,29 @@ function WorkspaceApp({
       id: crypto.randomUUID(),
       title: 'GitHub publishing cancellation requested',
       detail: 'The protected worker will stop at its next safe checkpoint.',
+      tone: 'warning',
+    });
+  }
+
+  async function pushMadeSolidHandoff(builderRunId: string, input: MadeSolidHandoffInput) {
+    const handoff = await repository.requestMadeSolidHandoff(builderRunId, input);
+    if (!handoff) throw new Error('The committed edit could not be queued for Made Solid.');
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Made Solid handoff queued',
+      detail: `Edit v${input.sourceEditVersion} is moving into the private Made Solid admin workspace by exact commit.`,
+      tone: 'success',
+    });
+  }
+
+  async function cancelMadeSolidHandoff(handoffId: string) {
+    await repository.cancelMadeSolidHandoff(handoffId);
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Handoff cancellation requested',
+      detail: 'The protected worker will stop at the next safe checkpoint.',
       tone: 'warning',
     });
   }
@@ -17594,7 +20563,7 @@ function WorkspaceApp({
     if (!workspace) return;
     const deleted = await repository.deleteProspect(workspace.business.id);
     if (!deleted) throw new Error('The prospect could not be deleted.');
-    await refreshData();
+    await refreshData({ full: true });
     setNotice({
       id: crypto.randomUUID(),
       title: 'Prospect deleted',
@@ -17746,10 +20715,10 @@ function WorkspaceApp({
             onCancelProspectBuild={() => cancelWebsiteBuildForBusiness(workspace.business.id)}
             onDeleteProspectBuilds={deleteWebsiteBuild}
             onOpenBuilderPreview={createBuilderPreviewUrl}
-            onPublishClientPreview={publishClientPreview}
-            onCancelClientPreviewPublication={cancelClientPreviewPublication}
             onPublishGithubWorkspace={publishGithubWorkspace}
             onCancelGithubWorkspacePublication={cancelGithubWorkspacePublication}
+            onPushMadeSolidHandoff={pushMadeSolidHandoff}
+            onCancelMadeSolidHandoff={cancelMadeSolidHandoff}
             onLoadBuilderRunEvidence={(builderRunId) =>
               repository.getBuilderRunEvidence(builderRunId)
             }
@@ -17757,6 +20726,7 @@ function WorkspaceApp({
             onCreateRedesignBrief={createRedesignBrief}
             onRefreshRedesignBriefArchitecture={refreshRedesignBriefArchitecture}
             onRequestAssetAnalysis={requestAssetAnalysis}
+            onRequestBrandColourRefresh={requestBrandColourRefresh}
             onRequestVisualContentExtraction={requestVisualContentExtraction}
             onCancelVisualContentExtraction={cancelVisualContentExtraction}
             onApproveAllVisualContent={approveAllVisualContent}
@@ -17790,6 +20760,8 @@ function WorkspaceApp({
             }
             tab={route.tab ?? 'overview'}
             onUpdateAuditFinding={updateAuditFinding}
+            onRequestAgentLearningProposal={requestAgentPackageProposal}
+            onOpenAgentLearningInbox={() => navigate({ page: 'agent-studio', section: 'learning' })}
             onUpdateAssetAnnotation={updateAssetAnnotation}
             onSaveBrandKit={saveBrandKit}
             onPushLogoVersionsToBuilder={pushLogoVersionsToBuilder}
@@ -17929,12 +20901,34 @@ function OrganizationSetup({ onCreated }: { onCreated: (organizationId: string) 
   );
 }
 
+const organizationCachePrefix = 'made-solid-studio.organization.';
+const localWorkspaceCacheKey = 'local-workspace';
+
+function readCachedOrganizationId(userId: string) {
+  try {
+    return window.localStorage.getItem(`${organizationCachePrefix}${userId}`) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function cacheOrganizationId(userId: string, organizationId?: string) {
+  try {
+    const key = `${organizationCachePrefix}${userId}`;
+    if (organizationId) window.localStorage.setItem(key, organizationId);
+    else window.localStorage.removeItem(key);
+  } catch {
+    // The organization lookup still works when browser storage is unavailable.
+  }
+}
+
 function SupabaseApp() {
   const client = getSupabaseClient();
   const [session, setSession] = useState<Session | null>(null);
+  const sessionUserIdRef = useRef<string>();
   const [authLoading, setAuthLoading] = useState(true);
   const [organizationId, setOrganizationId] = useState<string>();
-  const [organizationLoading, setOrganizationLoading] = useState(false);
+  const [organizationLoading, setOrganizationLoading] = useState(true);
   const [organizationError, setOrganizationError] = useState('');
 
   useEffect(() => {
@@ -17942,11 +20936,25 @@ function SupabaseApp() {
     let active = true;
     void client.auth.getSession().then(({ data }) => {
       if (active) {
+        const userId = data.session?.user.id;
+        sessionUserIdRef.current = userId;
+        if (userId) {
+          const cachedOrganizationId = readCachedOrganizationId(userId);
+          setOrganizationId(cachedOrganizationId);
+          setOrganizationLoading(!cachedOrganizationId);
+        }
         setSession(data.session);
         setAuthLoading(false);
       }
     });
     const { data: listener } = client.auth.onAuthStateChange((_event, nextSession) => {
+      const nextUserId = nextSession?.user.id;
+      if (nextUserId && nextUserId !== sessionUserIdRef.current) {
+        const cachedOrganizationId = readCachedOrganizationId(nextUserId);
+        setOrganizationId(cachedOrganizationId);
+        setOrganizationLoading(!cachedOrganizationId);
+      }
+      sessionUserIdRef.current = nextUserId;
       setSession(nextSession);
       setAuthLoading(false);
     });
@@ -17964,7 +20972,14 @@ function SupabaseApp() {
       return;
     }
     let active = true;
-    setOrganizationLoading(true);
+    const userId = session.user.id;
+    const cachedOrganizationId = readCachedOrganizationId(userId);
+    if (cachedOrganizationId) {
+      setOrganizationId(cachedOrganizationId);
+      setOrganizationLoading(false);
+    } else {
+      setOrganizationLoading(true);
+    }
     setOrganizationError('');
     void client
       .from('organizations')
@@ -17973,8 +20988,17 @@ function SupabaseApp() {
       .limit(1)
       .then(({ data, error }) => {
         if (!active) return;
-        if (error) setOrganizationError('We could not load your organization access.');
-        else setOrganizationId(typeof data?.[0]?.id === 'string' ? data[0].id : undefined);
+        if (error) {
+          if (!cachedOrganizationId) {
+            setOrganizationError('We could not load your organization access.');
+          } else {
+            console.warn('Made Solid Studio could not refresh organization access.', error);
+          }
+        } else {
+          const nextOrganizationId = typeof data?.[0]?.id === 'string' ? data[0].id : undefined;
+          cacheOrganizationId(userId, nextOrganizationId);
+          setOrganizationId(nextOrganizationId);
+        }
         setOrganizationLoading(false);
       });
     return () => {
@@ -17990,7 +21014,10 @@ function SupabaseApp() {
     [client, organizationId],
   );
 
-  if (!client) return <WorkspaceApp repository={siteforgeRepository} />;
+  if (!client)
+    return (
+      <WorkspaceApp repository={siteforgeRepository} workspaceCacheKey={localWorkspaceCacheKey} />
+    );
   if (authLoading) {
     return (
       <main className="auth-shell">
@@ -18025,21 +21052,26 @@ function SupabaseApp() {
   }
   if (!organizationId) return <OrganizationSetup onCreated={setOrganizationId} />;
   if (!repository) return null;
+  const workspaceCacheKey = `${session.user.id}:${organizationId}`;
   return (
     <WorkspaceApp
-      onSignOut={() =>
-        client.auth.signOut().then(({ error }) => {
-          if (error) throw error;
-        })
-      }
+      onSignOut={async () => {
+        const { error } = await client.auth.signOut();
+        if (error) throw error;
+        cacheOrganizationId(session.user.id);
+        await clearWorkspaceCache(workspaceCacheKey);
+      }}
       repository={repository}
       userEmail={session.user.email ?? 'Signed-in user'}
+      workspaceCacheKey={workspaceCacheKey}
     />
   );
 }
 
 export function App() {
   if (!isSupabaseConfigured || usesLocalStorage)
-    return <WorkspaceApp repository={siteforgeRepository} />;
+    return (
+      <WorkspaceApp repository={siteforgeRepository} workspaceCacheKey={localWorkspaceCacheKey} />
+    );
   return <SupabaseApp />;
 }

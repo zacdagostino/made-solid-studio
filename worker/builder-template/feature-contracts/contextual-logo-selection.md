@@ -7,6 +7,24 @@ mark. The builder receives the available family members in `../input/approved-as
 member has `logoFamilyPrimaryAssetId` equal to the Brand Kit's `primaryLogoAssetId`, plus an optional
 `logoAppearance` such as `original`, `black`, `black-accent`, `white`, or `white-accent`.
 
+## Reviewed and builder-derived colour roles
+
+Read `brandKit.palette.mode` before creating semantic colour tokens:
+
+- `primary_and_accent` locks both reviewed values exactly.
+- `accent_only` locks the reviewed accent and lets the builder choose primary.
+- `primary_only` locks the reviewed primary and lets the builder choose accent.
+- `builder_derived` lets the builder choose both roles.
+
+Every enabled reviewed colour must appear unchanged in its matching token. For a deliberately
+disabled role, choose a coherent WCAG 2.2 AA-compatible value for the new design and treat it as a
+design decision, never a verified brand fact. The logo family remains authoritative and mandatory
+regardless of which palette roles are builder-derived.
+
+Editable SVG creation is optional and defaults off in the Brand Kit workflow. Never assume a fresh
+SVG exists after a logo-version refresh; use only an editable SVG explicitly present in the current
+approved manifest, and otherwise use the approved source or transparent PNG family.
+
 ## Required behaviour
 
 - Choose the logo from the actual surface directly behind it, independently for the header, footer,

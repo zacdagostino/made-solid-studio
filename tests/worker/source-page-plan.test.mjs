@@ -52,3 +52,20 @@ test('normalises source URLs without discarding their path', () => {
     'https://example.com/services',
   );
 });
+
+test('preserves reviewed page coverage outcomes for the builder', () => {
+  const [page] = sourcePagePlan([
+    {
+      url: 'https://example.com/home-1',
+      disposition: 'redirect',
+      dispositionReason: 'Legacy homepage alias.',
+      targetSourceUrl: 'https://example.com/',
+      outputRequired: true,
+    },
+  ]);
+
+  assert.equal(page.disposition, 'redirect');
+  assert.equal(page.dispositionReason, 'Legacy homepage alias.');
+  assert.equal(page.targetSourceUrl, 'https://example.com/');
+  assert.equal(page.outputRequired, true);
+});

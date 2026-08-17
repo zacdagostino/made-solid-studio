@@ -48,6 +48,23 @@ test('traces a multi-colour raster logo without replacing its palette', async ()
   for (const colour of sourceColours) assert.match(svg, new RegExp(`fill="${colour}"`));
 });
 
+test('retains a small accent word inside a dominant-colour wordmark', () => {
+  const width = 200;
+  const height = 40;
+  const data = raster(width, height);
+  fill(data, width, 4, 8, 176, 32, [26, 55, 92]);
+  fill(data, width, 176, 8, 196, 32, [232, 93, 36]);
+
+  const colours = extractLogoPalette({ width, height, data }).map(({ red, green, blue }) =>
+    [red, green, blue].map(Math.round),
+  );
+
+  assert.deepEqual(colours, [
+    [26, 55, 92],
+    [232, 93, 36],
+  ]);
+});
+
 test('uses the pixel fitter for a compact, pixelated logo', async () => {
   const width = 16;
   const height = 16;
@@ -197,6 +214,82 @@ test('creates transparent original, monochrome, and accent logo versions from a 
   );
 });
 
+test('keeps a neutral wordmark primary and applies its chromatic accent only to the source accent region', () => {
+  const width = 12;
+  const height = 5;
+  const source = raster(width, height);
+  const matte = raster(width, height);
+  fill(source, width, 0, 0, width, height, [221, 225, 212]);
+  fill(matte, width, 0, 0, width, height, [255, 255, 255]);
+  fill(source, width, 1, 1, 8, 3, [87, 87, 89]);
+  fill(source, width, 8, 3, 11, 5, [142, 172, 85]);
+  fill(matte, width, 1, 1, 8, 3, [0, 0, 0]);
+  fill(matte, width, 8, 3, 11, 5, [0, 0, 0]);
+
+  const variants = transparentLogoVariants(
+    { width, height, data: source },
+    [
+      { red: 87, green: 87, blue: 89 },
+      { red: 221, green: 225, blue: 212 },
+      { red: 53, green: 53, blue: 55 },
+      { red: 142, green: 172, blue: 85 },
+    ],
+    {
+      sourceReference: { width, height, data: source },
+      alphaMatte: { width, height, data: matte },
+      useAiMatteOnly: true,
+    },
+  );
+  const original = variants.find((variant) => variant.key === 'original');
+  const blackAccent = variants.find((variant) => variant.key === 'black-accent');
+  const whiteAccent = variants.find((variant) => variant.key === 'white-accent');
+  const primaryPixel = (1 * width + 2) * 4;
+  const accentPixel = (3 * width + 9) * 4;
+
+  assert.deepEqual([...original.data.slice(primaryPixel, primaryPixel + 4)], [87, 87, 89, 255]);
+  assert.deepEqual([...original.data.slice(accentPixel, accentPixel + 4)], [142, 172, 85, 255]);
+  assert.deepEqual([...blackAccent.data.slice(primaryPixel, primaryPixel + 4)], [0, 0, 0, 255]);
+  assert.deepEqual([...blackAccent.data.slice(accentPixel, accentPixel + 4)], [142, 172, 85, 255]);
+  assert.deepEqual(
+    [...whiteAccent.data.slice(primaryPixel, primaryPixel + 4)],
+    [255, 255, 255, 255],
+  );
+  assert.deepEqual([...whiteAccent.data.slice(accentPixel, accentPixel + 4)], [142, 172, 85, 255]);
+});
+
+test('does not promote a sparse accent fringe outside the dense source accent word', () => {
+  const width = 30;
+  const height = 15;
+  const source = raster(width, height);
+  const matte = raster(width, height);
+  fill(source, width, 0, 0, width, height, [221, 225, 212]);
+  fill(matte, width, 0, 0, width, height, [255, 255, 255]);
+  fill(source, width, 2, 3, 18, 10, [87, 87, 89]);
+  fill(matte, width, 2, 3, 18, 10, [0, 0, 0]);
+  fill(source, width, 20, 8, 29, 13, [142, 172, 85]);
+  fill(matte, width, 20, 8, 29, 13, [0, 0, 0]);
+  fill(source, width, 3, 4, 7, 9, [142, 172, 85]);
+
+  const variants = transparentLogoVariants(
+    { width, height, data: source },
+    [
+      { red: 87, green: 87, blue: 89 },
+      { red: 221, green: 225, blue: 212 },
+      { red: 142, green: 172, blue: 85 },
+    ],
+    {
+      sourceReference: { width, height, data: source },
+      alphaMatte: { width, height, data: matte },
+      useAiMatteOnly: true,
+    },
+  );
+  const blackAccent = variants.find((variant) => variant.key === 'black-accent');
+  const fringePixel = (4 * width + 4) * 4;
+  const accentPixel = (9 * width + 22) * 4;
+  assert.deepEqual([...blackAccent.data.slice(fringePixel, fringePixel + 4)], [0, 0, 0, 255]);
+  assert.deepEqual([...blackAccent.data.slice(accentPixel, accentPixel + 4)], [142, 172, 85, 255]);
+});
+
 test('keeps a multicolour logo accent consistent through the AI matte soft edge', () => {
   const width = 16;
   const height = 7;
@@ -234,6 +327,39 @@ test('keeps a multicolour logo accent consistent through the AI matte soft edge'
   const whiteAccent = variants.find((variant) => variant.key === 'white-accent');
   assert.ok(whiteAccent);
   assert.deepEqual([...whiteAccent.data.slice(accentEdge, accentEdge + 4)], [209, 66, 57, 127]);
+});
+
+test('keeps a small accent region when the AI matte connects it to a dominant logo shape', () => {
+  const width = 18;
+  const height = 7;
+  const source = raster(width, height);
+  const matte = raster(width, height);
+  fill(source, width, 0, 0, width, height, [255, 255, 255]);
+  fill(matte, width, 0, 0, width, height, [255, 255, 255]);
+  fill(source, width, 1, 2, 12, 5, [23, 89, 182]);
+  fill(source, width, 13, 2, 16, 5, [209, 66, 57]);
+  // A one-pixel matte bridge makes both colours one connected component. That must not allow the
+  // larger primary region to recolour the smaller electrical/accent region.
+  fill(matte, width, 1, 2, 17, 5, [0, 0, 0]);
+
+  const variants = transparentLogoVariants(
+    { width, height, data: source },
+    [
+      { red: 23, green: 89, blue: 182 },
+      { red: 209, green: 66, blue: 57 },
+    ],
+    {
+      sourceReference: { width, height, data: source },
+      alphaMatte: { width, height, data: matte },
+      useAiMatteOnly: true,
+    },
+  );
+  const blackAccent = variants.find((variant) => variant.key === 'black-accent');
+  assert.ok(blackAccent);
+  const primaryPixel = (3 * width + 4) * 4;
+  const accentPixel = (3 * width + 14) * 4;
+  assert.deepEqual([...blackAccent.data.slice(primaryPixel, primaryPixel + 4)], [0, 0, 0, 255]);
+  assert.deepEqual([...blackAccent.data.slice(accentPixel, accentPixel + 4)], [209, 66, 57, 255]);
 });
 
 test('rejects background artefacts outside the original logo silhouette during cut-out', () => {

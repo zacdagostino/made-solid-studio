@@ -23,6 +23,8 @@ import type {
   BuilderRunMode,
   ClientPreviewPublication,
   ClientPreviewPublicationInput,
+  MadeSolidHandoff,
+  MadeSolidHandoffInput,
   GithubWorkspacePublication,
   GithubWorkspacePublicationInput,
   CapturedPage,
@@ -45,6 +47,7 @@ import {
   buildManifestSchemaVersion,
   codexBuilderContractVersion,
   createBuildManifestData,
+  unresolvedPageDispositions,
   currentManifestContentMatchesBrief,
   manifestSourceMatchesBrief,
 } from './build-manifest';
@@ -306,6 +309,7 @@ function artifactFromRow(row: DatabaseRow): ResearchArtifact {
     storagePath: readString(row, 'storage_path'),
     contentType: readOptionalString(row, 'content_type'),
     byteSize: typeof row.byte_size === 'number' ? row.byte_size : undefined,
+    sha256: readOptionalString(row, 'sha256'),
     metadata,
     createdAt: readString(row, 'created_at'),
   };
@@ -330,6 +334,11 @@ function assetAnalysisFromRow(row: DatabaseRow): AssetAnalysisJob {
   const cancelRequestedAt = readOptionalString(row, 'cancel_requested_at');
   return {
     id: readString(row, 'id'),
+    runToken: readOptionalString(row, 'run_token'),
+    analysisScope:
+      row.analysis_scope === 'brand_colours' || row.analysis_scope === 'logo_versions'
+        ? row.analysis_scope
+        : 'full',
     businessId: readString(row, 'business_id'),
     crawlRunId: readString(row, 'crawl_run_id'),
     status:
@@ -345,6 +354,7 @@ function assetAnalysisFromRow(row: DatabaseRow): AssetAnalysisJob {
     currentAssetId: readOptionalString(row, 'current_asset_id'),
     editableLogoRetryAssetId: readOptionalString(row, 'editable_logo_retry_asset_id'),
     editableLogoRetryToken: readOptionalString(row, 'editable_logo_retry_token'),
+    editableLogoGenerationEnabled: row.editable_logo_generation_enabled === true,
     editableLogoSimplificationEnabled: row.editable_logo_simplification_enabled === true,
     editableLogoVectorizerProvider:
       row.editable_logo_vectorizer_provider === 'vectorizer_ai' ? 'vectorizer_ai' : 'vtracer',
@@ -434,6 +444,7 @@ function assetAnnotationFromRow(row: DatabaseRow): AssetAnnotation {
     businessId: readString(row, 'business_id'),
     crawlRunId: readString(row, 'crawl_run_id'),
     analysisJobId: readOptionalString(row, 'analysis_job_id'),
+    analysisRunToken: readOptionalString(row, 'analysis_run_token'),
     sourceContext: recordValue(row.source_context),
     observedDescription: readString(row, 'observed_description'),
     visibleText: Array.isArray(row.visible_text)
@@ -460,10 +471,10 @@ function assetAnnotationFromRow(row: DatabaseRow): AssetAnnotation {
 function brandPaletteFrom(value: unknown): BrandKit['palette'] {
   const palette = recordValue(value);
   return Object.fromEntries(
-    ['primary', 'accent']
+    ['primary', 'accent', 'mode']
       .filter((key) => typeof palette[key] === 'string')
       .map((key) => [key, palette[key] as string]),
-  );
+  ) as BrandKit['palette'];
 }
 
 function brandColourEvidenceFromRow(row: DatabaseRow): BrandColourEvidence {
@@ -792,6 +803,9 @@ function clientPreviewPublicationFromRow(row: DatabaseRow): ClientPreviewPublica
     clientEmail: readString(row, 'client_email'),
     projectName: readString(row, 'project_name'),
     finalBalanceCents: readOptionalNumber(row, 'final_balance_cents'),
+    pricingSnapshot: Object.keys(recordValue(row.pricing_snapshot)).length
+      ? (recordValue(row.pricing_snapshot) as ClientPreviewPublication['pricingSnapshot'])
+      : undefined,
     currency: readString(row, 'currency') || 'AUD',
     handoffNotes: readString(row, 'handoff_notes'),
     status:
@@ -805,6 +819,42 @@ function clientPreviewPublicationFromRow(row: DatabaseRow): ClientPreviewPublica
     cancelRequestedAt: readOptionalString(row, 'cancel_requested_at'),
     deploymentUrl: readOptionalString(row, 'deployment_url'),
     clientspaceHandoffId: readOptionalString(row, 'clientspace_handoff_id'),
+    errorSummary: readOptionalString(row, 'error_summary'),
+    createdAt: readString(row, 'created_at'),
+    completedAt: readOptionalString(row, 'completed_at'),
+    updatedAt: readString(row, 'updated_at'),
+  };
+}
+
+function madeSolidHandoffFromRow(row: DatabaseRow): MadeSolidHandoff {
+  const status = readString(row, 'status');
+  return {
+    id: readString(row, 'id'),
+    businessId: readString(row, 'business_id'),
+    builderRunId: readString(row, 'builder_run_id'),
+    sourceRepositoryUrl: readString(row, 'source_repository_url'),
+    sourceBranch: readString(row, 'source_branch'),
+    sourceCommit: readString(row, 'source_commit'),
+    sourceEditVersion: readNumber(row, 'source_edit_version'),
+    clientName: readString(row, 'client_name'),
+    contactName: readString(row, 'contact_name'),
+    clientEmail: readString(row, 'client_email'),
+    projectName: readString(row, 'project_name'),
+    handoffNotes: readString(row, 'handoff_notes'),
+    pricingSnapshot: Object.keys(recordValue(row.pricing_snapshot)).length
+      ? (recordValue(row.pricing_snapshot) as MadeSolidHandoff['pricingSnapshot'])
+      : undefined,
+    status:
+      status === 'running' || status === 'ready' || status === 'failed' || status === 'cancelled'
+        ? status
+        : 'queued',
+    progressPhase: readString(row, 'progress_phase') || 'queued',
+    progressDetail: readString(row, 'progress_detail'),
+    totalItems: readNumber(row, 'total_items'),
+    completedItems: readNumber(row, 'completed_items'),
+    cancelRequestedAt: readOptionalString(row, 'cancel_requested_at'),
+    websiteHandoffId: readOptionalString(row, 'website_handoff_id'),
+    websiteAdminUrl: readOptionalString(row, 'website_admin_url'),
     errorSummary: readOptionalString(row, 'error_summary'),
     createdAt: readString(row, 'created_at'),
     completedAt: readOptionalString(row, 'completed_at'),
@@ -997,6 +1047,22 @@ function throwIfError(error: { message: string } | null) {
   if (error) throw new Error(error.message);
 }
 
+function warnOptionalIntegrationError(integration: string, error: { message: string } | null) {
+  if (!error) return;
+  console.warn(`${integration} is unavailable; core workspace loading will continue.`, error);
+}
+
+function isMissingMadeSolidHandoffSchema(error: { code?: string; message: string } | null) {
+  if (!error) return false;
+  return (
+    error.code === 'PGRST205' ||
+    ((error.message.includes('made_solid_handoffs') ||
+      error.message.includes('request_made_solid_handoff') ||
+      error.message.includes('cancel_made_solid_handoff')) &&
+      error.message.includes('schema cache'))
+  );
+}
+
 function isDuplicateWebsiteError(error: { code?: string } | null) {
   return error?.code === '23505';
 }
@@ -1153,7 +1219,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         'reconcile_github_workspace_publications',
         { target_business_id: businessId },
       );
-      throwIfError(githubLifecycleError);
+      warnOptionalIntegrationError('GitHub workspace reconciliation', githubLifecycleError);
     }
 
     const [
@@ -1172,8 +1238,10 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       activity,
       aiUsageRecords,
       clientPreviewPublications,
+      madeSolidHandoffs,
       githubWorkspacePublications,
       githubWorkspaceWorkerAvailable,
+      madeSolidHandoffWorkerAvailable,
     ] = await Promise.all([
       this.client.from('websites').select('*').eq('business_id', businessId).limit(1),
       this.client.from('contacts').select('*').eq('business_id', businessId),
@@ -1207,7 +1275,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         .order('generated_at', { ascending: false }),
       this.client
         .from('builder_runs')
-        .select('*, agent_packages(version), builder_artifacts(kind, label, metadata)')
+        .select('*, agent_packages(version)')
         .eq('business_id', businessId)
         .order('created_at', { ascending: false }),
       this.client
@@ -1244,11 +1312,17 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         .eq('business_id', businessId)
         .order('created_at', { ascending: false }),
       this.client
+        .from('made_solid_handoffs')
+        .select('*')
+        .eq('business_id', businessId)
+        .order('created_at', { ascending: false }),
+      this.client
         .from('github_workspace_publications')
         .select('*')
         .eq('business_id', businessId)
         .order('created_at', { ascending: false }),
       this.client.rpc('github_workspace_worker_available'),
+      this.client.rpc('made_solid_handoff_worker_available'),
     ]);
     [
       websites,
@@ -1266,9 +1340,75 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       activity,
       aiUsageRecords,
       clientPreviewPublications,
-      githubWorkspacePublications,
-      githubWorkspaceWorkerAvailable,
     ].forEach((result) => throwIfError(result.error));
+    warnOptionalIntegrationError('Made Solid handoff history', madeSolidHandoffs.error);
+    warnOptionalIntegrationError(
+      'GitHub workspace publication history',
+      githubWorkspacePublications.error,
+    );
+    warnOptionalIntegrationError(
+      'GitHub workspace worker availability',
+      githubWorkspaceWorkerAvailable.error,
+    );
+    warnOptionalIntegrationError(
+      'Made Solid handoff worker availability',
+      madeSolidHandoffWorkerAvailable.error,
+    );
+
+    const builderRunRows = ((builderRuns.data ?? []) as DatabaseRow[]).map((row) => ({
+      ...row,
+      builder_artifacts: [] as DatabaseRow[],
+    }));
+    const builderRunIds = builderRunRows.map((row) => readString(row, 'id')).filter(Boolean);
+    const compactBuilderEvidenceResult = builderRunIds.length
+      ? await this.client
+          .from('builder_artifacts')
+          .select('builder_run_id,kind,metadata')
+          .in('builder_run_id', builderRunIds)
+          .in('kind', ['checkpoint', 'source_bundle'])
+      : { data: [], error: null };
+    warnOptionalIntegrationError('Builder source availability', compactBuilderEvidenceResult.error);
+    const compactBuilderEvidence = (compactBuilderEvidenceResult.data ?? []) as DatabaseRow[];
+    const sourceBundleRunIds = new Set(
+      compactBuilderEvidence
+        .filter((artifact) => {
+          const metadata = recordValue(artifact.metadata);
+          return (
+            readString(artifact, 'kind') === 'source_bundle' &&
+            typeof metadata.localDevelopmentHandoffVersion === 'number'
+          );
+        })
+        .map((artifact) => readString(artifact, 'builder_run_id')),
+    );
+    const finalSourceFallbackResults = await Promise.all(
+      builderRunIds
+        .filter((builderRunId) => !sourceBundleRunIds.has(builderRunId))
+        .map((builderRunId) =>
+          this.client
+            .from('builder_artifacts')
+            .select('builder_run_id,kind,metadata')
+            .eq('builder_run_id', builderRunId)
+            .eq('kind', 'draft_file')
+            .contains('metadata', { state: 'final_source' })
+            .limit(1),
+        ),
+    );
+    const finalSourceFallbackEvidence = finalSourceFallbackResults.flatMap((result) => {
+      warnOptionalIntegrationError('Builder final-source availability', result.error);
+      return (result.data ?? []) as DatabaseRow[];
+    });
+    const builderEvidenceByRun = new Map<string, DatabaseRow[]>();
+    for (const artifact of [...compactBuilderEvidence, ...finalSourceFallbackEvidence]) {
+      const builderRunId = readString(artifact, 'builder_run_id');
+      if (!builderRunId) continue;
+      const evidence = builderEvidenceByRun.get(builderRunId) ?? [];
+      evidence.push(artifact);
+      builderEvidenceByRun.set(builderRunId, evidence);
+    }
+    const hydratedBuilderRunRows = builderRunRows.map((row) => ({
+      ...row,
+      builder_artifacts: builderEvidenceByRun.get(readString(row, 'id')) ?? [],
+    }));
 
     const website = (websites.data ?? [])[0]
       ? websiteFromRow((websites.data ?? [])[0] as DatabaseRow)
@@ -1384,7 +1524,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     throwIfError(aiEnhancedLogoArtifactsResult.error);
 
     const latestAudit = (audits.data ?? [])[0] as DatabaseRow | undefined;
-    const latestBuilderRun = (builderRuns.data ?? [])[0] as DatabaseRow | undefined;
+    const latestBuilderRun = hydratedBuilderRunRows[0];
     const findingResult = latestAudit
       ? await this.client
           .from('audit_findings')
@@ -1399,36 +1539,48 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
           .eq('builder_run_id', readString(latestBuilderRun, 'id'))
           .order('created_at')
       : { data: [], error: null };
-    const [builderEventsResult, builderStageEventsResult, firstQualityEventResult] =
-      latestBuilderRun
-        ? await Promise.all([
-            this.client
-              .from('builder_events')
-              .select('*')
-              .eq('builder_run_id', readString(latestBuilderRun, 'id'))
-              .order('sequence', { ascending: false })
-              .limit(180),
-            this.client
-              .from('builder_events')
-              .select('*')
-              .eq('builder_run_id', readString(latestBuilderRun, 'id'))
-              .eq('kind', 'stage')
-              .order('sequence'),
-            this.client
-              .from('builder_events')
-              .select('*')
-              .eq('builder_run_id', readString(latestBuilderRun, 'id'))
-              .eq('kind', 'quality')
-              .order('sequence')
-              .limit(1),
-          ])
-        : [
-            { data: [], error: null },
-            { data: [], error: null },
-            { data: [], error: null },
-          ];
+    const [
+      builderEventsResult,
+      builderCodexEventsResult,
+      builderStageEventsResult,
+      firstQualityEventResult,
+    ] = latestBuilderRun
+      ? await Promise.all([
+          this.client
+            .from('builder_events')
+            .select('*')
+            .eq('builder_run_id', readString(latestBuilderRun, 'id'))
+            .order('sequence', { ascending: false })
+            .limit(180),
+          this.client
+            .from('builder_events')
+            .select('*')
+            .eq('builder_run_id', readString(latestBuilderRun, 'id'))
+            .contains('metadata', { stream: 'codex' })
+            .order('sequence'),
+          this.client
+            .from('builder_events')
+            .select('*')
+            .eq('builder_run_id', readString(latestBuilderRun, 'id'))
+            .eq('kind', 'stage')
+            .order('sequence'),
+          this.client
+            .from('builder_events')
+            .select('*')
+            .eq('builder_run_id', readString(latestBuilderRun, 'id'))
+            .eq('kind', 'quality')
+            .order('sequence')
+            .limit(1),
+        ])
+      : [
+          { data: [], error: null },
+          { data: [], error: null },
+          { data: [], error: null },
+          { data: [], error: null },
+        ];
     throwIfError(builderArtifactsResult.error);
     throwIfError(builderEventsResult.error);
+    throwIfError(builderCodexEventsResult.error);
     throwIfError(builderStageEventsResult.error);
     throwIfError(firstQualityEventResult.error);
     const latestBriefRow = (briefs.data ?? [])[0] as DatabaseRow | undefined;
@@ -1454,6 +1606,10 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       ...((aiEnhancedLogoArtifactsResult.data ?? []) as DatabaseRow[]).map(artifactFromRow),
       ...((referencedAssetsResult.data ?? []) as DatabaseRow[]).map(artifactFromRow),
     ];
+    const assetAnalysisJobs = ((assetJobs.data ?? []) as DatabaseRow[]).map(assetAnalysisFromRow);
+    const currentAssetAnalysis = assetAnalysisJobs.find(
+      (job) => job.crawlRunId === latestCapture?.id,
+    );
 
     return {
       business: businessFromRow(businessRow as DatabaseRow),
@@ -1478,10 +1634,8 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       researchPacket: ((packetsResult.data ?? []) as DatabaseRow[])
         .map(researchPacketFromRow)
         .find((packet) => packet.crawlRunId === latestCapture?.id),
-      assetAnalysis: (assetJobs.data ?? [])[0]
-        ? assetAnalysisFromRow((assetJobs.data ?? [])[0] as DatabaseRow)
-        : undefined,
-      assetAnalysisJobs: ((assetJobs.data ?? []) as DatabaseRow[]).map(assetAnalysisFromRow),
+      assetAnalysis: currentAssetAnalysis,
+      assetAnalysisJobs,
       assetAnnotations: ((annotationsResult.data ?? []) as DatabaseRow[])
         .map(assetAnnotationFromRow)
         .filter((annotation) => annotation.crawlRunId === latestCapture?.id),
@@ -1506,7 +1660,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         : undefined,
       buildManifests: ((manifests.data ?? []) as DatabaseRow[]).map(buildManifestFromRow),
       latestBuilderRun: latestBuilderRun ? builderRunFromRow(latestBuilderRun) : undefined,
-      builderRuns: ((builderRuns.data ?? []) as DatabaseRow[]).map(builderRunFromRow),
+      builderRuns: hydratedBuilderRunRows.map(builderRunFromRow),
       builderArtifacts: ((builderArtifactsResult.data ?? []) as DatabaseRow[]).map(
         builderArtifactFromRow,
       ),
@@ -1515,6 +1669,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
           ...new Map(
             [
               ...((builderEventsResult.data ?? []) as DatabaseRow[]),
+              ...((builderCodexEventsResult.data ?? []) as DatabaseRow[]),
               ...((builderStageEventsResult.data ?? []) as DatabaseRow[]),
               ...((firstQualityEventResult.data ?? []) as DatabaseRow[]),
             ].map((event) => [readString(event, 'id'), event]),
@@ -1526,6 +1681,10 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       clientPreviewPublications: ((clientPreviewPublications.data ?? []) as DatabaseRow[]).map(
         clientPreviewPublicationFromRow,
       ),
+      madeSolidHandoffs: ((madeSolidHandoffs.data ?? []) as DatabaseRow[]).map(
+        madeSolidHandoffFromRow,
+      ),
+      madeSolidHandoffWorkerAvailable: madeSolidHandoffWorkerAvailable.data === true,
       githubWorkspacePublications: ((githubWorkspacePublications.data ?? []) as DatabaseRow[]).map(
         githubWorkspacePublicationFromRow,
       ),
@@ -1714,13 +1873,27 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     return workspace?.assetAnalysis;
   }
 
+  async requestBrandColourRefresh(businessId: string) {
+    const { data, error } = await this.client.rpc('request_brand_colour_refresh', {
+      target_business_id: businessId,
+    });
+    throwIfError(error);
+    if (typeof data !== 'string') throw new Error('The logo-colour refresh could not be queued.');
+    const workspace = await this.getWorkspace(businessId);
+    return workspace?.assetAnalysis;
+  }
+
   async requestEditableLogoRetry(
     asset: ResearchArtifact,
-    options: { simplifyGeometry?: boolean; vectorizerProvider?: 'vtracer' | 'vectorizer_ai' } = {},
+    options: {
+      createEditableSvg?: boolean;
+      simplifyGeometry?: boolean;
+      vectorizerProvider?: 'vtracer' | 'vectorizer_ai';
+    } = {},
   ) {
     const { data: deletionPaths, error: pathsError } = await this.client.rpc(
       'prospect_generated_logo_deletion_paths',
-      { p_asset_id: asset.id },
+      { include_editable_svg: options.createEditableSvg === true, p_asset_id: asset.id },
     );
     throwIfError(pathsError);
     const pathsByBucket = new Map<string, string[]>();
@@ -1735,6 +1908,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       throwIfError(storageError);
     }
     const { data, error } = await this.client.rpc('request_editable_logo_retry', {
+      create_editable_svg: options.createEditableSvg === true,
       target_asset_id: asset.id,
       simplify_geometry: options.simplifyGeometry === true,
       vectorizer_provider:
@@ -1798,6 +1972,27 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       .eq('id', asset.id)
       .eq('kind', 'asset');
     throwIfError(error);
+    const workspace = await this.getWorkspace(asset.businessId);
+    const brief = workspace?.redesignBrief;
+    if (!brief || brief.status !== 'draft') return;
+    const nextAssetIds = selected
+      ? [...new Set([...brief.sourceSelections.assetIds, asset.id])]
+      : brief.sourceSelections.assetIds.filter((assetId) => assetId !== asset.id);
+    const nextAutoSelectedAssetIds = selected
+      ? [...new Set([...brief.sourceSelections.autoSelectedAssetIds, asset.id])]
+      : brief.sourceSelections.autoSelectedAssetIds.filter((assetId) => assetId !== asset.id);
+    const { error: briefError } = await this.client
+      .from('redesign_briefs')
+      .update({
+        source_selections: {
+          ...brief.sourceSelections,
+          assetIds: nextAssetIds,
+          autoSelectedAssetIds: nextAutoSelectedAssetIds,
+        },
+      })
+      .eq('id', brief.id)
+      .eq('status', 'draft');
+    throwIfError(briefError);
   }
 
   async updateAssetAnnotation(
@@ -1821,7 +2016,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
 
     const workspace = await this.getWorkspace(annotation.businessId);
     const brief = workspace?.redesignBrief;
-    if (!workspace || !brief || brief.status !== 'draft') return;
+    if (!workspace) return;
 
     const excludedAssetIds = new Set(
       workspace.assetAnnotations
@@ -1831,6 +2026,26 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         )
         .map((candidate) => candidate.assetId),
     );
+    const brandKit = workspace.brandKit;
+    if (brandKit?.status === 'draft' && excludedAssetIds.has(annotation.assetId)) {
+      const { error: brandKitError } = await this.client
+        .from('brand_kits')
+        .update({
+          primary_logo_artifact_id:
+            brandKit.primaryLogoAssetId === annotation.assetId ? null : brandKit.primaryLogoAssetId,
+          editable_logo_artifact_id:
+            brandKit.editableLogoAssetId === annotation.assetId
+              ? null
+              : brandKit.editableLogoAssetId,
+          approved_asset_ids: brandKit.approvedAssetIds.filter(
+            (assetId) => !excludedAssetIds.has(assetId),
+          ),
+        })
+        .eq('id', brandKit.id)
+        .eq('status', 'draft');
+      throwIfError(brandKitError);
+    }
+    if (!brief || brief.status !== 'draft') return;
     const { error: briefError } = await this.client
       .from('redesign_briefs')
       .update({
@@ -2086,10 +2301,16 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     if (approve) {
       if (!draft.primaryLogoAssetId)
         throw new Error('Choose the organisation logo before approval.');
-      if (!/^#[0-9a-f]{6}$/i.test(draft.palette.primary ?? '')) {
+      const primaryReviewed = !['accent_only', 'builder_derived'].includes(
+        draft.palette.mode ?? 'primary_and_accent',
+      );
+      const accentReviewed = !['primary_only', 'builder_derived'].includes(
+        draft.palette.mode ?? 'primary_and_accent',
+      );
+      if (primaryReviewed && !/^#[0-9a-f]{6}$/i.test(draft.palette.primary ?? '')) {
         throw new Error('Enter a reviewed six-digit primary brand colour before approval.');
       }
-      if (!/^#[0-9a-f]{6}$/i.test(draft.palette.accent ?? '')) {
+      if (accentReviewed && !/^#[0-9a-f]{6}$/i.test(draft.palette.accent ?? '')) {
         throw new Error('Enter a reviewed six-digit accent colour before approval.');
       }
     }
@@ -2376,6 +2597,11 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
 
   async approveRedesignBrief(brief: RedesignBrief) {
     if (brief.status === 'approved') return;
+    if (unresolvedPageDispositions(brief).length) {
+      throw new Error(
+        'Review every selected page outcome and choose destinations for merges or redirects before approval.',
+      );
+    }
     const approvedAt = new Date().toISOString();
     const { data, error } = await this.client
       .from('redesign_briefs')
@@ -2474,7 +2700,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       target_business_id: businessId,
     });
     throwIfError(lifecycleError);
-    const { error } = await this.client.rpc('request_website_build', {
+    const { data, error } = await this.client.rpc('request_website_build', {
       target_business_id: businessId,
       requested_mode: mode,
       requested_target_source_url: targetSourceUrl ?? null,
@@ -2484,8 +2710,16 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       requested_source_builder_run_id: sourceBuilderRunId ?? null,
     });
     throwIfError(error);
-    const workspace = await this.getWorkspace(businessId);
-    return workspace?.latestBuilderRun;
+    if (typeof data !== 'string' || !data) {
+      throw new Error('The protected builder did not return the new private test run.');
+    }
+    const { data: run, error: runError } = await this.client
+      .from('builder_runs')
+      .select('*, agent_packages(version), builder_artifacts(kind)')
+      .eq('id', data)
+      .single();
+    throwIfError(runError);
+    return builderRunFromRow(run as DatabaseRow);
   }
 
   async requestBuilderQualityRecheck(builderRunId: string, agentPackageId: string) {
@@ -2670,7 +2904,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     builderRunId: string,
     input: ClientPreviewPublicationInput,
   ) {
-    const { data, error } = await this.client.rpc('request_client_preview_publication', {
+    const { data, error } = await this.client.rpc('request_client_preview_publication_v2', {
       target_builder_run_id: builderRunId,
       target_client_name: input.clientName,
       target_contact_name: input.contactName,
@@ -2679,6 +2913,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       target_final_balance_cents: input.finalBalanceCents ?? null,
       target_currency: input.currency,
       target_handoff_notes: input.handoffNotes,
+      target_pricing_snapshot: input.pricingSnapshot,
     });
     throwIfError(error);
     const row = Array.isArray(data) ? data[0] : data;
@@ -2689,6 +2924,42 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     const { error } = await this.client.rpc('cancel_client_preview_publication', {
       target_publication_id: publicationId,
     });
+    throwIfError(error);
+  }
+
+  async requestMadeSolidHandoff(builderRunId: string, input: MadeSolidHandoffInput) {
+    const { data, error } = await this.client.rpc('request_made_solid_handoff_v2', {
+      target_builder_run_id: builderRunId,
+      target_source_repository_url: input.sourceRepositoryUrl,
+      target_source_branch: input.sourceBranch,
+      target_source_commit: input.sourceCommit,
+      target_source_edit_version: input.sourceEditVersion,
+      target_client_name: input.clientName,
+      target_contact_name: input.contactName,
+      target_client_email: input.clientEmail,
+      target_project_name: input.projectName,
+      target_handoff_notes: input.handoffNotes,
+      target_pricing_snapshot: input.pricingSnapshot,
+    });
+    if (isMissingMadeSolidHandoffSchema(error)) {
+      throw new Error(
+        'Made Solid handoff is not available yet because its database migration has not been applied. Core prospect and Agent Studio builds are still available.',
+      );
+    }
+    throwIfError(error);
+    const row = Array.isArray(data) ? data[0] : data;
+    return row ? madeSolidHandoffFromRow(row as DatabaseRow) : undefined;
+  }
+
+  async cancelMadeSolidHandoff(handoffId: string) {
+    const { error } = await this.client.rpc('cancel_made_solid_handoff', {
+      target_handoff_id: handoffId,
+    });
+    if (isMissingMadeSolidHandoffSchema(error)) {
+      throw new Error(
+        'Made Solid handoff cancellation is not available yet because its database migration has not been applied.',
+      );
+    }
     throwIfError(error);
   }
 

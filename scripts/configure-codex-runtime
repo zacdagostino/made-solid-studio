@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+
+# Source this file before starting Codex. The official Codex package ships a
+# Linux bubblewrap helper; exposing it on PATH avoids a misleading startup
+# warning in Codespaces without requiring root access or mutating the image.
+
+codex_command="$(command -v codex 2>/dev/null || true)"
+if [[ -n "$codex_command" ]] && ! command -v bwrap >/dev/null 2>&1; then
+  codex_entrypoint="$(readlink -f "$codex_command" 2>/dev/null || true)"
+  codex_package_directory="$(cd "$(dirname "$codex_entrypoint")/.." 2>/dev/null && pwd || true)"
+  bundled_bwrap=""
+  if [[ -n "$codex_package_directory" ]]; then
+    bundled_bwrap="$(find "$codex_package_directory" -type f -path '*/codex-resources/bwrap' -print -quit 2>/dev/null || true)"
+  fi
+  if [[ -n "$bundled_bwrap" && -x "$bundled_bwrap" ]]; then
+    export PATH="$(dirname "$bundled_bwrap"):$PATH"
+  fi
+fi
+
+unset codex_command codex_entrypoint codex_package_directory bundled_bwrap

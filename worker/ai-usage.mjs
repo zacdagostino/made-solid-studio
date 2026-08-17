@@ -113,7 +113,16 @@ export function creditedUsage({ model, usage }) {
 }
 
 export async function recordAiUsage(client, payload) {
-  const priced = pricedUsage(payload);
+  const normalized = responseUsage(payload.usage);
+  const subscriptionBacked = payload.billingMode === 'chatgpt_subscription';
+  const priced = subscriptionBacked
+    ? {
+        ...normalized,
+        costUsd: null,
+        costSource: 'unavailable',
+        pricingVersion: null,
+      }
+    : pricedUsage(payload);
   const credited = creditedUsage(payload);
   const { error } = await client.from('ai_usage_records').insert({
     organization_id: payload.organizationId,
@@ -130,7 +139,11 @@ export async function recordAiUsage(client, payload) {
     cost_usd: priced.costUsd,
     cost_source: priced.costSource,
     pricing_version: priced.pricingVersion,
-    metadata: { ...(payload.metadata ?? {}), ...credited },
+    metadata: {
+      ...(payload.metadata ?? {}),
+      billingMode: payload.billingMode ?? 'api_usage',
+      ...credited,
+    },
   });
   if (error) throw new Error('The worker could not save AI usage for this operation.');
 }

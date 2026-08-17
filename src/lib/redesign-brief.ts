@@ -4,6 +4,7 @@ import type {
   BriefPagePlan,
   BriefSitemapEntry,
   CapturedPage,
+  PageDisposition,
   RedesignBrief,
   RedesignBriefDraft,
   ResearchArtifact,
@@ -19,6 +20,7 @@ type PacketPage = {
   title?: unknown;
   primaryHeading?: unknown;
   description?: unknown;
+  canonicalUrl?: unknown;
 };
 
 type SourcePage = {
@@ -27,6 +29,7 @@ type SourcePage = {
   title: string;
   primaryHeading: string;
   description: string;
+  canonicalUrl: string;
 };
 
 type ArchitectureRole =
@@ -73,6 +76,7 @@ function packetPages(packet: ResearchPacket): SourcePage[] {
       title: stringValue((page as PacketPage).title),
       primaryHeading: stringValue((page as PacketPage).primaryHeading),
       description: stringValue((page as PacketPage).description),
+      canonicalUrl: stringValue((page as PacketPage).canonicalUrl),
     }))
     .filter((page) => page.url);
 }
@@ -90,6 +94,7 @@ function sourcePages(packet: ResearchPacket, capturedPages: CapturedPage[]) {
       title: stringValue(capturedPage.title) || packetPage?.title || '',
       primaryHeading: packetPage?.primaryHeading || '',
       description: packetPage?.description || '',
+      canonicalUrl: stringValue(capturedPage.canonicalUrl) || packetPage?.canonicalUrl || '',
     });
   }
 
@@ -155,6 +160,52 @@ function architectureRole(page: SourcePage): ArchitectureRole {
     return 'sector';
   }
   return 'retained';
+}
+
+export function pageDisposition(page: SourcePage, pages: SourcePage[]) {
+  const path = pathname(page);
+  const role = architectureRole(page);
+  const home = pages.find((candidate) => architectureRole(candidate) === 'home');
+  const canonical = page.canonicalUrl ? normalisePageUrl(page.canonicalUrl) : '';
+  const canonicalTarget = canonical
+    ? pages.find((candidate) => normalisePageUrl(candidate.url) === canonical)
+    : undefined;
+  if (canonicalTarget && normalisePageUrl(canonicalTarget.url) !== normalisePageUrl(page.url)) {
+    return {
+      disposition: 'redirect' as PageDisposition,
+      dispositionReason: 'The captured canonical URL points to another selected page.',
+      targetSourceUrl: canonicalTarget.url,
+    };
+  }
+  if (role === 'success') {
+    return {
+      disposition: 'workflow_state' as PageDisposition,
+      dispositionReason:
+        'Confirmation pages belong to an approved form or booking flow, not global navigation.',
+    };
+  }
+  if (role === 'profile' || role === 'resource_taxonomy') {
+    return {
+      disposition: 'contextual' as PageDisposition,
+      dispositionReason:
+        'This supporting archive should be linked only from the relevant resource context.',
+    };
+  }
+  if (
+    /\/(?:home|blank|page|copy-of|test|new-page)(?:[-_]\d+)?$/.test(path) ||
+    /\/(?:home|blank|page|test)[-_]\d+$/.test(path)
+  ) {
+    return {
+      disposition: 'needs_review' as PageDisposition,
+      dispositionReason:
+        'The URL resembles a CMS placeholder or legacy duplicate. Review its unique content before retaining a public route.',
+      targetSourceUrl: home?.url,
+    };
+  }
+  return {
+    disposition: 'build' as PageDisposition,
+    dispositionReason: 'The captured evidence supports a standalone visitor-facing page.',
+  };
 }
 
 function countLabel(count: number, singular: string, plural = `${singular}s`) {
@@ -260,7 +311,7 @@ function proposedSitemapFor(pages: SourcePage[]): BriefSitemapEntry[] {
   return entries;
 }
 
-function planForPage(page: SourcePage): BriefPagePlan {
+function planForPage(page: SourcePage, pages: SourcePage[]): BriefPagePlan {
   const role = architectureRole(page);
   const plans: Record<ArchitectureRole, string[]> = {
     home: [
@@ -344,7 +395,12 @@ function planForPage(page: SourcePage): BriefPagePlan {
       'Purposeful placement outside primary navigation unless reviewed otherwise',
     ],
   };
-  return { title: labelForPage(page), structure: plans[role], sourceUrl: page.url };
+  return {
+    title: labelForPage(page),
+    structure: plans[role],
+    sourceUrl: page.url,
+    ...pageDisposition(page, pages),
+  };
 }
 
 export function assetGuidanceFromAnnotations(annotations: AssetAnnotation[]) {
@@ -434,6 +490,9 @@ export function createBriefDraft(
     ? pages.filter((page) => selectedUrls.has(page.url))
     : pages;
   const visualAssets = artifacts.filter((artifact) => artifact.kind === 'asset');
+  const agentEligibleAssets = visualAssets.filter(
+    (artifact) => artifact.metadata.analysisSelected !== false,
+  );
   const approvedAssetGuidance = [
     ...brandGuidance(brandKit, annotations),
     ...assetGuidanceFromAnnotations(annotations).filter(
@@ -442,9 +501,9 @@ export function createBriefDraft(
   ];
   const proposedSitemap = proposedSitemapFor(architecturePages);
   const draft: RedesignBriefDraft = {
-    strategy: `Create a clear, mobile-first redesign for ${businessName} using only the reviewed research packet. Separate primary conversion navigation from resources, tools, and utility routes; improve hierarchy, readability, and the path to a confirmed action without introducing new business claims. Every selected source page remains part of the private replacement scope.`,
+    strategy: `Create a clear, mobile-first redesign for ${businessName} using only the reviewed research packet. Separate primary conversion navigation from resources, tools, and utility routes; improve hierarchy, readability, and the path to a confirmed action without introducing new business claims. Give every selected source page a reviewed coverage outcome without automatically making it a public route.`,
     proposedSitemap,
-    pagePlans: architecturePages.map(planForPage),
+    pagePlans: architecturePages.map((page) => planForPage(page, architecturePages)),
     assetGuidance: approvedAssetGuidance,
     capabilityInventory: detectCapabilities(packet, capturedPages),
     approvedVisualContent: approvedVisualContentFromCandidates(visualContentCandidates),
@@ -460,7 +519,7 @@ export function createBriefDraft(
           }
         : undefined,
     assumptions: [
-      'The redesign will preserve reviewed factual content and approved visual assets from the captured website.',
+      'Every selected source page has a reviewed coverage outcome; selection does not automatically make a route public or globally navigable.',
       'Only the human-approved asset descriptions in this brief may guide visual interpretation or reuse.',
       'No testimonials, qualifications, prices, guarantees, services, or contact details will be invented.',
       'The primary conversion action remains a decision for human review before build work begins.',
@@ -479,8 +538,8 @@ export function createBriefDraft(
   return {
     sourceSelections: {
       pageUrls: pages.map((page) => page.url),
-      assetIds: visualAssets.map((asset) => asset.id),
-      autoSelectedAssetIds: visualAssets.map((asset) => asset.id),
+      assetIds: agentEligibleAssets.map((asset) => asset.id),
+      autoSelectedAssetIds: agentEligibleAssets.map((asset) => asset.id),
       uncertainties: [],
     },
     draft,

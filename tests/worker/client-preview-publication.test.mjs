@@ -24,6 +24,7 @@ test('publishes only through the protected Vercel and Clientspace worker path', 
   assert.doesNotMatch(source, /target: 'production'/);
   assert.match(source, /data-made-solid-review-bridge/);
   assert.match(source, /sourceProjectId: job\.business_id/);
+  assert.match(source, /pricingSnapshot: job\.pricing_snapshot/);
   assert.doesNotMatch(source, /VITE_(?:VERCEL|CLIENTSPACE)/);
 });
 
