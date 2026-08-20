@@ -55,6 +55,8 @@ type CodexModel = {
   defaultEffort: string;
   efforts: CodexEffort[];
   supportsImages: boolean;
+  serviceTiers: Array<{ id: string; name: string; description: string }>;
+  defaultServiceTier: string;
   isDefault: boolean;
 };
 
@@ -86,6 +88,7 @@ type CodexStatus = {
     turnId?: string;
     phase?: string;
     attachmentId?: string;
+    attachmentIds?: string[];
     feedbackId?: string;
   }>;
   agents: CodexAgent[];
@@ -97,10 +100,12 @@ type CodexStatus = {
     prompt: string;
     model: string;
     effort: string;
+    serviceTier?: 'default' | 'priority';
     deliveryMode: 'queue' | 'interrupt';
     createdAt: string;
     position: number;
     attachmentId?: string;
+    attachmentIds?: string[];
     workMode?: 'direct' | 'team';
   }>;
 };
@@ -133,16 +138,10 @@ type TeamResumeState = {
 };
 
 type PanelPhase =
-  | 'closed'
-  | 'compose'
-  | 'sending-chat'
-  | 'capturing'
-  | 'capturing-tab'
-  | 'selecting'
-  | 'review'
-  | 'sending';
+  'closed' | 'compose' | 'sending-chat' | 'capturing' | 'capturing-tab' | 'selecting';
 type Point = { x: number; y: number };
 type Selection = { start: Point; end: Point };
+type DraftAttachment = { id: string; name: string; source: string };
 
 const statusEndpoint = '/__made-solid/codex-status';
 const feedbackEndpoint = '/__made-solid/codex-feedback';
@@ -152,6 +151,7 @@ const browserCaptureSource = 'made-solid-browser-capture';
 const codexPreferencesKey = 'made-solid-codex-preferences-v1';
 const codexDraftKey = 'made-solid-codex-draft-v1';
 const maximumPhotoBytes = 15 * 1024 * 1024;
+const maximumDraftAttachments = 5;
 const supportedPhotoTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 function RuntimeAttachmentImage({ attachmentId, alt }: { attachmentId: string; alt: string }) {
@@ -182,14 +182,37 @@ function RuntimeAttachmentImage({ attachmentId, alt }: { attachmentId: string; a
   return source ? <img alt={alt} className="codex-chat-message__attachment" src={source} /> : null;
 }
 
+function RuntimeAttachmentGallery({
+  attachmentIds,
+  altPrefix,
+}: {
+  attachmentIds: string[];
+  altPrefix: string;
+}) {
+  if (!attachmentIds.length) return null;
+  return (
+    <div className="codex-chat-message__attachments">
+      {attachmentIds.map((attachmentId, index) => (
+        <RuntimeAttachmentImage
+          attachmentId={attachmentId}
+          alt={`${altPrefix} ${index + 1} of ${attachmentIds.length}`}
+          key={attachmentId}
+        />
+      ))}
+    </div>
+  );
+}
+
 type CodexPreferences = {
   modelId: string;
   effortByModel: Record<string, string>;
   workMode: 'direct' | 'team';
+  fastMode: boolean;
 };
 
 function readCodexPreferences(): CodexPreferences {
-  if (typeof window === 'undefined') return { modelId: '', effortByModel: {}, workMode: 'team' };
+  if (typeof window === 'undefined')
+    return { modelId: '', effortByModel: {}, workMode: 'team', fastMode: false };
   try {
     const stored = JSON.parse(
       window.localStorage.getItem(codexPreferencesKey) || '{}',
@@ -201,9 +224,10 @@ function readCodexPreferences(): CodexPreferences {
           ? stored.effortByModel
           : {},
       workMode: stored.workMode === 'direct' ? 'direct' : 'team',
+      fastMode: stored.fastMode === true,
     };
   } catch {
-    return { modelId: '', effortByModel: {}, workMode: 'team' };
+    return { modelId: '', effortByModel: {}, workMode: 'team', fastMode: false };
   }
 }
 
@@ -609,7 +633,15 @@ async function waitForHiddenCaptureUi() {
   await new Promise<void>((resolvePaint) =>
     requestAnimationFrame(() => requestAnimationFrame(() => resolvePaint())),
   );
-  await new Promise<void>((resolveCompositor) => window.setTimeout(resolveCompositor, 120));
+  const closingDialog = document.querySelector<HTMLElement>(
+    '.codex-chat-dialog[data-state="closed"]',
+  );
+  if (closingDialog) {
+    await Promise.all(
+      closingDialog.getAnimations().map((animation) => animation.finished.catch(() => undefined)),
+    );
+  }
+  await new Promise<void>((resolvePaint) => requestAnimationFrame(() => resolvePaint()));
 }
 
 export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean }) {
@@ -618,6 +650,9 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   const conversationPickerRef = useRef<HTMLDivElement>(null);
   const previousWorkingRef = useRef(false);
   const chatLogRef = useRef<HTMLDivElement>(null);
+  const knownMessageIdsRef = useRef(new Set<string>());
+  const knownMessageThreadRef = useRef('');
+  const messageAnimationTimerRef = useRef<number>();
   const previousChatScrollTopRef = useRef(0);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
@@ -627,6 +662,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   const [isSupported, setIsSupported] = useState<boolean>();
   const [phase, setPhase] = useState<PanelPhase>('closed');
   const [status, setStatus] = useState<CodexStatus>();
+  const [enteringMessageIds, setEnteringMessageIds] = useState<Set<string>>(() => new Set());
   const [selectedModelId, setSelectedModelId] = useState(() => readCodexPreferences().modelId);
   const [selectedEffort, setSelectedEffort] = useState(() => {
     const preferences = readCodexPreferences();
@@ -638,12 +674,13 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   const [workMode, setWorkMode] = useState<'direct' | 'team'>(
     () => readCodexPreferences().workMode,
   );
+  const [fastMode, setFastMode] = useState(() => readCodexPreferences().fastMode);
   const [selectedThreadId, setSelectedThreadId] = useState('');
   const [conversationPickerOpen, setConversationPickerOpen] = useState(false);
   const selectedThreadIdRef = useRef('');
   const [sourceScreenshot, setSourceScreenshot] = useState('');
-  const [croppedScreenshot, setCroppedScreenshot] = useState('');
   const [selection, setSelection] = useState<Selection>();
+  const [draftAttachments, setDraftAttachments] = useState<DraftAttachment[]>([]);
   const [prompt, setPrompt] = useState(readCodexDraft);
   const [error, setError] = useState<string>();
   const [browserCaptureAvailable, setBrowserCaptureAvailable] = useState(false);
@@ -656,7 +693,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   const [pendingVisualMessage, setPendingVisualMessage] = useState<{
     id: string;
     text: string;
-    image: string;
+    images: string[];
   }>();
   const [expandedQueueId, setExpandedQueueId] = useState('');
   const [queuedEdits, setQueuedEdits] = useState<Record<string, string>>({});
@@ -809,6 +846,29 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   }, [pendingChatMessage, pendingVisualMessage, status?.messages, status?.queuedMessages]);
 
   useEffect(() => {
+    const threadId = status?.thread?.id ?? '';
+    if (!threadId) return;
+    const currentIds = new Set(status?.messages.map((message) => message.id) ?? []);
+    if (knownMessageThreadRef.current !== threadId || !knownMessageIdsRef.current.size) {
+      knownMessageThreadRef.current = threadId;
+      knownMessageIdsRef.current = currentIds;
+      setEnteringMessageIds(new Set());
+      return;
+    }
+    const incomingIds = [...currentIds].filter((id) => !knownMessageIdsRef.current.has(id));
+    knownMessageIdsRef.current = currentIds;
+    if (!incomingIds.length) return;
+    setEnteringMessageIds(new Set(incomingIds));
+    window.clearTimeout(messageAnimationTimerRef.current);
+    messageAnimationTimerRef.current = window.setTimeout(
+      () => setEnteringMessageIds(new Set()),
+      600,
+    );
+  }, [status?.messages, status?.thread?.id]);
+
+  useEffect(() => () => window.clearTimeout(messageAnimationTimerRef.current), []);
+
+  useEffect(() => {
     if (phase !== 'compose') return;
     updateChatFollowingLatest(true);
     const frame = window.requestAnimationFrame(scrollChatToLatest);
@@ -895,13 +955,31 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   const queuedCount = status?.queuedCount ?? 0;
   const interruptingCount = status?.interruptingCount ?? 0;
   const activeFlags = status?.thread?.activeFlags ?? [];
-  const workingDetail = interruptingCount
-    ? `Stopping current turn · ${interruptingCount} ${interruptingCount === 1 ? 'message' : 'messages'} next`
+  const hasActiveProgressUpdate =
+    status?.messages.some(
+      (message) =>
+        message.role === 'assistant' &&
+        message.phase === 'commentary' &&
+        (!status.thread?.activeTurnId || message.turnId === status.thread.activeTurnId),
+    ) === true;
+  const workingTitle = interruptingCount
+    ? 'Stopping the current turn'
     : activeFlags.includes('waitingOnApproval')
-      ? 'Waiting for an approval'
+      ? 'Waiting for approval'
       : activeFlags.includes('waitingOnUserInput')
         ? 'Waiting for your input'
-        : 'Working on your request';
+        : hasActiveProgressUpdate
+          ? 'Working through the next step'
+          : 'Getting oriented';
+  const workingDetail = interruptingCount
+    ? `${interruptingCount} ${interruptingCount === 1 ? 'message is' : 'messages are'} lined up next`
+    : activeFlags.includes('waitingOnApproval')
+      ? 'Codex will continue as soon as the requested approval is available.'
+      : activeFlags.includes('waitingOnUserInput')
+        ? 'Codex needs your response before it can continue safely.'
+        : hasActiveProgressUpdate
+          ? 'The latest progress is above. Another update will appear after the next verified step.'
+          : 'Reading your request and workspace context before acting.';
 
   useEffect(() => {
     if (!isCodexWorking && !anyConversationWorking) return;
@@ -950,6 +1028,9 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
     status?.threads.find((thread) => thread.id === (selectedThreadId || status?.thread?.id)) ??
     status?.thread;
   const selectedModel = availableModels.find((model) => model.id === selectedModelId);
+  const fastModeAvailable =
+    selectedModel?.serviceTiers?.some((tier) => tier.id === 'priority') === true;
+  const selectedServiceTier = fastMode && fastModeAvailable ? 'priority' : 'default';
   const isInterrupted = selectedThread?.interrupted === true;
   const selectionRectangle = selectedRectangle(selection);
   const selectionReady = Boolean(
@@ -983,9 +1064,10 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
         modelId: selectedModelId,
         effortByModel: { ...effortPreferences, [selectedModelId]: selectedEffort },
         workMode,
+        fastMode,
       } satisfies CodexPreferences),
     );
-  }, [effortPreferences, selectedEffort, selectedModelId, workMode]);
+  }, [effortPreferences, fastMode, selectedEffort, selectedModelId, workMode]);
 
   const discardEmptyConversation = async (threadId: string) => {
     const candidate = status?.threads.find((thread) => thread.id === threadId);
@@ -1025,6 +1107,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
           action: 'new-thread',
           model: selectedModel.id,
           effort: selectedEffort,
+          serviceTier: selectedServiceTier,
         }),
       });
       const result = (await response.json()) as {
@@ -1092,6 +1175,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
           threadId: selectedThread.id,
           model: selectedModel.id,
           effort: selectedEffort,
+          serviceTier: selectedServiceTier,
         }),
       });
       const result = (await response.json()) as {
@@ -1249,19 +1333,57 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
     return beginCapture(true);
   };
 
-  const choosePhoto = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.currentTarget.files?.[0];
+  const appendDraftAttachment = (source: string, name: string) => {
+    if (draftAttachments.length >= maximumDraftAttachments) {
+      setError(`You can attach up to ${maximumDraftAttachments} images to one message.`);
+      setPhase('compose');
+      return;
+    }
+    setDraftAttachments((current) => [...current, { id: crypto.randomUUID(), name, source }]);
+    setSelection(undefined);
+    setError(undefined);
+    setPhase('compose');
+    window.requestAnimationFrame(() => composerTextareaRef.current?.focus());
+  };
+
+  const choosePhotos = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.currentTarget.files ?? []);
     event.currentTarget.value = '';
-    if (!file) return;
+    if (!files.length) return;
+    const availableSlots = maximumDraftAttachments - draftAttachments.length;
+    const selectedFiles = files.slice(0, Math.max(0, availableSlots));
+    if (!selectedFiles.length) {
+      setError(`You can attach up to ${maximumDraftAttachments} images to one message.`);
+      return;
+    }
     setIsPreparingPhoto(true);
     setError(undefined);
     try {
-      const photo = await readPhotoFile(file);
-      setCroppedScreenshot(photo);
-      setSelection(undefined);
-      setPhase('review');
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'The selected photo could not be read.');
+      const prepared = await Promise.allSettled(
+        selectedFiles.map(async (file) => ({
+          id: crypto.randomUUID(),
+          name: file.name || 'Selected image',
+          source: await readPhotoFile(file),
+        })),
+      );
+      const ready = prepared.flatMap((result) =>
+        result.status === 'fulfilled' ? [result.value] : [],
+      );
+      if (ready.length) setDraftAttachments((current) => [...current, ...ready]);
+      const rejected = prepared.filter((result) => result.status === 'rejected');
+      const omitted = files.length - selectedFiles.length;
+      if (rejected.length || omitted) {
+        const messages = [];
+        if (rejected.length) {
+          messages.push(
+            `${rejected.length} ${rejected.length === 1 ? 'image was' : 'images were'} not added. Use JPEG, PNG, or WebP files smaller than 15 MB.`,
+          );
+        }
+        if (omitted) messages.push(`Only ${maximumDraftAttachments} images can be attached.`);
+        setError(messages.join(' '));
+      }
+      setIsComposerExpanded(true);
+      window.requestAnimationFrame(() => composerTextareaRef.current?.focus());
     } finally {
       setIsPreparingPhoto(false);
     }
@@ -1331,9 +1453,10 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
       canvas.width,
       canvas.height,
     );
-    setCroppedScreenshot(canvas.toDataURL('image/png'));
-    setPhase('review');
-    setError(undefined);
+    appendDraftAttachment(
+      canvas.toDataURL('image/png'),
+      `Screenshot ${draftAttachments.length + 1}`,
+    );
   };
 
   const useWholeScreenshot = () => {
@@ -1341,10 +1464,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
       setError('Capture the page before choosing the whole screenshot.');
       return;
     }
-    setCroppedScreenshot(sourceScreenshot);
-    setSelection(undefined);
-    setPhase('review');
-    setError(undefined);
+    appendDraftAttachment(sourceScreenshot, `Screenshot ${draftAttachments.length + 1}`);
   };
 
   const finishSelection = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -1398,7 +1518,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
     }
   };
 
-  const sendFeedback = async (kind: 'chat' | 'visual') => {
+  const sendFeedback = async () => {
     if (!prompt.trim()) {
       setError('Describe what Codex should change or investigate.');
       return;
@@ -1408,17 +1528,19 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
       return;
     }
     const submittedPrompt = prompt.trim();
-    setPhase(kind === 'visual' ? 'sending' : 'sending-chat');
+    const submittedAttachments = [...draftAttachments];
+    setPhase('sending-chat');
     setError(undefined);
     try {
       const response = await studioRuntimeFetch(feedbackEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({
-          screenshot: kind === 'visual' ? croppedScreenshot : undefined,
+          screenshots: submittedAttachments.map((attachment) => attachment.source),
           prompt: submittedPrompt,
           model: selectedModel.id,
           effort: selectedEffort,
+          serviceTier: selectedServiceTier,
           workMode,
           context: `${document.title} · ${window.location.href}`,
           threadId: selectedThreadId || status?.thread?.id,
@@ -1426,28 +1548,25 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
       });
       const result = (await response.json()) as { id?: string; detail?: string };
       if (!response.ok) throw new Error(result.detail || 'Codex could not accept this feedback.');
-      if (kind === 'chat') {
+      if (!submittedAttachments.length) {
         setPendingChatMessage({
           id: result.id || crypto.randomUUID(),
           text: submittedPrompt,
         });
-        setPrompt('');
-        setIsComposerExpanded(false);
-        setPhase('compose');
       } else {
         setPendingVisualMessage({
           id: result.id || crypto.randomUUID(),
           text: submittedPrompt,
-          image: croppedScreenshot,
+          images: submittedAttachments.map((attachment) => attachment.source),
         });
-        setPrompt('');
-        setIsComposerExpanded(false);
-        setCroppedScreenshot('');
-        setPhase('compose');
       }
+      setPrompt('');
+      setDraftAttachments([]);
+      setIsComposerExpanded(false);
+      setPhase('compose');
       await refreshStatus();
     } catch (cause) {
-      setPhase(kind === 'visual' ? 'review' : 'compose');
+      setPhase('compose');
       setError(cause instanceof Error ? cause.message : 'Codex could not accept this feedback.');
     }
   };
@@ -1691,16 +1810,33 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                   ? status.messages.map((message) => (
                       <Fragment key={message.id}>
                         <article
-                          className={`codex-chat-message codex-chat-message--${message.role}`}
+                          className={`codex-chat-message codex-chat-message--${message.role}${
+                            message.role === 'assistant' && message.phase === 'commentary'
+                              ? ' codex-chat-message--progress'
+                              : ''
+                          }${enteringMessageIds.has(message.id) ? ' codex-chat-message--entering' : ''}`}
+                          data-phase={message.phase}
                         >
-                          <strong>{message.role === 'user' ? 'You' : 'Codex'}</strong>
+                          <strong>
+                            {message.role === 'user' ? (
+                              'You'
+                            ) : message.phase === 'commentary' ? (
+                              <>
+                                <span aria-hidden="true" className="codex-chat-message__pulse" />
+                                Progress update
+                              </>
+                            ) : (
+                              'Codex'
+                            )}
+                          </strong>
                           <MarkdownContent>{message.text}</MarkdownContent>
-                          {message.attachmentId ? (
-                            <RuntimeAttachmentImage
-                              attachmentId={message.attachmentId}
-                              alt="Image attached to your message"
-                            />
-                          ) : null}
+                          <RuntimeAttachmentGallery
+                            attachmentIds={
+                              message.attachmentIds ??
+                              (message.attachmentId ? [message.attachmentId] : [])
+                            }
+                            altPrefix="Image attached to your message"
+                          />
                         </article>
                         {(agentTeamsAfterMessage.get(message.id) ?? []).map((team) => (
                           <AgentTeamPanel
@@ -1807,12 +1943,13 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                       ) : (
                         <MarkdownContent>{message.prompt}</MarkdownContent>
                       )}
-                      {message.attachmentId ? (
-                        <RuntimeAttachmentImage
-                          attachmentId={message.attachmentId}
-                          alt="Image attached to your queued message"
-                        />
-                      ) : null}
+                      <RuntimeAttachmentGallery
+                        attachmentIds={
+                          message.attachmentIds ??
+                          (message.attachmentId ? [message.attachmentId] : [])
+                        }
+                        altPrefix="Image attached to your queued message"
+                      />
                       {queueActionError && expandedQueueId === message.id ? (
                         <p className="codex-queued-message__error" role="alert">
                           {queueActionError}
@@ -1822,7 +1959,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                   );
                 })}
                 {pendingChatMessage && !pendingChatAccepted ? (
-                  <article className="codex-chat-message codex-chat-message--user codex-chat-message--pending">
+                  <article className="codex-chat-message codex-chat-message--user codex-chat-message--pending codex-chat-message--entering">
                     <strong>
                       You <span>Sending</span>
                     </strong>
@@ -1830,16 +1967,21 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                   </article>
                 ) : null}
                 {pendingVisualMessage && !pendingVisualAccepted ? (
-                  <article className="codex-chat-message codex-chat-message--user codex-chat-message--pending">
+                  <article className="codex-chat-message codex-chat-message--user codex-chat-message--pending codex-chat-message--entering">
                     <strong>
                       You <span>Sending</span>
                     </strong>
                     <MarkdownContent>{pendingVisualMessage.text}</MarkdownContent>
-                    <img
-                      alt="Image attached to your message"
-                      className="codex-chat-message__attachment"
-                      src={pendingVisualMessage.image}
-                    />
+                    <div className="codex-chat-message__attachments">
+                      {pendingVisualMessage.images.map((image, index) => (
+                        <img
+                          alt={`Image attached to your message ${index + 1} of ${pendingVisualMessage.images.length}`}
+                          className="codex-chat-message__attachment"
+                          key={`${pendingVisualMessage.id}-${index}`}
+                          src={image}
+                        />
+                      ))}
+                    </div>
                   </article>
                 ) : null}
                 {status?.agents?.length && !agentTeamsAfterMessage.size ? (
@@ -2047,18 +2189,17 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                       )}
                     </span>
                     <span className="codex-working-status__copy">
-                      <strong>{isCodexWorking ? 'Codex is working' : 'Waiting for Codex'}</strong>
+                      <strong>{isCodexWorking ? workingTitle : 'Waiting for Codex'}</strong>
                       <small>
                         {isCodexWorking
-                          ? interruptingCount
-                            ? workingDetail
-                            : activeAgents.length
-                              ? `${activeAgents.length} agent${activeAgents.length === 1 ? '' : 's'} working in parallel`
-                              : queuedCount
-                                ? `${queuedCount} ${queuedCount === 1 ? 'request' : 'requests'} queued next`
-                                : workingDetail
+                          ? workingDetail
                           : `${queuedCount} ${queuedCount === 1 ? 'request' : 'requests'} queued`}
                       </small>
+                      {isCodexWorking && queuedCount ? (
+                        <small className="codex-working-status__queue">
+                          {queuedCount} {queuedCount === 1 ? 'request' : 'requests'} queued next
+                        </small>
+                      ) : null}
                     </span>
                     <time aria-hidden="true">
                       {isCodexWorking
@@ -2084,6 +2225,37 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
               aria-label="Message composer"
               className={`codex-composer-surface ${isComposerExpanded ? 'is-expanded' : 'is-collapsed'}`}
             >
+              {draftAttachments.length ? (
+                <div aria-label="Selected images" className="codex-composer-draft-attachments">
+                  {draftAttachments.map((attachment) => (
+                    <figure key={attachment.id}>
+                      <img alt={`Selected image: ${attachment.name}`} src={attachment.source} />
+                      <figcaption title={attachment.name}>{attachment.name}</figcaption>
+                      <IconButton
+                        disabled={phase === 'sending-chat'}
+                        label={`Remove ${attachment.name}`}
+                        onClick={() => {
+                          setDraftAttachments((current) =>
+                            current.filter((candidate) => candidate.id !== attachment.id),
+                          );
+                          setError(undefined);
+                          window.requestAnimationFrame(() => composerTextareaRef.current?.focus());
+                        }}
+                        variant="quiet"
+                      >
+                        <X aria-hidden="true" size={16} />
+                      </IconButton>
+                    </figure>
+                  ))}
+                </div>
+              ) : null}
+              {draftAttachments.length || isPreparingPhoto ? (
+                <p aria-live="polite" className="codex-composer-attachment-status">
+                  {isPreparingPhoto
+                    ? 'Preparing selected images…'
+                    : `${draftAttachments.length} of ${maximumDraftAttachments} images selected`}
+                </p>
+              ) : null}
               <label className="codex-feedback-prompt codex-feedback-prompt--compose">
                 <span>Message to Codex</span>
                 <textarea
@@ -2091,7 +2263,10 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                   maxLength={4_000}
                   onChange={(event) => setPrompt(event.target.value)}
                   onBlur={() => {
-                    if (!prompt.trim() || !chatFollowingLatestRef.current)
+                    if (
+                      (!prompt.trim() && draftAttachments.length === 0) ||
+                      !chatFollowingLatestRef.current
+                    )
                       setIsComposerExpanded(false);
                   }}
                   onFocus={() => {
@@ -2112,7 +2287,8 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                   accept="image/jpeg,image/png,image/webp"
                   aria-label="Photo from camera roll"
                   hidden
-                  onChange={(event) => void choosePhoto(event)}
+                  multiple
+                  onChange={(event) => void choosePhotos(event)}
                   ref={photoInputRef}
                   type="file"
                 />
@@ -2178,9 +2354,6 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                   <SlidersHorizontal aria-hidden="true" size={18} />
                 </IconButton>
                 <IconButton
-                  disabled={
-                    phase === 'sending-chat' || !status?.thread || !selectedModel || !prompt.trim()
-                  }
                   label={
                     phase === 'sending-chat'
                       ? 'Sending message'
@@ -2188,7 +2361,14 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                         ? 'Queue message'
                         : 'Send message'
                   }
-                  onClick={() => void sendFeedback('chat')}
+                  disabled={
+                    phase === 'sending-chat' ||
+                    isPreparingPhoto ||
+                    !status?.thread ||
+                    !selectedModel ||
+                    !prompt.trim()
+                  }
+                  onClick={() => void sendFeedback()}
                   variant="primary"
                 >
                   {phase === 'sending-chat' ? (
@@ -2233,6 +2413,26 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                     </span>
                     <span aria-hidden="true" className="codex-agent-mode__state">
                       {workMode === 'team' ? 'On' : 'Off'}
+                    </span>
+                  </Button>
+                  <Button
+                    aria-pressed={selectedServiceTier === 'priority'}
+                    className={`codex-agent-mode${selectedServiceTier === 'priority' ? ' is-active' : ''}`}
+                    disabled={phase === 'sending-chat' || !fastModeAvailable}
+                    onClick={() => setFastMode((current) => !current)}
+                    variant="quiet"
+                  >
+                    <Clock3 aria-hidden="true" size={17} />
+                    <span className="codex-agent-mode__copy">
+                      <strong>Fast</strong>
+                      <small>
+                        {fastModeAvailable
+                          ? 'Higher-speed Codex responses with increased usage'
+                          : 'Unavailable for the selected model'}
+                      </small>
+                    </span>
+                    <span aria-hidden="true" className="codex-agent-mode__state">
+                      {selectedServiceTier === 'priority' ? 'On' : 'Off'}
                     </span>
                   </Button>
                   <footer className="codex-composer-footer">
@@ -2359,100 +2559,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                 Use whole screenshot
               </Button>
               <Button disabled={!selectionReady} onClick={() => cropSelection()}>
-                Review selection
-              </Button>
-            </ButtonGroup>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
-
-      <Dialog.Root
-        onOpenChange={(open) => !open && closePanel()}
-        open={phase === 'review' || phase === 'sending'}
-      >
-        <Dialog.Portal>
-          <Dialog.Overlay className="codex-feedback-overlay" />
-          <Dialog.Content
-            aria-describedby="codex-review-description"
-            className="codex-feedback-dialog codex-feedback-review"
-            onCloseAutoFocus={(event) => {
-              event.preventDefault();
-              triggerRef.current?.focus();
-            }}
-          >
-            <header className="codex-feedback-dialog__header">
-              <div>
-                <span className="codex-feedback-dialog__icon" aria-hidden="true">
-                  <Camera size={20} />
-                </span>
-                <div>
-                  <Dialog.Title>Review visual feedback</Dialog.Title>
-                  <Dialog.Description id="codex-review-description">
-                    Add a clear instruction, then send the image and prompt to your tmux
-                    conversation.
-                  </Dialog.Description>
-                </div>
-              </div>
-              <Dialog.Close asChild>
-                <IconButton
-                  label="Close visual feedback"
-                  disabled={phase === 'sending'}
-                  variant="quiet"
-                >
-                  <X aria-hidden="true" size={18} />
-                </IconButton>
-              </Dialog.Close>
-            </header>
-
-            <img
-              alt="Selected photo or screenshot that will be sent to Codex"
-              className="codex-feedback-review__image"
-              src={croppedScreenshot}
-            />
-            <label className="codex-feedback-prompt">
-              <span>What should Codex change?</span>
-              <textarea
-                autoFocus
-                disabled={phase === 'sending'}
-                maxLength={4_000}
-                onChange={(event) => setPrompt(event.target.value)}
-                placeholder="For example: Fix this overlap across mobile, tablet, and desktop, then verify it with screenshots."
-                rows={5}
-                value={prompt}
-              />
-              <small>{prompt.length.toLocaleString()} / 4,000</small>
-            </label>
-            <div className="codex-feedback-review__configuration">
-              <span>{selectedModel?.label}</span>
-              <span>{selectedEffort} reasoning</span>
-            </div>
-
-            {error ? (
-              <p className="codex-feedback-error" role="alert">
-                <CircleAlert aria-hidden="true" size={18} />
-                {error}
-              </p>
-            ) : null}
-
-            <ButtonGroup className="codex-feedback-dialog__actions">
-              <Button
-                disabled={phase === 'sending'}
-                onClick={() => setPhase('selecting')}
-                variant="secondary"
-              >
-                <RotateCcw aria-hidden="true" size={18} />
-                Adjust selection
-              </Button>
-              <Button
-                disabled={phase === 'sending' || !prompt.trim()}
-                onClick={() => void sendFeedback('visual')}
-              >
-                {phase === 'sending' ? (
-                  <LoaderCircle aria-hidden="true" className="is-spinning" size={18} />
-                ) : (
-                  <Send aria-hidden="true" size={18} />
-                )}
-                {phase === 'sending' ? 'Sending…' : 'Send to Codex'}
+                Add selection to message
               </Button>
             </ButtonGroup>
           </Dialog.Content>

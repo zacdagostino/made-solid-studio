@@ -21,6 +21,7 @@ async function openChatSettings(composer) {
 }
 
 test.beforeEach(async ({ page }) => {
+  let statusRequestCount = 0;
   await page.addInitScript(
     ({ screenshot, tabScreenshot }) => {
       window.addEventListener('message', (event) => {
@@ -83,12 +84,14 @@ test.beforeEach(async ({ page }) => {
     { screenshot: captureSvg, tabScreenshot: capturePng },
   );
   await page.route('**/__made-solid/codex-status*', async (route) => {
+    statusRequestCount += 1;
     const selectedThreadId = new URL(route.request().url()).searchParams.get('threadId');
     const pageUrl = new URL(route.request().headers().referer || 'http://localhost');
     const noWorkingStart = pageUrl.searchParams.has('codexWorkingNoStart');
     const working = pageUrl.searchParams.has('codexWorking') || noWorkingStart;
     const interrupted = pageUrl.searchParams.has('codexInterrupted');
     const teamHistory = pageUrl.searchParams.has('codexTeamHistory');
+    const incomingProgress = pageUrl.searchParams.has('codexIncoming');
     const workingSince = Math.floor(Date.now() / 1_000) - 65;
     const threadUpdatedAt = noWorkingStart
       ? Math.floor(Date.now() / 1_000) - 97 * 60 * 60
@@ -154,12 +157,17 @@ test.beforeEach(async ({ page }) => {
                   text: 'Open the Studio chat.',
                   turnId: 'turn-team-1',
                 },
-                {
-                  id: 'current-codex',
-                  role: 'assistant',
-                  text: 'Studio chat is connected.',
-                  turnId: 'turn-team-1',
-                },
+                ...(!incomingProgress || statusRequestCount > 2
+                  ? [
+                      {
+                        id: 'current-codex',
+                        role: 'assistant',
+                        text: 'Studio chat is connected.',
+                        turnId: 'turn-team-1',
+                        phase: working ? 'commentary' : 'final_answer',
+                      },
+                    ]
+                  : []),
                 ...(teamHistory
                   ? [
                       {
@@ -273,6 +281,10 @@ test.beforeEach(async ({ page }) => {
             defaultEffort: 'medium',
             isDefault: true,
             supportsImages: true,
+            serviceTiers: [
+              { id: 'priority', name: 'Fast', description: '1.5x speed, increased usage' },
+            ],
+            defaultServiceTier: 'default',
             efforts: [
               { id: 'low', description: 'Faster responses with lighter reasoning' },
               { id: 'medium', description: 'Balanced reasoning' },
@@ -284,6 +296,10 @@ test.beforeEach(async ({ page }) => {
             defaultEffort: 'medium',
             isDefault: false,
             supportsImages: true,
+            serviceTiers: [
+              { id: 'priority', name: 'Fast', description: '1.5x speed, increased usage' },
+            ],
+            defaultServiceTier: 'default',
             efforts: [
               { id: 'medium', description: 'Balanced reasoning' },
               { id: 'high', description: 'Deeper reasoning for complex changes' },
@@ -373,12 +389,44 @@ test('sends a text-only chat message to the selected Codex model', async ({ page
     'Review the current implementation and explain the next best change.',
   );
   await expect(composer.getByRole('log', { name: 'Codex chat log' })).toContainText('Sending');
+  await expect(composer.locator('.codex-chat-message--pending')).toHaveCSS(
+    'animation-name',
+    'codex-user-message-enter',
+  );
   await expect(page.getByRole('dialog', { name: 'Message queued' })).toHaveCount(0);
   expect(delivered.model).toBe('gpt-5.3-codex-spark');
   expect(delivered.effort).toBe('high');
+  expect(delivered.serviceTier).toBe('default');
   expect(delivered.workMode).toBe('team');
   expect(delivered.prompt).toContain('Review the current implementation');
   expect(delivered).not.toHaveProperty('screenshot');
+});
+
+test('sends Fast as the selected Codex priority service tier', async ({ page }) => {
+  let delivered;
+  await page.route('**/__made-solid/codex-feedback', async (route) => {
+    delivered = route.request().postDataJSON();
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({ status: 'queued', id: 'fast-chat-1' }),
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openChatSettings(composer);
+  const fast = composer.getByRole('button', { name: /^Fast/ });
+  await expect(fast).toHaveAttribute('aria-pressed', 'false');
+  await fast.click();
+  await expect(fast).toHaveAttribute('aria-pressed', 'true');
+  await composer.getByLabel('Message to Codex').fill('Use the Fast service tier for this turn.');
+  await composer.getByRole('button', { name: 'Send message' }).click();
+
+  await expect.poll(() => delivered?.serviceTier).toBe('priority');
+  expect(delivered.model).toBe('gpt-5.6-sol');
+  expect(delivered.effort).toBe('medium');
 });
 
 test('shows the live attached agent hierarchy and opens each sub-chat', async ({ page }) => {
@@ -892,19 +940,21 @@ test('creates a new Codex conversation with the selected model and reasoning', a
     action: 'new-thread',
     model: 'gpt-5.6-terra',
     effort: 'high',
+    serviceTier: 'default',
   });
   await composer.getByRole('button', { name: 'Conversation' }).click();
   await composer.getByRole('menuitemradio', { name: /^Studio/ }).click();
   await expect.poll(() => deletedThreadId).toBe('thread-new');
 });
 
-test('keeps the selected model and reasoning after the panel and page reopen', async ({ page }) => {
+test('keeps the selected model, reasoning, and Fast preference after reopen', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat with Codex' }).click();
   let composer = page.getByRole('dialog', { name: 'Codex', exact: true });
   await openChatSettings(composer);
   await composer.getByLabel('Model').selectOption('gpt-5.6-terra');
   await composer.getByLabel('Reasoning').selectOption('high');
+  await composer.getByRole('button', { name: /^Fast/ }).click();
   await composer.getByRole('button', { name: 'Close Codex chat' }).click();
   await page.reload();
   await page.getByRole('button', { name: 'Chat with Codex' }).click();
@@ -912,6 +962,10 @@ test('keeps the selected model and reasoning after the panel and page reopen', a
   await openChatSettings(composer);
   await expect(composer.getByLabel('Model')).toHaveValue('gpt-5.6-terra');
   await expect(composer.getByLabel('Reasoning')).toHaveValue('high');
+  await expect(composer.getByRole('button', { name: /^Fast/ })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
 });
 
 test('keeps an unsent draft across Studio and preview workspaces until it is sent', async ({
@@ -982,8 +1036,11 @@ test('shows real Codex working state, queued work, and a live elapsed timer', as
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
   const workingState = composer.locator('.codex-working-status');
 
-  await expect(workingState).toContainText('Codex is working');
+  await expect(workingState).toContainText('Working through the next step');
+  await expect(workingState).toContainText('The latest progress is above');
   await expect(workingState).toContainText('2 requests queued next');
+  const progressUpdate = composer.locator('.codex-chat-message--progress');
+  await expect(progressUpdate).toContainText('Progress update');
   await expect(workingState.locator('time')).toHaveText(/1m (?:0[5-9]|1\d)s/);
   const conversationPicker = composer.getByRole('button', { name: 'Conversation' });
   await conversationPicker.click();
@@ -1002,6 +1059,33 @@ test('shows real Codex working state, queued work, and a live elapsed timer', as
   await expect(composer).toHaveScreenshot('codex-feedback-working.png', {
     mask: [workingState.locator('time')],
   });
+  const accessibility = await new AxeBuilder({ page }).include('.codex-chat-dialog').analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+test('eases a new Codex progress update into the active transcript', async ({ page }) => {
+  await page.goto('/?codexWorking=1&codexIncoming=1');
+  await page.getByRole('button', { name: 'Codex is working' }).click();
+  const progressUpdate = page.locator('.codex-chat-message--progress');
+
+  await expect(progressUpdate).toHaveClass(/codex-chat-message--entering/);
+  await expect(progressUpdate).toHaveCSS('animation-name', 'codex-assistant-message-enter');
+});
+
+test('keeps chat progress and message states static when reduced motion is preferred', async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/?codexWorking=1');
+  await page.getByRole('button', { name: 'Codex is working' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+
+  await expect(composer.locator('.codex-chat-message--progress')).toHaveCSS(
+    'animation-name',
+    'none',
+  );
+  await expect(composer.locator('.codex-chat-message__pulse')).toHaveCSS('animation-name', 'none');
+  await expect(composer.locator('.codex-working-status')).toHaveCSS('animation-name', 'none');
 });
 
 test('never presents a stale thread timestamp as active working time', async ({ page }) => {
@@ -1234,16 +1318,15 @@ test('captures a selected region and queues its prompt for the chosen Codex mode
   await expect(selectionDialog).toHaveScreenshot('codex-feedback-selection.png');
   await page.mouse.up();
 
-  const review = page.getByRole('dialog', { name: 'Review visual feedback' });
-  await review
-    .getByLabel('What should Codex change?')
-    .fill('Fix this layout issue comprehensively and verify all required viewports.');
-  await expect(review).toHaveScreenshot('codex-feedback-review.png');
-  await review.getByRole('button', { name: 'Send to Codex' }).click();
-
   await expect(composer).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Review visual feedback' })).toHaveCount(0);
+  await expect(composer.getByAltText('Selected image: Screenshot 1')).toBeVisible();
+  await composer
+    .getByLabel('Message to Codex')
+    .fill('Fix this layout issue comprehensively and verify all required viewports.');
+  await composer.getByRole('button', { name: 'Send message' }).click();
   await expect(composer.getByLabel('Message to Codex')).toHaveValue('');
-  const inlineAttachment = composer.getByAltText('Image attached to your message');
+  const inlineAttachment = composer.locator('.codex-chat-message__attachment').last();
   await expect(inlineAttachment).toBeVisible();
   await expect(inlineAttachment).toHaveAttribute('src', /^data:image\/svg\+xml/);
   await expect(page.getByRole('dialog', { name: 'Message queued' })).toHaveCount(0);
@@ -1256,7 +1339,8 @@ test('captures a selected region and queues its prompt for the chosen Codex mode
   expect(delivered.effort).toBe('high');
   expect(delivered.workMode).toBe('team');
   expect(delivered.prompt).toContain('Fix this layout issue');
-  expect(delivered.screenshot).toContain('data:image/svg+xml');
+  expect(delivered.screenshots).toHaveLength(1);
+  expect(delivered.screenshots[0]).toContain('data:image/svg+xml');
 
   await composer.getByRole('button', { name: 'Close Codex chat' }).click();
   await expect(trigger).toBeFocused();
@@ -1281,16 +1365,15 @@ test('can review and send the complete captured screenshot without drawing a reg
   await composer.getByRole('button', { name: 'Capture another tab or window' }).click();
   const selectionDialog = page.getByRole('dialog', { name: 'Drag around the issue' });
   await selectionDialog.getByRole('button', { name: 'Use whole screenshot' }).click();
-  const review = page.getByRole('dialog', { name: 'Review visual feedback' });
-  await review.getByLabel('What should Codex change?').fill('Review the complete screen.');
-  await review.getByRole('button', { name: 'Send to Codex' }).click();
-
   await expect(composer).toBeVisible();
-  await expect(composer.getByAltText('Image attached to your message')).toBeVisible();
-  expect(delivered.screenshot).toContain('data:image/svg+xml');
+  await expect(composer.getByAltText('Selected image: Screenshot 1')).toBeVisible();
+  await composer.getByLabel('Message to Codex').fill('Review the complete screen.');
+  await composer.getByRole('button', { name: 'Send message' }).click();
+  await expect(composer.locator('.codex-chat-message__attachment').last()).toBeVisible();
+  expect(delivered.screenshots[0]).toContain('data:image/svg+xml');
 });
 
-test('uploads a camera-roll photo through visual review and sends it with the prompt', async ({
+test('uploads, removes, and sends multiple camera-roll photos inside the active composer', async ({
   page,
 }) => {
   let delivered;
@@ -1309,6 +1392,10 @@ test('uploads a camera-roll photo through visual review and sends it with the pr
   const photoInput = composer.getByLabel('Photo from camera roll', { exact: true });
   const uploadButton = composer.getByRole('button', { name: 'Upload photo from camera roll' });
   await expect(photoInput).toHaveAttribute('accept', 'image/jpeg,image/png,image/webp');
+  await expect(photoInput).toHaveAttribute('multiple', '');
+  await composer.evaluate((element) =>
+    Promise.all(element.getAnimations().map((animation) => animation.finished.catch(() => {}))),
+  );
   const uploadBounds = await uploadButton.boundingBox();
   expect(uploadBounds?.width).toBeGreaterThanOrEqual(44);
   expect(uploadBounds?.height).toBeGreaterThanOrEqual(44);
@@ -1316,23 +1403,31 @@ test('uploads a camera-roll photo through visual review and sends it with the pr
     true,
   );
   const [fileChooser] = await Promise.all([page.waitForEvent('filechooser'), uploadButton.click()]);
-  await fileChooser.setFiles({
-    name: 'camera-roll.png',
-    mimeType: 'image/png',
-    buffer: Buffer.from(capturePng.split(',')[1], 'base64'),
-  });
-
-  const review = page.getByRole('dialog', { name: 'Review visual feedback' });
-  await expect(
-    review.getByAltText('Selected photo or screenshot that will be sent to Codex'),
-  ).toBeVisible();
-  await review.getByLabel('What should Codex change?').fill('Use this photo as visual context.');
-  await review.getByRole('button', { name: 'Send to Codex' }).click();
+  const photoBuffer = Buffer.from(capturePng.split(',')[1], 'base64');
+  await fileChooser.setFiles([
+    { name: 'first-photo.png', mimeType: 'image/png', buffer: photoBuffer },
+    { name: 'remove-photo.png', mimeType: 'image/png', buffer: photoBuffer },
+    { name: 'second-photo.png', mimeType: 'image/png', buffer: photoBuffer },
+  ]);
 
   await expect(composer).toBeVisible();
-  await expect(composer.getByAltText('Image attached to your message')).toBeVisible();
-  expect(delivered.prompt).toBe('Use this photo as visual context.');
-  expect(delivered.screenshot).toBe(capturePng);
+  await expect(page.getByRole('dialog', { name: 'Review visual feedback' })).toHaveCount(0);
+  await expect(composer.getByAltText('Selected image: first-photo.png')).toBeVisible();
+  await expect(composer.getByAltText('Selected image: second-photo.png')).toBeVisible();
+  await expect(composer.getByText('3 of 5 images selected')).toBeVisible();
+  const removePhotoButton = composer.getByRole('button', { name: 'Remove remove-photo.png' });
+  await expect(removePhotoButton).toBeEnabled();
+  await removePhotoButton.click();
+  await expect(composer.getByAltText('Selected image: remove-photo.png')).toHaveCount(0);
+  await composer.getByLabel('Message to Codex').fill('Use these photos as visual context.');
+  await expect(composer).toHaveScreenshot('codex-feedback-multi-image-draft.png');
+  const accessibility = await new AxeBuilder({ page }).include('.codex-chat-dialog').analyze();
+  expect(accessibility.violations).toEqual([]);
+  await composer.getByRole('button', { name: 'Send message' }).click();
+
+  await expect(composer.locator('.codex-chat-message__attachment')).toHaveCount(2);
+  expect(delivered.prompt).toBe('Use these photos as visual context.');
+  expect(delivered.screenshots).toEqual([capturePng, capturePng]);
 });
 
 test('restores focus when Escape dismisses the control panel', async ({ page }) => {
@@ -1342,6 +1437,67 @@ test('restores focus when Escape dismisses the control panel', async ({ page }) 
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog', { name: 'Codex', exact: true })).toBeHidden();
   await expect(trigger).toBeFocused();
+});
+
+test('animates the chat dialog in and out while respecting reduced motion', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+  const trigger = page.getByRole('button', { name: 'Chat with Codex' });
+  await trigger.click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+
+  await expect(composer).toHaveAttribute('data-state', 'open');
+  await expect(composer).toHaveCSS('animation-name', 'codex-chat-dialog-in');
+
+  const closingState = await composer
+    .getByRole('button', { name: 'Close Codex chat' })
+    .evaluate(async (button) => {
+      button.click();
+      await new Promise(requestAnimationFrame);
+      const dialog = document.querySelector('.codex-chat-dialog');
+      return dialog
+        ? {
+            state: dialog.getAttribute('data-state'),
+            animationName: getComputedStyle(dialog).animationName,
+          }
+        : null;
+    });
+  expect(closingState).toEqual({
+    state: 'closed',
+    animationName: 'codex-chat-dialog-out',
+  });
+  await expect(composer).toBeHidden();
+  await expect(trigger).toBeFocused();
+
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await trigger.click();
+  await expect(page.getByRole('dialog', { name: 'Codex', exact: true })).toHaveCSS(
+    'animation-name',
+    'none',
+  );
+});
+
+test('centers the connection status tag within the compact agent header', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  const badge = composer.locator('.codex-feedback-dialog__status .status-badge');
+
+  await expect(badge).toHaveText('Ready');
+  const contentInsets = await badge.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const textBounds = range.getBoundingClientRect();
+    return {
+      top: textBounds.top - bounds.top,
+      right: bounds.right - textBounds.right,
+      bottom: bounds.bottom - textBounds.bottom,
+      left: textBounds.left - bounds.left,
+    };
+  });
+  expect(Math.abs(contentInsets.top - contentInsets.bottom)).toBeLessThanOrEqual(2);
+  expect(Math.abs(contentInsets.left - contentInsets.right)).toBeLessThanOrEqual(2);
 });
 
 test('hides the chat and model controls before the browser capture chooser opens', async ({

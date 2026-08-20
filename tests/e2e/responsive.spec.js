@@ -3692,7 +3692,14 @@ test('displays the newest test package above retained package versions', async (
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const packagePicker = page.getByLabel('Test agent package');
-  await expect(packagePicker).toHaveValue('agent-package-local-v15-9-permanent-railway-runtime');
+  await expect(packagePicker).toHaveValue(
+    'agent-package-local-v16-4-private-workspace-preview-access',
+  );
+  await expect(packagePicker).toContainText('v16.4 · Approved test');
+  await expect(packagePicker).toContainText('v16.3 · Approved test');
+  await expect(packagePicker).toContainText('v16.2 · Approved test');
+  await expect(packagePicker).toContainText('v16.1 · Approved test');
+  await expect(packagePicker).toContainText('v16.0 · Approved test');
   await expect(packagePicker).toContainText('v15.9 · Approved test');
   await expect(packagePicker).toContainText('v15.8 · Approved test');
   await expect(packagePicker).toContainText('v15.7 · Approved test');
@@ -3798,6 +3805,11 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v16.4', 'Private workspace preview access'],
+    ['v16.3', 'Contextual Codex chat'],
+    ['v16.2', 'Inline multi-image Codex chat'],
+    ['v16.1', 'Animated Codex chat'],
+    ['v16.0', 'Fast Codex chat'],
     ['v15.9', 'Permanent Railway Studio runtime'],
     ['v15.8', 'Subscription-safe Codex runtime'],
     ['v15.7', 'Uninterrupted Codex recovery'],
@@ -4046,7 +4058,7 @@ test('keeps a failed test available without blocking another test', async ({ pag
   const chooser = page.locator('.builder-run__tests');
   await expect(chooser).toBeVisible();
   await expect(page.getByLabel('Test agent package')).toHaveValue(
-    'agent-package-local-v15-9-permanent-railway-runtime',
+    'agent-package-local-v16-4-private-workspace-preview-access',
   );
   await expect(chooser.getByLabel('Create page from scratch')).toBeChecked();
   await expect(chooser.getByLabel('Previous built page')).toHaveCount(0);
@@ -4320,8 +4332,8 @@ test('separates test refinement from the published builder agent package', async
   );
   await expect(page.getByRole('heading', { name: 'Every saved build package' })).toBeVisible();
   const versionCards = page.locator('.agent-package-version-ledger__list article');
-  await expect(versionCards).toHaveCount(101);
-  await expect(versionCards.first().getByRole('heading')).toHaveText('v15.9');
+  await expect(versionCards).toHaveCount(106);
+  await expect(versionCards.first().getByRole('heading')).toHaveText('v16.4');
   const stagedV7Card = versionCards.filter({
     hasText: 'Five tested behaviours staged for the next production package.',
   });

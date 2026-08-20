@@ -331,6 +331,13 @@ const localUninterruptedCodexRecoveryPackageId =
 const localSubscriptionSafeCodexRuntimePackageId =
   'agent-package-local-v15-8-subscription-safe-codex-runtime';
 const localPermanentRailwayRuntimePackageId = 'agent-package-local-v15-9-permanent-railway-runtime';
+const localFastCodexChatPackageId = 'agent-package-local-v16-fast-codex-chat';
+const localAnimatedCodexChatPackageId = 'agent-package-local-v16-1-animated-codex-chat';
+const localInlineMultiImageCodexChatPackageId =
+  'agent-package-local-v16-2-inline-multi-image-codex-chat';
+const localContextualCodexChatPackageId = 'agent-package-local-v16-3-contextual-codex-chat';
+const localPrivateWorkspacePreviewAccessPackageId =
+  'agent-package-local-v16-4-private-workspace-preview-access';
 
 type StoreName =
   | 'activities'
@@ -2319,10 +2326,100 @@ export class SiteforgeRepository {
         'Replaces the disposable Codespace lifecycle with a secured, persistent Studio runtime while retaining Supabase authorization and the existing ChatGPT subscription billing boundary.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localFastCodexChatPackage: AgentPackage = {
+      ...localPermanentRailwayRuntimePackage,
+      id: localFastCodexChatPackageId,
+      version: 16,
+      basePackageId: localPermanentRailwayRuntimePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v16.0',
+      contractAddendum:
+        'The Studio Codex chat settings expose the selected model’s Fast service tier independently from its reasoning level. The preference persists locally and applies consistently to new conversations, queued turns, interrupted continuations, and recovered work.',
+      instructionsAddendum:
+        'Discover service tiers from the live Codex model catalog. Enable Fast only when the selected model advertises the priority tier, label its increased usage clearly, default safely to Standard, and pass the selected service tier through every app-server thread and turn lifecycle without silently changing reasoning effort.',
+      summary:
+        'Fast Codex chat test package: adds a persistent, model-aware Fast setting with end-to-end priority-tier delivery.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Gives Studio reviewers the same explicit speed choice as Codex while preserving accurate model capability checks and lifecycle recovery.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localAnimatedCodexChatPackage: AgentPackage = {
+      ...localFastCodexChatPackage,
+      id: localAnimatedCodexChatPackageId,
+      version: 16.1,
+      basePackageId: localFastCodexChatPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v16.1',
+      contractAddendum:
+        'The Studio Codex chat enters and exits with a restrained, directional panel transition while preserving the dialog lifecycle, focus restoration, and immediate access to the workspace trigger.',
+      instructionsAddendum:
+        'Animate both the opening and closing dialog states with short opacity, translation, and scale transitions anchored to the launcher edge. Keep the exit state mounted until its animation completes and disable all panel and overlay motion for prefers-reduced-motion.',
+      summary:
+        'Animated Codex chat test package: adds polished open and close transitions with a reduced-motion fallback.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes opening and dismissing the Studio chat feel spatially connected to its launcher without delaying interaction or overriding accessibility preferences.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localInlineMultiImageCodexChatPackage: AgentPackage = {
+      ...localAnimatedCodexChatPackage,
+      id: localInlineMultiImageCodexChatPackageId,
+      version: 16.2,
+      basePackageId: localAnimatedCodexChatPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v16.2',
+      contractAddendum:
+        'The active Studio Codex composer accepts up to five JPEG, PNG, or WebP images in one message. Selected images remain inside the current draft, can be removed individually, and move into the submitted user message without a separate visual-review dialog.',
+      instructionsAddendum:
+        'Append valid multi-file selections to the active draft, preserve the message and ready images after failures, reject invalid or excess files without discarding valid selections, and deliver every ready image as a localImage input in original selection order. Keep screenshot region selection available, then return the result to the same composer.',
+      summary:
+        'Inline multi-image Codex chat test package: keeps up to five selected photos and screenshots inside the active message composer and delivers them together.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Removes the detached upload-review workflow and makes visual context behave like a durable, editable part of the current Codex message.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localContextualCodexChatPackage: AgentPackage = {
+      ...localInlineMultiImageCodexChatPackage,
+      id: localContextualCodexChatPackageId,
+      version: 16.3,
+      basePackageId: localInlineMultiImageCodexChatPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v16.3',
+      contractAddendum:
+        'Studio chat distinguishes concise Codex progress commentary from final answers, asks for useful context at meaningful transitions, and gives new user, assistant, queued, and working states restrained directional easing with a static reduced-motion fallback.',
+      instructionsAddendum:
+        'During longer work, provide concise verified commentary before long tool runs and after meaningful findings or changes. Explain what is being checked, what changed, and what remains without exposing hidden reasoning or fabricating progress. Preserve message roles and commentary phases in the transcript, animate newly rendered states with restrained directional easing, and disable non-essential motion for prefers-reduced-motion.',
+      summary:
+        'Contextual Codex chat test package: adds meaningful progress notes and polished, accessible message motion.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes longer Codex turns feel responsive and understandable while preserving truthful status, transcript semantics, and reduced-motion access.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localPrivateWorkspacePreviewAccessPackage: AgentPackage = {
+      ...localContextualCodexChatPackage,
+      id: localPrivateWorkspacePreviewAccessPackageId,
+      version: 16.4,
+      basePackageId: localContextualCodexChatPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v16.4',
+      contractAddendum:
+        'The permanent Studio runtime issues working, expiring capabilities for the private editable-workspace preview domain so authenticated reviewers can see the current source immediately without publishing it.',
+      instructionsAddendum:
+        'Verify private workspace-preview capabilities against the current clock, reject expired or invalid signatures, exchange a valid query capability for the secure preview cookie, and proxy only the active matching workspace. Keep the preview private, expiring, no-index, and separate from production publication.',
+      summary:
+        'Private workspace preview access test package: restores valid expiring links for immediate review of the active Studio or website source.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the existing private Railway preview lane usable for immediate source review while preserving its signed, expiring access boundary.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localPrivateWorkspacePreviewAccessPackage,
+          localContextualCodexChatPackage,
+          localInlineMultiImageCodexChatPackage,
+          localAnimatedCodexChatPackage,
+          localFastCodexChatPackage,
           localPermanentRailwayRuntimePackage,
           localSubscriptionSafeCodexRuntimePackage,
           localUninterruptedCodexRecoveryPackage,
@@ -2430,6 +2527,11 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localPrivateWorkspacePreviewAccessPackage,
+          localContextualCodexChatPackage,
+          localInlineMultiImageCodexChatPackage,
+          localAnimatedCodexChatPackage,
+          localFastCodexChatPackage,
           localPermanentRailwayRuntimePackage,
           localSubscriptionSafeCodexRuntimePackage,
           localUninterruptedCodexRecoveryPackage,
@@ -2540,6 +2642,11 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localPrivateWorkspacePreviewAccessPackage,
+            localContextualCodexChatPackage,
+            localInlineMultiImageCodexChatPackage,
+            localAnimatedCodexChatPackage,
+            localFastCodexChatPackage,
             localPermanentRailwayRuntimePackage,
             localSubscriptionSafeCodexRuntimePackage,
             localUninterruptedCodexRecoveryPackage,

@@ -23,6 +23,11 @@ test('creates expiring private workspace preview capabilities', () => {
     undefined,
   );
   assert.equal(verifyWorkspacePreviewToken(token, secret, { now: () => 61_001 }), undefined);
+  assert.equal(
+    verifyWorkspacePreviewToken(createWorkspacePreviewToken('prospect-site', secret), secret)
+      ?.directory,
+    'prospect-site',
+  );
   const url = new URL(
     workspacePreviewUrl('https://workspace.example.com', 'prospect-site', secret),
   );
