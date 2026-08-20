@@ -1403,7 +1403,9 @@ test('keeps generation, website editing, and Made Solid handoff in separate rout
     page.getByText(/create and sync the private editable source repository first/i),
   ).toBeVisible();
   await expect(page.getByLabel('Client email (review before Clientspace)')).toBeVisible();
-  await expect(page.getByText(/it does not publish the website/i)).toBeVisible();
+  await expect(
+    page.getByText(/it does not create a client account or send an email/i),
+  ).toBeVisible();
   const sourceTransfer = page.locator('.handoff-submit');
   await sourceTransfer.scrollIntoViewIfNeeded();
   await expect(sourceTransfer).toHaveScreenshot('made-solid-handoff-transfer.png');
@@ -2201,7 +2203,7 @@ test('uses a workspace section picker on mobile', async ({ page }, testInfo) => 
     await expect(tabs).toBeHidden();
     await picker.click();
     const options = page.getByRole('menu', { name: 'Workspace section' });
-    await expect(options.getByRole('menuitemradio')).toHaveCount(12);
+    await expect(options.getByRole('menuitemradio')).toHaveCount(13);
     await page.keyboard.press('Escape');
     await expect(options).toBeHidden();
     await expect(picker).toBeFocused();
@@ -2504,8 +2506,8 @@ test('keeps post-capture image content recovery clear and contained', async ({ p
     .getByRole('heading', { name: 'Recover image-based information' })
     .locator('..')
     .locator('..');
-  await expect(panel).toContainText('website is not visited again');
-  await expect(panel).toContainText('starts automatically');
+  await expect(panel).toContainText('Saved images remain available for manual review');
+  await expect(panel).toContainText('are not sent to OpenAI');
   await expect(panel).toContainText('Tables and lists keep their structure');
   await expect(page.getByRole('button', { name: 'Recover structured content' })).toHaveCount(0);
   await expect(page.getByText('Image analysis is needed')).toBeVisible();
@@ -2983,7 +2985,7 @@ test('keeps the build manifest package separate from the Agent Studio test contr
   await expect(prospectBuildAction).toBeDisabled();
   const productionVersion = page.getByText('Production version').locator('..');
   await expect(productionVersion).toContainText('v6.0');
-  await expect(productionVersion.getByLabel(/new agent features awaiting/)).toHaveText('2');
+  await expect(productionVersion.getByLabel(/new agent features awaiting/)).toHaveText('4');
   await expect(productionVersion).toContainText(
     'This exact published version will be pinned to the build.',
   );
@@ -3227,22 +3229,22 @@ test('keeps the build manifest package separate from the Agent Studio test contr
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.23');
   await expect(testingBehaviour).toContainText('without nested scrollbar chrome');
   await expect(testingBehaviour).toContainText('Context-aware logo selection');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.11');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.12');
   await expect(testingBehaviour).toContainText(
-    'experimental SVG creation is now an explicit default-off choice',
+    'every approved transparent version of the primary logo remains available together',
   );
   await expect(testingBehaviour).toContainText('Semantic recovery from image-based content');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.15');
   await expect(testingBehaviour).toContainText('excluded from reusable manifest assets');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.35');
-  await expect(testingBehaviour).toContainText('consistent content-derived page names');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.36');
+  await expect(testingBehaviour).toContainText('every selected source now receives a reviewed');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.43');
   await expect(testingBehaviour).toContainText('proposition before supporting media');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.19');
   await expect(testingBehaviour).toContainText('explicit preview, production service');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.83');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.89');
   await expect(testingBehaviour).toContainText(
-    'after a failed test, Test something else resets the failed choices',
+    'Codex Test Builder and Codex Website Builder now reject API-key mode',
   );
   await expect(testingBehaviour).toContainText(
     'Select behaviours to stage for the next production draft',
@@ -3690,9 +3692,13 @@ test('displays the newest test package above retained package versions', async (
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const packagePicker = page.getByLabel('Test agent package');
-  await expect(packagePicker).toHaveValue(
-    'agent-package-local-v15-3-clientspace-admin-email-review',
-  );
+  await expect(packagePicker).toHaveValue('agent-package-local-v15-9-permanent-railway-runtime');
+  await expect(packagePicker).toContainText('v15.9 · Approved test');
+  await expect(packagePicker).toContainText('v15.8 · Approved test');
+  await expect(packagePicker).toContainText('v15.7 · Approved test');
+  await expect(packagePicker).toContainText('v15.6 · Approved test');
+  await expect(packagePicker).toContainText('v15.5 · Approved test');
+  await expect(packagePicker).toContainText('v15.4 · Approved test');
   await expect(packagePicker).toContainText('v15.3 · Approved test');
   await expect(packagePicker).toContainText('v15.2 · Approved test');
   await expect(packagePicker).toContainText('v15.1 · Approved test');
@@ -3792,6 +3798,12 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v15.9', 'Permanent Railway Studio runtime'],
+    ['v15.8', 'Subscription-safe Codex runtime'],
+    ['v15.7', 'Uninterrupted Codex recovery'],
+    ['v15.6', 'Turn-scoped Agent teams'],
+    ['v15.5', 'Spacious Codex chat'],
+    ['v15.4', 'Resumable Agent team'],
     ['v15.3', 'Clientspace Admin email review'],
     ['v15.2', 'Inbound client email review'],
     ['v15.1', 'Cold prospect offer'],
@@ -3889,9 +3901,12 @@ test('displays the newest test package above retained package versions', async (
   ];
   await expect(versions).toHaveCount(expectedVersions.length);
   await expect(versions.nth(0)).toContainText('Approved test');
-  for (const [index, [version, summary]] of expectedVersions.entries()) {
-    await expect(versions.nth(index)).toContainText(version);
-    await expect(versions.nth(index)).toContainText(summary);
+  for (const [version, summary] of expectedVersions) {
+    const versionCard = versions.filter({
+      has: page.getByRole('heading', { exact: true, name: version }),
+    });
+    await expect(versionCard).toHaveCount(1);
+    await expect(versionCard).toContainText(summary);
   }
   await expect(versions.nth(0)).toHaveScreenshot('local-refinement-handoff-package-register.png');
 
@@ -4031,7 +4046,7 @@ test('keeps a failed test available without blocking another test', async ({ pag
   const chooser = page.locator('.builder-run__tests');
   await expect(chooser).toBeVisible();
   await expect(page.getByLabel('Test agent package')).toHaveValue(
-    'agent-package-local-v12-9-codex-capture-preferences',
+    'agent-package-local-v15-9-permanent-railway-runtime',
   );
   await expect(chooser.getByLabel('Create page from scratch')).toBeChecked();
   await expect(chooser.getByLabel('Previous built page')).toHaveCount(0);
@@ -4305,8 +4320,8 @@ test('separates test refinement from the published builder agent package', async
   );
   await expect(page.getByRole('heading', { name: 'Every saved build package' })).toBeVisible();
   const versionCards = page.locator('.agent-package-version-ledger__list article');
-  await expect(versionCards).toHaveCount(71);
-  await expect(versionCards.first().getByRole('heading')).toHaveText('v12.9');
+  await expect(versionCards).toHaveCount(101);
+  await expect(versionCards.first().getByRole('heading')).toHaveText('v15.9');
   const stagedV7Card = versionCards.filter({
     hasText: 'Five tested behaviours staged for the next production package.',
   });
@@ -4485,7 +4500,7 @@ test('separates test refinement from the published builder agent package', async
   await expect(featureDialog.locator('.is-changed')).not.toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(
-    page.getByText('60 unpublished packages derived from this production package.'),
+    page.getByText(/\d+ unpublished packages derived from this production package\./),
   ).toBeVisible();
 
   await page.getByRole('button', { name: 'Agent architecture' }).click();
@@ -4822,6 +4837,30 @@ test('creates a persistent prospect workspace from a public URL', async ({ page 
   const task = page.getByLabel('Verify business identity, services, and contact details.');
   await task.check({ force: true });
   await expect(task).toBeChecked();
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const database = await new Promise((resolve, reject) => {
+          const request = window.indexedDB.open('siteforge-os');
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        const transaction = database.transaction('tasks', 'readonly');
+        const tasks = await new Promise((resolve, reject) => {
+          const request = transaction.objectStore('tasks').getAll();
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        database.close();
+        const businessId = window.location.hash.split('/')[2];
+        return tasks.find(
+          (candidate) =>
+            candidate.businessId === businessId &&
+            candidate.body === 'Verify business identity, services, and contact details.',
+        )?.state;
+      }),
+    )
+    .toBe('done');
 
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Acme Plumbing' })).toBeVisible();

@@ -7188,6 +7188,7 @@ a:focus-visible {
 }
 .agent-architecture-runtime__tabs .button {
   width: 100%;
+  min-height: 45px;
 }
 .agent-architecture-runtime__detail {
   display: grid;
@@ -10139,9 +10140,11 @@ a:focus-visible {
 .pipeline-funnel__steps article > div strong {
   font-size: 1.3rem;
 }
+.pipeline-funnel__steps small {
+  color: var(--color-ink);
+}
 .pipeline-funnel__steps article > small {
   grid-column: 1 / -1;
-  color: var(--color-muted);
 }
 @media (max-width: 720px) {
   .pipeline-funnel__steps {
