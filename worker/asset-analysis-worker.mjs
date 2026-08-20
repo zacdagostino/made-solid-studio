@@ -3,16 +3,22 @@
 import { createHash } from 'node:crypto';
 import { hostname } from 'node:os';
 import { createClient } from '@supabase/supabase-js';
+import { openAiApiEnabled, openAiApiKey } from './openai-api-policy.mjs';
 import { chromium } from 'playwright';
 import { recordAiUsage } from './ai-usage.mjs';
 import { assertPublicUrl } from './security.mjs';
-import { coloursFromSvg, isBrandColour } from './brand-evidence.mjs';
+import { coloursFromSvg, isBrandColour, isLogoBrandColour } from './brand-evidence.mjs';
 import {
   extractLogoPalette,
   lockRasterColoursToSource,
   vectorizeRasterLogo,
 } from './logo-vectorizer.mjs';
-import { alphaMattePreview, logoMatte, transparentLogoVariants } from './logo-variants.mjs';
+import {
+  alphaMattePreview,
+  logoBrandColours,
+  logoMatte,
+  transparentLogoVariants,
+} from './logo-variants.mjs';
 
 const artifactBucket = 'siteforge-artifacts';
 const requestTimeoutMs = 90_000;
@@ -115,6 +121,18 @@ function recordValue(value) {
 
 function isSelectedForAnalysis(asset) {
   return recordValue(asset.metadata).analysisSelected !== false;
+}
+
+function uniqueAssetsByContent(assets, preferredIds = new Set()) {
+  const groups = new Map();
+  for (const asset of assets) {
+    const key = readString(asset.sha256) || `artifact:${asset.id}`;
+    const existing = groups.get(key);
+    if (!existing || (preferredIds.has(asset.id) && !preferredIds.has(existing.id))) {
+      groups.set(key, asset);
+    }
+  }
+  return [...groups.values()];
 }
 
 function storedAnnotationFromRow(row) {
@@ -737,14 +755,14 @@ async function storeLogoAppearanceVariants(
   alphaMatte,
   alphaMatteBlob,
   alphaMatteRequestId,
+  appearanceRaster,
   onStored,
 ) {
   const metadata = recordValue(sourceAsset.metadata);
   const retryToken = readString(job.editable_logo_retry_token);
-  const variants = transparentLogoVariants(imageDataFromRaster(raster), palette, {
-    sourceReference: imageDataFromRaster(sourceReference),
-    alphaMatte: alphaMatte ? imageDataFromRaster(alphaMatte) : undefined,
-    useAiMatteOnly: Boolean(alphaMatte),
+  const verifiedAppearanceRaster = appearanceRaster ?? sourceReference ?? raster;
+  const variants = transparentLogoVariants(imageDataFromRaster(verifiedAppearanceRaster), palette, {
+    sourceReference: imageDataFromRaster(verifiedAppearanceRaster),
   });
   const matteVariant = alphaMatte
     ? { key: 'alpha-matte', label: 'ChatGPT alpha matte', data: alphaMatte.data }
@@ -752,8 +770,8 @@ async function storeLogoAppearanceVariants(
   const matteBlob =
     alphaMatteBlob ??
     (await rasterBlobFromPixels(browser, {
-      width: raster.width,
-      height: raster.height,
+      width: alphaMatte?.width ?? verifiedAppearanceRaster.width,
+      height: alphaMatte?.height ?? verifiedAppearanceRaster.height,
       data: matteVariant.data,
     }));
   const matteContent = Buffer.from(await matteBlob.arrayBuffer());
@@ -784,11 +802,11 @@ async function storeLogoAppearanceVariants(
         pageUrl: readString(metadata.pageUrl),
         assetType: 'logo_alpha_matte',
         detail:
-          'Private, reviewable high-quality alpha matte created by ChatGPT. This exact black-and-white output drives the transparent logo versions.',
+          'Private, reviewable high-quality alpha matte. Source-owned geometry and colour regions drive the transparent logo versions.',
         context: readString(metadata.context),
         logoVariant: 'alpha_matte',
-        privateAiSuggestion: true,
-        aiAlphaMatte: true,
+        privateAiSuggestion: Boolean(alphaMatteBlob),
+        aiAlphaMatte: Boolean(alphaMatteBlob),
         rawAiOutput: Boolean(alphaMatteBlob),
         ...(alphaMatteRequestId ? { aiAlphaMatteRequestId: alphaMatteRequestId } : {}),
         transparentBackground: false,
@@ -804,8 +822,8 @@ async function storeLogoAppearanceVariants(
   await onStored?.(matteVariant, 0, variants.length);
   for (const [index, variant] of variants.entries()) {
     const blob = await rasterBlobFromPixels(browser, {
-      width: raster.width,
-      height: raster.height,
+      width: verifiedAppearanceRaster.width,
+      height: verifiedAppearanceRaster.height,
       data: variant.data,
     });
     const content = Buffer.from(await blob.arrayBuffer());
@@ -973,54 +991,19 @@ async function resampleLogoForGeometrySimplification(browser, raster) {
 }
 
 async function pixelColourCandidates(browser, blob) {
-  const page = await browser.newPage({ viewport: { width: 400, height: 400 } });
-  try {
-    const source = `data:${blob.type || 'image/avif'};base64,${Buffer.from(
-      await blob.arrayBuffer(),
-    ).toString('base64')}`;
-    await page.setContent(`<img id="asset" src="${source}">`);
-    return await page.evaluate(async () => {
-      const image = document.querySelector('#asset');
-      if (!(image instanceof HTMLImageElement)) return [];
-      await image.decode();
-      const longestEdge = 180;
-      const scale = Math.min(1, longestEdge / Math.max(image.naturalWidth, image.naturalHeight));
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-      const context = canvas.getContext('2d', { willReadFrequently: true });
-      if (!context) return [];
-      context.drawImage(image, 0, 0, canvas.width, canvas.height);
-      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-      const buckets = new Map();
-      for (let index = 0; index < pixels.length; index += 16) {
-        if (pixels[index + 3] < 200) continue;
-        const red = Math.min(255, Math.round(pixels[index] / 24) * 24);
-        const green = Math.min(255, Math.round(pixels[index + 1] / 24) * 24);
-        const blue = Math.min(255, Math.round(pixels[index + 2] / 24) * 24);
-        const maximum = Math.max(red, green, blue) / 255;
-        const minimum = Math.min(red, green, blue) / 255;
-        const saturation = maximum === 0 ? 0 : (maximum - minimum) / maximum;
-        const brightness = (red + green + blue) / (255 * 3);
-        if (brightness > 0.94 || brightness < 0.08 || saturation < 0.28) continue;
-        const key = `${red}-${green}-${blue}`;
-        const bucket = buckets.get(key) ?? { red, green, blue, count: 0 };
-        bucket.count += 1;
-        buckets.set(key, bucket);
-      }
-      return [...buckets.values()]
-        .sort((left, right) => right.count - left.count)
-        .slice(0, 8)
-        .map(({ red, green, blue, count }) => ({
-          colour: `#${[red, green, blue]
-            .map((value) => value.toString(16).padStart(2, '0'))
-            .join('')}`.toUpperCase(),
-          occurrenceCount: count,
-        }));
-    });
-  } finally {
-    await page.close();
-  }
+  const raster = await rasteriseLogo(browser, blob, {
+    longestEdge: 640,
+    pixelBudget: 360_000,
+  });
+  const palette = logoBrandColours(extractLogoPalette(imageDataFromRaster(raster)));
+  return palette.map(({ red, green, blue }, index) => ({
+    colour: `#${[red, green, blue]
+      .map((value) => Math.round(value).toString(16).padStart(2, '0'))
+      .join('')}`.toUpperCase(),
+    // Palette order reflects source coverage. Retain every distinct cluster so a small accent
+    // inside a long wordmark cannot be dropped by coarse top-frequency buckets.
+    occurrenceCount: Math.max(1, palette.length - index),
+  }));
 }
 
 async function logoColourEvidence(browser, blob, asset, annotation) {
@@ -1220,7 +1203,8 @@ async function saveBrandColourEvidence(client, job, evidence) {
   if (deleteError) throw new Error('The worker could not refresh previous brand-colour evidence.');
   const unique = new Map();
   for (const item of evidence) {
-    if (!isBrandColour(item.colour)) continue;
+    const directLogoColour = item.sourceType === 'logo_vector' || item.sourceType === 'logo_pixels';
+    if (!(directLogoColour ? isLogoBrandColour(item.colour) : isBrandColour(item.colour))) continue;
     const sourceKey = `${item.sourceType}|${item.assetId ?? item.sourceUrl ?? ''}|${item.sourceLabel}|${item.colour}`;
     const current = unique.get(sourceKey);
     if (current) current.occurrence_count += item.occurrenceCount;
@@ -1385,6 +1369,9 @@ async function updateProgress(client, job, workerId, patch) {
 
 async function processJob(client, job, workerId, apiKey, model) {
   const cancellation = createCancellationMonitor(client, job, workerId);
+  let analyzedOutputCount = 0;
+  let savedEvidenceCount;
+  let savedLogoVersionCount = 0;
   try {
     const { data: business, error: businessError } = await client
       .from('businesses')
@@ -1444,10 +1431,23 @@ async function processJob(client, job, workerId, apiKey, model) {
     const selectedPrimaryLogoIds = new Set(
       (brandKits ?? []).map((kit) => readString(kit.primary_logo_artifact_id)).filter(Boolean),
     );
+    const analysisScope = ['brand_colours', 'logo_versions'].includes(
+      readString(job.analysis_scope),
+    )
+      ? readString(job.analysis_scope)
+      : 'full';
+    const colourOnly = analysisScope === 'brand_colours';
+    const logoVersionsOnly = analysisScope === 'logo_versions';
+    if (colourOnly && !selectedPrimaryLogoIds.size) {
+      throw new Error(
+        'Choose an original primary logo in the Brand Kit before redoing its colours.',
+      );
+    }
     const retryEditableLogoAssetId = readString(job.editable_logo_retry_asset_id);
+    const createEditableSvg = job.editable_logo_generation_enabled === true;
     const simplifyEditableLogoGeometry = job.editable_logo_simplification_enabled === true;
     const editableLogoVectorizerProvider =
-      readString(job.editable_logo_vectorizer_provider) === 'vectorizer_ai'
+      createEditableSvg && readString(job.editable_logo_vectorizer_provider) === 'vectorizer_ai'
         ? 'vectorizer_ai'
         : 'vtracer';
     const conversionAnnotation = (asset) => {
@@ -1487,41 +1487,45 @@ async function processJob(client, job, workerId, apiKey, model) {
         .map((asset) => readString(recordValue(asset.metadata).derivedFromAssetId))
         .filter(Boolean),
     );
-    const selectedAssets = retryEditableLogoAssetId
-      ? (assets ?? []).filter(
-          (asset) => asset.id === retryEditableLogoAssetId && !isDerivedVectorSuggestion(asset),
-        )
-      : (assets ?? []).filter(
-          (asset) =>
-            !isDerivedVectorSuggestion(asset) &&
-            (isSelectedForAnalysis(asset) || selectedPrimaryLogoIds.has(asset.id)),
+    const selectedAssets = uniqueAssetsByContent(
+      (assets ?? []).filter((asset) => {
+        if (isDerivedVectorSuggestion(asset)) return false;
+        if (colourOnly) return selectedPrimaryLogoIds.has(asset.id);
+        if (logoVersionsOnly) return asset.id === retryEditableLogoAssetId;
+        return (
+          isSelectedForAnalysis(asset) ||
+          selectedPrimaryLogoIds.has(asset.id) ||
+          asset.id === retryEditableLogoAssetId
         );
-    const assetsNeedingAnalysis = retryEditableLogoAssetId
-      ? []
-      : selectedAssets.filter(
-          (asset) =>
-            !isDerivedVectorSuggestion(asset) &&
-            !selectedPrimaryLogoIds.has(asset.id) &&
-            (!annotationsByAsset.has(asset.id) || annotationsByAsset.get(asset.id)?.retryable),
-        );
-    const vectorCandidates = retryEditableLogoAssetId
-      ? selectedAssets.filter(
-          (asset) =>
-            asset.id === retryEditableLogoAssetId &&
-            canCreateEditableLogoVariant(asset, conversionAnnotation(asset)),
-        )
-      : [];
+      }),
+      selectedPrimaryLogoIds,
+    );
+    const assetsNeedingAnalysis = analysisScope === 'full' ? selectedAssets : [];
+    const vectorCandidates =
+      createEditableSvg && logoVersionsOnly && retryEditableLogoAssetId
+        ? selectedAssets.filter(
+            (asset) =>
+              asset.id === retryEditableLogoAssetId &&
+              canCreateEditableLogoVariant(asset, conversionAnnotation(asset)),
+          )
+        : [];
     const totalItems =
-      assetsNeedingAnalysis.length + vectorCandidates.length + retryEditableLogoAssetId
-        ? 0
-        : Math.min((pages ?? []).length, maxBrandEvidencePages);
+      assetsNeedingAnalysis.length +
+      vectorCandidates.length +
+      (analysisScope === 'full'
+        ? Math.min((pages ?? []).length, maxBrandEvidencePages)
+        : selectedAssets.length);
     await updateProgress(client, job, workerId, {
       progress_phase: 'preparing',
-      progress_detail: assetsNeedingAnalysis.length
-        ? 'Private visual assets loaded. Preparing newly captured images for analysis.'
-        : vectorCandidates.length
-          ? 'Preparing high-fidelity transparent logo versions from the approved logo.'
-          : 'Existing visual suggestions retained. Refreshing deterministic brand evidence only.',
+      progress_detail: colourOnly
+        ? 'Loading the selected original logo only. Other assets and captured pages will not be reanalysed.'
+        : assetsNeedingAnalysis.length
+          ? retryEditableLogoAssetId
+            ? 'Private visual assets loaded. Preparing newly captured images for analysis alongside the logo refresh.'
+            : 'Private visual assets loaded. Preparing a fresh analysis of every selected image.'
+          : vectorCandidates.length
+            ? 'Preparing high-fidelity transparent logo versions from the approved logo.'
+            : 'Existing visual suggestions retained. Refreshing deterministic brand evidence only.',
       current_asset_id: null,
       total_items: totalItems,
       completed_items: 0,
@@ -1628,6 +1632,7 @@ async function processJob(client, job, workerId, apiKey, model) {
           crawl_run_id: job.crawl_run_id,
           asset_id: asset.id,
           analysis_job_id: job.id,
+          analysis_run_token: job.run_token,
           source_context: sourceContext,
           observed_description: annotation.observedDescription,
           visible_text: annotation.visibleText,
@@ -1651,6 +1656,7 @@ async function processJob(client, job, workerId, apiKey, model) {
         retryable: annotation.raw?.processingStatus === 'unavailable',
       });
       completedItems += 1;
+      analyzedOutputCount += 1;
       await queueProgress({
         progress_phase: 'analysing_asset',
         progress_detail:
@@ -1722,6 +1728,15 @@ async function processJob(client, job, workerId, apiKey, model) {
                     const sourceImageData = imageDataFromRaster(sourceRaster);
                     const referencePalette = extractLogoPalette(sourceImageData);
                     const aiMatte = enhancementMatte(referencePalette);
+                    const appearanceWidth = Math.min(1_400, Math.max(sourceRaster.width, 1_024));
+                    const appearanceRaster = await rasteriseLogo(browser, sourceForTracing, {
+                      width: appearanceWidth,
+                      height: Math.max(
+                        1,
+                        Math.round((appearanceWidth * sourceRaster.height) / sourceRaster.width),
+                      ),
+                      background: aiMatte,
+                    });
                     let tracingRaster = sourceRaster;
                     let shapeReferenceRaster = sourceRaster;
                     let alphaMatteRaster;
@@ -2016,7 +2031,9 @@ async function processJob(client, job, workerId, apiKey, model) {
                       alphaMatteRaster,
                       alphaMatteBlob,
                       alphaMatteRequestId,
+                      appearanceRaster,
                       async (variant, savedCount, totalVariants) => {
+                        savedLogoVersionCount = Math.max(savedLogoVersionCount, savedCount);
                         await cancellation.assertActive();
                         await updateProgress(client, job, workerId, {
                           progress_phase:
@@ -2032,70 +2049,74 @@ async function processJob(client, job, workerId, apiKey, model) {
                       },
                     );
                     await cancellation.assertActive();
-                    if (
-                      simplifyEditableLogoGeometry &&
-                      shouldSimplifyLogoOutline(tracingRaster, referencePalette)
-                    ) {
+                    if (createEditableSvg) {
+                      if (
+                        simplifyEditableLogoGeometry &&
+                        shouldSimplifyLogoOutline(tracingRaster, referencePalette)
+                      ) {
+                        await updateProgress(client, job, workerId, {
+                          progress_phase: 'fitting_logo_geometry',
+                          progress_detail:
+                            'Detecting straight lines, corners and curved sections before the geometry-fitted SVG trace.',
+                          current_asset_id: asset.id,
+                          total_items: totalItems,
+                          completed_items: completedItems,
+                        });
+                        tracingRaster = await resampleLogoForGeometrySimplification(
+                          browser,
+                          tracingRaster,
+                        );
+                      }
+
+                      await cancellation.assertActive();
                       await updateProgress(client, job, workerId, {
-                        progress_phase: 'fitting_logo_geometry',
+                        progress_phase: 'vectorising_logo',
                         progress_detail:
-                          'Detecting straight lines, corners and curved sections before the geometry-fitted SVG trace.',
+                          editableLogoVectorizerProvider === 'vectorizer_ai'
+                            ? 'Sending the original colour-locked logo to Vectorizer.AI for an editable SVG trace.'
+                            : 'Tracing editable SVG shapes and locking the approved source colours into the result.',
                         current_asset_id: asset.id,
                         total_items: totalItems,
                         completed_items: completedItems,
                       });
-                      tracingRaster = await resampleLogoForGeometrySimplification(
-                        browser,
-                        tracingRaster,
-                      );
-                    }
-
-                    await cancellation.assertActive();
-                    await updateProgress(client, job, workerId, {
-                      progress_phase: 'vectorising_logo',
-                      progress_detail:
-                        editableLogoVectorizerProvider === 'vectorizer_ai'
-                          ? 'Sending the original colour-locked logo to Vectorizer.AI for an editable SVG trace.'
-                          : 'Tracing editable SVG shapes and locking the approved source colours into the result.',
-                      current_asset_id: asset.id,
-                      total_items: totalItems,
-                      completed_items: completedItems,
-                    });
-                    tracingRaster = lockRasterColoursToSource(
-                      imageDataFromRaster(tracingRaster),
-                      sourceImageData,
-                      referencePalette,
-                    );
-                    if (editableLogoVectorizerProvider === 'vectorizer_ai') {
-                      svg = await vectorizeWithVectorizerAi({
-                        apiId: process.env.VECTORIZER_AI_API_ID?.trim(),
-                        apiSecret: process.env.VECTORIZER_AI_API_SECRET?.trim(),
-                        raster: await rasterBlobFromPixels(browser, tracingRaster),
-                        signal: cancellation.signal,
-                      });
-                    } else {
-                      const vectorTrace = await vectorizeRasterLogo(tracingRaster, {
+                      tracingRaster = lockRasterColoursToSource(
+                        imageDataFromRaster(tracingRaster),
+                        sourceImageData,
                         referencePalette,
-                        simplifyGeometry: simplifyEditableLogoGeometry,
-                      });
-                      svg = vectorTrace.svg;
-                      svgSimplifier = vectorTrace.simplifier;
+                      );
+                      if (editableLogoVectorizerProvider === 'vectorizer_ai') {
+                        svg = await vectorizeWithVectorizerAi({
+                          apiId: process.env.VECTORIZER_AI_API_ID?.trim(),
+                          apiSecret: process.env.VECTORIZER_AI_API_SECRET?.trim(),
+                          raster: await rasterBlobFromPixels(browser, tracingRaster),
+                          signal: cancellation.signal,
+                        });
+                      } else {
+                        const vectorTrace = await vectorizeRasterLogo(tracingRaster, {
+                          referencePalette,
+                          simplifyGeometry: simplifyEditableLogoGeometry,
+                        });
+                        svg = vectorTrace.svg;
+                        svgSimplifier = vectorTrace.simplifier;
+                      }
                     }
                   }
-                  if (
-                    editableLogoVectorizerProvider === 'vtracer' &&
-                    canCreateVectorSuggestion(asset, existingAnnotation)
-                  ) {
-                    await storeVectorSuggestion(client, job, asset, svg);
+                  if (createEditableSvg) {
+                    if (
+                      editableLogoVectorizerProvider === 'vtracer' &&
+                      canCreateVectorSuggestion(asset, existingAnnotation)
+                    ) {
+                      await storeVectorSuggestion(client, job, asset, svg);
+                    }
+                    await storeEditableLogoVariant(client, job, asset, svg, {
+                      aiEnhancement: usedAiEnhancement,
+                      aiEnhancementModel: enhancementModel,
+                      simplifier: svgSimplifier,
+                      vectorizer: editableLogoVectorizerProvider,
+                    });
+                    derivedFromAssetIds.add(asset.id);
+                    editableVariantFromAssetIds.add(asset.id);
                   }
-                  await storeEditableLogoVariant(client, job, asset, svg, {
-                    aiEnhancement: usedAiEnhancement,
-                    aiEnhancementModel: enhancementModel,
-                    simplifier: svgSimplifier,
-                    vectorizer: editableLogoVectorizerProvider,
-                  });
-                  derivedFromAssetIds.add(asset.id);
-                  editableVariantFromAssetIds.add(asset.id);
                 } catch (error) {
                   if (asset.id === retryEditableLogoAssetId) {
                     throw new Error(
@@ -2126,35 +2147,45 @@ async function processJob(client, job, workerId, apiKey, model) {
           continue;
         }
       }
-      if (!retryEditableLogoAssetId) {
-        await cancellation.assertActive();
-        await updateProgress(client, job, workerId, {
-          progress_phase: 'collecting_brand_evidence',
-          progress_detail: 'Reading repeated interface colours from captured pages.',
-          current_asset_id: null,
-          total_items: totalItems,
-          completed_items: completedItems,
-        });
-        const interfaceEvidence = await collectRenderedInterfaceEvidence(browser, pages ?? [], () =>
-          cancellation.assertActive(),
-        );
-        brandEvidence.push(...interfaceEvidence);
-        completedItems += Math.min((pages ?? []).length, maxBrandEvidencePages);
-        await cancellation.assertActive();
-        const evidenceCount = await saveBrandColourEvidence(client, job, brandEvidence);
-        await updateProgress(client, job, workerId, {
-          progress_phase: 'saving_brand_evidence',
-          progress_detail: evidenceCount
-            ? `Saved ${evidenceCount} private brand-colour observations for review.`
-            : 'No reliable brand colours were found. Manual colour review is still available.',
-          current_asset_id: null,
-          total_items: totalItems,
-          completed_items: completedItems,
-        });
-      }
+      await cancellation.assertActive();
+      await updateProgress(client, job, workerId, {
+        progress_phase: 'collecting_brand_evidence',
+        progress_detail: 'Detecting primary and accent evidence from the logo and captured pages.',
+        current_asset_id: null,
+        total_items: totalItems,
+        completed_items: completedItems,
+      });
+      const interfaceEvidence =
+        analysisScope === 'full'
+          ? await collectRenderedInterfaceEvidence(browser, pages ?? [], () =>
+              cancellation.assertActive(),
+            )
+          : [];
+      brandEvidence.push(...interfaceEvidence);
+      completedItems +=
+        analysisScope === 'full'
+          ? Math.min((pages ?? []).length, maxBrandEvidencePages)
+          : selectedAssets.length;
+      await cancellation.assertActive();
+      const evidenceCount = await saveBrandColourEvidence(client, job, brandEvidence);
+      savedEvidenceCount = evidenceCount;
+      await updateProgress(client, job, workerId, {
+        progress_phase: 'saving_brand_evidence',
+        progress_detail: evidenceCount
+          ? `Saved ${evidenceCount} private brand-colour observations for primary and accent review.`
+          : 'No reliable brand colours were found. Manual colour review is still available.',
+        current_asset_id: null,
+        total_items: totalItems,
+        completed_items: completedItems,
+      });
     } finally {
       await browser.close();
     }
+    return {
+      analyzedOutputCount,
+      savedEvidenceCount: savedEvidenceCount ?? 0,
+      savedLogoVersionCount,
+    };
   } finally {
     cancellation.stop();
   }
@@ -2173,6 +2204,8 @@ async function markFailed(client, job, error) {
     .update({
       status: 'failed',
       lease_expires_at: null,
+      progress_phase: 'failed',
+      progress_detail: errorSummary,
       error_summary: errorSummary,
     })
     .eq('id', job.id)
@@ -2197,14 +2230,40 @@ async function markCancelled(client, job, workerId) {
 }
 
 async function processNext(client, workerId, apiKey, model) {
-  const { data, error } = await client.rpc('claim_next_asset_analysis', {
+  const { data, error } = await client.rpc('claim_next_asset_analysis_v2', {
     worker_identity: workerId,
+    supported_contract_version: 2,
   });
   if (error) throw new Error('The worker could not claim asset analysis.');
   const job = Array.isArray(data) ? data[0] : undefined;
   if (!job) return false;
   try {
-    await processJob(client, job, workerId, apiKey, model);
+    const outcome = await processJob(client, job, workerId, apiKey, model);
+    const analysisScope = ['brand_colours', 'logo_versions'].includes(
+      readString(job.analysis_scope),
+    )
+      ? readString(job.analysis_scope)
+      : 'full';
+    const completedOutputs = [
+      outcome.analyzedOutputCount
+        ? `${outcome.analyzedOutputCount} new asset review ${outcome.analyzedOutputCount === 1 ? 'card' : 'cards'} saved`
+        : '',
+      outcome.savedLogoVersionCount
+        ? `${outcome.savedLogoVersionCount} transparent logo ${outcome.savedLogoVersionCount === 1 ? 'version' : 'versions'} saved`
+        : '',
+      outcome.savedEvidenceCount
+        ? `${outcome.savedEvidenceCount} brand-colour ${outcome.savedEvidenceCount === 1 ? 'observation' : 'observations'} refreshed`
+        : '',
+    ].filter(Boolean);
+    const completionLabel =
+      analysisScope === 'brand_colours'
+        ? 'Original-logo colour refresh complete'
+        : analysisScope === 'logo_versions'
+          ? 'Logo version refresh complete'
+          : 'Asset analysis complete';
+    const completionDetail = completedOutputs.length
+      ? `${completionLabel}: ${completedOutputs.join(', ')}.`
+      : 'Asset analysis complete. No new review cards or reliable brand-colour observations were produced.';
     const { error: completeError } = await client
       .from('asset_analysis_jobs')
       .update({
@@ -2212,20 +2271,57 @@ async function processNext(client, workerId, apiKey, model) {
         model,
         lease_expires_at: null,
         progress_phase: 'complete',
-        progress_detail: 'Asset analysis complete. Suggestions are ready for human review.',
+        progress_detail: completionDetail,
         current_asset_id: null,
         error_summary: null,
       })
       .eq('id', job.id)
       .eq('worker_id', workerId);
     if (completeError) throw completeError;
-    const { error: contentRecoveryError } = await client.rpc('request_visual_content_extraction', {
-      target_business_id: job.business_id,
-    });
-    if (contentRecoveryError) {
+    const apiRecoveryEnabled = openAiApiEnabled();
+    const { error: contentRecoveryError } =
+      analysisScope === 'full' && apiRecoveryEnabled
+        ? await client.rpc('request_visual_content_extraction', {
+            target_business_id: job.business_id,
+          })
+        : { error: null };
+    if (analysisScope === 'full' && apiRecoveryEnabled && contentRecoveryError) {
       console.warn(
         `[asset-analysis-worker] visual-content recovery was not available for ${job.id}: ${contentRecoveryError.message}`,
       );
+    } else if (analysisScope === 'full' && apiRecoveryEnabled) {
+      const { error: pendingStructureError } = await client
+        .from('visual_content_candidates')
+        .update({ structure_status: 'pending', structure_error: null })
+        .eq('crawl_run_id', job.crawl_run_id)
+        .eq('review_state', 'needs_review');
+      if (!pendingStructureError) {
+        const { error: structureQueueError } = await client.from('visual_content_jobs').upsert(
+          {
+            organization_id: job.organization_id,
+            business_id: job.business_id,
+            crawl_run_id: job.crawl_run_id,
+            status: 'queued',
+            model: null,
+            worker_id: null,
+            lease_expires_at: null,
+            attempt_count: 0,
+            error_summary: null,
+            progress_phase: 'queued',
+            progress_detail: 'Waiting to interpret saved image content as structured information.',
+            current_candidate_id: null,
+            total_items: 0,
+            completed_items: 0,
+            cancel_requested_at: null,
+          },
+          { onConflict: 'crawl_run_id' },
+        );
+        if (structureQueueError) {
+          console.warn(
+            `[asset-analysis-worker] structured visual-content recovery was not queued for ${job.id}: ${structureQueueError.message}`,
+          );
+        }
+      }
     }
     await client.from('activities').insert({
       organization_id: job.organization_id,
@@ -2251,7 +2347,7 @@ async function processNext(client, workerId, apiKey, model) {
 }
 
 async function main() {
-  const apiKey = process.env.OPENAI_API_KEY?.trim() || process.env.SITEFORGE_CODEX_API_KEY?.trim();
+  const apiKey = openAiApiKey(process.env, ['OPENAI_API_KEY']);
   const supabaseUrl = requiredEnvironment('SITEFORGE_SUPABASE_URL');
   const serviceRoleKey = requiredEnvironment('SITEFORGE_SUPABASE_SERVICE_ROLE_KEY');
   const model = process.env.SITEFORGE_ASSET_VISION_MODEL?.trim() || 'gpt-5';

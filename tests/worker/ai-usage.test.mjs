@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { codexUsage, creditedUsage, pricedUsage, responseUsage } from '../../worker/ai-usage.mjs';
+import {
+  codexUsage,
+  creditedUsage,
+  pricedUsage,
+  recordAiUsage,
+  responseUsage,
+} from '../../worker/ai-usage.mjs';
 
 test('normalises Responses API and Codex CLI token usage without inventing totals', () => {
   assert.deepEqual(
@@ -102,4 +108,34 @@ test('records exact token-credit estimates for named Codex execution profiles', 
     credits: null,
     creditPricingVersion: null,
   });
+});
+
+test('records ChatGPT subscription builds without estimating API spend', async () => {
+  const inserted = [];
+  const client = {
+    from(table) {
+      assert.equal(table, 'ai_usage_records');
+      return {
+        async insert(value) {
+          inserted.push(value);
+          return { error: null };
+        },
+      };
+    },
+  };
+  await recordAiUsage(client, {
+    organizationId: 'organisation-1',
+    businessId: 'business-1',
+    builderRunId: 'build-1',
+    source: 'codex_build',
+    model: 'gpt-5.6-sol',
+    billingMode: 'chatgpt_subscription',
+    usage: { input_tokens: 1_000_000, output_tokens: 100_000 },
+  });
+  assert.equal(inserted.length, 1);
+  assert.equal(inserted[0].cost_usd, null);
+  assert.equal(inserted[0].cost_source, 'unavailable');
+  assert.equal(inserted[0].pricing_version, null);
+  assert.equal(inserted[0].metadata.billingMode, 'chatgpt_subscription');
+  assert.equal(inserted[0].metadata.credits, 200);
 });

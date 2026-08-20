@@ -223,14 +223,69 @@ async function assignPreviewAlias(deploymentId, job) {
   return `https://${alias}`;
 }
 
-async function sendClientspaceHandoff(job, deploymentUrl) {
-  const { data: report } = await supabase
-    .from('decision_reports')
-    .select('id, version, status, summary, updated_at')
-    .eq('business_id', job.business_id)
+async function loadReviewedDecisionReport(businessId) {
+  const versionResult = await supabase
+    .from('decision_report_versions')
+    .select('id, version, review_state, summary, data, created_at')
+    .eq('business_id', businessId)
+    .eq('review_state', 'approved')
     .order('version', { ascending: false })
     .limit(1)
     .maybeSingle();
+  if (!versionResult.error) return versionResult.data;
+
+  // Keep older protected workspaces usable while the specialist-audit migration is rolling out.
+  const legacyResult = await supabase
+    .from('decision_reports')
+    .select('id, version, status, summary, updated_at')
+    .eq('business_id', businessId)
+    .eq('status', 'approved')
+    .order('version', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (legacyResult.error) throw legacyResult.error;
+  return legacyResult.data;
+}
+
+async function loadReportMedia(reportData) {
+  const findings = Array.isArray(reportData?.findings) ? reportData.findings : [];
+  const references = findings
+    .map((finding) => finding?.evidence)
+    .filter(
+      (evidence) =>
+        evidence &&
+        typeof evidence.artifactId === 'string' &&
+        typeof evidence.storageBucket === 'string' &&
+        typeof evidence.storagePath === 'string',
+    )
+    .filter(
+      (evidence, index, all) =>
+        all.findIndex((candidate) => candidate.artifactId === evidence.artifactId) === index,
+    )
+    .slice(0, 8);
+  const media = [];
+  for (const reference of references) {
+    const { data, error } = await supabase.storage
+      .from(reference.storageBucket)
+      .download(reference.storagePath);
+    if (error || !data || data.size > 6 * 1024 * 1024) continue;
+    const contentType = data.type === 'image/jpeg' ? 'image/jpeg' : 'image/png';
+    media.push({
+      artifactId: reference.artifactId,
+      contentType,
+      base64: Buffer.from(await data.arrayBuffer()).toString('base64'),
+    });
+  }
+  return media;
+}
+
+async function sendClientspaceHandoff(job, deploymentUrl) {
+  const report = await loadReviewedDecisionReport(job.business_id);
+  const reportData =
+    report?.data && typeof report.data === 'object' && !Array.isArray(report.data)
+      ? report.data
+      : {};
+  const reportMedia = report ? await loadReportMedia(reportData) : [];
   const response = await fetch(clientspaceHandoffUrl, {
     method: 'POST',
     headers: {
@@ -247,12 +302,16 @@ async function sendClientspaceHandoff(job, deploymentUrl) {
       previewUrl: deploymentUrl,
       report: report
         ? {
+            ...reportData,
             title: `${job.project_name} website report`,
             summary: report.summary,
             version: report.version,
+            reviewedAt: report.created_at || report.updated_at,
           }
         : null,
+      reportMedia,
       finalBalanceCents: job.final_balance_cents,
+      pricingSnapshot: job.pricing_snapshot,
       currency: job.currency,
       handoffNotes: job.handoff_notes,
     }),

@@ -17,6 +17,15 @@ export type ReviewState = 'needs_review' | 'approved' | 'blocked';
 export type EvidenceState = 'captured' | 'not_collected' | 'inferred' | 'verified' | 'rejected';
 export type AuditStatus =
   'not_started' | 'research_pending' | 'running' | 'ready' | 'failed' | 'cancelled';
+export type AuditSpecialistKind =
+  | 'responsive_ui'
+  | 'accessibility'
+  | 'performance_engineering'
+  | 'technical_seo'
+  | 'conversion_journey'
+  | 'platform_integrations';
+export type AuditFindingClass =
+  'observed_defect' | 'observed_condition' | 'usability_concern' | 'design_judgement';
 export type DeliverableStatus = 'not_started' | 'draft' | 'ready' | 'approved';
 export type RedesignBriefStatus = 'draft' | 'approved';
 export type AssetAnalysisStatus =
@@ -79,6 +88,35 @@ export type Contact = {
   updatedAt: string;
 };
 
+export type OutreachConsentBasis =
+  'public_role_relevant' | 'express_call' | 'existing_relationship' | 'not_established';
+
+export type OutreachCompliance = {
+  id: string;
+  businessId: string;
+  contactId?: string;
+  consentBasis: OutreachConsentBasis;
+  sourceUrl?: string;
+  sourceNote: string;
+  emailAllowed: boolean;
+  phoneAllowed: boolean;
+  doNotCallCheckedAt?: string;
+  doNotCallClear: boolean;
+  senderIdentificationConfirmed: boolean;
+  unsubscribeProcessConfirmed: boolean;
+  suppressedAt?: string;
+  suppressionReason?: string;
+  campaignCohort?: string;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type OutreachComplianceInput = Omit<
+  OutreachCompliance,
+  'id' | 'businessId' | 'createdAt' | 'updatedAt'
+>;
+
 export type EvidenceFact = {
   id: string;
   businessId: string;
@@ -138,6 +176,7 @@ export type ResearchArtifact = {
   storagePath: string;
   contentType?: string;
   byteSize?: number;
+  sha256?: string;
   metadata: Record<string, unknown>;
   createdAt: string;
 };
@@ -153,6 +192,8 @@ export type ResearchPacket = {
 
 export type AssetAnalysisJob = {
   id: string;
+  runToken?: string;
+  analysisScope?: 'full' | 'logo_versions' | 'brand_colours';
   businessId: string;
   crawlRunId: string;
   status: AssetAnalysisStatus;
@@ -163,6 +204,7 @@ export type AssetAnalysisJob = {
   currentAssetId?: string;
   editableLogoRetryAssetId?: string;
   editableLogoRetryToken?: string;
+  editableLogoGenerationEnabled?: boolean;
   editableLogoSimplificationEnabled?: boolean;
   editableLogoVectorizerProvider?: 'vtracer' | 'vectorizer_ai';
   totalItems: number;
@@ -196,6 +238,7 @@ export type AssetAnnotation = {
   businessId: string;
   crawlRunId: string;
   analysisJobId?: string;
+  analysisRunToken?: string;
   sourceContext: Record<string, unknown>;
   observedDescription: string;
   visibleText: string[];
@@ -334,6 +377,7 @@ export type BrandColourEvidence = {
 export type BrandPalette = {
   primary?: string;
   accent?: string;
+  mode?: 'primary_and_accent' | 'accent_only' | 'primary_only' | 'builder_derived';
 };
 
 export type BrandKit = {
@@ -366,10 +410,16 @@ export type BriefSitemapEntry = {
   sourceUrl?: string;
 };
 
+export type PageDisposition =
+  'needs_review' | 'build' | 'merge' | 'redirect' | 'workflow_state' | 'contextual' | 'exclude';
+
 export type BriefPagePlan = {
   title: string;
   structure: string[];
   sourceUrl?: string;
+  disposition: PageDisposition;
+  dispositionReason: string;
+  targetSourceUrl?: string;
 };
 
 export type BriefAssetGuidance = {
@@ -462,6 +512,19 @@ export type BuildManifestPage = {
   outputPath: string;
   sourcePath: string;
   sourceSelected: boolean;
+  disposition: Exclude<PageDisposition, 'needs_review' | 'merge' | 'exclude'>;
+  targetSourceUrl?: string;
+};
+
+export type BuildManifestPageCoverage = {
+  url: string;
+  title?: string;
+  pageType?: string;
+  canonicalUrl?: string;
+  disposition: Exclude<PageDisposition, 'needs_review'>;
+  dispositionReason: string;
+  targetSourceUrl?: string;
+  outputRequired: boolean;
 };
 
 export type BuildManifestAsset = {
@@ -471,6 +534,9 @@ export type BuildManifestAsset = {
   storageBucket: string;
   storagePath: string;
   sourceSelected: boolean;
+  sourcePageUrls: string[];
+  sourceUrls: string[];
+  duplicateArtifactIds: string[];
 };
 
 export type BuildRuntimeProfile = 'static-marketing' | 'managed-forms' | 'managed-next-runtime';
@@ -522,6 +588,7 @@ export type BuildManifestData = {
   };
   permittedFacts: BuildManifestFact[];
   selectedPages: BuildManifestPage[];
+  pageCoverage: BuildManifestPageCoverage[];
   selectedAssets: BuildManifestAsset[];
   approvedAssetGuidance: BriefAssetGuidance[];
   approvedCapabilities: CapabilityInventoryItem[];
@@ -696,6 +763,7 @@ export type ClientPreviewPublication = {
   clientEmail: string;
   projectName: string;
   finalBalanceCents?: number;
+  pricingSnapshot?: import('./pricing').PricingQuoteSnapshot;
   currency: string;
   handoffNotes: string;
   status: ClientPreviewPublicationStatus;
@@ -718,8 +786,52 @@ export type ClientPreviewPublicationInput = {
   clientEmail: string;
   projectName: string;
   finalBalanceCents?: number;
+  pricingSnapshot: import('./pricing').PricingQuoteSnapshot;
   currency: string;
   handoffNotes: string;
+};
+
+export type MadeSolidHandoffStatus = 'queued' | 'running' | 'ready' | 'failed' | 'cancelled';
+
+export type MadeSolidHandoff = {
+  id: string;
+  businessId: string;
+  builderRunId: string;
+  sourceRepositoryUrl: string;
+  sourceBranch: string;
+  sourceCommit: string;
+  sourceEditVersion: number;
+  clientName: string;
+  contactName: string;
+  clientEmail: string;
+  projectName: string;
+  handoffNotes: string;
+  pricingSnapshot?: import('./pricing').PricingQuoteSnapshot;
+  status: MadeSolidHandoffStatus;
+  progressPhase: string;
+  progressDetail: string;
+  totalItems: number;
+  completedItems: number;
+  cancelRequestedAt?: string;
+  websiteHandoffId?: string;
+  websiteAdminUrl?: string;
+  errorSummary?: string;
+  createdAt: string;
+  completedAt?: string;
+  updatedAt: string;
+};
+
+export type MadeSolidHandoffInput = {
+  sourceRepositoryUrl: string;
+  sourceBranch: string;
+  sourceCommit: string;
+  sourceEditVersion: number;
+  clientName: string;
+  contactName: string;
+  clientEmail: string;
+  projectName: string;
+  handoffNotes: string;
+  pricingSnapshot: import('./pricing').PricingQuoteSnapshot;
 };
 
 export type GithubWorkspacePublicationStatus =
@@ -817,6 +929,7 @@ export type AuditFinding = {
     | 'Accessibility'
     | 'SEO'
     | 'Performance'
+    | 'Platform'
     | 'Content'
     | 'Trust'
     | 'Conversion';
@@ -825,13 +938,64 @@ export type AuditFinding = {
   finding: string;
   recommendation: string;
   evidenceIds: string[];
+  evidenceArtifactIds?: string[];
   sourceUrls: string[];
+  specialistKind?: AuditSpecialistKind;
+  findingClass?: AuditFindingClass;
+  customerImpact?: string;
+  confidence?: 'high' | 'medium' | 'low';
+  measurement?: Record<string, unknown>;
   reviewState: ReviewState;
+};
+
+export type AuditSpecialistTask = {
+  id: string;
+  businessId: string;
+  auditId: string;
+  crawlRunId: string;
+  specialistKind: AuditSpecialistKind;
+  status: AuditStatus;
+  progressPhase?: string;
+  progressDetail?: string;
+  totalItems: number;
+  completedItems: number;
+  cancelRequestedAt?: string;
+  errorSummary?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AuditObservation = {
+  id: string;
+  businessId: string;
+  auditId: string;
+  specialistTaskId: string;
+  crawlRunId: string;
+  specialistKind: AuditSpecialistKind;
+  area: AuditFinding['area'];
+  findingClass: AuditFindingClass;
+  severity: AuditFinding['severity'];
+  title: string;
+  observation: string;
+  customerImpact: string;
+  recommendation: string;
+  sourceUrls: string[];
+  evidenceFactIds: string[];
+  evidenceArtifactIds: string[];
+  viewport?: { width: number; height: number; label?: string };
+  interactionState?: string;
+  selector?: string;
+  measurement: Record<string, unknown>;
+  confidence: 'high' | 'medium' | 'low';
+  reviewState: ReviewState;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type Audit = {
   id: string;
   businessId: string;
+  version?: number;
   crawlRunId?: string;
   status: AuditStatus;
   findings: AuditFinding[];
@@ -840,6 +1004,7 @@ export type Audit = {
   totalItems: number;
   completedItems: number;
   cancelRequestedAt?: string;
+  errorSummary?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -857,10 +1022,36 @@ export type RedesignConcept = {
 export type DecisionReport = {
   id: string;
   businessId: string;
+  auditId?: string;
+  crawlRunId?: string;
   status: DeliverableStatus;
   version: number;
+  schemaVersion?: number;
+  reviewState?: ReviewState;
   summary: string;
+  data?: Record<string, unknown>;
   createdAt: string;
+  updatedAt: string;
+};
+
+export type ReportPreviewJobStatus = 'queued' | 'running' | 'ready' | 'failed' | 'cancelled';
+
+export type ReportPreviewJob = {
+  id: string;
+  businessId: string;
+  reportVersionId: string;
+  status: ReportPreviewJobStatus;
+  progressPhase: string;
+  progressDetail: string;
+  totalItems: number;
+  completedItems: number;
+  cancelRequestedAt?: string;
+  remotePreviewId?: string;
+  previewUrl?: string;
+  previewExpiresAt?: string;
+  errorSummary?: string;
+  createdAt: string;
+  completedAt?: string;
   updatedAt: string;
 };
 
@@ -887,6 +1078,7 @@ export type ProspectWorkspace = {
   website?: Website;
   captures: ResearchCapture[];
   contacts: Contact[];
+  outreachCompliance?: OutreachCompliance;
   facts: EvidenceFact[];
   latestCapture?: ResearchCapture;
   capturedPages: CapturedPage[];
@@ -909,6 +1101,8 @@ export type ProspectWorkspace = {
   builderArtifacts: BuilderArtifact[];
   builderEvents: BuilderEvent[];
   clientPreviewPublications: ClientPreviewPublication[];
+  madeSolidHandoffs: MadeSolidHandoff[];
+  madeSolidHandoffWorkerAvailable: boolean;
   githubWorkspacePublications: GithubWorkspacePublication[];
   githubWorkspaceWorkerAvailable: boolean;
   aiUsageRecords: AiUsageRecord[];
@@ -916,8 +1110,13 @@ export type ProspectWorkspace = {
   previousFacts: EvidenceFact[];
   previousArtifacts: ResearchArtifact[];
   audit?: Audit;
+  auditSpecialistTasks?: AuditSpecialistTask[];
+  auditObservations?: AuditObservation[];
   concept?: RedesignConcept;
   report?: DecisionReport;
+  reportVersions?: DecisionReport[];
+  reportPreviewJobs: ReportPreviewJob[];
+  reportPreviewWorkerAvailable: boolean;
   tasks: Task[];
   activity: Activity[];
 };

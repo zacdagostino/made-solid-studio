@@ -1,0 +1,21 @@
+{
+  "name": "Made Solid editable website",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": {
+      "label": "Website preview",
+      "onAutoForward": "openBrowser"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["openai.chatgpt"],
+      "settings": {
+        "task.allowAutomaticTasks": "on",
+        "workbench.startupEditor": "none"
+      }
+    }
+  },
+  "postStartCommand": "bash .devcontainer/launch-workspace.sh"
+}

@@ -47,27 +47,29 @@ function hueDistance(left, right) {
   return Math.min(difference, 1 - difference);
 }
 
-function logoBrandColours(palette) {
-  const chromatic = palette.filter((colour) => colourProfile(colour).saturation >= 0.16);
-  const candidates = chromatic.length
-    ? chromatic
-    : palette.filter((colour) => {
-        const profile = colourProfile(colour);
-        return profile.value < 0.82 || profile.saturation >= 0.05;
-      });
-  const selected = candidates.filter((candidate) => {
-    const profile = colourProfile(candidate);
-    return !candidates.some((base) => {
-      if (base === candidate) return false;
-      const baseProfile = colourProfile(base);
-      return (
-        hueDistance(baseProfile.hue, profile.hue) <= 0.08 &&
-        baseProfile.saturation >= profile.saturation + 0.16 &&
-        baseProfile.value <= profile.value + 0.06
-      );
-    });
+export function logoBrandColours(palette) {
+  const usable = palette.filter((colour) => {
+    const profile = colourProfile(colour);
+    return profile.value < 0.9 || profile.saturation >= 0.16;
   });
-  return selected.length ? selected : palette;
+  if (!usable.length) return palette.slice(0, 1);
+
+  // Palette order reflects source coverage, so the first usable colour is the logo's primary
+  // colour even when it is a charcoal neutral. Previously, finding any chromatic colour discarded
+  // every neutral. A charcoal + green wordmark consequently became green everywhere.
+  const primary = usable[0];
+  const primaryProfile = colourProfile(primary);
+  const accent = usable
+    .slice(1)
+    .filter((colour) => {
+      const profile = colourProfile(colour);
+      return (
+        profile.saturation >= 0.16 &&
+        (primaryProfile.saturation < 0.16 || hueDistance(primaryProfile.hue, profile.hue) > 0.08)
+      );
+    })
+    .sort((left, right) => colourProfile(right).saturation - colourProfile(left).saturation)[0];
+  return accent ? [primary, accent] : [primary];
 }
 
 export function logoMatte(imageData) {
@@ -248,12 +250,138 @@ function smoothedForegroundColours(imageData, palette, expectedShape) {
   return colours;
 }
 
+function removeSparseAccentSeeds(seeds, width, accentIndex) {
+  const visited = new Uint8Array(seeds.length);
+  const queue = new Int32Array(seeds.length);
+  const components = [];
+  let totalAccentSeeds = 0;
+  for (const seed of seeds) if (seed === accentIndex) totalAccentSeeds += 1;
+  if (!totalAccentSeeds) return;
+
+  for (let start = 0; start < seeds.length; start += 1) {
+    if (seeds[start] !== accentIndex || visited[start]) continue;
+    let queueStart = 0;
+    let queueEnd = 1;
+    let left = start % width;
+    let right = left;
+    let top = Math.floor(start / width);
+    let bottom = top;
+    queue[0] = start;
+    visited[start] = 1;
+    while (queueStart < queueEnd) {
+      const pixel = queue[queueStart];
+      queueStart += 1;
+      const x = pixel % width;
+      const y = Math.floor(pixel / width);
+      left = Math.min(left, x);
+      right = Math.max(right, x);
+      top = Math.min(top, y);
+      bottom = Math.max(bottom, y);
+      const neighbours = [
+        pixel - width,
+        pixel + width,
+        x > 0 ? pixel - 1 : -1,
+        x + 1 < width ? pixel + 1 : -1,
+      ];
+      for (const neighbour of neighbours) {
+        if (neighbour < 0 || neighbour >= seeds.length) continue;
+        if (visited[neighbour] || seeds[neighbour] !== accentIndex) continue;
+        visited[neighbour] = 1;
+        queue[queueEnd] = neighbour;
+        queueEnd += 1;
+      }
+    }
+    const area = (right - left + 1) * (bottom - top + 1);
+    components.push({
+      pixels: Int32Array.from(queue.subarray(0, queueEnd)),
+      count: queueEnd,
+      area,
+    });
+  }
+
+  const minimumCount = Math.max(8, Math.round(totalAccentSeeds * 0.003));
+  const dense = components.filter(
+    (component) => component.count >= minimumCount && component.count / component.area >= 0.12,
+  );
+  if (dense.reduce((sum, component) => sum + component.count, 0) < totalAccentSeeds * 0.45) return;
+  const retained = new Set(dense);
+  for (const component of components) {
+    if (retained.has(component)) continue;
+    for (const pixel of component.pixels) seeds[pixel] = 0;
+  }
+}
+
+function retainDominantAccentRegion(seeds, width, height, accentIndex) {
+  const columns = 20;
+  const rows = 20;
+  const counts = new Uint32Array(columns * rows);
+  let total = 0;
+  for (let pixel = 0; pixel < seeds.length; pixel += 1) {
+    if (seeds[pixel] !== accentIndex) continue;
+    const x = pixel % width;
+    const y = Math.floor(pixel / width);
+    const column = Math.min(columns - 1, Math.floor((x / width) * columns));
+    const row = Math.min(rows - 1, Math.floor((y / height) * rows));
+    counts[row * columns + column] += 1;
+    total += 1;
+  }
+  if (total < 32) return;
+
+  const windowColumns = 10;
+  const windowRows = 7;
+  let best = { count: 0, column: 0, row: 0 };
+  for (let row = 0; row <= rows - windowRows; row += 1) {
+    for (let column = 0; column <= columns - windowColumns; column += 1) {
+      let count = 0;
+      for (let offsetY = 0; offsetY < windowRows; offsetY += 1) {
+        for (let offsetX = 0; offsetX < windowColumns; offsetX += 1) {
+          count += counts[(row + offsetY) * columns + column + offsetX];
+        }
+      }
+      if (count > best.count) best = { count, column, row };
+    }
+  }
+  // Only collapse to one region when the source itself has a clear dominant accent cluster. This
+  // preserves genuinely distributed multi-part accents while rejecting a secondary fringe caused
+  // by compression or colour-matted antialiasing elsewhere in the mark.
+  if (best.count < total * 0.62) return;
+  const left = Math.floor((best.column / columns) * width);
+  const right = Math.ceil(((best.column + windowColumns) / columns) * width);
+  const top = Math.floor((best.row / rows) * height);
+  const bottom = Math.ceil(((best.row + windowRows) / rows) * height);
+  for (let pixel = 0; pixel < seeds.length; pixel += 1) {
+    if (seeds[pixel] !== accentIndex) continue;
+    const x = pixel % width;
+    const y = Math.floor(pixel / width);
+    if (x < left || x >= right || y < top || y >= bottom) seeds[pixel] = 0;
+  }
+}
+
 function sourceColourOwnership(imageData, palette, alphaMatte) {
   const shape = expectedLogoShape(imageData, palette);
-  const colours = smoothedForegroundColours(imageData, palette, shape);
-  const sourceSeeds = Int16Array.from(colours);
+  const smoothedColours = smoothedForegroundColours(imageData, palette, shape);
+  const sourceSeeds = new Int16Array(smoothedColours.length).fill(-1);
+  for (let pixel = 0, offset = 0; pixel < smoothedColours.length; pixel += 1, offset += 4) {
+    const colourIndex = smoothedColours[pixel];
+    if (colourIndex < 0) continue;
+    const candidate = palette[colourIndex];
+    const distance =
+      (imageData.data[offset] - candidate.red) ** 2 +
+      (imageData.data[offset + 1] - candidate.green) ** 2 +
+      (imageData.data[offset + 2] - candidate.blue) ** 2;
+    // Resized logos often have a pale, slightly green-tinted fringe around every glyph. It may be
+    // nearest to the accent in a two-colour palette, but it is not source accent artwork. Only
+    // colour pixels close to a verified palette colour may seed ownership; the matte can then
+    // extend that label through the soft edge of the same letter.
+    if (distance <= 64 ** 2) sourceSeeds[pixel] = colourIndex;
+  }
+  if (palette.length > 1) {
+    retainDominantAccentRegion(sourceSeeds, imageData.width, imageData.height, 1);
+    removeSparseAccentSeeds(sourceSeeds, imageData.width, 1);
+  }
+  const colours = Int16Array.from(sourceSeeds);
   const { width, height } = imageData;
-  if (alphaMatte?.width !== width || alphaMatte?.height !== height) return colours;
+  const hasAlphaMatte = alphaMatte?.width === width && alphaMatte?.height === height;
 
   // The source image decides colour ownership and the AI matte decides coverage. Propagate the
   // verified source labels only through visible matte pixels, producing a nearest-region map that
@@ -263,11 +391,16 @@ function sourceColourOwnership(imageData, palette, alphaMatte) {
   let queueStart = 0;
   let queueEnd = 0;
   for (let pixel = 0, offset = 0; pixel < visible.length; pixel += 1, offset += 4) {
-    const luma =
-      alphaMatte.data[offset] * 0.2126 +
-      alphaMatte.data[offset + 1] * 0.7152 +
-      alphaMatte.data[offset + 2] * 0.0722;
-    visible[pixel] = alphaMatte.data[offset + 3] >= 8 && luma <= 247 ? 1 : 0;
+    const luma = hasAlphaMatte
+      ? alphaMatte.data[offset] * 0.2126 +
+        alphaMatte.data[offset + 1] * 0.7152 +
+        alphaMatte.data[offset + 2] * 0.0722
+      : 0;
+    visible[pixel] = hasAlphaMatte
+      ? alphaMatte.data[offset + 3] >= 8 && luma <= 247
+        ? 1
+        : 0
+      : shape.allowed[pixel];
     if (visible[pixel] && colours[pixel] >= 0) {
       queue[queueEnd] = pixel;
       queueEnd += 1;
@@ -291,7 +424,12 @@ function sourceColourOwnership(imageData, palette, alphaMatte) {
       queueEnd += 1;
     }
   }
+  if (!hasAlphaMatte) return colours;
 
+  // A soft edge may contain a misleading source colour after resampling. Let a strongly dominant
+  // connected region own those edge pixels, but never recolour solid source pixels. Wordmarks
+  // commonly join a small accent letter or electrical symbol to a much larger primary shape, and
+  // collapsing that whole component would turn the entire `+ accent` logo into one colour.
   const visited = new Uint8Array(width * height);
   const component = new Int32Array(width * height);
   const counts = new Uint32Array(palette.length);
@@ -333,7 +471,13 @@ function sourceColourOwnership(imageData, palette, alphaMatte) {
     }
     if (owner < 0 || ownerCount / Math.max(1, seedCount) < 0.85) continue;
     for (let index = 0; index < componentEnd; index += 1) {
-      colours[component[index]] = owner;
+      const pixel = component[index];
+      const offset = pixel * 4;
+      const matteLuma =
+        alphaMatte.data[offset] * 0.2126 +
+        alphaMatte.data[offset + 1] * 0.7152 +
+        alphaMatte.data[offset + 2] * 0.0722;
+      if (matteLuma > 16) colours[pixel] = owner;
     }
   }
   return colours;

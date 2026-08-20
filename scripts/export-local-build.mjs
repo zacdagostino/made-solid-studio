@@ -131,7 +131,9 @@ const assetArtifacts = (artifacts ?? []).filter((artifact) => {
 });
 
 const destinationDirectory = resolve(destinationValue);
+console.log('[workspace] Preparing the completed build source for local development.');
 await ensureEmptyDestination(destinationDirectory);
+console.log('[workspace] Downloading the editable source and approved assets.');
 await downloadInBatches([
   ...sourceArtifacts.map((artifact) => () => {
     const sourcePath = record(artifact.metadata).sourcePath;
@@ -157,6 +159,7 @@ try {
   console.warn('Git baseline commit could not be created automatically; initialise it manually.');
 }
 
+console.log('[workspace] Adding the Made Solid refinement logging workflow.');
 await applyLocalDevelopmentHandoff(destinationDirectory, {
   studioBuildId: run.id,
   businessId: run.business_id,

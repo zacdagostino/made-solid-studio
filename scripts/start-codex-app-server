@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+project_directory="$(cd "$(dirname "$0")/.." && pwd)"
+source "$project_directory/scripts/configure-codex-runtime"
+
+if ! command -v codex >/dev/null 2>&1; then
+  echo "Codex is required for the Studio Workspace Agent. Run scripts/codespace-work to install it."
+  exit 1
+fi
+
+login_status="$(codex --config 'forced_login_method="chatgpt"' login status 2>&1 || true)"
+if [[ ! "$login_status" =~ [Ll]ogged[[:space:]]in[[:space:]]using[[:space:]][Cc]hat[Gg][Pp][Tt] ]]; then
+  echo "The Studio Codex Workspace Agent requires a ChatGPT subscription sign-in."
+  echo "Run 'codex login --device-auth' in this trusted environment, then restart Studio."
+  echo "API-key authentication is deliberately blocked for this agent."
+  exit 1
+fi
+
+# The cached ChatGPT login is the only credential this process may use. Keep
+# unrelated server-side API keys out of the app-server environment as defence
+# in depth if the surrounding worker host also runs OpenAI API features.
+unset OPENAI_API_KEY SITEFORGE_CODEX_API_KEY CODEX_API_KEY
+
+cd "${SITEFORGE_STUDIO_WORKSPACE_DIR:-$project_directory}"
+
+exec codex --config 'forced_login_method="chatgpt"' app-server \
+  --listen ws://127.0.0.1:4500 \
+  --enable prevent_idle_sleep \
+  --disable shell_snapshot

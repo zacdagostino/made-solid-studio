@@ -6,6 +6,16 @@
 - Do not edit `dist/` directly. Treat it as build output; make changes in source files and rebuild.
 - Ask before adding dependencies, changing build tooling, changing deployment configuration, or making a visual redesign outside the requested scope.
 
+## Codespace repository layout
+
+- This Codespace intentionally contains two sibling Git repositories that are developed together when a task spans the Studio and Clientspace:
+  - Made Solid Studio: `/workspaces/siteforge-os`
+  - Made Solid website and Clientspace: `/workspaces/made-solid-website`
+- The repositories have separate Git histories. Inspect each repository's status independently and create separate commits in the repository that owns each change; never treat the parent `/workspaces` directory as one repository or include one repository's files in the other repository's commit.
+- A cross-product task may require coordinated changes and verification in both repositories. Do not assume the website repository is missing merely because the current working directory is `/workspaces/siteforge-os`; check the sibling path explicitly.
+- Codex sessions launched for this Codespace must have both repository paths available as writable workspace roots. If the sibling repository exists but a session cannot write to it, report that as a session launcher/sandbox configuration problem, not as a missing repository or an incorrect two-repository setup.
+- The Codespace startup tooling may launch both applications, but application processes, ports, builds, tests, and commits remain scoped to their owning repository.
+
 ## UI quality is a release requirement
 
 Every user-facing change must be designed and verified at these viewport sizes:
@@ -48,6 +58,9 @@ Every user-facing change must be designed and verified at these viewport sizes:
 - Define stable dimensions or aspect ratios for controls, thumbnails, tables, and media so content changes cannot cause layout shift.
 - Keep related controls aligned to a shared grid. Do not use absolute positioning for normal layout, and do not rely on fixed heights for text-bearing containers.
 - At each breakpoint, intentionally choose whether a group wraps, stacks, scrolls, collapses, or becomes a menu. Never leave that behavior accidental.
+- For generated marketing sections, prove that sticky/side headings reserve enough column width and gap to avoid overlapping adjacent cards at desktop. Long headings must wrap by words inside their own column, never sit underneath or behind the content grid.
+- Cards that may optionally include media must share one layout contract with cards that do not. Use a stable media layer or thumbnail treatment that does not change text geometry, create dark empty blocks, or make mixed card grids visually uneven.
+- Interactive cards must separate context icons from action/link icons in markup and CSS. Hover/focus motion may move the action affordance, but must not accidentally translate decorative/context icons into labels or other controls.
 
 ## Design system
 

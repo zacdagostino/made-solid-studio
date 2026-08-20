@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+session_name="made-solid-studio"
+project_directory="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+made_solid_website_directory="${MADE_SOLID_WEBSITE_DIRECTORY:-$(dirname "$project_directory")/made-solid-website}"
+
+if ! command -v codex >/dev/null 2>&1; then
+  echo "Installing the Codex CLI from OpenAI..."
+  curl -fsSL https://chatgpt.com/codex/install.sh | sh
+fi
+
+source "$project_directory/scripts/configure-codex-runtime"
+
+if command -v code >/dev/null 2>&1 && code --version >/dev/null 2>&1 && ! code --list-extensions | grep -Fqx 'openai.chatgpt'; then
+  echo "Installing the official Codex editor extension..."
+  code --install-extension openai.chatgpt ||
+    echo "The editor extension could not be installed automatically; Codex will still open in the terminal."
+fi
+
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "tmux is required to open the Studio app and Codex terminals together."
+  exit 1
+fi
+
+bash "$project_directory/scripts/clean-codespace-ports" ||
+  echo "Codespace port cleanup could not complete; startup will continue."
+
+if ! tmux has-session -t "$session_name" 2>/dev/null; then
+  tmux new-session \
+    -d \
+    -s "$session_name" \
+    -n codex-server \
+    -c "$project_directory" \
+    "bash -lc 'bash scripts/start-codex-app-server; exit_code=\$?; echo; echo \"CODEX SERVER STOPPED — exit code \$exit_code\"; exec bash'"
+
+  tmux new-window \
+    -d \
+    -t "$session_name:1" \
+    -n codex \
+    -c "$project_directory" \
+    "bash -lc 'until curl -fsS http://127.0.0.1:4500/readyz >/dev/null 2>&1; do sleep 0.25; done; codex resume --last --remote ws://127.0.0.1:4500 --model gpt-5.6-sol --config model_reasoning_effort=medium --sandbox danger-full-access --ask-for-approval never --add-dir \"$made_solid_website_directory\"; exec bash'"
+
+  tmux new-window \
+    -d \
+    -t "$session_name:2" \
+    -n app \
+    -c "$project_directory" \
+    "bash -lc 'SITEFORGE_EXTERNAL_BUILDER=1 npm run start:local; exit_code=\$?; echo; echo \"APP STOPPED — exit code \$exit_code\"; exec bash'"
+
+  tmux new-window \
+    -d \
+    -t "$session_name:3" \
+    -n builds \
+    -c "$project_directory" \
+    "bash -lc 'bash scripts/start-subscription-builder; exit_code=\$?; echo; echo \"SUBSCRIPTION BUILDER STOPPED — exit code \$exit_code\"; exec bash'"
+
+  if [[ -f "$made_solid_website_directory/package.json" ]]; then
+    tmux new-window \
+      -d \
+      -t "$session_name:4" \
+      -n website \
+      -c "$project_directory" \
+      "bash -lc 'bash scripts/start-made-solid-website; exit_code=\$?; echo; echo \"WEBSITE STOPPED — exit code \$exit_code\"; exec bash'"
+  fi
+
+  tmux new-window \
+    -d \
+    -t "$session_name:5" \
+    -n ports \
+    -c "$project_directory" \
+    "bash -lc 'bash scripts/publish-codespace-ports; exit_code=\$?; echo; echo \"PORT VISIBILITY STOPPED — exit code \$exit_code\"; exec bash'"
+
+  tmux select-window -t "$session_name:codex"
+else
+  if ! curl -fsS --retry 4 --retry-delay 1 --retry-connrefused \
+    http://127.0.0.1:4500/readyz >/dev/null 2>&1; then
+    tmux kill-window -t "$session_name:codex" 2>/dev/null || true
+    tmux kill-window -t "$session_name:codex-server" 2>/dev/null || true
+    tmux new-window \
+      -d \
+      -t "$session_name:0" \
+      -n codex-server \
+      -c "$project_directory" \
+      "bash -lc 'bash scripts/start-codex-app-server; exit_code=\$?; echo; echo \"CODEX SERVER STOPPED — exit code \$exit_code\"; exec bash'"
+    tmux new-window \
+      -d \
+      -t "$session_name:1" \
+      -n codex \
+      -c "$project_directory" \
+      "bash -lc 'until curl -fsS http://127.0.0.1:4500/readyz >/dev/null 2>&1; do sleep 0.25; done; codex resume --last --remote ws://127.0.0.1:4500 --model gpt-5.6-sol --config model_reasoning_effort=medium --sandbox danger-full-access --ask-for-approval never --add-dir \"$made_solid_website_directory\"; exec bash'"
+  fi
+
+  if ! tmux list-windows -t "$session_name" -F '#{window_name}' | grep -Fqx codex; then
+    tmux new-window \
+      -d \
+      -t "$session_name:1" \
+      -n codex \
+      -c "$project_directory" \
+      "bash -lc 'until curl -fsS http://127.0.0.1:4500/readyz >/dev/null 2>&1; do sleep 0.25; done; codex resume --last --remote ws://127.0.0.1:4500 --model gpt-5.6-sol --config model_reasoning_effort=medium --sandbox danger-full-access --ask-for-approval never --add-dir \"$made_solid_website_directory\"; exec bash'"
+  fi
+
+  if ! curl -fsS --retry 4 --retry-delay 1 --retry-connrefused \
+    http://127.0.0.1:5173/ >/dev/null 2>&1; then
+    tmux kill-window -t "$session_name:app" 2>/dev/null || true
+    tmux new-window \
+      -d \
+      -t "$session_name:2" \
+      -n app \
+      -c "$project_directory" \
+      "bash -lc 'SITEFORGE_EXTERNAL_BUILDER=1 npm run start:local; exit_code=\$?; echo; echo \"APP STOPPED — exit code \$exit_code\"; exec bash'"
+  fi
+
+  if ! tmux list-windows -t "$session_name" -F '#{window_name}' | grep -Fqx builds; then
+    tmux new-window \
+      -d \
+      -t "$session_name:" \
+      -n builds \
+      -c "$project_directory" \
+      "bash -lc 'bash scripts/start-subscription-builder; exit_code=\$?; echo; echo \"SUBSCRIPTION BUILDER STOPPED — exit code \$exit_code\"; exec bash'"
+  fi
+
+  if [[ -f "$made_solid_website_directory/package.json" ]] &&
+    ! curl -fsS --retry 4 --retry-delay 1 --retry-connrefused \
+      http://127.0.0.1:3001/ >/dev/null 2>&1; then
+    tmux kill-window -t "$session_name:website" 2>/dev/null || true
+    tmux new-window \
+      -d \
+      -t "$session_name:" \
+      -n website \
+      -c "$project_directory" \
+      "bash -lc 'bash scripts/start-made-solid-website; exit_code=\$?; echo; echo \"WEBSITE STOPPED — exit code \$exit_code\"; exec bash'"
+  fi
+
+  if ! tmux list-windows -t "$session_name" -F '#{window_name}' | grep -Fqx ports; then
+    tmux new-window \
+      -d \
+      -t "$session_name:" \
+      -n ports \
+      -c "$project_directory" \
+      "bash -lc 'bash scripts/publish-codespace-ports; exit_code=\$?; echo; echo \"PORT VISIBILITY STOPPED — exit code \$exit_code\"; exec bash'"
+  fi
+fi
+
+if [[ -f "$made_solid_website_directory/package.json" ]]; then
+  website_url="http://127.0.0.1:3001/"
+  if [[ -n "${CODESPACE_NAME:-}" && -n "${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-}" ]]; then
+    website_url="https://${CODESPACE_NAME}-3001.${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN}/"
+  fi
+  browser_marker="/tmp/made-solid-website-browser-opened"
+  if [[ ! -e "$browser_marker" ]]; then
+    (
+      until curl -fsS http://127.0.0.1:3001/ >/dev/null 2>&1; do sleep 0.5; done
+      touch "$browser_marker"
+      if [[ -n "${BROWSER:-}" && -x "${BROWSER}" ]]; then
+        "${BROWSER}" "$website_url" >/dev/null 2>&1 || true
+      fi
+    ) &
+  fi
+fi
+
+if [[ ! -t 0 || ! -t 1 ]]; then
+  echo "Codespace workspace session '$session_name' is ready. Open a terminal to attach."
+  exit 0
+fi
+
+exec tmux attach-session -d -t "$session_name"

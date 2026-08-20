@@ -49,6 +49,13 @@ export function isBrandColour(value) {
   return brightness >= 0.08 && brightness <= 0.94 && saturation >= 0.28;
 }
 
+export function isLogoBrandColour(value) {
+  const colour = rgbForHex(value);
+  if (!colour) return false;
+  const brightness = (colour.red + colour.green + colour.blue) / (255 * 3);
+  return brightness >= 0.08 && brightness <= 0.9;
+}
+
 function hueForHex(value) {
   const colour = rgbForHex(value);
   if (!colour) return 0;
@@ -93,7 +100,9 @@ function rankEvidence(evidence) {
   const grouped = new Map();
   for (const item of evidence) {
     const colour = normaliseHexColour(item.colour ?? '');
-    if (!colour || !isBrandColour(colour)) continue;
+    const directLogoColour = item.sourceType === 'logo_vector' || item.sourceType === 'logo_pixels';
+    if (!colour || !(directLogoColour ? isLogoBrandColour(colour) : isBrandColour(colour)))
+      continue;
     const current = grouped.get(colour) ?? {
       colour,
       score: 0,

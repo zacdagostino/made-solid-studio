@@ -10,9 +10,19 @@ import type {
   RedesignBrief,
   ResearchArtifact,
 } from './domain';
+import { groupVisualAssets } from './visual-asset-groups';
 
-export const buildManifestSchemaVersion = 5;
-export const codexBuilderContractVersion = 'made-solid-studio-codex-builder-v8';
+export const buildManifestSchemaVersion = 7;
+export const codexBuilderContractVersion = 'made-solid-studio-codex-builder-v11';
+
+export function unresolvedPageDispositions(brief: RedesignBrief) {
+  return brief.draft.pagePlans.filter(
+    (plan) =>
+      !plan.disposition ||
+      plan.disposition === 'needs_review' ||
+      ((plan.disposition === 'merge' || plan.disposition === 'redirect') && !plan.targetSourceUrl),
+  );
+}
 
 const builderRules = [
   'Build a complete mobile-first website from this manifest, not a superficial reskin of the captured website.',
@@ -20,13 +30,13 @@ const builderRules = [
   'Treat selected pages and selected assets as research context. Only approved asset guidance authorises visual reuse in the redesign.',
   'Treat approved visual-content groups as required semantic source material, not layout instructions. Account for every item on its source page, while deciding whether to integrate the group into an existing section or create a new composition and owning its responsive design and styling.',
   'Never reuse or render an image that supplied approved recovered semantic content. Its asset ID is retained only as private provenance and the source image is excluded from selected assets, approved asset guidance, and the staged builder workspace.',
-  'When a Brand Kit is present, use its staged approved logo family in the header and footer, choose a contrast-safe approved logo appearance for each direct background surface, prefer its approved editable SVG logo version only where its original colours remain legible, use its reviewed primary and accent colours as brand tokens, and derive accessible neutral, background, surface, muted, and border tokens rather than copying a weak legacy palette or substituting a generic identity.',
+  'When a Brand Kit is present, use its staged approved logo family in the header and footer, choose a contrast-safe approved logo appearance for each direct background surface, prefer its approved editable SVG logo version only where its original colours remain legible, and use every enabled reviewed brand colour as its exact matching semantic token. A palette role deliberately switched off is builder-derived: choose a coherent accessible value for that role without presenting it as a verified brand fact. Derive accessible neutral, background, surface, muted, and border tokens rather than copying a weak legacy palette or substituting a generic identity.',
   'Use semantic HTML, labelled forms, keyboard-accessible controls, accessible colour contrast, and a clear focus order.',
   'Create a clear visual hierarchy with purposeful typography, spacing, navigation, calls to action, trust presentation, and restrained motion. Viewport reveals for headings and containers, plus counters for real metrics, are built-in defaults: apply them where they support scanning without waiting for a separate motion prompt.',
   'Design responsive mobile, tablet, and desktop layouts. Do not rely on desktop layouts shrinking into mobile.',
   'Keep performance, privacy, maintainability, local SEO foundations, and reusable design tokens as first-class implementation constraints.',
   'Surface open questions and uncertainties for human review rather than resolving them with assumptions.',
-  'Treat the proposed sitemap as an information-hierarchy model, not a list of the only pages to build. Every selected source page remains required output scope; keep articles, tools, legal, confirmation, profile, and other supporting routes available without forcing them into primary navigation.',
+  'Treat pageCoverage as the reviewed source-coverage contract. Build only entries with outputRequired. Merge content into its target without creating another page, omit excluded residue, implement redirect aliases without navigation links, keep workflow states out of navigation and search indexing, and link contextual routes only where relevant.',
   'Do not publish, contact a prospect, use uncertain information as fact, or make compliance guarantees without human approval.',
   'Implement only the approved capabilities. For a capability that requires an external service, account, authentication, payments, or server-side data, create an honest preview of the user-facing flow and record the production integration requirement; do not invent credentials, accounts, transactions, or working backend behaviour.',
   'Use the manifest architecture contract: Next.js App Router, strict TypeScript, Tailwind with semantic CSS tokens, native HTML first, and Base UI only for interaction patterns whose keyboard or focus behaviour is not safely supplied by the platform.',
@@ -43,7 +53,12 @@ function cleanRouteSegment(value: string) {
 }
 
 function buildPageRoutes(
-  pages: Array<Pick<BuildManifestPage, 'url' | 'title' | 'pageType' | 'canonicalUrl'>>,
+  pages: Array<
+    Pick<
+      BuildManifestPage,
+      'url' | 'title' | 'pageType' | 'canonicalUrl' | 'disposition' | 'targetSourceUrl'
+    >
+  >,
 ): BuildManifestPage[] {
   const usedRoutes = new Set<string>();
   return pages.map((page) => {
@@ -155,16 +170,25 @@ function buildArchitecture(capabilities: CapabilityInventoryItem[]): BuildArchit
 
 function selectedArtifacts(artifacts: ResearchArtifact[], ids: string[]) {
   const selectedIds = new Set(ids);
-  return artifacts
-    .filter((artifact) => artifact.kind === 'asset' && selectedIds.has(artifact.id))
-    .map((artifact) => ({
-      artifactId: artifact.id,
-      label: artifact.label,
-      contentType: artifact.contentType,
-      storageBucket: artifact.storageBucket,
-      storagePath: artifact.storagePath,
-      sourceSelected: true,
-    }));
+  return groupVisualAssets(artifacts.filter((artifact) => artifact.kind === 'asset'))
+    .filter((group) => group.assets.some((artifact) => selectedIds.has(artifact.id)))
+    .map((group) => {
+      const artifact =
+        group.assets.find((candidate) => selectedIds.has(candidate.id)) ?? group.asset;
+      return {
+        artifactId: artifact.id,
+        label: artifact.label,
+        contentType: artifact.contentType,
+        storageBucket: artifact.storageBucket,
+        storagePath: artifact.storagePath,
+        sourceSelected: true,
+        sourcePageUrls: group.pageUrls,
+        sourceUrls: group.sourceUrls,
+        duplicateArtifactIds: group.assets
+          .map((candidate) => candidate.id)
+          .filter((artifactId) => artifactId !== artifact.id),
+      };
+    });
 }
 
 function permittedFacts(facts: EvidenceFact[]) {
@@ -258,6 +282,15 @@ export function createBuildManifestData(
   brief: RedesignBrief,
 ): BuildManifestData {
   const selectedPageUrls = new Set(brief.sourceSelections.pageUrls);
+  const selectedAssetIds = new Set(brief.sourceSelections.assetIds);
+  const canonicalAssetIds = new Map<string, string>();
+  for (const group of groupVisualAssets(
+    workspace.artifacts.filter((artifact) => artifact.kind === 'asset'),
+  )) {
+    const representative =
+      group.assets.find((asset) => selectedAssetIds.has(asset.id)) ?? group.asset;
+    for (const asset of group.assets) canonicalAssetIds.set(asset.id, representative.id);
+  }
   const approvedVisualContent = brief.draft.approvedVisualContent ?? [];
   const recoveredContentAssetIds = new Set(
     approvedVisualContent.map((item) => item.assetId).filter(Boolean),
@@ -268,13 +301,47 @@ export function createBuildManifestData(
   const selectedPages = buildPageRoutes(
     workspace.capturedPages
       .filter((page) => selectedPageUrls.has(page.url))
-      .map((page) => ({
+      .map((page) => {
+        const plan = brief.draft.pagePlans.find((candidate) => candidate.sourceUrl === page.url);
+        return {
+          url: page.url,
+          title: page.title,
+          pageType: page.pageType,
+          canonicalUrl: page.canonicalUrl,
+          disposition: plan?.disposition,
+          targetSourceUrl: plan?.targetSourceUrl,
+        };
+      })
+      .filter(
+        (
+          page,
+        ): page is typeof page & {
+          disposition: 'build' | 'redirect' | 'workflow_state' | 'contextual';
+        } =>
+          page.disposition === 'build' ||
+          page.disposition === 'redirect' ||
+          page.disposition === 'workflow_state' ||
+          page.disposition === 'contextual',
+      ),
+  );
+  const pageCoverage = workspace.capturedPages
+    .filter((page) => selectedPageUrls.has(page.url))
+    .map((page) => {
+      const plan = brief.draft.pagePlans.find((candidate) => candidate.sourceUrl === page.url);
+      if (!plan || plan.disposition === 'needs_review') {
+        throw new Error(`Review the page disposition for ${page.url} before building.`);
+      }
+      return {
         url: page.url,
         title: page.title,
         pageType: page.pageType,
         canonicalUrl: page.canonicalUrl,
-      })),
-  );
+        disposition: plan.disposition,
+        dispositionReason: plan.dispositionReason,
+        targetSourceUrl: plan.targetSourceUrl,
+        outputRequired: !['merge', 'exclude'].includes(plan.disposition),
+      };
+    });
 
   return {
     source: {
@@ -286,13 +353,21 @@ export function createBuildManifestData(
     },
     permittedFacts: permittedFacts(workspace.facts),
     selectedPages,
+    pageCoverage,
     selectedAssets: selectedArtifacts(
       workspace.artifacts,
       brief.sourceSelections.assetIds.filter((assetId) => !recoveredContentAssetIds.has(assetId)),
     ),
-    approvedAssetGuidance: brief.draft.assetGuidance.filter(
-      (guidance) => !recoveredContentAssetIds.has(guidance.assetId),
-    ),
+    approvedAssetGuidance: [
+      ...new Map(
+        brief.draft.assetGuidance
+          .filter((guidance) => !recoveredContentAssetIds.has(guidance.assetId))
+          .map((guidance) => {
+            const assetId = canonicalAssetIds.get(guidance.assetId) ?? guidance.assetId;
+            return [assetId, { ...guidance, assetId }] as const;
+          }),
+      ).values(),
+    ],
     approvedCapabilities,
     approvedVisualContent,
     approvedVisualContentGroups: groupApprovedVisualContent(approvedVisualContent),

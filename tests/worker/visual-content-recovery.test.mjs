@@ -71,7 +71,7 @@ test('images converted to approved semantic content are never reusable build ass
   );
   assert.match(
     manifest,
-    /brief\.draft\.assetGuidance\.filter\([\s\S]*?!recoveredContentAssetIds\.has\(guidance\.assetId\)/,
+    /brief\.draft\.assetGuidance\s*\.filter\([\s\S]*?!recoveredContentAssetIds\.has\(guidance\.assetId\)/,
   );
   assert.match(
     worker,

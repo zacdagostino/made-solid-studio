@@ -26,7 +26,7 @@ export function previewHostConfiguration(environment = process.env) {
     throw new Error('PREVIEW_PUBLIC_ORIGIN must use HTTPS outside local development.');
   }
   return {
-    port: Number(environment.PORT) || defaultPort,
+    port: Number(environment.SITEFORGE_PREVIEW_PORT) || defaultPort,
     publicOrigin: configuredOrigin,
     serviceRoleKey,
     supabaseUrl,

@@ -1,5 +1,6 @@
 import { hostname } from 'node:os';
 import { createClient } from '@supabase/supabase-js';
+import { requireOpenAiApiKey } from './openai-api-policy.mjs';
 import { recordAiUsage } from './ai-usage.mjs';
 
 const artifactBucket = 'siteforge-artifacts';
@@ -246,7 +247,7 @@ async function processJob(client, job, workerId, apiKey, model) {
 }
 
 async function main() {
-  const apiKey = requiredEnvironment('OPENAI_API_KEY');
+  const apiKey = requireOpenAiApiKey('OpenAI capability analysis');
   const client = createClient(
     requiredEnvironment('SITEFORGE_SUPABASE_URL'),
     requiredEnvironment('SITEFORGE_SUPABASE_SERVICE_ROLE_KEY'),

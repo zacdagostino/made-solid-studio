@@ -3,7 +3,17 @@ import { expect, test } from '@playwright/test';
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { copyFile, cp, mkdir, mkdtemp, readFile, readdir, rm, symlink } from 'node:fs/promises';
+import {
+  copyFile,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
@@ -127,7 +137,10 @@ async function compileInteractiveNextFixture() {
     recursive: true,
   });
   await symlink(join(foundationDirectory, 'node_modules'), join(fixtureDirectory, 'node_modules'));
-  await mkdir(join(fixtureDirectory, 'src/components/site'), { recursive: true });
+  await Promise.all([
+    mkdir(join(fixtureDirectory, 'public'), { recursive: true }),
+    mkdir(join(fixtureDirectory, 'src/components/site'), { recursive: true }),
+  ]);
   await Promise.all([
     copyFile(
       join(process.cwd(), 'tests/fixtures/private-preview-next-page.tsx'),
@@ -137,8 +150,15 @@ async function compileInteractiveNextFixture() {
       join(process.cwd(), 'tests/fixtures/private-preview-next-navigation.tsx'),
       join(fixtureDirectory, 'src/components/site/private-preview-navigation.tsx'),
     ),
+    writeFile(
+      join(fixtureDirectory, 'public/made-solid-codex-bridge.js'),
+      '/* The production builder stages the authenticated workspace bridge here. */\n',
+    ),
   ]);
-  await runFile('npm', ['run', 'build'], { cwd: fixtureDirectory });
+  await runFile('npm', ['run', 'build'], {
+    cwd: fixtureDirectory,
+    env: { ...process.env, MADE_SOLID_STUDIO_ORIGIN: '' },
+  });
   return {
     outputDirectory: join(fixtureDirectory, 'out'),
     remove: () => rm(fixtureDirectory, { force: true, recursive: true }),
@@ -208,9 +228,37 @@ test('hydrates the compiled Next runtime inside the fallback preview frame', asy
   const siteFiles = new Set(await filesBelow(fixture.outputDirectory));
   const browserErrors = [];
   page.on('console', (message) => {
-    if (message.type() === 'error') browserErrors.push(message.text());
+    if (message.type() === 'error') {
+      const sourceUrl = message.location().url;
+      browserErrors.push(sourceUrl ? `${message.text()} (${sourceUrl})` : message.text());
+    }
   });
   page.on('pageerror', (error) => browserErrors.push(error.stack ?? error.message));
+  await page.route('**/__made-solid/codex-status*', async (route) => {
+    await route.fulfill({
+      body: JSON.stringify({
+        account: null,
+        agents: [],
+        defaultEffort: 'medium',
+        defaultModel: '',
+        detail: 'Codex is not needed by the isolated preview fixture.',
+        messages: [],
+        models: [],
+        queuedCount: 0,
+        queuedMessages: [],
+        status: 'unavailable',
+        thread: null,
+        threads: [],
+      }),
+      contentType: 'application/json',
+    });
+  });
+  await page.route('https://preview-test.supabase.co/made-solid-codex-bridge.js', async (route) => {
+    await route.fulfill({
+      body: '/* Authenticated workspace bridge staged by the production builder. */\n',
+      contentType: 'text/javascript',
+    });
+  });
   await page.route(`${previewRoot}**`, async (route) => {
     const url = new URL(route.request().url());
     const relativePath = url.pathname.slice(new URL(previewRoot).pathname.length) || 'index.html';

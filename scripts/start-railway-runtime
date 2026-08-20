@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+application_directory="$(cd "$(dirname "$0")/.." && pwd)"
+runtime_data_directory="${SITEFORGE_RUNTIME_DATA_DIR:-/data}"
+runtime_directory="$runtime_data_directory/runtime"
+workspace_root="${SITEFORGE_RUNTIME_WORKSPACES_DIR:-$runtime_data_directory/workspaces}"
+prospect_workspaces_directory="$runtime_data_directory/prospect-workspaces"
+codex_home_directory="$runtime_data_directory/codex"
+preview_secret_file="$runtime_directory/workspace-preview-secret"
+port="${PORT:-8080}"
+
+if [[ ! "$port" =~ ^[0-9]+$ ]] || ((port < 1 || port > 65535)); then
+  echo "PORT must be a valid TCP port."
+  exit 1
+fi
+for required_name in SITEFORGE_SUPABASE_URL SITEFORGE_SUPABASE_SERVICE_ROLE_KEY; do
+  if [[ -z "${!required_name:-}" ]]; then
+    echo "$required_name is required by the Railway Studio runtime."
+    exit 1
+  fi
+done
+
+mkdir -p \
+  "$runtime_directory" \
+  "$prospect_workspaces_directory" \
+  "$codex_home_directory"
+
+if [[ -e "$application_directory/prospect-workspaces" && ! -L "$application_directory/prospect-workspaces" ]]; then
+  echo "$application_directory/prospect-workspaces must be a symlink in the Railway image."
+  exit 1
+fi
+ln -sfn "$prospect_workspaces_directory" "$application_directory/prospect-workspaces"
+
+if [[ -n "${SITEFORGE_GITHUB_TOKEN:-}" ]]; then
+  export GH_TOKEN="$SITEFORGE_GITHUB_TOKEN"
+elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
+  export GH_TOKEN="$GITHUB_TOKEN"
+fi
+"$application_directory/scripts/bootstrap-railway-workspaces"
+
+if [[ -z "${SITEFORGE_WORKSPACE_PREVIEW_SECRET:-}" ]]; then
+  if [[ ! -s "$preview_secret_file" ]]; then
+    PREVIEW_SECRET_FILE="$preview_secret_file" node --input-type=module -e \
+      "import { randomBytes } from 'node:crypto'; import { writeFileSync } from 'node:fs'; writeFileSync(process.env.PREVIEW_SECRET_FILE, randomBytes(48).toString('base64url'), { mode: 0o600 });"
+  fi
+  SITEFORGE_WORKSPACE_PREVIEW_SECRET="$(<"$preview_secret_file")"
+  export SITEFORGE_WORKSPACE_PREVIEW_SECRET
+fi
+
+export NODE_ENV=production
+export SITEFORGE_RUNTIME_AUTH_REQUIRED=1
+export SITEFORGE_RUNTIME_DATA_DIR="$runtime_data_directory"
+export SITEFORGE_RUNTIME_WORKSPACES_DIR="$workspace_root"
+export SITEFORGE_STUDIO_WORKSPACE_DIR="$workspace_root/siteforge-os"
+export MADE_SOLID_WEBSITE_DIRECTORY="$workspace_root/made-solid-website"
+export SITEFORGE_PROSPECT_WORKSPACES_DIR="$prospect_workspaces_directory"
+export SITEFORGE_CODEX_HOME="$codex_home_directory"
+export CODEX_HOME="$codex_home_directory"
+export SITEFORGE_ACTIVE_PREVIEW_PATH="$runtime_directory/active-preview.json"
+export SITEFORGE_PREVIEW_PORT="${SITEFORGE_PREVIEW_PORT:-8787}"
+export SITEFORGE_WORKSPACE_PROXY_PORT="${SITEFORGE_WORKSPACE_PROXY_PORT:-3000}"
+export SITEFORGE_CODEX_AUTH_MODE=chatgpt
+export SITEFORGE_OPENAI_API_ENABLED=false
+export SUPABASE_URL="${SUPABASE_URL:-$SITEFORGE_SUPABASE_URL}"
+export SUPABASE_SERVICE_ROLE_KEY="${SUPABASE_SERVICE_ROLE_KEY:-$SITEFORGE_SUPABASE_SERVICE_ROLE_KEY}"
+unset OPENAI_API_KEY SITEFORGE_CODEX_API_KEY CODEX_API_KEY
+
+declare -a child_processes=()
+stopping=0
+
+stop_runtime() {
+  if ((stopping)); then return; fi
+  stopping=1
+  for child in "${child_processes[@]}"; do
+    kill -TERM "$child" 2>/dev/null || true
+  done
+  wait || true
+}
+
+maintain_codex_app_server() {
+  while true; do
+    "$application_directory/scripts/start-codex-app-server" || true
+    echo "[railway-runtime] Codex Workspace Agent is waiting for ChatGPT device authentication."
+    sleep 20
+  done
+}
+
+trap stop_runtime INT TERM EXIT
+
+node "$application_directory/node_modules/vite/bin/vite.js" preview \
+  --config "$application_directory/vite.config.ts" \
+  --host 0.0.0.0 \
+  --port "$port" \
+  --strictPort &
+child_processes+=("$!")
+
+node "$application_directory/worker/supervisor.mjs" &
+child_processes+=("$!")
+
+node "$application_directory/preview-host/server.mjs" &
+child_processes+=("$!")
+
+node "$application_directory/scripts/workspace-preview-proxy.mjs" &
+child_processes+=("$!")
+
+maintain_codex_app_server &
+child_processes+=("$!")
+
+echo "[railway-runtime] Made Solid Studio is starting on port $port."
+set +e
+wait -n "${child_processes[@]}"
+exit_code=$?
+set -e
+echo "[railway-runtime] a required runtime process stopped; shutting down for a clean restart."
+stop_runtime
+trap - EXIT
+exit "$exit_code"

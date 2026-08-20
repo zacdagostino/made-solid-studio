@@ -16,6 +16,7 @@ const sourceGuardMigrationUrl = new URL(
   '../../supabase/migrations/20260807164000_github_workspace_source_guard.sql',
   import.meta.url,
 );
+const cloudRepositoryUrl = new URL('../../src/lib/cloud-repository.ts', import.meta.url);
 
 test('publishes complete local workspaces through a protected private-only GitHub worker', async () => {
   const source = await readFile(workerUrl, 'utf8');
@@ -29,6 +30,20 @@ test('publishes complete local workspaces through a protected private-only GitHu
   assert.match(source, /GIT_CONFIG_VALUE_0: `Authorization: Basic/);
   assert.doesNotMatch(source, /https:\/\/\$\{githubToken\}@github\.com/);
   assert.doesNotMatch(source, /private: false/);
+});
+
+test('refreshes the repository startup handoff after loading an archived workspace', async () => {
+  const source = await readFile(workerUrl, 'utf8');
+  const archiveLoad = source.indexOf(
+    'await loadWorkspaceArchive(job, temporaryDirectory, localArchive)',
+  );
+  const archiveRefresh = source.indexOf(
+    'await applyLocalDevelopmentHandoff(projectDirectory, localDevelopmentOrigin(run))',
+    archiveLoad,
+  );
+  assert.notEqual(archiveLoad, -1);
+  assert.ok(archiveRefresh > archiveLoad);
+  assert.match(source, /function localDevelopmentOrigin\(run\)/);
 });
 
 test('queues completed full-site builds without weakening client quality gates', async () => {
@@ -50,9 +65,20 @@ test('queues completed full-site builds without weakening client quality gates',
 });
 
 test('starts the GitHub worker only when protected credentials are configured', async () => {
-  const source = await readFile(supervisorUrl, 'utf8');
-  assert.match(source, /if \(process\.env\.GITHUB_TOKEN\)/);
-  assert.match(source, /\['github-workspace', 'github-workspace-worker\.mjs'\]/);
+  const [supervisor, worker] = await Promise.all([
+    readFile(supervisorUrl, 'utf8'),
+    readFile(workerUrl, 'utf8'),
+  ]);
+  assert.match(
+    supervisor,
+    /if \(process\.env\.SITEFORGE_GITHUB_TOKEN \|\| process\.env\.GITHUB_TOKEN\)/,
+  );
+  assert.match(supervisor, /\['github-workspace', 'github-workspace-worker\.mjs'\]/);
+  assert.match(
+    worker,
+    /process\.env\.SITEFORGE_GITHUB_TOKEN\?\.trim\(\) \|\| requiredEnvironment\('GITHUB_TOKEN'\)/,
+  );
+  assert.match(worker, /Codespaces repository token cannot create/);
 });
 
 test('rejects unserviceable queues and reconciles an expired GitHub worker lease', async () => {
@@ -72,4 +98,29 @@ test('refuses to label a completed build as exportable without safe source evide
   assert.match(source, /metadata->>'state'.*= 'final_source'/);
   assert.match(source, /no safe local-development source package/);
   assert.match(source, /no repository was queued/);
+});
+
+test('keeps core workspace loading available when the optional GitHub integration is offline', async () => {
+  const source = await readFile(cloudRepositoryUrl, 'utf8');
+  assert.match(source, /warnOptionalIntegrationError\('GitHub workspace reconciliation'/);
+  assert.match(source, /'GitHub workspace publication history'/);
+  assert.match(source, /'GitHub workspace worker availability'/);
+  assert.match(source, /core workspace loading will continue/);
+  assert.doesNotMatch(source, /throwIfError\(githubLifecycleError\)/);
+});
+
+test('loads build history without joining every source artifact into the startup query', async () => {
+  const source = await readFile(cloudRepositoryUrl, 'utf8');
+  assert.match(source, /\.select\('\*, agent_packages\(version\)'\)/);
+  assert.match(source, /\.in\('kind', \['checkpoint', 'source_bundle'\]\)/);
+  assert.match(
+    source,
+    /typeof metadata\.localDevelopmentHandoffVersion === 'number'/,
+    'legacy source bundles must not suppress the final-source availability fallback',
+  );
+  assert.match(source, /finalSourceFallbackResults/);
+  assert.doesNotMatch(
+    source,
+    /\.select\('\*, agent_packages\(version\), builder_artifacts\(kind, label, metadata\)'\)/,
+  );
 });

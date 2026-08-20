@@ -211,6 +211,58 @@ function requiredEnvironment(name) {
   return value;
 }
 
+function builderCodexAuthentication(environment = process.env) {
+  const configuredMode = environment.SITEFORGE_CODEX_AUTH_MODE?.trim().toLowerCase();
+  const mode = configuredMode || 'chatgpt';
+  if (mode !== 'chatgpt') {
+    throw new Error(
+      'The Codex Website Builder and Codex Test Builder are subscription-only. SITEFORGE_CODEX_AUTH_MODE must be chatgpt.',
+    );
+  }
+  return {
+    mode,
+    billingMode: 'chatgpt_subscription',
+    label: 'ChatGPT subscription',
+  };
+}
+
+function builderCodexEnvironment(authentication, environment = process.env) {
+  const values = {
+    HOME: environment.HOME,
+    PATH: environment.PATH,
+    SHELL: environment.SHELL,
+    LANG: environment.LANG,
+    LC_ALL: environment.LC_ALL,
+    TERM: environment.TERM,
+    NO_COLOR: '1',
+  };
+  const codexHome = environment.SITEFORGE_CODEX_HOME?.trim() || environment.CODEX_HOME?.trim();
+  if (codexHome) values.CODEX_HOME = codexHome;
+  return Object.fromEntries(
+    Object.entries(values).filter(([, value]) => typeof value === 'string' && value.length > 0),
+  );
+}
+
+async function assertBuilderCodexAuthentication(codexExecutable, authentication, environment) {
+  let result;
+  try {
+    result = await runCommand(
+      codexExecutable,
+      ['--config', 'forced_login_method="chatgpt"', 'login', 'status'],
+      { env: environment },
+    );
+  } catch {
+    throw new Error(
+      'The Codex builder is not signed in with ChatGPT. Run codex login --device-auth in this trusted worker environment, then resume the build.',
+    );
+  }
+  if (!/logged in using chatgpt/i.test(`${result.stdout}\n${result.stderr}`)) {
+    throw new Error(
+      'The Codex builder is not signed in with ChatGPT. Run codex login --device-auth in this trusted worker environment, then resume the build.',
+    );
+  }
+}
+
 async function executableFile(path) {
   if (!path) return false;
   try {
@@ -326,7 +378,9 @@ function safeErrorSummary(error) {
   if (error instanceof BuilderCancelledError) return error.message;
   if (
     error instanceof Error &&
-    /SITEFORGE_CODEX_API_KEY|OPENAI_API_KEY|Codex CLI/.test(error.message)
+    /SITEFORGE_CODEX_AUTH_MODE|SITEFORGE_CODEX_API_KEY|OPENAI_API_KEY|Codex builder|Codex CLI/.test(
+      error.message,
+    )
   ) {
     return error.message.slice(0, 500);
   }
@@ -362,6 +416,17 @@ function failureDetails(error) {
       action:
         'Add credits to the worker API account, then resume this build from its saved private source checkpoint.',
       context: { provider: 'openai', reason: 'credits_exhausted' },
+    };
+  }
+  if (/Codex builder is not signed in with ChatGPT/i.test(message)) {
+    return {
+      ...base,
+      code: 'builder_chatgpt_login_required',
+      stage: 'worker_configuration',
+      summary: 'The protected builder needs a ChatGPT subscription sign-in.',
+      action:
+        'Run codex login --device-auth in the trusted builder environment, then retry this build.',
+      context: { provider: 'openai', authentication: 'chatgpt' },
     };
   }
   if (error instanceof BuilderStorageError) {
@@ -453,14 +518,14 @@ function failureDetails(error) {
       context: error.context,
     };
   }
-  if (/SITEFORGE_CODEX_API_KEY|OPENAI_API_KEY/.test(message)) {
+  if (/SITEFORGE_CODEX_AUTH_MODE|ChatGPT subscription|signed in with ChatGPT/.test(message)) {
     return {
       ...base,
       code: 'builder_credentials_missing',
       stage: 'worker_configuration',
-      summary: 'The protected builder does not have a server-only Codex API key.',
+      summary: 'The protected builder authentication is incomplete.',
       action:
-        'Add SITEFORGE_CODEX_API_KEY or OPENAI_API_KEY to the worker environment, then retry the build.',
+        'Sign the trusted worker in with ChatGPT, confirm SITEFORGE_CODEX_AUTH_MODE=chatgpt, then retry the build. API-key fallback is not supported.',
     };
   }
   if (/approved Build Manifest is no longer available/.test(message)) {
@@ -529,6 +594,17 @@ function failureDetails(error) {
       summary: 'The generated website did not compile every selected route.',
       action:
         'Review the saved frozen draft, then start a clean rebuild from the approved manifest.',
+    };
+  }
+  if (/EACCES: permission denied.*local-development.*package\.json/i.test(message)) {
+    return {
+      ...base,
+      code: 'editable_source_packaging_failed',
+      stage: 'saving_outputs',
+      summary:
+        'The generated site passed its checks, but its editable source copy could not be prepared.',
+      action:
+        'Resume the build from its validated source checkpoint after restoring editable-copy permissions.',
     };
   }
   if (/rendered no text|private browser|quality-check server/.test(message)) {
@@ -1425,6 +1501,22 @@ function assetMatchesSelectedPages(asset, selectedPageUrls, primaryLogoAssetId) 
   });
 }
 
+function groupApprovedAssetsByContent(assets, primaryLogoAssetId = '') {
+  const contentGroups = new Map();
+  for (const asset of assets) {
+    const key =
+      typeof asset.sha256 === 'string' && asset.sha256 ? asset.sha256 : `asset:${asset.id}`;
+    const existing = contentGroups.get(key);
+    if (!existing) {
+      contentGroups.set(key, { asset, assets: [asset] });
+    } else {
+      existing.assets.push(asset);
+      if (asset.id === primaryLogoAssetId) existing.asset = asset;
+    }
+  }
+  return [...contentGroups.values()];
+}
+
 async function stageApprovedAssets(client, manifest, siteDirectory, selectedPages = []) {
   const data = recordValue(manifest.data);
   const brandKit = recordValue(data.brandKit);
@@ -1472,9 +1564,11 @@ async function stageApprovedAssets(client, manifest, siteDirectory, selectedPage
   const stagedFileNames = new Set();
   let index = 0;
   const selectedPageUrls = sourceUrlSet(selectedPages);
-  for (const asset of (assets ?? []).filter((candidate) =>
+  const eligibleAssets = (assets ?? []).filter((candidate) =>
     assetMatchesSelectedPages(candidate, selectedPageUrls, primaryLogoAssetId),
-  )) {
+  );
+  for (const group of groupApprovedAssetsByContent(eligibleAssets, primaryLogoAssetId)) {
+    const asset = group.asset;
     let blob;
     let downloadError;
     try {
@@ -1519,6 +1613,33 @@ async function stageApprovedAssets(client, manifest, siteDirectory, selectedPage
         `public/assets/${fileName}`,
         asset.content_type || blob.type || 'application/octet-stream',
         guidanceByAssetId.get(asset.id),
+        {
+          duplicateArtifactIds: group.assets
+            .map((candidate) => candidate.id)
+            .filter((id) => id !== asset.id),
+          sourcePageUrls: [
+            ...new Set(
+              group.assets.flatMap((candidate) => {
+                const metadata = recordValue(candidate.metadata);
+                return [
+                  metadata.pageUrl,
+                  ...(Array.isArray(metadata.pageUrls) ? metadata.pageUrls : []),
+                ].filter((value) => typeof value === 'string');
+              }),
+            ),
+          ],
+          sourceUrls: [
+            ...new Set(
+              group.assets.flatMap((candidate) => {
+                const metadata = recordValue(candidate.metadata);
+                return [
+                  metadata.sourceUrl,
+                  ...(Array.isArray(metadata.sourceUrls) ? metadata.sourceUrls : []),
+                ].filter((value) => typeof value === 'string');
+              }),
+            ),
+          ],
+        },
       ),
     );
   }
@@ -1531,6 +1652,7 @@ function approvedAssetDescriptor(
   relativePath,
   contentType,
   guidance = {},
+  provenance = {},
 ) {
   const metadata = recordValue(asset.metadata);
   const derivedFromAssetId =
@@ -1565,6 +1687,15 @@ function approvedAssetDescriptor(
     ...(Array.isArray(guidance.visibleText) && guidance.visibleText.length
       ? { visibleText: guidance.visibleText.filter((item) => typeof item === 'string') }
       : {}),
+    ...(Array.isArray(provenance.sourcePageUrls) && provenance.sourcePageUrls.length
+      ? { sourcePageUrls: provenance.sourcePageUrls }
+      : {}),
+    ...(Array.isArray(provenance.sourceUrls) && provenance.sourceUrls.length
+      ? { sourceUrls: provenance.sourceUrls }
+      : {}),
+    ...(Array.isArray(provenance.duplicateArtifactIds) && provenance.duplicateArtifactIds.length
+      ? { duplicateArtifactIds: provenance.duplicateArtifactIds }
+      : {}),
     ...(isLogoFamilyMember
       ? {
           logoFamilyPrimaryAssetId: primaryLogoAssetId,
@@ -1594,8 +1725,11 @@ async function stageSelectedPageContent(
 ) {
   const data = recordValue(manifest.data);
   const allPages = sourcePagePlan(Array.isArray(data.selectedPages) ? data.selectedPages : []);
+  const coveragePages = sourcePagePlan(
+    Array.isArray(data.pageCoverage) ? data.pageCoverage : (data.selectedPages ?? []),
+  );
   const targetSourceUrlSet = new Set(targetSourceUrls);
-  const pages =
+  const outputPages =
     buildMode === 'homepage_test'
       ? allPages.filter((page) => page.outputPath === 'index.html').slice(0, 1)
       : buildMode === 'page_test'
@@ -1603,7 +1737,7 @@ async function stageSelectedPageContent(
           ? allPages.filter((page) => targetSourceUrlSet.has(page.sourceUrl))
           : allPages.filter((page) => page.sourceUrl === targetSourceUrl).slice(0, 1)
         : allPages;
-  if (!pages.length) {
+  if (!outputPages.length) {
     throw new Error(
       buildMode === 'homepage_test'
         ? 'The approved Build Manifest does not contain a homepage source page.'
@@ -1612,6 +1746,13 @@ async function stageSelectedPageContent(
           : 'The approved Build Manifest does not contain any selected source pages.',
     );
   }
+  const outputUrls = new Set(outputPages.map((page) => page.sourceUrl));
+  const contextPages = coveragePages.filter((page) => {
+    if (page.disposition === 'exclude') return false;
+    if (outputUrls.has(page.sourceUrl)) return true;
+    if (page.disposition !== 'merge' || !page.targetSourceUrl) return false;
+    return outputUrls.has(page.targetSourceUrl);
+  });
   const { data: artifacts, error } = await client
     .from('artifacts')
     .select('storage_bucket, storage_path, metadata, content_type, byte_size')
@@ -1633,7 +1774,7 @@ async function stageSelectedPageContent(
   const sourceDirectory = join(inputDirectory, 'source-pages');
   await mkdir(sourceDirectory, { recursive: true });
   const stagedPages = [];
-  for (const page of pages) {
+  for (const page of contextPages) {
     const artifact = contentBySourceUrl.get(page.sourceUrl);
     if (!artifact) {
       throw new Error(
@@ -1685,7 +1826,7 @@ async function stageSelectedPageContent(
     JSON.stringify(
       {
         purpose:
-          'Selected source-page content for a private redesign. Each listed page requires a corresponding generated output file.',
+          'Reviewed source-page content for a private redesign. Follow each disposition: only outputRequired pages become routes; merge sources contribute to their target; excluded sources are not staged.',
         pages: stagedPages,
       },
       null,
@@ -1693,7 +1834,8 @@ async function stageSelectedPageContent(
     ),
   );
   await chmod(indexPath, 0o444);
-  return stagedPages;
+  const stagedByUrl = new Map(stagedPages.map((page) => [page.sourceUrl, page]));
+  return outputPages.map((page) => stagedByUrl.get(page.sourceUrl) ?? page);
 }
 
 function selectedSourcePages(manifest, buildMode, targetSourceUrl, targetSourceUrls = []) {
@@ -1760,6 +1902,19 @@ function projectManifestData(data, selectedPages, stagedAssets, buildMode) {
   const fullData = recordValue(data);
   if (buildMode === 'full_site' || buildMode === 'site_test') return fullData;
   const selectedPageUrls = sourceUrlSet(selectedPages);
+  const contextPageUrls = new Set(selectedPageUrls);
+  for (const item of Array.isArray(fullData.pageCoverage) ? fullData.pageCoverage : []) {
+    const coverage = recordValue(item);
+    if (coverage.disposition !== 'merge' || typeof coverage.targetSourceUrl !== 'string') continue;
+    try {
+      if (!selectedPageUrls.has(normaliseSourceUrl(coverage.targetSourceUrl))) continue;
+      if (typeof coverage.sourceUrl === 'string') {
+        contextPageUrls.add(normaliseSourceUrl(coverage.sourceUrl));
+      }
+    } catch {
+      // Invalid source references were rejected before a manifest became ready.
+    }
+  }
   const stagedAssetIds = new Set(
     stagedAssets
       .map((asset) => recordValue(asset).assetId)
@@ -1775,10 +1930,24 @@ function projectManifestData(data, selectedPages, stagedAssets, buildMode) {
       ).filter((assetId) => stagedAssetIds.has(assetId)),
     },
     permittedFacts: (Array.isArray(fullData.permittedFacts) ? fullData.permittedFacts : []).filter(
-      (fact) => sourceBoundItemMatches(fact, selectedPageUrls),
+      (fact) => sourceBoundItemMatches(fact, contextPageUrls),
     ),
     selectedPages: (Array.isArray(fullData.selectedPages) ? fullData.selectedPages : []).filter(
       (page) => sourceBoundItemMatches(page, selectedPageUrls),
+    ),
+    pageCoverage: (Array.isArray(fullData.pageCoverage) ? fullData.pageCoverage : []).filter(
+      (item) => {
+        const coverage = recordValue(item);
+        if (sourceBoundItemMatches(item, selectedPageUrls)) return true;
+        if (coverage.disposition !== 'merge' || typeof coverage.targetSourceUrl !== 'string') {
+          return false;
+        }
+        try {
+          return selectedPageUrls.has(normaliseSourceUrl(coverage.targetSourceUrl));
+        } catch {
+          return false;
+        }
+      },
     ),
     selectedAssets: (Array.isArray(fullData.selectedAssets) ? fullData.selectedAssets : []).filter(
       (asset) => stagedAssetIds.has(recordValue(asset).artifactId),
@@ -1790,17 +1959,17 @@ function projectManifestData(data, selectedPages, stagedAssets, buildMode) {
     approvedVisualContent: (Array.isArray(fullData.approvedVisualContent)
       ? fullData.approvedVisualContent
       : []
-    ).filter((item) => sourceBoundItemMatches(item, selectedPageUrls)),
+    ).filter((item) => sourceBoundItemMatches(item, contextPageUrls)),
     approvedVisualContentGroups: (Array.isArray(fullData.approvedVisualContentGroups)
       ? fullData.approvedVisualContentGroups
       : []
-    ).filter((group) => sourceBoundItemMatches(group, selectedPageUrls)),
+    ).filter((group) => sourceBoundItemMatches(group, contextPageUrls)),
     proposedSitemap: (Array.isArray(fullData.proposedSitemap)
       ? fullData.proposedSitemap
       : []
     ).filter((entry) => sourceBoundItemMatches(entry, selectedPageUrls)),
     pagePlans: (Array.isArray(fullData.pagePlans) ? fullData.pagePlans : []).filter((plan) =>
-      sourceBoundItemMatches(plan, selectedPageUrls),
+      sourceBoundItemMatches(plan, contextPageUrls),
     ),
   };
 }
@@ -2313,7 +2482,7 @@ function buildPrompt(workspace, buildInstruction) {
     'For each route export Next.js metadata with other: { "siteforge-source-url": "<exact sourceUrl>" }. Keep sourcePath, publicPath, and outputPath exactly as assigned.',
     ...(usesContract('site-navigation-architecture.md')
       ? [
-          'Read feature-contracts/site-navigation-architecture.md. Use clean publicPath values and a page-based primary header with real generated routes, never homepage section shortcuts when multiple pages exist. Keep meaningful parent/child navigation and make every selected route reachable from the homepage.',
+          'Read feature-contracts/site-navigation-architecture.md. Apply every reviewed pageCoverage disposition, use clean publicPath values and a page-based primary header with real generated routes, never homepage section shortcuts when multiple pages exist. Keep meaningful parent/child navigation, make standalone and contextual routes reachable, and keep redirects and workflow states out of global navigation.',
           'Give every visitor-facing route and internal link a meaningful content-derived name. Replace source placeholders such as Blank, Unnamed page, Untitled, or raw path labels like /blank with concise page titles, H1s, and navigation labels supported by that page dossier. Do not change the assigned publicPath, sourcePath, outputPath, or provenance marker.',
         ]
       : []),
@@ -2335,7 +2504,7 @@ function buildPrompt(workspace, buildInstruction) {
     'approved-assets.json includes each asset’s reviewed role, observed description, safe reuse note, cautions, and visible text beside its usable publicPath. When the selected page has permitted approved worksite_photo or project_photo assets, use at least two distinct photographs when two are available, or the one available photograph, as meaningful page content with accurate alt text; do not discard approved photography in favour of an image-free generic composition.',
     ...(usesContract('contextual-logo-selection.md')
       ? [
-          'Read and implement feature-contracts/contextual-logo-selection.md. The approved primary logo family is mandatory in the header and footer. Use the explicit logoFamilyPrimaryAssetId and logoAppearance fields in approved-assets.json to choose a contrast-safe approved version for each direct background surface, and annotate every logo image as required by the contract. Use the reviewed primary and accent colours as brand tokens, then design coherent accessible neutrals, surfaces, and backgrounds yourself; do not copy a weak legacy colour system or replace the identity with a generic one.',
+          'Read and implement feature-contracts/contextual-logo-selection.md. The approved primary logo family is mandatory in the header and footer. Use the explicit logoFamilyPrimaryAssetId and logoAppearance fields in approved-assets.json to choose a contrast-safe approved version for each direct background surface, and annotate every logo image as required by the contract. Use every enabled reviewed brand colour as its exact matching semantic token. Read the palette mode: primary_and_accent locks both roles, accent_only lets you derive primary, primary_only lets you derive accent, and builder_derived lets you choose both. Builder-derived roles must be coherent and accessible but are not verified brand facts; do not copy a weak legacy colour system or replace the identity with a generic one.',
         ]
       : []),
     'Keep the locked SiteRuntime mounted in the root layout. It supplies the server-rendered loading cover, post-handoff hero reveal, factual counters, and approved-logo introduction without determining visual design. Mark the real header logo or wrapper with data-siteforge-brand-logo, its exact data-siteforge-intro-surface and 4.5:1-contrasting data-siteforge-intro-ink colours, builder-chosen data-siteforge-intro-copy, and an honest data-siteforge-compact-logo-alignment of center or flow. Prefer an approved slogan for the intro copy, otherwise choose a concise evidence-grounded line without inventing a claim. Load the intrinsically sized header logo eagerly with high fetch priority. Mark the drawer logo with both data-siteforge-navigation-logo and the first data-sf-navigation-item, and preload any distinct drawer appearance in the initial document through data-siteforge-navigation-logo-src. The runtime pre-decodes and prioritises that mark, then exposes the logo and routes together when the drawer opens; do not add independent readiness visibility or route animations. If center is chosen, align to the viewport rather than an unequal middle grid cell. Do not add a second loader, fake progress, generic wordmark, or invented metric.',
@@ -2363,7 +2532,7 @@ function buildPrompt(workspace, buildInstruction) {
         ]
       : []),
     restoredCheckpoint
-      ? 'A private Next.js source checkpoint has been restored. Preserve useful components and design decisions, then extend or correct it until every selected route is covered.'
+      ? 'A private Next.js source checkpoint has been restored. Preserve useful components and design decisions, then extend or correct it until every reviewed page-coverage outcome is satisfied.'
       : 'Start from the locked Next.js builder foundation. Replace the starter route and build the generated component system.',
     homepageTest
       ? 'Finish by running npm run verify. Report the completed homepage component architecture and unresolved manifest questions.'
@@ -2898,7 +3067,15 @@ async function designSystemRhythmProblems(siteDirectory, htmlFiles) {
   return problems;
 }
 
-async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, diagnostics) {
+async function runCodex(
+  client,
+  run,
+  workerId,
+  workspace,
+  authentication,
+  eventWriter,
+  diagnostics,
+) {
   await assertBuildActive(client, run, workerId);
   const codexBuildDetail = workspace.scopedRevision
     ? workspace.rebasedToCurrentManifest
@@ -2918,19 +3095,15 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
       : 'Codex has started the private website build.',
     {
       scope: workspace.scopedRevision ? 'scoped_revision' : 'website_build',
+      authentication: authentication.billingMode,
+      terminalRuntime: 'tmux',
     },
   );
   const codexExecutable = await codexBinary();
-  // Codex installs its workspace-sandbox helper under its home directory. It
-  // deliberately refuses temporary homes, so keep this isolated worker home
-  // outside the disposable website workspace while the generated project
-  // itself remains restricted to workspace-write.
-  const codexHome =
-    process.env.SITEFORGE_CODEX_HOME?.trim() ||
-    join(process.env.HOME?.trim() || workerRoot, '.siteforge-codex-builder');
+  const codexEnvironment = builderCodexEnvironment(authentication);
+  await assertBuilderCodexAuthentication(codexExecutable, authentication, codexEnvironment);
   const executionProfile = builderExecutionProfile(run, workspace.agentPackage);
   const { model, reasoningEffort } = executionProfile;
-  await mkdir(codexHome, { recursive: true });
   const outputPath = join(workspace.runDirectory, 'codex-final-message.txt');
   const events = [];
   let latestDetail = workspace.scopedRevision
@@ -2958,6 +3131,8 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
     void eventWriter('activity', safeMessage, { stream: 'codex', ...metadata });
   }
   const codexArguments = [
+    '--config',
+    'forced_login_method="chatgpt"',
     'exec',
     '--cd',
     workspace.siteDirectory,
@@ -2975,12 +3150,7 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
   codexArguments.push(buildPrompt(workspace, run.build_instruction));
   const child = spawn(codexExecutable, codexArguments, {
     cwd: workspace.siteDirectory,
-    env: {
-      HOME: codexHome,
-      PATH: process.env.PATH,
-      CODEX_API_KEY: apiKey,
-      NO_COLOR: '1',
-    },
+    env: codexEnvironment,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let outputBuffer = '';
@@ -3129,12 +3299,16 @@ async function runCodex(client, run, workerId, workspace, apiKey, eventWriter, d
     source: 'codex_build',
     model: model || run.model || 'Codex CLI',
     usage: codexUsage(events),
+    billingMode: authentication.billingMode,
     metadata: {
       exitCode: exit.code,
       signal: exit.signal ?? null,
       eventCount: events.length,
       executionProfile,
       buildContext: workspace.contextSummary,
+      billingMode: authentication.billingMode,
+      authenticationMode: authentication.mode,
+      terminalRuntime: 'tmux',
     },
   });
   if (model) run.model = model;
@@ -3468,7 +3642,7 @@ function missingInternalNavigationTargets(htmlFiles, allFiles, outputDirectory) 
   return problems;
 }
 
-function unreachableSelectedPageProblems(htmlFiles) {
+function unreachableSelectedPageProblems(htmlFiles, selectedPages = []) {
   const generatedPaths = new Set(htmlFiles.map((file) => file.relativePath));
   if (!generatedPaths.has('index.html') || generatedPaths.size <= 1) return [];
   const linksByPage = new Map();
@@ -3499,8 +3673,13 @@ function unreachableSelectedPageProblems(htmlFiles) {
       pending.push(target);
     }
   }
+  const navigationExemptPaths = new Set(
+    selectedPages
+      .filter((page) => page.disposition === 'redirect' || page.disposition === 'workflow_state')
+      .map((page) => page.outputPath),
+  );
   return [...generatedPaths]
-    .filter((path) => !visited.has(path))
+    .filter((path) => !visited.has(path) && !navigationExemptPaths.has(path))
     .map((path) => `${path} cannot be reached by following internal links from index.html.`);
 }
 
@@ -4579,7 +4758,14 @@ async function runQualityChecks(
   );
   const inconsistentHeaderNavigation = inconsistentHeaderNavigationProblems(scopedHtmlFiles);
   const multiPageHeaderNavigation = multiPageHeaderRouteNavigationProblems(scopedHtmlFiles);
-  const unreachableSelectedPages = unreachableSelectedPageProblems(scopedHtmlFiles);
+  const unreachableSelectedPages = unreachableSelectedPageProblems(
+    scopedHtmlFiles,
+    sourcePagePlan(
+      Array.isArray(recordValue(manifest.data).selectedPages)
+        ? recordValue(manifest.data).selectedPages
+        : [],
+    ),
+  );
   const selectedPageCoverage = selectedPageCoverageCheck(
     manifest,
     scopedHtmlFiles,
@@ -4714,7 +4900,7 @@ async function runQualityChecks(
       status: unreachableSelectedPages.length ? 'failed' : 'passed',
       detail: unreachableSelectedPages.length
         ? unreachableSelectedPages.join(' ')
-        : 'Every generated page is reachable from the homepage through the internal navigation hierarchy.',
+        : 'Every standalone and contextual page is reachable from the homepage; reviewed redirects and workflow states remain outside global navigation.',
     },
     {
       id: 'brand-kit-usage',
@@ -4722,7 +4908,7 @@ async function runQualityChecks(
       status: brandCheckProblems.length ? 'failed' : 'passed',
       detail: brandCheckProblems.length
         ? brandCheckProblems.join(' ')
-        : 'No approved Brand Kit was required, or its primary logo and reviewed palette are present.',
+        : 'No approved Brand Kit was required, or its primary logo and enabled reviewed palette roles are present.',
     },
     {
       id: 'approved-image-usage',
@@ -5218,6 +5404,7 @@ function canContinueWithoutCodex(run, workspace) {
     'compiled_route_missing',
     'private_storage_rejected',
     'private_storage_temporary_failure',
+    'editable_source_packaging_failed',
     'build_manifest_temporarily_unavailable',
     'protected_workspace_temporary_failure',
     'builder_input_temporary_failure',
@@ -5225,7 +5412,7 @@ function canContinueWithoutCodex(run, workspace) {
   ].includes(resumeFailureCode(run));
 }
 
-async function processBuild(client, run, workerId, apiKey) {
+async function processBuild(client, run, workerId, authentication) {
   const { data: manifest, error } = await client
     .from('build_manifests')
     .select('*')
@@ -5308,17 +5495,12 @@ async function processBuild(client, run, workerId, apiKey) {
         reusedCheckpoint: true,
       };
     } else {
-      if (!apiKey) {
-        throw new Error(
-          'SITEFORGE_CODEX_API_KEY or OPENAI_API_KEY is required for the Codex builder worker.',
-        );
-      }
       codexOutput = await runCodex(
         client,
         run,
         workerId,
         workspace,
-        apiKey,
+        authentication,
         eventWriter,
         diagnostics,
       );
@@ -5444,7 +5626,7 @@ async function markFailed(client, run, error) {
   return paused;
 }
 
-async function processNextBuild(client, workerId, apiKey) {
+async function processNextBuild(client, workerId, authentication) {
   const { data, error } = await client.rpc('claim_next_website_build', {
     worker_identity: workerId,
   });
@@ -5454,7 +5636,7 @@ async function processNextBuild(client, workerId, apiKey) {
   const heartbeat = createBuilderHeartbeat(client, run, workerId);
   try {
     await heartbeat.renew();
-    const quality = await processBuild(client, run, workerId, apiKey);
+    const quality = await processBuild(client, run, workerId, authentication);
     const reviewRequired = quality.summary.status !== 'passed';
     const { error: completionError } = await client
       .from('builder_runs')
@@ -5518,7 +5700,7 @@ async function processNextBuild(client, workerId, apiKey) {
 async function main() {
   const supabaseUrl = requiredEnvironment('SITEFORGE_SUPABASE_URL');
   const serviceRoleKey = requiredEnvironment('SITEFORGE_SUPABASE_SERVICE_ROLE_KEY');
-  const apiKey = process.env.SITEFORGE_CODEX_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim();
+  const authentication = builderCodexAuthentication();
   const workerId =
     process.env.SITEFORGE_WORKER_ID?.trim() || `${hostname()}-builder-${process.pid}`;
   const pollIntervalMs = Number(process.env.SITEFORGE_BUILDER_POLL_MS ?? 5_000);
@@ -5538,7 +5720,7 @@ async function main() {
     do {
       try {
         await heartbeatBuilderWorker(client, workerId);
-        const claimed = await processNextBuild(client, workerId, apiKey);
+        const claimed = await processNextBuild(client, workerId, authentication);
         if (runOnce || stopping) {
           if (runOnce && !claimed)
             console.log('[builder-worker] no queued private preview builds.');
@@ -5574,6 +5756,8 @@ export {
   assetMatchesSelectedPages,
   buildContextSummary,
   buildPrompt,
+  builderCodexAuthentication,
+  builderCodexEnvironment,
   builderExecutionProfile,
   canContinueWithoutCodex,
   checkpointSourceBody,
@@ -5587,6 +5771,7 @@ export {
   enforceBrandPaletteTokens,
   failureDetails,
   fetchWithRequestTimeout,
+  groupApprovedAssetsByContent,
   expressiveNavigationMotionProblems,
   inconsistentHeaderNavigationProblems,
   lockedFoundationPaths,
