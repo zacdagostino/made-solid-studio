@@ -206,7 +206,7 @@ export function AppShell({
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      <aside aria-label="Primary navigation" className="sidebar">
         <Brand hidden={isLoading} />
         <Navigation activePage={activePage} onNavigate={onNavigate} />
         <div className="navigation-footer">

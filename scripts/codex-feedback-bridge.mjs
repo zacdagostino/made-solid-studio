@@ -5,6 +5,9 @@ import { extname, resolve } from 'node:path';
 const defaultServerUrl = 'ws://127.0.0.1:4500';
 const maximumImageBytes = 15 * 1024 * 1024;
 const maximumPromptLength = 4_000;
+const maximumAgentThreads = 24;
+const teamDelegationInstruction =
+  'Agent team is enabled for this request. You are the supervisor. Delegate useful independent workstreams to attached sub-agents with clear, non-overlapping assignments, run them concurrently when practical, monitor their outcomes, and synthesize the result in this parent conversation. Keep work that is trivial or inherently sequential in the parent agent.';
 const supportedImageTypes = new Map([
   ['image/png', '.png'],
   ['image/jpeg', '.jpg'],
@@ -138,12 +141,108 @@ function publicThread(thread, { discardable = false } = {}) {
     preview: typeof thread.preview === 'string' ? thread.preview.slice(0, 160) : undefined,
     status: String(thread.status?.type || 'unknown'),
     working: thread.status?.type === 'active',
+    activeTurnId: typeof turn?.id === 'string' ? turn.id : undefined,
     activeFlags,
     updatedAt: typeof thread.updatedAt === 'number' ? thread.updatedAt : undefined,
     workingStartedAt: typeof turn?.startedAt === 'number' ? turn.startedAt : undefined,
     lastTurnStatus: typeof lastTurn?.status === 'string' ? lastTurn.status : undefined,
     interrupted: lastTurn?.status === 'interrupted',
     discardable,
+  };
+}
+
+function agentTask(thread) {
+  const task = String(thread?.preview || '')
+    .split(/\n\s*(?:Captured from:|Agent team is enabled)/i, 1)[0]
+    .replace(/\s+/g, ' ')
+    .trim();
+  return task.slice(0, maximumPromptLength);
+}
+
+function collabAgentStates(threads) {
+  const states = new Map();
+  for (const thread of threads) {
+    for (const turn of Array.isArray(thread?.turns) ? thread.turns : []) {
+      for (const item of Array.isArray(turn?.items) ? turn.items : []) {
+        if (item?.type !== 'collabAgentToolCall' || !item.agentsStates) continue;
+        for (const [threadId, state] of Object.entries(item.agentsStates)) {
+          if (state && typeof state === 'object') states.set(String(threadId), state);
+        }
+      }
+    }
+  }
+  return states;
+}
+
+function collabAgentTurnIds(thread) {
+  const turnIds = new Map();
+  for (const turn of Array.isArray(thread?.turns) ? thread.turns : []) {
+    if (typeof turn?.id !== 'string') continue;
+    for (const item of Array.isArray(turn.items) ? turn.items : []) {
+      if (item?.type !== 'collabAgentToolCall' || !item.agentsStates) continue;
+      for (const threadId of Object.keys(item.agentsStates)) {
+        if (!turnIds.has(String(threadId))) turnIds.set(String(threadId), turn.id);
+      }
+    }
+  }
+  return turnIds;
+}
+
+function publicAgent(thread, detail, state, depth, supervisorTurnId) {
+  const source = detail?.thread ? { ...thread, ...detail.thread } : thread;
+  const turn = activeTurn(source);
+  const lastTurn = [...(Array.isArray(source?.turns) ? source.turns : [])]
+    .reverse()
+    .find((candidate) => typeof candidate?.id === 'string');
+  const inferredStatus =
+    source?.status?.type === 'active'
+      ? 'running'
+      : source?.status?.type === 'systemError'
+        ? 'errored'
+        : lastTurn?.status === 'interrupted'
+          ? 'interrupted'
+          : lastTurn?.status === 'completed'
+            ? 'completed'
+            : source?.status?.type === 'idle'
+              ? lastTurn
+                ? 'completed'
+                : 'pendingInit'
+              : 'pendingInit';
+  const messages = publicMessages(source).slice(-10);
+  const latestAssistantMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === 'assistant')?.text;
+  const status =
+    source?.status?.type === 'active' || turn
+      ? 'running'
+      : lastTurn?.status === 'interrupted'
+        ? 'interrupted'
+        : lastTurn?.status === 'completed'
+          ? 'completed'
+          : source?.status?.type === 'systemError'
+            ? 'errored'
+            : typeof state?.status === 'string'
+              ? state.status
+              : inferredStatus;
+  return {
+    id: String(source.id),
+    parentThreadId: typeof source.parentThreadId === 'string' ? source.parentThreadId : undefined,
+    supervisorTurnId,
+    nickname: typeof source.agentNickname === 'string' ? source.agentNickname : undefined,
+    role: typeof source.agentRole === 'string' ? source.agentRole : undefined,
+    name: typeof source.name === 'string' ? source.name : undefined,
+    task: agentTask(source),
+    status,
+    statusMessage:
+      typeof state?.message === 'string'
+        ? state.message.slice(0, 12_000)
+        : latestAssistantMessage?.slice(0, 12_000),
+    working: status === 'running',
+    depth,
+    createdAt: typeof source.createdAt === 'number' ? source.createdAt : undefined,
+    updatedAt: typeof source.updatedAt === 'number' ? source.updatedAt : undefined,
+    workingStartedAt: typeof turn?.startedAt === 'number' ? turn.startedAt : undefined,
+    messages,
   };
 }
 
@@ -161,6 +260,18 @@ function activeTurn(thread) {
     .find((turn) => turn?.status === 'inProgress' && typeof turn.id === 'string');
 }
 
+function lastTurn(thread) {
+  return [...(Array.isArray(thread?.turns) ? thread.turns : [])]
+    .reverse()
+    .find((turn) => typeof turn?.id === 'string');
+}
+
+function supervisorAgentRecoveryInstruction(agents) {
+  if (!agents.length) return '';
+  const targets = agents.map((agent) => `${agent.name} (${agent.id})`).join(', ');
+  return ` Agent team recovery is required for these interrupted attached agents: ${targets}. Before continuing the parent work, use the followup_task collaboration tool once for each exact thread ID and tell that agent to continue its original assignment from its saved sub-chat. Do not call App Server directly for a child, do not merely monitor an interrupted child, and do not spawn a replacement unless followup_task reports that the saved child cannot resume. Wait for fresh completion results from every resumed child before final synthesis.`;
+}
+
 function publicMessages(thread) {
   const messages = [];
   for (const turn of Array.isArray(thread?.turns) ? thread.turns : []) {
@@ -176,6 +287,7 @@ function publicMessages(thread) {
             id: String(item.id || randomUUID()),
             role: 'user',
             text: text.slice(0, maximumPromptLength),
+            turnId: typeof turn.id === 'string' ? turn.id : undefined,
           });
       } else if (item.type === 'agentMessage' && typeof item.text === 'string') {
         const text = item.text.trim();
@@ -185,6 +297,7 @@ function publicMessages(thread) {
             role: 'assistant',
             text: text.slice(0, 12_000),
             phase: typeof item.phase === 'string' ? item.phase : undefined,
+            turnId: typeof turn.id === 'string' ? turn.id : undefined,
           });
       }
     }
@@ -196,7 +309,7 @@ function messagesWithFeedbackRecords(thread, records, threadId) {
   const messages = publicMessages(thread);
   const available = records.filter(
     (record) =>
-      ['running', 'completed', 'interrupted', 'delivered'].includes(record.status) &&
+      ['running', 'recovering', 'completed', 'interrupted', 'delivered'].includes(record.status) &&
       String(record.threadId || '') === String(threadId || ''),
   );
   const used = new Set();
@@ -209,7 +322,8 @@ function messagesWithFeedbackRecords(thread, records, threadId) {
         (candidate) =>
           !used.has(candidate.id) &&
           (message.text === candidate.prompt ||
-            message.text.startsWith(`${candidate.prompt}\n\nCaptured from:`)),
+            message.text.startsWith(`${candidate.prompt}\n\nCaptured from:`) ||
+            message.text.startsWith(`${candidate.prompt}\n\nAgent team is enabled`)),
       );
     if (!record) continue;
     used.add(record.id);
@@ -288,14 +402,36 @@ export class CodexFeedbackBridge {
         }),
         ...listedThreads.filter((thread) => !startedThreadIds.has(String(thread.id))),
       ].slice(0, 50);
-      const requestedThread = threadCandidates.find(
+      let requestedThread = threadCandidates.find(
         (candidate) => String(candidate.id) === String(threadId || ''),
       );
+      let requestedThreadDetail;
+      if (
+        !requestedThread &&
+        typeof threadId === 'string' &&
+        /^[A-Za-z0-9-]{1,100}$/.test(threadId)
+      ) {
+        try {
+          requestedThreadDetail = await client.request('thread/read', {
+            threadId,
+            includeTurns: true,
+          });
+          if (requestedThreadDetail?.thread?.id) {
+            requestedThread = requestedThreadDetail.thread;
+            threadCandidates.unshift(requestedThread);
+          }
+        } catch {
+          // A stale browser selection falls back to the newest listed Studio thread.
+        }
+      }
       const thread = requestedThread || selectThread(threadCandidates, this.cwd);
-      let threadDetail;
+      let threadDetail =
+        String(requestedThreadDetail?.thread?.id || '') === String(thread?.id || '')
+          ? requestedThreadDetail
+          : undefined;
       if (thread) {
         try {
-          threadDetail = await client.request('thread/read', {
+          threadDetail ??= await client.request('thread/read', {
             threadId: thread.id,
             includeTurns: true,
           });
@@ -315,6 +451,84 @@ export class CodexFeedbackBridge {
             updatedAt: threadDetail.thread.updatedAt || thread.updatedAt,
           }
         : thread;
+      let agentThreads = [];
+      if (thread?.id) {
+        try {
+          const descendants = await client.request('thread/list', {
+            limit: maximumAgentThreads,
+            ancestorThreadId: thread.id,
+            sortKey: 'created_at',
+            sortDirection: 'asc',
+            sourceKinds: [
+              'subAgent',
+              'subAgentReview',
+              'subAgentCompact',
+              'subAgentThreadSpawn',
+              'subAgentOther',
+            ],
+          });
+          agentThreads = Array.isArray(descendants.data)
+            ? descendants.data.slice(0, maximumAgentThreads)
+            : [];
+        } catch {
+          // Older app-server builds can still serve the parent conversation without agent detail.
+        }
+      }
+      const agentDetails = await Promise.all(
+        agentThreads.map(async (agentThread) => {
+          try {
+            return await client.request('thread/read', {
+              threadId: agentThread.id,
+              includeTurns: true,
+            });
+          } catch {
+            return { thread: agentThread };
+          }
+        }),
+      );
+      const agentStates = collabAgentStates([
+        detailedThread,
+        ...agentDetails.map((detail) => detail?.thread),
+      ]);
+      const agentParents = new Map(
+        agentThreads.map((agentThread) => [String(agentThread.id), agentThread.parentThreadId]),
+      );
+      const agentDepth = (agentThread) => {
+        let depth = 0;
+        let parentId = agentThread.parentThreadId;
+        const visited = new Set();
+        while (parentId && String(parentId) !== String(thread?.id) && !visited.has(parentId)) {
+          visited.add(parentId);
+          depth += 1;
+          parentId = agentParents.get(String(parentId));
+        }
+        return Math.min(depth, 4);
+      };
+      const directAgentTurnIds = collabAgentTurnIds(detailedThread);
+      const rootAgentId = (agentThread) => {
+        let currentId = String(agentThread.id);
+        let parentId = agentThread.parentThreadId;
+        const visited = new Set();
+        while (parentId && String(parentId) !== String(thread?.id) && !visited.has(parentId)) {
+          visited.add(parentId);
+          currentId = String(parentId);
+          parentId = agentParents.get(String(parentId));
+        }
+        return currentId;
+      };
+      const parentTurns = (Array.isArray(detailedThread?.turns) ? detailedThread.turns : []).filter(
+        (turn) => typeof turn?.id === 'string',
+      );
+      const supervisorTurnId = (agentThread) => {
+        const directTurnId = directAgentTurnIds.get(rootAgentId(agentThread));
+        if (directTurnId) return directTurnId;
+        if (typeof agentThread.createdAt !== 'number') return undefined;
+        return [...parentTurns]
+          .filter(
+            (turn) => typeof turn.startedAt === 'number' && turn.startedAt <= agentThread.createdAt,
+          )
+          .sort((left, right) => Number(right.startedAt) - Number(left.startedAt))[0]?.id;
+      };
       const records = await this.readRecords();
       const queued = records.filter((record) => record.status === 'queued');
       const selectedQueued = queued.filter(
@@ -356,6 +570,15 @@ export class CodexFeedbackBridge {
               }),
         ),
         messages: messagesWithFeedbackRecords(threadDetail?.thread, records, thread?.id),
+        agents: agentThreads.map((agentThread, index) =>
+          publicAgent(
+            agentThread,
+            agentDetails[index],
+            agentStates.get(String(agentThread.id)),
+            agentDepth(agentThread),
+            supervisorTurnId(agentThread),
+          ),
+        ),
         models,
         queuedCount: selectedQueued.length,
         interruptingCount: selectedQueued.filter((record) => record.deliveryMode === 'interrupt')
@@ -369,6 +592,7 @@ export class CodexFeedbackBridge {
           createdAt: record.createdAt,
           position: index + 1,
           attachmentId: record.imagePath ? record.id : undefined,
+          workMode: record.workMode === 'team' ? 'team' : 'direct',
         })),
       };
     } finally {
@@ -387,6 +611,7 @@ export class CodexFeedbackBridge {
       throw new Error('Choose an available Codex model and reasoning level.');
     }
     const screenshot = parseScreenshot(input.screenshot);
+    const workMode = input.workMode === 'team' ? 'team' : 'direct';
     const threadId =
       typeof input.threadId === 'string' && /^[A-Za-z0-9-]{1,100}$/.test(input.threadId)
         ? input.threadId
@@ -404,6 +629,7 @@ export class CodexFeedbackBridge {
       prompt,
       model,
       effort,
+      workMode,
       deliveryMode: 'queue',
       imagePath,
       mimeType: screenshot?.mimeType,
@@ -519,12 +745,66 @@ export class CodexFeedbackBridge {
           runtimeWorkspaceRoots: this.runtimeWorkspaceRoots,
         });
       }
+      let agentThreads = [];
+      try {
+        const descendants = await client.request('thread/list', {
+          limit: maximumAgentThreads,
+          ancestorThreadId: threadId,
+          sortKey: 'created_at',
+          sortDirection: 'asc',
+          sourceKinds: [
+            'subAgent',
+            'subAgentReview',
+            'subAgentCompact',
+            'subAgentThreadSpawn',
+            'subAgentOther',
+          ],
+        });
+        agentThreads = Array.isArray(descendants.data)
+          ? descendants.data.slice(0, maximumAgentThreads)
+          : [];
+      } catch {
+        // Parent-only continuation remains available with older app-server builds.
+      }
+      const agentDetails = await Promise.all(
+        agentThreads.map(async (agentThread) => {
+          try {
+            return await client.request('thread/read', {
+              threadId: agentThread.id,
+              includeTurns: true,
+            });
+          } catch {
+            return { thread: agentThread };
+          }
+        }),
+      );
+      const agentStates = collabAgentStates([
+        thread,
+        ...agentDetails.map((detail) => detail?.thread),
+      ]);
+      const interruptedAgents = agentThreads
+        .map((agentThread, index) => ({
+          thread: agentThread,
+          detail: agentDetails[index],
+          public: publicAgent(
+            agentThread,
+            agentDetails[index],
+            agentStates.get(String(agentThread.id)),
+            0,
+          ),
+        }))
+        .filter((agent) => agent.public.status === 'interrupted');
+      const resumeRequestedAgents = interruptedAgents.map((agent) => ({
+        id: agent.public.id,
+        name: agent.public.role || agent.public.name || agent.public.nickname || 'Attached agent',
+      }));
+      const teamContinuation = supervisorAgentRecoveryInstruction(resumeRequestedAgents);
       const result = await client.request('turn/start', {
         threadId,
         input: [
           {
             type: 'text',
-            text: 'The previous turn was interrupted when the Codespace paused. Continue the original request from the saved work and transcript. Inspect the current shared workspace first, preserve existing changes, finish the remaining implementation and verification, and report the final result.',
+            text: `The previous turn was interrupted when the Codespace paused. Continue the original request from the saved work and transcript. Inspect the current shared workspace first, preserve existing changes, finish the remaining implementation and verification, and report the final result.${teamContinuation}`,
           },
         ],
         cwd: this.cwd,
@@ -532,10 +812,33 @@ export class CodexFeedbackBridge {
         model,
         effort,
       });
+      const records = await this.readRecords();
+      const interruptedRecord = [...records]
+        .reverse()
+        .find(
+          (record) => String(record.threadId || '') === threadId && record.status === 'interrupted',
+        );
+      if (interruptedRecord) {
+        await this.updateRecordStatus(interruptedRecord, 'running', {
+          turnId: typeof result.turn?.id === 'string' ? result.turn.id : interruptedRecord.turnId,
+          recoveryCount: Number(interruptedRecord.recoveryCount || 0) + 1,
+          recoveredAt: new Date().toISOString(),
+          agentRecoveryTurnId:
+            resumeRequestedAgents.length && typeof result.turn?.id === 'string'
+              ? result.turn.id
+              : undefined,
+          agentRecoveryThreadIds: resumeRequestedAgents.map((agent) => agent.id),
+        });
+      }
       return {
         status: 'accepted',
-        detail: 'Codex resumed the interrupted conversation from its saved transcript.',
+        detail: resumeRequestedAgents.length
+          ? `Codex resumed the supervisor with instructions to restart ${resumeRequestedAgents.length} interrupted attached agent${resumeRequestedAgents.length === 1 ? '' : 's'} from saved sub-chats.`
+          : 'Codex resumed the interrupted conversation from its saved transcript.',
         turnId: typeof result.turn?.id === 'string' ? result.turn.id : undefined,
+        resumeRequestedAgents,
+        resumedAgents: resumeRequestedAgents,
+        agentResumeFailures: [],
       };
     } finally {
       client.close();
@@ -597,6 +900,21 @@ export class CodexFeedbackBridge {
         ),
     );
     const interrupted = await this.interruptActiveTurn(record.threadId);
+    if (interrupted) {
+      const activeRecords = (await this.readRecords()).filter(
+        (candidate) =>
+          ['running', 'recovering'].includes(candidate.status) &&
+          String(candidate.threadId || '') === String(record.threadId || ''),
+      );
+      await Promise.all(
+        activeRecords.map((candidate) =>
+          this.updateRecordStatus(candidate, 'interrupted', {
+            interruptedAt: new Date().toISOString(),
+            supersededBy: record.id,
+          }),
+        ),
+      );
+    }
     void this.flush();
     return {
       status: 'queued',
@@ -750,11 +1068,22 @@ export class CodexFeedbackBridge {
             continue;
           }
           const threadCandidates = Array.isArray(threadResult.data) ? threadResult.data : [];
-          const thread = record.threadId
+          let thread = record.threadId
             ? threadCandidates.find(
                 (candidate) => String(candidate.id) === String(record.threadId),
               ) || this.startedThreads.get(String(record.threadId))
             : selectThread(threadCandidates, this.cwd);
+          if (!thread && record.threadId) {
+            try {
+              const directThread = await client.request('thread/read', {
+                threadId: record.threadId,
+                includeTurns: true,
+              });
+              thread = directThread?.thread;
+            } catch {
+              // The durable queue remains private and retries after the thread is available.
+            }
+          }
           if (!thread) continue;
           if (thread.status?.type === 'active') continue;
           if (thread.status?.type === 'notLoaded') {
@@ -762,7 +1091,13 @@ export class CodexFeedbackBridge {
               threadId: thread.id,
               runtimeWorkspaceRoots: this.runtimeWorkspaceRoots,
             });
+            const resumedThread = await client.request('thread/read', {
+              threadId: thread.id,
+              includeTurns: true,
+            });
+            thread = resumedThread?.thread || thread;
           }
+          if (thread.status?.type === 'active' || activeTurn(thread)) continue;
           try {
             const turnResult = await client.request('turn/start', {
               threadId: thread.id,
@@ -770,8 +1105,12 @@ export class CodexFeedbackBridge {
                 {
                   type: 'text',
                   text: record.context
-                    ? `${record.prompt}\n\nCaptured from: ${record.context}`
-                    : record.prompt,
+                    ? `${record.prompt}\n\nCaptured from: ${record.context}${
+                        record.workMode === 'team' ? `\n\n${teamDelegationInstruction}` : ''
+                      }`
+                    : `${record.prompt}${
+                        record.workMode === 'team' ? `\n\n${teamDelegationInstruction}` : ''
+                      }`,
                 },
                 ...(record.imagePath ? [{ type: 'localImage', path: record.imagePath }] : []),
               ],
@@ -818,94 +1157,213 @@ export class CodexFeedbackBridge {
     }
   }
 
+  async interruptedAgentsForSupervisor(client, { threadId }) {
+    let agentThreads;
+    try {
+      const descendants = await client.request('thread/list', {
+        limit: maximumAgentThreads,
+        ancestorThreadId: threadId,
+        sortKey: 'created_at',
+        sortDirection: 'asc',
+        sourceKinds: [
+          'subAgent',
+          'subAgentReview',
+          'subAgentCompact',
+          'subAgentThreadSpawn',
+          'subAgentOther',
+        ],
+      });
+      agentThreads = Array.isArray(descendants.data)
+        ? descendants.data.slice(0, maximumAgentThreads)
+        : [];
+    } catch {
+      return { agents: [], inspectionFailures: [] };
+    }
+
+    const agents = [];
+    const inspectionFailures = [];
+    for (const listedAgent of agentThreads) {
+      let detail;
+      try {
+        detail = await client.request('thread/read', {
+          threadId: listedAgent.id,
+          includeTurns: true,
+        });
+      } catch (error) {
+        inspectionFailures.push({
+          id: String(listedAgent.id),
+          detail: error instanceof Error ? error.message : 'The attached agent could not be read.',
+        });
+        continue;
+      }
+      const agent = detail?.thread ? { ...listedAgent, ...detail.thread } : listedAgent;
+      const interruptedTurn = lastTurn(agent);
+      if (
+        agent.status?.type === 'active' ||
+        activeTurn(agent) ||
+        interruptedTurn?.status !== 'interrupted'
+      ) {
+        continue;
+      }
+      agents.push({
+        id: String(agent.id),
+        name: agent.agentRole || agent.name || agent.agentNickname || 'Attached agent',
+      });
+    }
+    return { agents, inspectionFailures };
+  }
+
   async runMaintenance() {
-    await this.flush();
     const records = await this.readRecords();
-    const running = records.filter((record) => record.status === 'running');
-    if (!running.length) return;
+    const running = records.filter((record) => ['running', 'recovering'].includes(record.status));
+    if (!running.length) {
+      await this.flush();
+      return;
+    }
     const queued = records.filter((record) => record.status === 'queued');
     const client = await this.connect().catch(() => undefined);
     if (!client) return;
     try {
-      const threadResult = await client.request('thread/list', {
-        limit: 100,
-        cwd: this.cwd,
-        sortKey: 'updated_at',
-      });
-      const threads = Array.isArray(threadResult.data) ? threadResult.data : [];
       for (const record of running) {
-        const thread = threads.find(
-          (candidate) => String(candidate.id) === String(record.threadId || ''),
-        );
-        if (!thread) continue;
-        let detail;
         try {
-          detail = await client.request('thread/read', {
-            threadId: thread.id,
+          if (!record.threadId) continue;
+          const detail = await client.request('thread/read', {
+            threadId: record.threadId,
             includeTurns: true,
           });
-        } catch {
-          continue;
-        }
-        const turns = Array.isArray(detail?.thread?.turns) ? detail.thread.turns : [];
-        const trackedTurn = record.turnId
-          ? turns.find((turn) => String(turn?.id) === String(record.turnId))
-          : turns.at(-1);
-        if (!trackedTurn || trackedTurn.status === 'inProgress') continue;
-        if (trackedTurn.status === 'completed') {
-          await this.updateRecordStatus(record, 'completed', {
-            completedAt: new Date().toISOString(),
+          let detailedThread = detail?.thread;
+          if (!detailedThread?.id) continue;
+          if (detailedThread.status?.type === 'notLoaded') {
+            await client.request('thread/resume', {
+              threadId: detailedThread.id,
+              runtimeWorkspaceRoots: this.runtimeWorkspaceRoots,
+            });
+            const resumedDetail = await client.request('thread/read', {
+              threadId: detailedThread.id,
+              includeTurns: true,
+            });
+            detailedThread = resumedDetail?.thread || detailedThread;
+          }
+          const turns = Array.isArray(detailedThread?.turns) ? detailedThread.turns : [];
+          const trackedTurnIndex = record.turnId
+            ? turns.findIndex((turn) => String(turn?.id) === String(record.turnId))
+            : turns.length - 1;
+          const trackedTurn = turns[trackedTurnIndex];
+          if (!trackedTurn) continue;
+
+          if (
+            record.status === 'recovering' &&
+            String(record.recoveryFromTurnId || '') === String(trackedTurn.id)
+          ) {
+            const laterTurn = turns
+              .slice(trackedTurnIndex + 1)
+              .findLast((turn) => typeof turn?.id === 'string');
+            const liveTurn = activeTurn(detailedThread);
+            const recoveredTurn =
+              laterTurn || (liveTurn?.id !== trackedTurn.id ? liveTurn : undefined);
+            if (recoveredTurn) {
+              await this.updateRecordStatus(record, 'running', {
+                turnId: recoveredTurn.id,
+                recoveredAt: new Date().toISOString(),
+                recoveryFromTurnId: undefined,
+                recoveryStartedAt: undefined,
+              });
+              continue;
+            }
+          }
+
+          const hasQueuedFollowUp = queued.some(
+            (candidate) => String(candidate.threadId || '') === String(record.threadId || ''),
+          );
+          if (hasQueuedFollowUp && trackedTurn.status !== 'inProgress') {
+            await this.updateRecordStatus(record, 'interrupted', {
+              interruptedAt: new Date().toISOString(),
+            });
+            continue;
+          }
+
+          const interruptedAgentResult =
+            record.workMode === 'team' && !hasQueuedFollowUp
+              ? await this.interruptedAgentsForSupervisor(client, {
+                  threadId: detailedThread.id,
+                })
+              : { agents: [], inspectionFailures: [] };
+          const teamRecoveryInstruction = supervisorAgentRecoveryInstruction(
+            interruptedAgentResult.agents,
+          );
+
+          if (trackedTurn.status === 'inProgress') {
+            const liveTurn = activeTurn(detailedThread);
+            if (
+              teamRecoveryInstruction &&
+              liveTurn?.id &&
+              String(record.agentRecoveryTurnId || '') !== String(liveTurn.id)
+            ) {
+              await client.request('turn/steer', {
+                threadId: detailedThread.id,
+                expectedTurnId: liveTurn.id,
+                input: [{ type: 'text', text: teamRecoveryInstruction.trim() }],
+              });
+              await this.updateRecordStatus(record, 'running', {
+                agentRecoveryTurnId: liveTurn.id,
+                agentRecoveryThreadIds: interruptedAgentResult.agents.map((agent) => agent.id),
+                agentRecoveryRequestedAt: new Date().toISOString(),
+              });
+            }
+            continue;
+          }
+          if (trackedTurn.status === 'completed') {
+            await this.updateRecordStatus(record, 'completed', {
+              completedAt: new Date().toISOString(),
+            });
+            continue;
+          }
+          if (trackedTurn.status !== 'interrupted') {
+            await this.markFailed(record, `Codex turn ended with status ${trackedTurn.status}.`);
+            continue;
+          }
+
+          await this.updateRecordStatus(record, 'recovering', {
+            recoveryFromTurnId: trackedTurn.id,
+            recoveryStartedAt: new Date().toISOString(),
           });
-          continue;
-        }
-        if (trackedTurn.status !== 'interrupted') {
-          await this.markFailed(record, `Codex turn ended with status ${trackedTurn.status}.`);
-          continue;
-        }
-        const hasQueuedFollowUp = queued.some(
-          (candidate) => String(candidate.threadId || '') === String(record.threadId || ''),
-        );
-        if (hasQueuedFollowUp) {
-          await this.updateRecordStatus(record, 'interrupted', {
-            interruptedAt: new Date().toISOString(),
-          });
-          continue;
-        }
-        if (Number(record.recoveryCount || 0) >= 1) {
-          await this.updateRecordStatus(record, 'interrupted', {
-            interruptedAt: new Date().toISOString(),
-          });
-          continue;
-        }
-        if (thread.status?.type === 'notLoaded') {
-          await client.request('thread/resume', {
-            threadId: thread.id,
+          const recoveryResult = await client.request('turn/start', {
+            threadId: detailedThread.id,
+            input: [
+              {
+                type: 'text',
+                text: `The Codespace paused while this turn was still running. Continue the same request from the saved transcript and current workspace. Preserve existing changes, finish the remaining implementation and verification, and report the final result.${teamRecoveryInstruction}`,
+              },
+            ],
+            cwd: this.cwd,
             runtimeWorkspaceRoots: this.runtimeWorkspaceRoots,
+            model: record.model,
+            effort: record.effort,
           });
+          await this.updateRecordStatus(record, 'running', {
+            turnId:
+              typeof recoveryResult?.turn?.id === 'string' ? recoveryResult.turn.id : record.turnId,
+            recoveryCount: Number(record.recoveryCount || 0) + 1,
+            recoveredAt: new Date().toISOString(),
+            recoveryFromTurnId: undefined,
+            recoveryStartedAt: undefined,
+            agentRecoveryTurnId:
+              interruptedAgentResult.agents.length && typeof recoveryResult?.turn?.id === 'string'
+                ? recoveryResult.turn.id
+                : undefined,
+            agentRecoveryThreadIds: interruptedAgentResult.agents.map((agent) => agent.id),
+            agentRecoveryRequestedAt: interruptedAgentResult.agents.length
+              ? new Date().toISOString()
+              : undefined,
+          });
+        } catch {
+          // A transport or app-server restart leaves the durable record recoverable next cycle.
         }
-        const recoveryResult = await client.request('turn/start', {
-          threadId: thread.id,
-          input: [
-            {
-              type: 'text',
-              text: 'The Codespace paused while this turn was still running. Continue the same request from the saved transcript and current workspace. Preserve existing changes, finish the remaining implementation and verification, and report the final result.',
-            },
-          ],
-          cwd: this.cwd,
-          runtimeWorkspaceRoots: this.runtimeWorkspaceRoots,
-          model: record.model,
-          effort: record.effort,
-        });
-        await this.updateRecordStatus(record, 'running', {
-          turnId:
-            typeof recoveryResult?.turn?.id === 'string' ? recoveryResult.turn.id : record.turnId,
-          recoveryCount: Number(record.recoveryCount || 0) + 1,
-          recoveredAt: new Date().toISOString(),
-        });
       }
     } finally {
       client.close();
     }
+    await this.flush();
   }
 
   async updateRecordStatus(record, status, fields = {}) {

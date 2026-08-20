@@ -81,8 +81,10 @@ test('creates a versioned local refinement ledger and private learning bundle', 
     assert.match(codexScript, /bash "\$project_directory\/\.devcontainer\/setup\.sh"/);
     assert.match(codexScript, /CODEX_ACCESS_TOKEN/);
     assert.match(codexScript, /OPENAI_API_KEY/);
-    assert.match(codexScript, /codex login --with-access-token/);
-    assert.match(codexScript, /codex login --with-api-key/);
+    assert.match(codexScript, /login --with-access-token/);
+    assert.doesNotMatch(codexScript, /login --with-api-key/);
+    assert.match(codexScript, /forced_login_method="chatgpt"/);
+    assert.match(codexScript, /unset OPENAI_API_KEY SITEFORGE_CODEX_API_KEY CODEX_API_KEY/);
     assert.match(workspaceScript, /flock 8/);
     assert.match(workspaceScript, /tmux has-session/);
     assert.match(workspaceScript, /tmux new-session/);

@@ -1,6 +1,9 @@
 # Protected Workers
 
-These are separate, server-only processes. The capture worker claims website-capture jobs, validates public targets, respects applicable `robots.txt` rules, discovers crawlable internal pages, captures responsive screenshots, stores private artifacts, extracts source evidence, and runs automated accessibility checks. The audit worker reads only those saved private artifacts and produces editable, evidence-linked findings. The asset-analysis worker sends each captured public image and its saved page context to a vision model, then saves private, editable suggestions for human review. The visual-content worker reuses those saved private images to recover tables, testimonials, lists, FAQs, and other semantic information without recapturing the website. It also collects deterministic, reviewable brand-colour evidence from SVG logo fills/strokes, logo-image pixels, CSS variables, and repeated rendered interface controls. The agent-package worker turns a refinement direction into a reviewable draft package derived from the published package; it cannot silently change the shared runtime or publish a package. The builder worker runs Codex in a disposable workspace to create a private website preview from an approved Build Manifest.
+For background repository work that survives closing the browser, configure the ChatGPT
+subscription-backed environment in [`../docs/codex-cloud-setup.md`](../docs/codex-cloud-setup.md).
+
+These are separate, server-only processes. The capture worker claims website-capture jobs, validates public targets, respects applicable `robots.txt` rules, discovers crawlable internal pages, captures responsive screenshots, stores private artifacts, extracts source evidence, and runs automated accessibility checks. The audit worker reads only those saved private artifacts and produces editable, evidence-linked findings. Asset analysis always collects deterministic, reviewable brand-colour evidence; when separately billed OpenAI API features are explicitly enabled, it can also send a selected captured public image and minimal page context to a vision model for a private human-review suggestion. The opt-in visual-content worker reuses saved private images to recover tables, testimonials, lists, FAQs, and other semantic information without recapturing the website. The opt-in Agent Package Drafter turns a refinement direction into a reviewable draft package derived from the published package; it cannot silently change the shared runtime or publish a package. The builder worker runs subscription-authenticated Codex in a disposable workspace to create a private website preview from an approved Build Manifest.
 
 ## Runtime
 
@@ -30,26 +33,36 @@ starting another page or asset, and leaves any already saved evidence private an
 
 ## Required environment
 
-Set these only in the worker runtime or Codespaces secret store. Do not put either value in `.env.local`, any `VITE_` variable, browser code, or a committed file.
+Set server credentials only in the worker runtime or Codespaces secret store. Never put a secret in
+a `VITE_` variable, browser code, or a committed file.
 
 ```bash
 SITEFORGE_SUPABASE_URL=https://your-project.supabase.co
 SITEFORGE_SUPABASE_SERVICE_ROLE_KEY=your-server-only-key
-OPENAI_API_KEY=your-server-only-openai-key
-# Website builds default to the trusted worker's cached ChatGPT subscription login.
+# Website builds require the trusted worker's cached ChatGPT subscription login.
 SITEFORGE_CODEX_AUTH_MODE=chatgpt
+# Separately billed OpenAI API workers are off by default.
+SITEFORGE_OPENAI_API_ENABLED=false
+VITE_SITEFORGE_OPENAI_API_ENABLED=false
 ```
 
 Run `codex login --device-auth` once in the trusted Codespace or local worker environment before
 starting the builder. The named `builds` tmux window created by `scripts/codespace-work` verifies
 that the active login is ChatGPT-backed. It never copies or stores the cached credential in Studio.
-`OPENAI_API_KEY` remains required for the separate API-backed analysis workers.
+The Studio Workspace Agent, Website Builder, Test Builder, and exported-site Codex launcher all
+force `forced_login_method="chatgpt"`, strip API keys from the Codex process, and stop instead of
+falling back to usage-based access.
 
-For a deliberately usage-billed deployment worker, opt in explicitly:
+The Agent Package Drafter, capability analysis, UX vision, asset vision, and structured visual
+content recovery use the separately billed OpenAI API. Enable them only after approving that spend,
+and keep the public UI flag aligned with the protected worker flag:
 
 ```bash
-SITEFORGE_CODEX_AUTH_MODE=api_key
-SITEFORGE_CODEX_API_KEY=your-server-only-openai-key
+SITEFORGE_OPENAI_API_ENABLED=true
+VITE_SITEFORGE_OPENAI_API_ENABLED=true
+OPENAI_API_KEY=your-server-only-openai-key
+# Optional dedicated key for responsive UX vision
+SITEFORGE_UX_VISION_API_KEY=your-server-only-openai-key
 ```
 
 Optional runtime settings:
@@ -67,10 +80,10 @@ SITEFORGE_AGENT_PACKAGE_MODEL=gpt-5.6
 SITEFORGE_AI_PRICING_JSON='{"gpt-5.6":{"inputPerMillion":5,"cachedInputPerMillion":0.5,"outputPerMillion":30}}'
 ```
 
-The worker always records provider token usage. ChatGPT-backed builds are labelled as subscription
-usage and never turned into estimated API spend. Explicit `api_key` builds are priced from the
-reviewed rate card or documented standard rate, so the in-app total never treats an unknown amount
-as a real cost.
+The worker always records provider token usage. ChatGPT-backed builds are labelled as included
+Codex subscription usage and never turned into estimated API spend. API-key builder mode is not
+supported. Separately enabled OpenAI API calls are priced from the reviewed rate card when possible,
+so the in-app total never treats an unknown amount as a real cost.
 
 Without overrides, private homepage and page-set tests use GPT-5.6 Terra at medium reasoning;
 whole-site revisions and complete builds retain GPT-5.6 Sol at high reasoning. Every named profile

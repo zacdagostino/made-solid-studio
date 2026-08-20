@@ -1,8 +1,8 @@
 import type { BuildManifest, BuildManifestPage } from './domain';
 
-export const pricingScheduleVersion = 'made-solid-preview-first-v2.0';
-export const serviceTermsVersion = 'made-solid-au-services-v1.0';
-export const privacyNoticeVersion = 'made-solid-au-privacy-v1.0';
+export const pricingScheduleVersion = 'made-solid-cold-prospect-v3.0';
+export const serviceTermsVersion = 'made-solid-au-services-v1.1';
+export const privacyNoticeVersion = 'made-solid-au-privacy-v1.1';
 export const quoteValidityDays = 14;
 
 export type PricingContentMode = 'client_ready' | 'refine' | 'write';
@@ -15,6 +15,8 @@ export type PricingOptions = {
   applyGst: boolean;
   adjustmentCents: number;
   adjustmentReason: string;
+  includeManaged: boolean;
+  includeEssentials: boolean;
 };
 
 export type PricingSourceScope = {
@@ -50,6 +52,24 @@ export type PricingPaymentMilestone = {
   amountCents: number;
 };
 
+export type PricingOfferKind = 'milestones' | 'outright' | 'managed' | 'essentials';
+
+export type PricingOfferChoice = {
+  id: string;
+  kind: PricingOfferKind;
+  label: string;
+  summary: string;
+  scopeLabel: string;
+  totalCommitmentCents: number;
+  setupCents: number;
+  recurringCents: number;
+  recurringMonths: number;
+  paymentSchedule: PricingPaymentMilestone[];
+  includedItems: string[];
+  deferredItems: string[];
+  recommended: boolean;
+};
+
 export type PricingMetrics = {
   outputPages: number;
   corePages: number;
@@ -65,7 +85,7 @@ export type PricingMetrics = {
 };
 
 export type PricingQuoteSnapshot = {
-  schemaVersion: 2;
+  schemaVersion: 3;
   quoteReference: string;
   pricingVersion: string;
   source: 'automatic_build' | 'legacy_manual' | 'amendment';
@@ -81,6 +101,9 @@ export type PricingQuoteSnapshot = {
   metrics: PricingMetrics;
   options: PricingOptions;
   lineItems: PricingLineItem[];
+  fullScopeValueCents: number;
+  automaticOfferCeilingCents: number;
+  offerChoices: PricingOfferChoice[];
   paymentSchedule: PricingPaymentMilestone[];
   subtotalCents: number;
   gstCents: number;
@@ -106,7 +129,12 @@ export const defaultPricingOptions: PricingOptions = {
   applyGst: false,
   adjustmentCents: 0,
   adjustmentReason: '',
+  includeManaged: true,
+  includeEssentials: true,
 };
+
+const automaticOfferCeilingCents = 990_000;
+const essentialsSubtotalCents = 590_000;
 
 const capabilityAmounts: Record<string, { amountCents: number; label: string }> = {
   content_collection: { amountCents: 75_000, label: 'Managed content collection' },
@@ -171,25 +199,6 @@ function manifestSourceScope(manifest: BuildManifest): PricingSourceScope {
 }
 
 function paymentSchedule(totalCents: number): PricingPaymentMilestone[] {
-  if (totalCents <= 1_000_000) {
-    const opening = Math.round(totalCents / 2 / 100) * 100;
-    return [
-      {
-        sequence: 1,
-        kind: 'commencement',
-        label: 'Project commencement',
-        dueTrigger: 'Due when the proposal is accepted and work is commissioned.',
-        amountCents: opening,
-      },
-      {
-        sequence: 2,
-        kind: 'release',
-        label: 'Launch and handover',
-        dueTrigger: 'Due after final approval and before launch or source handover.',
-        amountCents: totalCents - opening,
-      },
-    ];
-  }
   const opening = Math.round((totalCents * 0.4) / 100) * 100;
   const progress = Math.round((totalCents * 0.3) / 100) * 100;
   return [
@@ -217,6 +226,132 @@ function paymentSchedule(totalCents: number): PricingPaymentMilestone[] {
   ];
 }
 
+function outrightSchedule(totalCents: number): PricingPaymentMilestone[] {
+  return [
+    {
+      sequence: 1,
+      kind: 'commencement',
+      label: 'Project commissioning',
+      dueTrigger: 'Due when the proposal is accepted so delivery can be scheduled.',
+      amountCents: totalCents,
+    },
+  ];
+}
+
+function applyTax(amountCents: number, applyGst: boolean) {
+  return amountCents + (applyGst ? Math.round(amountCents * 0.1) : 0);
+}
+
+function buildOfferChoices(
+  subtotalCents: number,
+  options: PricingOptions,
+  deferredItems: string[],
+): PricingOfferChoice[] {
+  const totalCents = applyTax(subtotalCents, options.applyGst);
+  const offers: PricingOfferChoice[] = [
+    {
+      id: 'recommended-milestones',
+      kind: 'milestones',
+      label: 'Build in three milestones',
+      summary: 'Commission the complete recommended launch scope across three fixed payments.',
+      scopeLabel: 'Recommended launch scope',
+      totalCommitmentCents: totalCents,
+      setupCents: paymentSchedule(totalCents)[0]?.amountCents ?? totalCents,
+      recurringCents: 0,
+      recurringMonths: 0,
+      paymentSchedule: paymentSchedule(totalCents),
+      includedItems: ['All components in the recommended launch scope shown in this proposal.'],
+      deferredItems,
+      recommended: true,
+    },
+    {
+      id: 'outright',
+      kind: 'outright',
+      label: 'Pay outright',
+      summary: 'One commissioning payment for the same complete scope and ownership outcome.',
+      scopeLabel: 'Recommended launch scope',
+      totalCommitmentCents: totalCents,
+      setupCents: totalCents,
+      recurringCents: 0,
+      recurringMonths: 0,
+      paymentSchedule: outrightSchedule(totalCents),
+      includedItems: ['All components in the recommended launch scope shown in this proposal.'],
+      deferredItems,
+      recommended: false,
+    },
+  ];
+
+  if (options.includeManaged) {
+    const setupBeforeTax = 99_000;
+    const managedSubtotal = Math.max(subtotalCents + 75_000, Math.round(subtotalCents * 1.08));
+    const monthlyBeforeTax = Math.ceil((managedSubtotal - setupBeforeTax) / 24 / 1_000) * 1_000;
+    const setupCents = applyTax(setupBeforeTax, options.applyGst);
+    const recurringCents = applyTax(monthlyBeforeTax, options.applyGst);
+    const managedTotal = setupCents + recurringCents * 24;
+    offers.push({
+      id: 'managed-24-month',
+      kind: 'managed',
+      label: 'Managed website plan',
+      summary: 'Lower upfront cost with build, hosting, care and support combined for 24 months.',
+      scopeLabel: 'Recommended launch scope with managed care',
+      totalCommitmentCents: managedTotal,
+      setupCents,
+      recurringCents,
+      recurringMonths: 24,
+      paymentSchedule: [],
+      includedItems: [
+        'All components in the recommended launch scope shown in this proposal.',
+        'Managed hosting, maintenance, security updates and priority support during the 24-month term.',
+      ],
+      deferredItems,
+      recommended: false,
+    });
+  }
+
+  if (options.includeEssentials && subtotalCents > essentialsSubtotalCents) {
+    const essentialsTotal = applyTax(essentialsSubtotalCents, options.applyGst);
+    const opening = Math.round(essentialsTotal / 2 / 100) * 100;
+    offers.push({
+      id: 'essentials-launch',
+      kind: 'essentials',
+      label: 'Essentials launch',
+      summary: 'A focused first release for the strongest services, proof and enquiry journey.',
+      scopeLabel: 'Focused essentials scope',
+      totalCommitmentCents: essentialsTotal,
+      setupCents: opening,
+      recurringCents: 0,
+      recurringMonths: 0,
+      paymentSchedule: [
+        {
+          sequence: 1,
+          kind: 'commencement',
+          label: 'Project commencement',
+          dueTrigger: 'Due when the focused launch is commissioned.',
+          amountCents: opening,
+        },
+        {
+          sequence: 2,
+          kind: 'release',
+          label: 'Launch and handover',
+          dueTrigger: 'Due after final approval and before launch.',
+          amountCents: essentialsTotal - opening,
+        },
+      ],
+      includedItems: [
+        'Core launch strategy, approved brand direction and responsive design system.',
+        'The priority service, proof and enquiry pages needed for a credible first release.',
+        'Contact workflow, responsive quality assurance and launch preparation.',
+      ],
+      deferredItems: [
+        'Secondary service and resource routes move to a separately approved second release.',
+        'Advanced integrations, account features and net-new long-form copy remain outside this option.',
+      ],
+      recommended: false,
+    });
+  }
+  return offers;
+}
+
 function isoDaysFromNow(days: number) {
   return new Date(Date.now() + days * 24 * 60 * 60 * 1_000).toISOString();
 }
@@ -238,36 +373,36 @@ export function calculateBuildPricing(
     lineItem(
       'preview-first-foundation',
       'Preview-first website delivery',
-      'Tailored private preview, strategy handoff, design system, eight core pages, five resource entries, responsive implementation, quality assurance and launch preparation.',
+      'Tailored private preview, strategy handoff, design system, ten core pages, fifteen reusable content entries, responsive implementation, quality assurance and launch preparation.',
       1,
       690_000,
       sourceKind,
     ),
   ];
 
-  const additionalCorePages = Math.max(0, corePages - 8);
+  const additionalCorePages = Math.min(12, Math.max(0, corePages - 10));
   if (additionalCorePages) {
     items.push(
       lineItem(
         'additional-core-pages',
         'Additional core website pages',
-        `${corePages} client-facing core pages are present in the latest source; eight are included in the delivery foundation.`,
+        `${corePages} client-facing core pages are present. Ten are included and repeated page production is volume-capped at twelve additional pages.`,
         additionalCorePages,
-        30_000,
+        12_500,
         sourceKind,
       ),
     );
   }
 
-  const additionalContentEntries = Math.max(0, contentEntries - 5);
+  const additionalContentEntries = Math.min(15, Math.max(0, contentEntries - 15));
   if (additionalContentEntries) {
     items.push(
       lineItem(
         'content-library',
         'Resource and article migration',
-        `${contentEntries} reusable article, news or resource entries are present; five are included in the foundation.`,
+        `${contentEntries} reusable article, news or resource entries are present; fifteen are included and migration pricing is volume-capped.`,
         additionalContentEntries,
-        10_000,
+        5_000,
         sourceKind,
       ),
     );
@@ -281,7 +416,7 @@ export function calculateBuildPricing(
         'Additional page systems',
         'Distinct responsive page families beyond the four included systems require their own layout and quality contract.',
         additionalPageSystems,
-        60_000,
+        65_000,
         sourceKind,
       ),
     );
@@ -318,7 +453,7 @@ export function calculateBuildPricing(
         'Managed application runtime',
         'Server-side production runtime, deployment configuration and operational handoff.',
         1,
-        120_000,
+        60_000,
         sourceKind,
       ),
     );
@@ -342,7 +477,7 @@ export function calculateBuildPricing(
         'Content and redirect migration',
         'Content transfer, canonical redirects and launch continuity for the latest source routes.',
         1,
-        50_000,
+        40_000,
         sourceKind,
       ),
     );
@@ -427,23 +562,46 @@ export function calculateBuildPricing(
   }
 
   const rawSubtotal = items.reduce((total, item) => total + item.amountCents, 0);
-  const subtotalCents = Math.max(0, Math.round(rawSubtotal / 10_000) * 10_000);
+  const fullScopeValueCents = Math.max(0, Math.round(rawSubtotal / 10_000) * 10_000);
+  const cappedSubtotal = Math.min(fullScopeValueCents, automaticOfferCeilingCents);
+  if (fullScopeValueCents > cappedSubtotal) {
+    items.push(
+      lineItem(
+        'cold-prospect-launch-credit',
+        'Preview-first launch credit',
+        'Automatic first-engagement pricing keeps the recommended cold-prospect offer within the reviewed launch ceiling.',
+        1,
+        cappedSubtotal - fullScopeValueCents,
+        'review',
+      ),
+    );
+  }
+  const subtotalCents = cappedSubtotal;
   const gstCents = options.applyGst ? Math.round(subtotalCents * 0.1) : 0;
   const totalCents = subtotalCents + gstCents;
-  const schedule = paymentSchedule(totalCents);
+  const deferredItems =
+    fullScopeValueCents > cappedSubtotal
+      ? [
+          'Scope beyond the automatic launch ceiling must be confirmed during onboarding before it is treated as included.',
+        ]
+      : [];
+  const offerChoices = buildOfferChoices(subtotalCents, options, deferredItems);
+  const schedule = offerChoices[0]?.paymentSchedule ?? paymentSchedule(totalCents);
   const reviewReasons = [
     ...(corePages > 35 ? ['More than 35 core website pages'] : []),
     ...(capabilities.some((capability) => ['commerce', 'account_area'].includes(capability.kind))
       ? ['Complex application capability']
       : []),
-    ...(subtotalCents > 3_000_000 ? ['Investment exceeds the automatic approval threshold'] : []),
+    ...(fullScopeValueCents > 1_500_000
+      ? ['Full scope value exceeds the automatic cold-prospect review threshold']
+      : []),
     ...(options.adjustmentCents && !options.adjustmentReason.trim()
       ? ['Commercial adjustment has no reason']
       : []),
   ];
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     pricingVersion: pricingScheduleVersion,
     source: 'automatic_build',
     sourceManifestId: manifest.id,
@@ -468,6 +626,9 @@ export function calculateBuildPricing(
     },
     options,
     lineItems: items,
+    fullScopeValueCents,
+    automaticOfferCeilingCents,
+    offerChoices,
     paymentSchedule: schedule,
     subtotalCents,
     gstCents,
@@ -487,7 +648,9 @@ export function calculateBuildPricing(
     ],
     exclusions: [
       'New capabilities or pages requested after quote acceptance require a clearly presented amendment.',
-      'Ongoing hosting and care are selected and billed separately before launch.',
+      options.includeManaged
+        ? 'Ongoing hosting and care are separate unless the client accepts the managed website option shown in this proposal.'
+        : 'Ongoing hosting and care are selected and billed separately before launch.',
       'Card details are handled by the payment provider and are not stored by Made Solid.',
     ],
     reviewRequired: reviewReasons.length > 0,

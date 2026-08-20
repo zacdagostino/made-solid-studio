@@ -1,5 +1,6 @@
 import { hostname } from 'node:os';
 import { createClient } from '@supabase/supabase-js';
+import { requireOpenAiApiKey } from './openai-api-policy.mjs';
 
 const timeoutMs = 120_000;
 
@@ -115,7 +116,7 @@ async function processProposal(client, proposal, workerId, apiKey, model) {
 }
 
 async function main() {
-  const apiKey = requiredEnvironment('OPENAI_API_KEY');
+  const apiKey = requireOpenAiApiKey('The Agent Package Drafter');
   const client = createClient(
     requiredEnvironment('SITEFORGE_SUPABASE_URL'),
     requiredEnvironment('SITEFORGE_SUPABASE_SERVICE_ROLE_KEY'),

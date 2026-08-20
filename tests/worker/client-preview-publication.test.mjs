@@ -25,6 +25,14 @@ test('publishes only through the protected Vercel and Clientspace worker path', 
   assert.match(source, /data-made-solid-review-bridge/);
   assert.match(source, /sourceProjectId: job\.business_id/);
   assert.match(source, /pricingSnapshot: job\.pricing_snapshot/);
+  assert.match(source, /\.from\('decision_report_versions'\)/);
+  assert.match(source, /\.eq\('review_state', 'approved'\)/);
+  assert.match(source, /\.\.\.reportData/);
+  assert.match(source, /reviewedAt: report\.created_at \|\| report\.updated_at/);
+  assert.match(source, /loadReportMedia/);
+  assert.match(source, /\.slice\(0, 8\)/);
+  assert.match(source, /reportMedia/);
+  assert.match(source, /6 \* 1024 \* 1024/);
   assert.doesNotMatch(source, /VITE_(?:VERCEL|CLIENTSPACE)/);
 });
 

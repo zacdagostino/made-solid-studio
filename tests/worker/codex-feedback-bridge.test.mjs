@@ -37,6 +37,7 @@ function fakeConnection(state) {
         };
       }
       if (method === 'thread/list') {
+        if (params.ancestorThreadId) return { data: state.agentThreads || [] };
         return {
           data: [
             ...(state.newThreads || []),
@@ -45,18 +46,22 @@ function fakeConnection(state) {
               name: 'Current Studio chat',
               cwd: '/workspaces/siteforge-os',
               updatedAt: Math.floor(Date.now() / 1_000) - 12,
-              status: state.busy ? { type: 'active', activeFlags: ['turn'] } : { type: 'idle' },
+              status:
+                state.threadStatus ||
+                (state.busy ? { type: 'active', activeFlags: ['turn'] } : { type: 'idle' }),
             },
             {
               id: 'thread-2',
               name: 'Earlier Studio chat',
               cwd: '/workspaces/siteforge-os',
-              status: { type: 'idle' },
+              status: state.threadStatus || { type: 'idle' },
             },
           ],
         };
       }
       if (method === 'thread/read') {
+        const agentThread = state.agentThreads?.find((thread) => thread.id === params.threadId);
+        if (agentThread) return { thread: agentThread };
         const newThread = state.newThreads?.find((thread) => thread.id === params.threadId);
         if (newThread) {
           if (state.unmaterializedNewThreads) {
@@ -89,7 +94,9 @@ function fakeConnection(state) {
         return {
           thread: {
             id: params.threadId,
-            status: state.busy ? { type: 'active', activeFlags: [] } : { type: 'idle' },
+            status:
+              state.threadStatus ||
+              (state.busy ? { type: 'active', activeFlags: [] } : { type: 'idle' }),
             turns: [
               {
                 id: 'turn-active',
@@ -107,6 +114,7 @@ function fakeConnection(state) {
                     phase: 'final',
                     text: 'The Studio page is ready.',
                   },
+                  ...(state.collabItems || []),
                 ],
               },
               ...submittedTurns,
@@ -114,7 +122,14 @@ function fakeConnection(state) {
           },
         };
       }
-      if (method === 'thread/resume') return { thread: { id: params.threadId } };
+      if (method === 'thread/resume') {
+        if (state.reactivateOnResume) {
+          state.threadStatus = { type: 'active', activeFlags: ['turn'] };
+          const lastTurnId = state.turnIds?.at(-1);
+          if (lastTurnId) state.turnStatuses[lastTurnId] = 'inProgress';
+        }
+        return { thread: { id: params.threadId } };
+      }
       if (method === 'thread/start') {
         state.threadStarts ??= [];
         state.threadStarts.push(params);
@@ -137,6 +152,10 @@ function fakeConnection(state) {
         };
       }
       if (method === 'turn/start') {
+        const agentThread = state.agentThreads?.find((thread) => thread.id === params.threadId);
+        if (agentThread) {
+          throw new Error('direct app-server input is not allowed for multi-agent v2 sub-agents');
+        }
         state.turns.push(params);
         state.turnIds ??= [];
         const turnId = `turn-${state.turnIds.length + 1}`;
@@ -163,6 +182,11 @@ function fakeConnection(state) {
         }
         return { turn: { id: turnId, status: 'inProgress' } };
       }
+      if (method === 'turn/steer') {
+        state.steers ??= [];
+        state.steers.push(params);
+        return { turnId: params.expectedTurnId };
+      }
       if (method === 'turn/interrupt') {
         state.interrupts ??= [];
         state.interrupts.push(params);
@@ -179,7 +203,9 @@ function fakeConnection(state) {
       }
       throw new Error(`Unexpected method: ${method}`);
     },
-    close() {},
+    close() {
+      state.closedConnections = Number(state.closedConnections || 0) + 1;
+    },
   });
 }
 
@@ -196,6 +222,7 @@ test('discovers ChatGPT models, image support, efforts, and the active Studio th
   assert.equal(status.thread.id, 'thread-1');
   assert.equal(status.threads.length, 2);
   assert.equal(status.messages[0].role, 'user');
+  assert.equal(status.messages[0].turnId, 'turn-active');
   assert.equal(status.messages[1].text, 'The Studio page is ready.');
   assert.equal(status.models[0].supportsImages, true);
   assert.deepEqual(
@@ -203,6 +230,99 @@ test('discovers ChatGPT models, image support, efforts, and the active Studio th
     ['low', 'medium'],
   );
   assert.equal(status.models[1].supportsImages, false);
+  assert.deepEqual(status.agents, []);
+});
+
+test('returns the live hierarchy and bounded sub-chat transcript for attached agents', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-agents-'));
+  const now = Math.floor(Date.now() / 1_000);
+  const state = {
+    busy: true,
+    turns: [],
+    collabItems: [
+      {
+        id: 'spawn-agent-1',
+        type: 'collabAgentToolCall',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'thread-1',
+        receiverThreadIds: ['agent-1'],
+        agentsStates: {
+          'agent-1': { status: 'running', message: 'Checking the responsive layout.' },
+        },
+      },
+    ],
+    agentThreads: [
+      {
+        id: 'agent-1',
+        parentThreadId: 'thread-1',
+        agentNickname: 'Lime',
+        agentRole: 'responsive reviewer',
+        preview: 'Verify the chat at mobile, tablet, and desktop widths.',
+        createdAt: now - 30,
+        updatedAt: now,
+        status: { type: 'active', activeFlags: ['turn'] },
+        turns: [
+          {
+            id: 'agent-turn-1',
+            status: 'inProgress',
+            startedAt: now - 25,
+            items: [
+              {
+                id: 'agent-user-1',
+                type: 'userMessage',
+                content: [{ type: 'text', text: 'Verify every required viewport.' }],
+              },
+              {
+                id: 'agent-message-1',
+                type: 'agentMessage',
+                text: 'Mobile and tablet checks are in progress.',
+              },
+            ],
+          },
+        ],
+      },
+      {
+        id: 'agent-2',
+        parentThreadId: 'agent-1',
+        agentNickname: 'Oak',
+        preview: 'Inspect keyboard and focus behaviour.',
+        createdAt: now - 20,
+        updatedAt: now - 2,
+        status: { type: 'idle' },
+        turns: [
+          {
+            id: 'agent-turn-2',
+            status: 'completed',
+            items: [
+              {
+                id: 'agent-message-2',
+                type: 'agentMessage',
+                text: 'Keyboard checks passed.',
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+
+  const status = await bridge.inspect({ threadId: 'thread-1' });
+
+  assert.equal(status.agents.length, 2);
+  assert.equal(status.agents[0].role, 'responsive reviewer');
+  assert.equal(status.agents[0].status, 'running');
+  assert.equal(status.agents[0].working, true);
+  assert.equal(status.agents[0].supervisorTurnId, 'turn-active');
+  assert.equal(status.agents[0].messages.at(-1).text, 'Mobile and tablet checks are in progress.');
+  assert.equal(status.agents[1].depth, 1);
+  assert.equal(status.agents[1].supervisorTurnId, 'turn-active');
+  assert.equal(status.agents[1].status, 'completed');
 });
 
 test('identifies and safely continues a turn interrupted by a Codespace pause', async () => {
@@ -232,6 +352,77 @@ test('identifies and safely continues a turn interrupted by a Codespace pause', 
   ]);
   assert.match(state.turns[0].input[0].text, /Codespace paused/);
   assert.match(state.turns[0].input[0].text, /preserve existing changes/);
+});
+
+test('asks the supervisor to resume each interrupted attached agent through collaboration', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-team-resume-'));
+  const interruptedTurn = (id) => ({ id, status: 'interrupted', items: [] });
+  const state = {
+    busy: false,
+    interrupted: true,
+    turns: [],
+    collabItems: [
+      {
+        id: 'team-state',
+        type: 'collabAgentToolCall',
+        agentsStates: {
+          'agent-interrupted-1': { status: 'interrupted' },
+          'agent-interrupted-2': { status: 'interrupted' },
+          'agent-complete': { status: 'completed' },
+        },
+      },
+    ],
+    agentThreads: [
+      {
+        id: 'agent-interrupted-1',
+        parentThreadId: 'thread-1',
+        agentRole: 'responsive reviewer',
+        preview: 'Check the responsive interface.',
+        status: { type: 'idle' },
+        turns: [interruptedTurn('agent-turn-1')],
+      },
+      {
+        id: 'agent-interrupted-2',
+        parentThreadId: 'thread-1',
+        agentNickname: 'Oak',
+        preview: 'Run the accessibility checks.',
+        status: { type: 'notLoaded' },
+        turns: [interruptedTurn('agent-turn-2')],
+      },
+      {
+        id: 'agent-complete',
+        parentThreadId: 'thread-1',
+        preview: 'Inspect the backend contract.',
+        status: { type: 'idle' },
+        turns: [{ id: 'agent-turn-3', status: 'completed', items: [] }],
+      },
+    ],
+  };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+
+  const resumed = await bridge.continueInterruptedThread({
+    threadId: 'thread-1',
+    model: 'gpt-text-only',
+    effort: 'medium',
+  });
+
+  assert.deepEqual(
+    state.turns.map((turn) => turn.threadId),
+    ['thread-1'],
+  );
+  assert.equal(resumed.resumeRequestedAgents.length, 2);
+  assert.equal(resumed.resumedAgents.length, 2);
+  assert.deepEqual(resumed.agentResumeFailures, []);
+  assert.match(resumed.detail, /instructions to restart 2 interrupted attached agents/);
+  assert.match(state.turns[0].input[0].text, /followup_task collaboration tool/);
+  assert.match(state.turns[0].input[0].text, /agent-interrupted-1/);
+  assert.match(state.turns[0].input[0].text, /agent-interrupted-2/);
+  assert.doesNotMatch(state.turns[0].input[0].text, /agent-complete/);
+  assert.match(state.turns[0].input[0].text, /Wait for fresh completion results/);
 });
 
 test('keeps a newly started empty thread selectable before thread/list includes it', async () => {
@@ -320,7 +511,7 @@ test('keeps feedback queued while Codex is busy, then delivers the image and mod
   assert.equal(running[0].turnId, 'turn-1');
 });
 
-test('durably resumes an app-owned turn once after a Codespace interruption', async () => {
+test('durably resumes every newly interrupted app-owned continuation', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-durable-resume-'));
   const state = { busy: false, turns: [], turnStatuses: {} };
   const bridge = new CodexFeedbackBridge({
@@ -345,11 +536,177 @@ test('durably resumes an app-owned turn once after a Codespace interruption', as
   assert.equal(recovered.turnId, 'turn-2');
   assert.equal(recovered.recoveryCount, 1);
 
-  state.turnStatuses['turn-2'] = 'completed';
+  state.turnStatuses['turn-2'] = 'interrupted';
+  await bridge.maintain();
+  assert.equal(state.turns.length, 3);
+  assert.match(state.turns[2].input[0].text, /Codespace paused/);
+  const recoveredAgain = (await bridge.readRecords('running'))[0];
+  assert.equal(recoveredAgain.turnId, 'turn-3');
+  assert.equal(recoveredAgain.recoveryCount, 2);
+
+  state.turnStatuses['turn-3'] = 'completed';
   await bridge.maintain();
   const completed = (await bridge.readRecords('completed'))[0];
   assert.equal(completed.id, accepted.id);
   assert.ok(completed.completedAt);
+});
+
+test('uses an app-server reactivated turn instead of starting a duplicate continuation', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-reactivated-turn-'));
+  const state = {
+    busy: false,
+    turns: [],
+    turnStatuses: {},
+    reactivateOnResume: true,
+  };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+  await bridge.enqueue({
+    prompt: 'Complete the resumable task.',
+    model: 'gpt-text-only',
+    effort: 'medium',
+    threadId: 'thread-2',
+  });
+  state.turnStatuses['turn-1'] = 'interrupted';
+  state.threadStatus = { type: 'notLoaded' };
+
+  await bridge.maintain();
+
+  assert.equal(state.turns.length, 1);
+  assert.equal(state.turnStatuses['turn-1'], 'inProgress');
+  const running = (await bridge.readRecords('running'))[0];
+  assert.equal(running.turnId, 'turn-1');
+  assert.equal(running.recoveryCount, undefined);
+});
+
+test('rebinds a recovery turn accepted before the bridge process disconnected', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-recovery-rebind-'));
+  const state = { busy: false, turns: [], turnStatuses: {} };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+  const accepted = await bridge.enqueue({
+    prompt: 'Finish the durable handoff.',
+    model: 'gpt-text-only',
+    effort: 'medium',
+    threadId: 'thread-2',
+  });
+  const record = (await bridge.readRecords('running'))[0];
+  state.turnStatuses['turn-1'] = 'interrupted';
+  await bridge.updateRecordStatus(record, 'recovering', {
+    recoveryFromTurnId: 'turn-1',
+    recoveryStartedAt: new Date().toISOString(),
+  });
+  state.turns.push({
+    threadId: 'thread-2',
+    input: [{ type: 'text', text: 'Existing recovery accepted before disconnect.' }],
+  });
+  state.turnIds.push('turn-2');
+
+  await bridge.maintain();
+
+  assert.equal(state.turns.length, 2);
+  const rebound = (await bridge.readRecords('running'))[0];
+  assert.equal(rebound.id, accepted.id);
+  assert.equal(rebound.turnId, 'turn-2');
+  assert.equal(rebound.recoveryFromTurnId, undefined);
+});
+
+test('automatically gives the supervisor exact interrupted-agent recovery instructions', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-team-maintenance-'));
+  const state = {
+    busy: false,
+    turns: [],
+    turnStatuses: {},
+    agentThreads: [
+      {
+        id: 'agent-interrupted',
+        parentThreadId: 'thread-2',
+        agentRole: 'verification specialist',
+        preview: 'Verify the implementation.',
+        status: { type: 'idle' },
+        turns: [{ id: 'agent-turn-1', status: 'interrupted', items: [] }],
+      },
+      {
+        id: 'agent-complete',
+        parentThreadId: 'thread-2',
+        preview: 'Review the contract.',
+        status: { type: 'idle' },
+        turns: [{ id: 'agent-turn-2', status: 'completed', items: [] }],
+      },
+    ],
+  };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+  await bridge.enqueue({
+    prompt: 'Complete the feature with an agent team.',
+    model: 'gpt-text-only',
+    effort: 'medium',
+    workMode: 'team',
+    threadId: 'thread-2',
+  });
+  state.turnStatuses['turn-1'] = 'interrupted';
+
+  await bridge.maintain();
+
+  assert.deepEqual(
+    state.turns.map((turn) => turn.threadId),
+    ['thread-2', 'thread-2'],
+  );
+  assert.equal(state.agentThreads[0].status.type, 'idle');
+  assert.equal(state.agentThreads[1].status.type, 'idle');
+  assert.match(state.turns[1].input[0].text, /Codespace paused/);
+  assert.match(state.turns[1].input[0].text, /followup_task collaboration tool/);
+  assert.match(state.turns[1].input[0].text, /agent-interrupted/);
+  assert.doesNotMatch(state.turns[1].input[0].text, /agent-complete/);
+});
+
+test('steers a reactivated supervisor once to resume interrupted team agents', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-team-steer-'));
+  const state = {
+    busy: false,
+    turns: [],
+    turnStatuses: {},
+    agentThreads: [
+      {
+        id: 'agent-interrupted',
+        parentThreadId: 'thread-2',
+        preview: 'Verify the implementation.',
+        status: { type: 'idle' },
+        turns: [{ id: 'agent-turn-1', status: 'interrupted', items: [] }],
+      },
+    ],
+  };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+  await bridge.enqueue({
+    prompt: 'Complete the feature with an agent team.',
+    model: 'gpt-text-only',
+    effort: 'medium',
+    workMode: 'team',
+    threadId: 'thread-2',
+  });
+
+  await bridge.maintain();
+  await bridge.maintain();
+
+  assert.equal(state.turns.length, 1);
+  assert.equal(state.steers.length, 1);
+  assert.equal(state.steers[0].threadId, 'thread-2');
+  assert.equal(state.steers[0].expectedTurnId, 'turn-1');
+  assert.match(state.steers[0].input[0].text, /followup_task collaboration tool/);
+  assert.match(state.steers[0].input[0].text, /agent-interrupted/);
 });
 
 test('delivers a text-only chat turn without creating an image attachment', async () => {
@@ -388,6 +745,33 @@ test('delivers a text-only chat turn without creating an image attachment', asyn
   assert.equal(deliveredMessage.text, 'Explain the next implementation step.');
   assert.equal(deliveredMessage.feedbackId, queued.id);
   assert.equal(deliveredMessage.attachmentId, undefined);
+  assert.ok(state.closedConnections > 0);
+  assert.deepEqual(state.interrupts || [], []);
+});
+
+test('authorizes real delegation only for an Agent team request and keeps the visible prompt clean', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-agent-team-'));
+  const state = { busy: false, turns: [] };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+
+  const accepted = await bridge.enqueue({
+    prompt: 'Build and verify the new workspace navigation.',
+    model: 'gpt-text-only',
+    effort: 'medium',
+    workMode: 'team',
+    threadId: 'thread-2',
+  });
+
+  assert.equal(accepted.status, 'accepted');
+  assert.match(state.turns[0].input[0].text, /Agent team is enabled/);
+  assert.match(state.turns[0].input[0].text, /Delegate useful independent workstreams/);
+  assert.equal((await bridge.readRecords('running'))[0].workMode, 'team');
+  const status = await bridge.inspect({ threadId: 'thread-2' });
+  assert.equal(status.messages.at(-1).text, 'Build and verify the new workspace navigation.');
 });
 
 test('runs an idle conversation while another conversation is already working', async () => {

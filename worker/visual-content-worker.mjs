@@ -2,6 +2,7 @@
 
 import { hostname } from 'node:os';
 import { createClient } from '@supabase/supabase-js';
+import { requireOpenAiApiKey } from './openai-api-policy.mjs';
 import { chromium } from 'playwright';
 import { recordAiUsage } from './ai-usage.mjs';
 
@@ -325,8 +326,9 @@ async function processJob(client, job, workerId, apiKey, model) {
 }
 
 async function main() {
-  const apiKey =
-    process.env.OPENAI_API_KEY?.trim() || requiredEnvironment('SITEFORGE_CODEX_API_KEY');
+  const apiKey = requireOpenAiApiKey('Structured visual-content recovery', process.env, [
+    'OPENAI_API_KEY',
+  ]);
   const client = createClient(
     requiredEnvironment('SITEFORGE_SUPABASE_URL'),
     requiredEnvironment('SITEFORGE_SUPABASE_SERVICE_ROLE_KEY'),

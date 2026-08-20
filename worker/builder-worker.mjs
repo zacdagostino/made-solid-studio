@@ -214,29 +214,16 @@ function requiredEnvironment(name) {
 function builderCodexAuthentication(environment = process.env) {
   const configuredMode = environment.SITEFORGE_CODEX_AUTH_MODE?.trim().toLowerCase();
   const mode = configuredMode || 'chatgpt';
-  if (mode === 'chatgpt') {
-    return {
-      mode,
-      billingMode: 'chatgpt_subscription',
-      label: 'ChatGPT subscription',
-    };
+  if (mode !== 'chatgpt') {
+    throw new Error(
+      'The Codex Website Builder and Codex Test Builder are subscription-only. SITEFORGE_CODEX_AUTH_MODE must be chatgpt.',
+    );
   }
-  if (mode === 'api_key') {
-    const credential =
-      environment.SITEFORGE_CODEX_API_KEY?.trim() || environment.OPENAI_API_KEY?.trim();
-    if (!credential) {
-      throw new Error(
-        'SITEFORGE_CODEX_AUTH_MODE is api_key, but SITEFORGE_CODEX_API_KEY or OPENAI_API_KEY is not configured.',
-      );
-    }
-    return {
-      mode,
-      billingMode: 'api_usage',
-      label: 'OpenAI API',
-      credential,
-    };
-  }
-  throw new Error('SITEFORGE_CODEX_AUTH_MODE must be chatgpt or api_key.');
+  return {
+    mode,
+    billingMode: 'chatgpt_subscription',
+    label: 'ChatGPT subscription',
+  };
 }
 
 function builderCodexEnvironment(authentication, environment = process.env) {
@@ -251,17 +238,19 @@ function builderCodexEnvironment(authentication, environment = process.env) {
   };
   const codexHome = environment.SITEFORGE_CODEX_HOME?.trim() || environment.CODEX_HOME?.trim();
   if (codexHome) values.CODEX_HOME = codexHome;
-  if (authentication.mode === 'api_key') values.CODEX_API_KEY = authentication.credential;
   return Object.fromEntries(
     Object.entries(values).filter(([, value]) => typeof value === 'string' && value.length > 0),
   );
 }
 
 async function assertBuilderCodexAuthentication(codexExecutable, authentication, environment) {
-  if (authentication.mode !== 'chatgpt') return;
   let result;
   try {
-    result = await runCommand(codexExecutable, ['login', 'status'], { env: environment });
+    result = await runCommand(
+      codexExecutable,
+      ['--config', 'forced_login_method="chatgpt"', 'login', 'status'],
+      { env: environment },
+    );
   } catch {
     throw new Error(
       'The Codex builder is not signed in with ChatGPT. Run codex login --device-auth in this trusted worker environment, then resume the build.',
@@ -529,14 +518,14 @@ function failureDetails(error) {
       context: error.context,
     };
   }
-  if (/SITEFORGE_CODEX_AUTH_MODE|SITEFORGE_CODEX_API_KEY|OPENAI_API_KEY/.test(message)) {
+  if (/SITEFORGE_CODEX_AUTH_MODE|ChatGPT subscription|signed in with ChatGPT/.test(message)) {
     return {
       ...base,
       code: 'builder_credentials_missing',
       stage: 'worker_configuration',
       summary: 'The protected builder authentication is incomplete.',
       action:
-        'Use the default ChatGPT subscription sign-in, or explicitly configure api_key mode and its server-only key, then retry the build.',
+        'Sign the trusted worker in with ChatGPT, confirm SITEFORGE_CODEX_AUTH_MODE=chatgpt, then retry the build. API-key fallback is not supported.',
     };
   }
   if (/approved Build Manifest is no longer available/.test(message)) {
@@ -3142,6 +3131,8 @@ async function runCodex(
     void eventWriter('activity', safeMessage, { stream: 'codex', ...metadata });
   }
   const codexArguments = [
+    '--config',
+    'forced_login_method="chatgpt"',
     'exec',
     '--cd',
     workspace.siteDirectory,

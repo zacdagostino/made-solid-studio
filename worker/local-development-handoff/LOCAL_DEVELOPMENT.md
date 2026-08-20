@@ -20,10 +20,11 @@ If this Codespace was created before automatic resume startup was added, pull th
 branch and rebuild its container once. New Codespaces and all later resumes use the checked-in start
 hook automatically.
 
-Codex and its editor extension share the same cached login. For unattended sign-in, add either
-`CODEX_ACCESS_TOKEN` or `OPENAI_API_KEY` as a Codespaces secret for this repository. Never save a
-token in this repository. Without either secret, follow the normal Codex browser sign-in once when
-the Codex terminal opens.
+Codex and its editor extension share the same cached ChatGPT login. A permitted ChatGPT Enterprise
+workspace may use `CODEX_ACCESS_TOKEN` for unattended sign-in. Personal subscriptions should use
+`codex login --device-auth` once in the trusted Codespace. Never save a token in this repository.
+The launcher rejects API-key authentication and never falls back to `OPENAI_API_KEY`, so editing the
+website cannot create separate API charges.
 
 ### Other local environments
 

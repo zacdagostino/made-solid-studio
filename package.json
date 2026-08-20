@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "vite --config vite.config.ts",
     "start:local": "node --env-file-if-exists=.env.preview.local worker/local-dev.mjs",
+    "start:railway": "bash scripts/start-railway-runtime",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
     "preview:host": "node preview-host/server.mjs",
@@ -23,6 +24,7 @@
     "test:ui": "playwright test tests/e2e/responsive.spec.js",
     "worker:capture": "node worker/capture-worker.mjs",
     "worker:audit": "node worker/audit-worker.mjs",
+    "worker:audit-specialists": "node worker/audit-specialist-worker.mjs",
     "worker:assets": "node worker/asset-analysis-worker.mjs",
     "worker:visual-content": "node worker/visual-content-worker.mjs",
     "worker:agent-package": "node worker/agent-package-worker.mjs",

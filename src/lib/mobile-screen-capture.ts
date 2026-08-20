@@ -1,4 +1,5 @@
 import { getFontEmbedCSS, toPng } from 'html-to-image';
+import { studioRuntimeFetch } from './studio-runtime';
 
 const captureAssetEndpoint = '/__made-solid/capture-asset';
 const transparentPixel =
@@ -41,7 +42,7 @@ async function embeddedImageUrl(url: string) {
     if (!response.ok) throw new Error('Image request failed.');
     return await blobDataUrl(await response.blob());
   } catch {
-    const response = await fetch(captureAssetEndpoint, {
+    const response = await studioRuntimeFetch(captureAssetEndpoint, {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify({ url }),

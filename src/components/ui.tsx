@@ -109,7 +109,12 @@ export function ToastRegion({
 }) {
   if (!notice) return null;
   return (
-    <aside aria-atomic="true" aria-live="polite" className="toast-region">
+    <aside
+      aria-atomic="true"
+      aria-label="Notifications"
+      aria-live="polite"
+      className="toast-region"
+    >
       <div
         className={cn('toast', `toast--${notice.tone ?? 'success'}`)}
         key={notice.id}

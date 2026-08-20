@@ -1805,6 +1805,8 @@ test('keeps the AI usage page responsive and reachable from navigation', async (
   await expect(page.getByRole('combobox', { name: 'View' })).toHaveValue('overview');
   await expect(page.getByRole('combobox', { name: 'Prospect' })).toHaveValue('all');
   await expect(page.getByRole('combobox', { name: 'Build' })).toBeDisabled();
+  await expect(page.getByText('Included Codex usage', { exact: true })).toBeVisible();
+  await expect(page.getByText('API cost unavailable', { exact: true })).toBeVisible();
   await expect(page.getByText('No AI usage recorded yet')).toBeVisible();
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
@@ -2166,7 +2168,16 @@ test('shows the published Next.js component and runtime architecture', async ({
 });
 
 test('contains page content horizontally across workspace sections', async ({ page }) => {
-  const sections = ['overview', 'research', 'assets', 'audit', 'brief', 'redesign', 'settings'];
+  const sections = [
+    'overview',
+    'email',
+    'research',
+    'assets',
+    'audit',
+    'brief',
+    'redesign',
+    'settings',
+  ];
 
   for (const section of sections) {
     await page.goto(`/#/prospects/business-demo-local-services/${section}`);
@@ -2190,7 +2201,7 @@ test('uses a workspace section picker on mobile', async ({ page }, testInfo) => 
     await expect(tabs).toBeHidden();
     await picker.click();
     const options = page.getByRole('menu', { name: 'Workspace section' });
-    await expect(options.getByRole('menuitemradio')).toHaveCount(11);
+    await expect(options.getByRole('menuitemradio')).toHaveCount(12);
     await page.keyboard.press('Escape');
     await expect(options).toBeHidden();
     await expect(picker).toBeFocused();
@@ -3680,8 +3691,16 @@ test('displays the newest test package above retained package versions', async (
 
   const packagePicker = page.getByLabel('Test agent package');
   await expect(packagePicker).toHaveValue(
-    'agent-package-local-v14-5-codespace-interrupted-chat-recovery',
+    'agent-package-local-v15-3-clientspace-admin-email-review',
   );
+  await expect(packagePicker).toContainText('v15.3 · Approved test');
+  await expect(packagePicker).toContainText('v15.2 · Approved test');
+  await expect(packagePicker).toContainText('v15.1 · Approved test');
+  await expect(packagePicker).toContainText('v15.0 · Approved test');
+  await expect(packagePicker).toContainText('v14.9 · Approved test');
+  await expect(packagePicker).toContainText('v14.8 · Approved test');
+  await expect(packagePicker).toContainText('v14.7 · Approved test');
+  await expect(packagePicker).toContainText('v14.6 · Approved test');
   await expect(packagePicker).toContainText('v14.5 · Approved test');
   await expect(packagePicker).toContainText('v14.4 · Approved test');
   await expect(packagePicker).toContainText('v14.3 · Approved test');
@@ -3773,6 +3792,14 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v15.3', 'Clientspace Admin email review'],
+    ['v15.2', 'Inbound client email review'],
+    ['v15.1', 'Cold prospect offer'],
+    ['v15.0', 'Agent team chat'],
+    ['v14.9', 'Durable Codex turn recovery'],
+    ['v14.8', 'Reliable unmaterialized-chat cleanup'],
+    ['v14.7', 'Codex experimental workspace capability'],
+    ['v14.6', 'Dual-repository Codex workspace'],
     ['v14.5', 'Codespace interrupted-chat recovery'],
     ['v14.4', 'Recent-prompt chat titles'],
     ['v14.3', 'Camera-roll photo upload'],
@@ -4654,10 +4681,19 @@ test('opens the shared builder settings panel from the navigation settings page'
   await page.goto('/#/settings');
 
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Codex Cloud' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open Codex Cloud' })).toHaveAttribute(
+    'href',
+    'https://chatgpt.com/codex',
+  );
+  await expect(page.getByText('API calls blocked')).toBeVisible();
   await page.getByRole('button', { name: 'Builder settings' }).click();
   const panel = page.getByRole('dialog', { name: 'Builder settings' });
   await expect(panel).toBeVisible();
   await expect(panel).toContainText('gpt-5.6');
+  await expect(panel).toContainText('ChatGPT subscription only');
+  await expect(panel).toContainText('API-key fallback');
+  await expect(panel).toContainText('Blocked');
   await expect(panel).toContainText('Workspace write only');
 
   await page.keyboard.press('Escape');

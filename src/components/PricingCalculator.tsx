@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, CircleDollarSign, RotateCcw, ShieldAlert, Sparkles } from 'lucide-react';
+import {
+  CheckCircle2,
+  CircleDollarSign,
+  Landmark,
+  RotateCcw,
+  ShieldAlert,
+  Sparkles,
+  WalletCards,
+} from 'lucide-react';
 import type { BuildManifest } from '../lib/domain';
 import {
   approvePricingCalculation,
@@ -81,7 +89,7 @@ export function PricingCalculator({
             <CircleDollarSign size={20} />
           </span>
           <div>
-            <span className="pricing-calculator__eyebrow">Calculated investment</span>
+            <span className="pricing-calculator__eyebrow">Recommended prospect offer</span>
             <h3>{formatAud(calculation.totalCents)}</h3>
           </div>
         </div>
@@ -119,6 +127,74 @@ export function PricingCalculator({
             : 'Pricing is locked to the newest available source scope.'}
         </span>
       </p>
+
+      <div className="pricing-calculator__guardrail">
+        <span>
+          <small>Internal full-scope value</small>
+          <strong>{formatAud(calculation.fullScopeValueCents)}</strong>
+        </span>
+        <span>
+          <small>Automatic cold-offer ceiling</small>
+          <strong>{formatAud(calculation.automaticOfferCeilingCents)}</strong>
+        </span>
+        <p>
+          The client sees clear fixed choices. Company size or net worth never changes the price;
+          only the latest reviewed build scope does.
+        </p>
+      </div>
+
+      <div className="pricing-calculator__offers" aria-label="Client offer choices">
+        <div className="pricing-calculator__section-heading">
+          <span aria-hidden="true">
+            <WalletCards size={18} />
+          </span>
+          <div>
+            <strong>Client choice menu</strong>
+            <small>Every amount is a complete commitment, not a teaser price.</small>
+          </div>
+        </div>
+        <div className="pricing-calculator__offer-grid">
+          {calculation.offerChoices.map((offer) => (
+            <article
+              className={
+                offer.recommended
+                  ? 'pricing-calculator__offer pricing-calculator__offer--recommended'
+                  : 'pricing-calculator__offer'
+              }
+              key={offer.id}
+            >
+              <div>
+                <span>
+                  {offer.recommended
+                    ? 'Recommended'
+                    : offer.kind === 'managed'
+                      ? 'Lower upfront'
+                      : 'Alternative'}
+                </span>
+                <strong>{offer.label}</strong>
+              </div>
+              <p>{offer.summary}</p>
+              <strong className="pricing-calculator__offer-price">
+                {offer.kind === 'managed'
+                  ? `${formatAud(offer.setupCents)} + ${formatAud(offer.recurringCents)}/mo`
+                  : formatAud(offer.totalCommitmentCents)}
+              </strong>
+              {offer.kind === 'managed' ? (
+                <small>
+                  {offer.recurringMonths} months · {formatAud(offer.totalCommitmentCents)} total
+                  commitment
+                </small>
+              ) : (
+                <small>
+                  {offer.paymentSchedule.length}{' '}
+                  {offer.paymentSchedule.length === 1 ? 'payment' : 'fixed payments'} ·{' '}
+                  {offer.scopeLabel}
+                </small>
+              )}
+            </article>
+          ))}
+        </div>
+      </div>
 
       <details className="pricing-calculator__scope" open>
         <summary>
@@ -205,11 +281,27 @@ export function PricingCalculator({
           />
           <span>Reserve priority delivery (+20%)</span>
         </label>
+        <label className="pricing-calculator__check">
+          <input
+            checked={options.includeManaged}
+            onChange={(event) => updateOption('includeManaged', event.target.checked)}
+            type="checkbox"
+          />
+          <span>Offer a 24-month managed plan</span>
+        </label>
+        <label className="pricing-calculator__check">
+          <input
+            checked={options.includeEssentials}
+            onChange={(event) => updateOption('includeEssentials', event.target.checked)}
+            type="checkbox"
+          />
+          <span>Offer a focused essentials launch</span>
+        </label>
       </div>
 
       <dl className="pricing-calculator__totals">
         <div>
-          <dt>Project subtotal</dt>
+          <dt>Recommended subtotal</dt>
           <dd>{formatAud(calculation.subtotalCents)}</dd>
         </div>
         <div>
@@ -231,7 +323,9 @@ export function PricingCalculator({
       </dl>
 
       <div className="pricing-calculator__schedule">
-        <strong>Automatic payment milestones</strong>
+        <strong>
+          <Landmark aria-hidden="true" size={17} /> Recommended payment milestones
+        </strong>
         <ol>
           {calculation.paymentSchedule.map((milestone) => (
             <li key={milestone.sequence}>

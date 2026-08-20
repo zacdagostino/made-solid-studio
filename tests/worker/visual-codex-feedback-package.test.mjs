@@ -46,6 +46,34 @@ const durableTurnRecoveryMigrationUrl = new URL(
   '../../supabase/migrations/20260817234000_durable_codex_turn_recovery_test_package.sql',
   import.meta.url,
 );
+const resumableAgentTeamMigrationUrl = new URL(
+  '../../supabase/migrations/20260819100000_resumable_agent_team_test_package.sql',
+  import.meta.url,
+);
+const spaciousCodexChatMigrationUrl = new URL(
+  '../../supabase/migrations/20260819110000_spacious_codex_chat_test_package.sql',
+  import.meta.url,
+);
+const turnScopedAgentTeamsMigrationUrl = new URL(
+  '../../supabase/migrations/20260819120000_turn_scoped_agent_teams_test_package.sql',
+  import.meta.url,
+);
+const uninterruptedCodexRecoveryMigrationUrl = new URL(
+  '../../supabase/migrations/20260819130000_uninterrupted_codex_recovery_test_package.sql',
+  import.meta.url,
+);
+const subscriptionSafeCodexRuntimeMigrationUrl = new URL(
+  '../../supabase/migrations/20260819200000_subscription_safe_codex_runtime_test_package.sql',
+  import.meta.url,
+);
+const permanentRailwayRuntimeMigrationUrl = new URL(
+  '../../supabase/migrations/20260819210000_permanent_railway_runtime_test_package.sql',
+  import.meta.url,
+);
+const agentTeamChatMigrationUrl = new URL(
+  '../../supabase/migrations/20260818090000_agent_team_chat_test_package.sql',
+  import.meta.url,
+);
 const repositoryUrl = new URL('../../src/lib/repository.ts', import.meta.url);
 const appUrl = new URL('../../src/App.tsx', import.meta.url);
 const componentUrl = new URL('../../src/components/CodexFeedbackPanel.tsx', import.meta.url);
@@ -98,15 +126,182 @@ test('registers public Codespace ports once above concurrent Codex chats', async
   );
 });
 
-test('records the current reliable New-chat Testing behaviour revision', async () => {
+test('records the current permanent Codex Testing behaviour revision', async () => {
   const app = await readFile(appUrl, 'utf8');
   assert.match(app, /id: 'visual-codex-feedback'/);
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.ok(Number(revision[1]) >= 24);
-  assert.match(app, /app-owned turns now continue independently/);
-  assert.match(app, /recover once from the saved transcript/);
+  assert.ok(Number(revision[1]) >= 31);
+  assert.match(app, /Workspace Agent now runs behind the signed-in Studio/);
+  assert.match(app, /resumes after the browser closes/);
+});
+
+test('registers the permanent Railway runtime as the newest immutable package', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(permanentRailwayRuntimeMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Permanent Railway Studio runtime test package:/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 15\.9,/);
+  assert.match(repository, /basePackageId: localSubscriptionSafeCodexRuntimePackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localPermanentRailwayRuntimePackage,') <
+      packageLedger.indexOf('localSubscriptionSafeCodexRuntimePackage,'),
+  );
+});
+
+test('registers the subscription-safe Codex runtime as the newest immutable package', async () => {
+  const [migration, repository, app, launcher] = await Promise.all([
+    readFile(subscriptionSafeCodexRuntimeMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+    readFile(appServerLauncherUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Subscription-safe Codex runtime test package:/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback", "framework-quality-gates"/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 15\.8,/);
+  assert.match(repository, /basePackageId: localUninterruptedCodexRecoveryPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localSubscriptionSafeCodexRuntimePackage,') <
+      packageLedger.indexOf('localUninterruptedCodexRecoveryPackage,'),
+  );
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.89`/);
+  assert.match(launcher, /forced_login_method="chatgpt"/);
+  assert.match(launcher, /unset OPENAI_API_KEY SITEFORGE_CODEX_API_KEY CODEX_API_KEY/);
+});
+
+test('registers uninterrupted Codex recovery as the newest immutable local and cloud package', async () => {
+  const [migration, repository, bridge, localService] = await Promise.all([
+    readFile(uninterruptedCodexRecoveryMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(new URL('../../scripts/codex-feedback-bridge.mjs', import.meta.url), 'utf8'),
+    readFile(localServiceUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Uninterrupted Codex recovery test package:/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 15\.7,/);
+  assert.match(repository, /basePackageId: localTurnScopedAgentTeamsPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localUninterruptedCodexRecoveryPackage,') <
+      packageLedger.indexOf('localTurnScopedAgentTeamsPackage,'),
+  );
+  assert.match(bridge, /record\.status === 'recovering'/);
+  assert.match(bridge, /interruptedAgentsForSupervisor/);
+  assert.match(bridge, /turn\/steer/);
+  assert.match(bridge, /followup_task collaboration tool/);
+  assert.doesNotMatch(bridge, /Number\(record\.recoveryCount \|\| 0\) >= 1/);
+  assert.match(localService, /void codexFeedbackBridge\.maintain\(\)/);
+  assert.match(localService, /await codexFeedbackBridge\.maintain\(\)/);
+});
+
+test('registers turn-scoped Agent teams as the newest immutable local and cloud package', async () => {
+  const [migration, repository, bridge, component] = await Promise.all([
+    readFile(turnScopedAgentTeamsMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(new URL('../../scripts/codex-feedback-bridge.mjs', import.meta.url), 'utf8'),
+    readFile(componentUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Turn-scoped Agent teams test package:/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 15\.6,/);
+  assert.match(repository, /basePackageId: localSpaciousCodexChatPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localTurnScopedAgentTeamsPackage,') <
+      packageLedger.indexOf('localSpaciousCodexChatPackage,'),
+  );
+  assert.match(bridge, /collabAgentTurnIds/);
+  assert.match(component, /agentTeamsAfterMessage/);
+  assert.match(component, /supervisorTurnId/);
+});
+
+test('registers spacious Codex chat above its prior immutable package', async () => {
+  const [migration, repository, component] = await Promise.all([
+    readFile(spaciousCodexChatMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(componentUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Spacious Codex chat test package:/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 15\.5,/);
+  assert.match(repository, /basePackageId: localResumableAgentTeamPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localSpaciousCodexChatPackage,') <
+      packageLedger.indexOf('localResumableAgentTeamPackage,'),
+  );
+  assert.match(component, /label="Chat settings"/);
+  assert.match(component, /codex-composer-settings/);
+});
+
+test('registers resumable Agent team above its prior immutable package', async () => {
+  const [migration, repository, bridge, component] = await Promise.all([
+    readFile(resumableAgentTeamMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(new URL('../../scripts/codex-feedback-bridge.mjs', import.meta.url), 'utf8'),
+    readFile(componentUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Resumable Agent team test package:/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 15\.4,/);
+  assert.match(repository, /basePackageId: localClientspaceAdminEmailReviewPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localResumableAgentTeamPackage,') <
+      packageLedger.indexOf('localClientspaceAdminEmailReviewPackage,'),
+  );
+  assert.match(bridge, /resumedAgents/);
+  assert.match(bridge, /agentResumeFailures/);
+  assert.match(component, /Resuming interrupted agents/);
+  assert.match(component, /Resume working/);
+});
+
+test('registers Agent team chat above durable turn recovery', async () => {
+  const [migration, repository, bridge, component] = await Promise.all([
+    readFile(agentTeamChatMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(new URL('../../scripts/codex-feedback-bridge.mjs', import.meta.url), 'utf8'),
+    readFile(componentUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Agent team chat test package:/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 15,/);
+  assert.match(repository, /basePackageId: localDurableCodexTurnRecoveryPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localAgentTeamChatPackage,') <
+      packageLedger.indexOf('localDurableCodexTurnRecoveryPackage,'),
+  );
+  assert.match(bridge, /ancestorThreadId: thread\.id/);
+  assert.match(bridge, /teamDelegationInstruction/);
+  assert.match(component, /codex-agent-team/);
+  assert.match(component, /Agent team/);
 });
 
 test('registers durable Codex turn recovery above New-chat cleanup', async () => {
@@ -377,7 +572,8 @@ test('uses shared controls, a compact model selector, and live model discovery f
   assert.match(service, /chromium\.launch/);
   assert.match(service, /sec-fetch-site/);
   assert.match(service, /22 \* 1024 \* 1024/);
-  assert.match(service, /configureServer\(server\)/);
+  assert.match(service, /configurePreviewServer: configureWorkspaceServer/);
+  assert.match(service, /configureServer: configureWorkspaceServer/);
 });
 
 test('ships one locally scoped Manifest V3 capture helper for Chrome and Brave', async () => {
@@ -402,7 +598,8 @@ test('starts the local app-server before the full-access remote tmux client', as
   const client = launcher.indexOf('codex resume --last --remote ws://127.0.0.1:4500');
   assert.ok(server >= 0);
   assert.ok(client > server);
-  assert.match(appServerLauncher, /codex app-server/);
+  assert.match(appServerLauncher, /app-server/);
+  assert.match(appServerLauncher, /forced_login_method="chatgpt"/);
   assert.match(appServerLauncher, /--enable prevent_idle_sleep/);
   assert.match(appServerLauncher, /--disable shell_snapshot/);
   assert.match(launcher, /--model gpt-5\.6-sol/);

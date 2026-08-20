@@ -3,6 +3,7 @@
 import { createHash } from 'node:crypto';
 import { hostname } from 'node:os';
 import { createClient } from '@supabase/supabase-js';
+import { openAiApiEnabled, openAiApiKey } from './openai-api-policy.mjs';
 import { chromium } from 'playwright';
 import { recordAiUsage } from './ai-usage.mjs';
 import { assertPublicUrl } from './security.mjs';
@@ -2277,17 +2278,18 @@ async function processNext(client, workerId, apiKey, model) {
       .eq('id', job.id)
       .eq('worker_id', workerId);
     if (completeError) throw completeError;
+    const apiRecoveryEnabled = openAiApiEnabled();
     const { error: contentRecoveryError } =
-      analysisScope === 'full'
+      analysisScope === 'full' && apiRecoveryEnabled
         ? await client.rpc('request_visual_content_extraction', {
             target_business_id: job.business_id,
           })
         : { error: null };
-    if (analysisScope === 'full' && contentRecoveryError) {
+    if (analysisScope === 'full' && apiRecoveryEnabled && contentRecoveryError) {
       console.warn(
         `[asset-analysis-worker] visual-content recovery was not available for ${job.id}: ${contentRecoveryError.message}`,
       );
-    } else if (analysisScope === 'full') {
+    } else if (analysisScope === 'full' && apiRecoveryEnabled) {
       const { error: pendingStructureError } = await client
         .from('visual_content_candidates')
         .update({ structure_status: 'pending', structure_error: null })
@@ -2345,7 +2347,7 @@ async function processNext(client, workerId, apiKey, model) {
 }
 
 async function main() {
-  const apiKey = process.env.OPENAI_API_KEY?.trim() || process.env.SITEFORGE_CODEX_API_KEY?.trim();
+  const apiKey = openAiApiKey(process.env, ['OPENAI_API_KEY']);
   const supabaseUrl = requiredEnvironment('SITEFORGE_SUPABASE_URL');
   const serviceRoleKey = requiredEnvironment('SITEFORGE_SUPABASE_SERVICE_ROLE_KEY');
   const model = process.env.SITEFORGE_ASSET_VISION_MODEL?.trim() || 'gpt-5';

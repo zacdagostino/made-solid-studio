@@ -7,7 +7,7 @@ const root = new URL('../../', import.meta.url);
 test('requires a source-aware approved quote locked to the exact revision before handoff', async () => {
   const [migration, app, pricing, domain] = await Promise.all([
     readFile(
-      new URL('supabase/migrations/20260817190000_versioned_build_pricing.sql', root),
+      new URL('supabase/migrations/20260817190500_versioned_build_pricing.sql', root),
       'utf8',
     ),
     readFile(new URL('src/App.tsx', root), 'utf8'),
@@ -20,9 +20,12 @@ test('requires a source-aware approved quote locked to the exact revision before
   assert.match(migration, /balanceCents/);
   assert.match(app, /<PricingCalculator/);
   assert.match(app, /pricingSnapshot: approvedQuote/);
-  assert.match(pricing, /pricingScheduleVersion = 'made-solid-preview-first-v2\.0'/);
+  assert.match(pricing, /pricingScheduleVersion = 'made-solid-cold-prospect-v3\.0'/);
   assert.match(pricing, /'Preview-first website delivery'/);
   assert.match(pricing, /sourceScope: scope/);
   assert.match(pricing, /paymentSchedule: schedule/);
+  assert.match(pricing, /automaticOfferCeilingCents/);
+  assert.match(pricing, /offerChoices/);
+  assert.match(pricing, /'managed-24-month'/);
   assert.match(domain, /pricingSnapshot: import\('\.\/pricing'\)\.PricingQuoteSnapshot/);
 });

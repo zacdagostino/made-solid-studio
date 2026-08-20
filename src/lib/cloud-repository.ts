@@ -14,6 +14,8 @@ import type {
   BrandKit,
   Audit,
   AuditFinding,
+  AuditObservation,
+  AuditSpecialistTask,
   BuildManifest,
   BuilderArtifact,
   BuilderEvent,
@@ -25,12 +27,15 @@ import type {
   ClientPreviewPublicationInput,
   MadeSolidHandoff,
   MadeSolidHandoffInput,
+  OutreachCompliance,
+  OutreachComplianceInput,
   GithubWorkspacePublication,
   GithubWorkspacePublicationInput,
   CapturedPage,
   Business,
   Contact,
   DecisionReport,
+  ReportPreviewJob,
   EvidenceFact,
   ProspectWorkspace,
   ResearchArtifact,
@@ -57,6 +62,7 @@ import {
   createBriefDraft,
   visualContentMatchesBrief,
 } from './redesign-brief';
+import { openAiApiFeaturesEnabled } from './ai-billing';
 
 type DatabaseRow = Record<string, unknown>;
 
@@ -948,6 +954,7 @@ function auditFromRow(row: DatabaseRow, findings: AuditFinding[]): Audit {
   return {
     id: readString(row, 'id'),
     businessId: readString(row, 'business_id'),
+    version: readNumber(row, 'version'),
     crawlRunId: readOptionalString(row, 'crawl_run_id'),
     status:
       cancelRequestedAt && readString(row, 'status') === 'failed'
@@ -959,6 +966,7 @@ function auditFromRow(row: DatabaseRow, findings: AuditFinding[]): Audit {
     totalItems: readNumber(row, 'total_items'),
     completedItems: readNumber(row, 'completed_items'),
     cancelRequestedAt,
+    errorSummary: readOptionalString(row, 'error_summary'),
     createdAt: readString(row, 'created_at'),
     updatedAt: readString(row, 'updated_at'),
   };
@@ -968,6 +976,9 @@ function findingFromRow(row: DatabaseRow): AuditFinding {
   const evidenceIds = Array.isArray(row.evidence_fact_ids)
     ? row.evidence_fact_ids.filter((value): value is string => typeof value === 'string')
     : [];
+  const evidenceArtifactIds = Array.isArray(row.evidence_artifact_ids)
+    ? row.evidence_artifact_ids.filter((value): value is string => typeof value === 'string')
+    : [];
   return {
     id: readString(row, 'id'),
     area: readString(row, 'area') as AuditFinding['area'],
@@ -976,10 +987,79 @@ function findingFromRow(row: DatabaseRow): AuditFinding {
     finding: readString(row, 'finding'),
     recommendation: readString(row, 'recommendation'),
     evidenceIds,
+    evidenceArtifactIds,
     sourceUrls: Array.isArray(row.source_urls)
       ? row.source_urls.filter((value): value is string => typeof value === 'string')
       : [],
+    specialistKind: readOptionalString(row, 'specialist_kind') as AuditFinding['specialistKind'],
+    findingClass: readOptionalString(row, 'finding_class') as AuditFinding['findingClass'],
+    customerImpact: readOptionalString(row, 'customer_impact'),
+    confidence: readOptionalString(row, 'confidence') as AuditFinding['confidence'],
     reviewState: readString(row, 'review_state') as AuditFinding['reviewState'],
+  };
+}
+
+function auditSpecialistTaskFromRow(row: DatabaseRow): AuditSpecialistTask {
+  const cancelRequestedAt = readOptionalString(row, 'cancel_requested_at');
+  return {
+    id: readString(row, 'id'),
+    businessId: readString(row, 'business_id'),
+    auditId: readString(row, 'audit_id'),
+    crawlRunId: readString(row, 'crawl_run_id'),
+    specialistKind: readString(row, 'specialist_kind') as AuditSpecialistTask['specialistKind'],
+    status:
+      cancelRequestedAt && readString(row, 'progress_phase') === 'cancelled'
+        ? 'cancelled'
+        : auditStatus(readString(row, 'status')),
+    progressPhase: readOptionalString(row, 'progress_phase'),
+    progressDetail: readOptionalString(row, 'progress_detail'),
+    totalItems: readNumber(row, 'total_items'),
+    completedItems: readNumber(row, 'completed_items'),
+    cancelRequestedAt,
+    errorSummary: readOptionalString(row, 'error_summary'),
+    createdAt: readString(row, 'created_at'),
+    updatedAt: readString(row, 'updated_at'),
+  };
+}
+
+function stringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string')
+    : [];
+}
+
+function auditObservationFromRow(row: DatabaseRow): AuditObservation {
+  const viewportRecord = recordValue(row.viewport);
+  const width = readNumber(viewportRecord, 'width');
+  const height = readNumber(viewportRecord, 'height');
+  return {
+    id: readString(row, 'id'),
+    businessId: readString(row, 'business_id'),
+    auditId: readString(row, 'audit_id'),
+    specialistTaskId: readString(row, 'specialist_task_id'),
+    crawlRunId: readString(row, 'crawl_run_id'),
+    specialistKind: readString(row, 'specialist_kind') as AuditObservation['specialistKind'],
+    area: readString(row, 'area') as AuditObservation['area'],
+    findingClass: readString(row, 'finding_class') as AuditObservation['findingClass'],
+    severity: readString(row, 'severity') as AuditObservation['severity'],
+    title: readString(row, 'title'),
+    observation: readString(row, 'observation'),
+    customerImpact: readString(row, 'customer_impact'),
+    recommendation: readString(row, 'recommendation'),
+    sourceUrls: stringArray(row.source_urls),
+    evidenceFactIds: stringArray(row.evidence_fact_ids),
+    evidenceArtifactIds: stringArray(row.evidence_artifact_ids),
+    viewport:
+      width > 0 && height > 0
+        ? { width, height, label: readOptionalString(viewportRecord, 'label') }
+        : undefined,
+    interactionState: readOptionalString(row, 'interaction_state'),
+    selector: readOptionalString(row, 'selector'),
+    measurement: recordValue(row.measurement),
+    confidence: readString(row, 'confidence') as AuditObservation['confidence'],
+    reviewState: readString(row, 'review_state') as AuditObservation['reviewState'],
+    createdAt: readString(row, 'created_at'),
+    updatedAt: readString(row, 'updated_at'),
   };
 }
 
@@ -996,13 +1076,54 @@ function conceptFromRow(row: DatabaseRow): RedesignConcept {
 }
 
 function reportFromRow(row: DatabaseRow): DecisionReport {
+  const storedStatus = readString(row, 'status');
+  const reviewState = readOptionalString(row, 'review_state') as DecisionReport['reviewState'];
   return {
     id: readString(row, 'id'),
     businessId: readString(row, 'business_id'),
-    status: readString(row, 'status') as DecisionReport['status'],
+    auditId: readOptionalString(row, 'audit_id'),
+    crawlRunId: readOptionalString(row, 'crawl_run_id'),
+    status:
+      storedStatus === 'not_started' ||
+      storedStatus === 'draft' ||
+      storedStatus === 'ready' ||
+      storedStatus === 'approved'
+        ? storedStatus
+        : reviewState === 'approved'
+          ? 'approved'
+          : 'draft',
     version: typeof row.version === 'number' ? row.version : 1,
+    schemaVersion: readOptionalNumber(row, 'schema_version'),
+    reviewState,
     summary: readString(row, 'summary'),
+    data: recordValue(row.data),
     createdAt: readString(row, 'created_at'),
+    updatedAt: readString(row, 'updated_at') || readString(row, 'created_at'),
+  };
+}
+
+function reportPreviewJobFromRow(row: DatabaseRow): ReportPreviewJob {
+  const status = readString(row, 'status');
+  return {
+    id: readString(row, 'id'),
+    businessId: readString(row, 'business_id'),
+    reportVersionId: readString(row, 'report_version_id'),
+    status:
+      status === 'running' || status === 'ready' || status === 'failed' || status === 'cancelled'
+        ? status
+        : 'queued',
+    progressPhase: readString(row, 'progress_phase') || 'queued',
+    progressDetail:
+      readString(row, 'progress_detail') || 'Waiting for the protected report preview worker.',
+    totalItems: readNumber(row, 'total_items'),
+    completedItems: readNumber(row, 'completed_items'),
+    cancelRequestedAt: readOptionalString(row, 'cancel_requested_at'),
+    remotePreviewId: readOptionalString(row, 'remote_preview_id'),
+    previewUrl: readOptionalString(row, 'preview_url'),
+    previewExpiresAt: readOptionalString(row, 'preview_expires_at'),
+    errorSummary: readOptionalString(row, 'error_summary'),
+    createdAt: readString(row, 'created_at'),
+    completedAt: readOptionalString(row, 'completed_at'),
     updatedAt: readString(row, 'updated_at'),
   };
 }
@@ -1026,6 +1147,29 @@ function activityFromRow(row: DatabaseRow): Activity {
     type: readString(row, 'type') as Activity['type'],
     message: readString(row, 'message'),
     createdAt: readString(row, 'created_at'),
+  };
+}
+
+function outreachComplianceFromRow(row: DatabaseRow): OutreachCompliance {
+  return {
+    id: readString(row, 'id'),
+    businessId: readString(row, 'business_id'),
+    contactId: readOptionalString(row, 'contact_id'),
+    consentBasis: readString(row, 'consent_basis') as OutreachCompliance['consentBasis'],
+    sourceUrl: readOptionalString(row, 'source_url'),
+    sourceNote: readString(row, 'source_note'),
+    emailAllowed: row.email_allowed === true,
+    phoneAllowed: row.phone_allowed === true,
+    doNotCallCheckedAt: readOptionalString(row, 'do_not_call_checked_at'),
+    doNotCallClear: row.do_not_call_clear === true,
+    senderIdentificationConfirmed: row.sender_identification_confirmed === true,
+    unsubscribeProcessConfirmed: row.unsubscribe_process_confirmed === true,
+    suppressedAt: readOptionalString(row, 'suppressed_at'),
+    suppressionReason: readOptionalString(row, 'suppression_reason'),
+    campaignCohort: readOptionalString(row, 'campaign_cohort'),
+    notes: readString(row, 'notes'),
+    createdAt: readString(row, 'created_at'),
+    updatedAt: readString(row, 'updated_at'),
   };
 }
 
@@ -1227,6 +1371,8 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       contacts,
       facts,
       audits,
+      auditSpecialistTasks,
+      auditObservations,
       assetJobs,
       visualContentJobs,
       briefs,
@@ -1234,6 +1380,8 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       builderRuns,
       concepts,
       reports,
+      reportVersions,
+      reportPreviewJobs,
       tasks,
       activity,
       aiUsageRecords,
@@ -1242,6 +1390,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       githubWorkspacePublications,
       githubWorkspaceWorkerAvailable,
       madeSolidHandoffWorkerAvailable,
+      reportPreviewWorkerAvailable,
     ] = await Promise.all([
       this.client.from('websites').select('*').eq('business_id', businessId).limit(1),
       this.client.from('contacts').select('*').eq('business_id', businessId),
@@ -1252,6 +1401,16 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         .eq('business_id', businessId)
         .order('version', { ascending: false })
         .limit(1),
+      this.client
+        .from('audit_specialist_tasks')
+        .select('*')
+        .eq('business_id', businessId)
+        .order('created_at'),
+      this.client
+        .from('audit_observations')
+        .select('*')
+        .eq('business_id', businessId)
+        .order('created_at'),
       this.client
         .from('asset_analysis_jobs')
         .select('*')
@@ -1291,6 +1450,16 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         .order('version', { ascending: false })
         .limit(1),
       this.client
+        .from('decision_report_versions')
+        .select('*')
+        .eq('business_id', businessId)
+        .order('version', { ascending: false }),
+      this.client
+        .from('report_preview_jobs')
+        .select('*')
+        .eq('business_id', businessId)
+        .order('created_at', { ascending: false }),
+      this.client
         .from('tasks')
         .select('*')
         .eq('business_id', businessId)
@@ -1323,12 +1492,15 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         .order('created_at', { ascending: false }),
       this.client.rpc('github_workspace_worker_available'),
       this.client.rpc('made_solid_handoff_worker_available'),
+      this.client.rpc('report_preview_worker_available'),
     ]);
     [
       websites,
       contacts,
       facts,
       audits,
+      auditSpecialistTasks,
+      auditObservations,
       assetJobs,
       visualContentJobs,
       briefs,
@@ -1336,11 +1508,17 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       builderRuns,
       concepts,
       reports,
+      reportVersions,
       tasks,
       activity,
       aiUsageRecords,
       clientPreviewPublications,
     ].forEach((result) => throwIfError(result.error));
+    warnOptionalIntegrationError('Private report preview history', reportPreviewJobs.error);
+    warnOptionalIntegrationError(
+      'Private report preview worker status',
+      reportPreviewWorkerAvailable.error,
+    );
     warnOptionalIntegrationError('Made Solid handoff history', madeSolidHandoffs.error);
     warnOptionalIntegrationError(
       'GitHub workspace publication history',
@@ -1610,12 +1788,21 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     const currentAssetAnalysis = assetAnalysisJobs.find(
       (job) => job.crawlRunId === latestCapture?.id,
     );
+    const outreachComplianceResult = await this.client
+      .from('outreach_compliance')
+      .select('*')
+      .eq('business_id', businessId)
+      .maybeSingle();
+    throwIfError(outreachComplianceResult.error);
 
     return {
       business: businessFromRow(businessRow as DatabaseRow),
       website,
       captures: orderedCaptures,
       contacts: ((contacts.data ?? []) as DatabaseRow[]).map(contactFromRow),
+      outreachCompliance: outreachComplianceResult.data
+        ? outreachComplianceFromRow(outreachComplianceResult.data as DatabaseRow)
+        : undefined,
       facts:
         latestCapture?.status === 'ready' ||
         latestCapture?.status === 'running' ||
@@ -1681,6 +1868,10 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       clientPreviewPublications: ((clientPreviewPublications.data ?? []) as DatabaseRow[]).map(
         clientPreviewPublicationFromRow,
       ),
+      reportPreviewJobs: ((reportPreviewJobs.data ?? []) as DatabaseRow[]).map(
+        reportPreviewJobFromRow,
+      ),
+      reportPreviewWorkerAvailable: reportPreviewWorkerAvailable.data === true,
       madeSolidHandoffs: ((madeSolidHandoffs.data ?? []) as DatabaseRow[]).map(
         madeSolidHandoffFromRow,
       ),
@@ -1707,12 +1898,25 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
             ((findingResult.data ?? []) as DatabaseRow[]).map(findingFromRow),
           )
         : undefined,
+      auditSpecialistTasks: latestAudit
+        ? ((auditSpecialistTasks.data ?? []) as DatabaseRow[])
+            .map(auditSpecialistTaskFromRow)
+            .filter((task) => task.auditId === readString(latestAudit, 'id'))
+        : [],
+      auditObservations: latestAudit
+        ? ((auditObservations.data ?? []) as DatabaseRow[])
+            .map(auditObservationFromRow)
+            .filter((observation) => observation.auditId === readString(latestAudit, 'id'))
+        : [],
       concept: (concepts.data ?? [])[0]
         ? conceptFromRow((concepts.data ?? [])[0] as DatabaseRow)
         : undefined,
-      report: (reports.data ?? [])[0]
-        ? reportFromRow((reports.data ?? [])[0] as DatabaseRow)
-        : undefined,
+      report: (reportVersions.data ?? [])[0]
+        ? reportFromRow((reportVersions.data ?? [])[0] as DatabaseRow)
+        : (reports.data ?? [])[0]
+          ? reportFromRow((reports.data ?? [])[0] as DatabaseRow)
+          : undefined,
+      reportVersions: ((reportVersions.data ?? []) as DatabaseRow[]).map(reportFromRow),
       tasks: ((tasks.data ?? []) as DatabaseRow[]).map(taskFromRow),
       activity: ((activity.data ?? []) as DatabaseRow[]).map(activityFromRow),
     };
@@ -1860,6 +2064,44 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         review_state: patch.reviewState,
       })
       .eq('id', finding.id);
+    throwIfError(error);
+  }
+
+  async updateAuditObservation(
+    observationId: string,
+    reviewState: AuditObservation['reviewState'],
+  ) {
+    const { error } = await this.client
+      .from('audit_observations')
+      .update({ review_state: reviewState })
+      .eq('id', observationId);
+    throwIfError(error);
+  }
+
+  async createDecisionReport(businessId: string, auditId: string) {
+    const { data, error } = await this.client.rpc('create_audit_report_version', {
+      target_business_id: businessId,
+      target_audit_id: auditId,
+    });
+    throwIfError(error);
+    if (typeof data !== 'string') throw new Error('The report draft could not be frozen.');
+    const workspace = await this.getWorkspace(businessId);
+    return workspace?.reportVersions?.find((report) => report.id === data) ?? workspace?.report;
+  }
+
+  async requestReportPreview(reportVersionId: string) {
+    const { data, error } = await this.client.rpc('request_report_preview', {
+      target_report_version_id: reportVersionId,
+    });
+    throwIfError(error);
+    const row = Array.isArray(data) ? data[0] : data;
+    return row ? reportPreviewJobFromRow(row as DatabaseRow) : undefined;
+  }
+
+  async cancelReportPreview(jobId: string) {
+    const { error } = await this.client.rpc('cancel_report_preview', {
+      target_job_id: jobId,
+    });
     throwIfError(error);
   }
 
@@ -2454,6 +2696,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     }
     const hasReusableCapabilityInventory = Array.isArray(latestBrief?.draft.capabilityInventory);
     if (
+      openAiApiFeaturesEnabled &&
       recordValue(workspace.researchPacket.data.capabilityAnalysis).status !== 'ready' &&
       !hasReusableCapabilityInventory
     ) {
@@ -3001,11 +3244,42 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
   }
 
   async approveForOutreach(businessId: string) {
-    const { data, error } = await this.client.rpc('approve_business_for_outreach', {
+    const { data, error } = await this.client.rpc('approve_business_for_outreach_v2', {
       target_business_id: businessId,
     });
     throwIfError(error);
     return data === true;
+  }
+
+  async saveOutreachCompliance(businessId: string, input: OutreachComplianceInput) {
+    const { data, error } = await this.client
+      .from('outreach_compliance')
+      .upsert(
+        {
+          organization_id: this.organizationId,
+          business_id: businessId,
+          contact_id: input.contactId ?? null,
+          consent_basis: input.consentBasis,
+          source_url: input.sourceUrl?.trim() || null,
+          source_note: input.sourceNote.trim(),
+          email_allowed: input.emailAllowed,
+          phone_allowed: input.phoneAllowed,
+          do_not_call_checked_at: input.doNotCallCheckedAt ?? null,
+          do_not_call_clear: input.doNotCallClear,
+          sender_identification_confirmed: input.senderIdentificationConfirmed,
+          unsubscribe_process_confirmed: input.unsubscribeProcessConfirmed,
+          suppressed_at: input.suppressedAt ?? null,
+          suppression_reason: input.suppressionReason?.trim() || null,
+          campaign_cohort: input.campaignCohort?.trim() || null,
+          notes: input.notes.trim(),
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'business_id' },
+      )
+      .select('*')
+      .single();
+    throwIfError(error);
+    return outreachComplianceFromRow(data as DatabaseRow);
   }
 
   async deleteProspect(businessId: string) {

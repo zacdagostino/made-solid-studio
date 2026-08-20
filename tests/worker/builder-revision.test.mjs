@@ -1050,19 +1050,15 @@ test('defaults website builds to ChatGPT subscription authentication without for
   assert.equal(environment.CODEX_API_KEY, undefined);
 });
 
-test('retains API-key builder authentication only as an explicit opt-in', () => {
-  const authentication = builderCodexAuthentication({
-    SITEFORGE_CODEX_AUTH_MODE: 'api_key',
-    SITEFORGE_CODEX_API_KEY: 'dedicated-builder-key',
-    OPENAI_API_KEY: 'shared-analysis-key',
-  });
-  assert.equal(authentication.mode, 'api_key');
-  assert.equal(authentication.billingMode, 'api_usage');
-  assert.equal(authentication.credential, 'dedicated-builder-key');
-  assert.equal(
-    builderCodexEnvironment(authentication, { HOME: '/tmp/member-home', PATH: '/usr/bin' })
-      .CODEX_API_KEY,
-    'dedicated-builder-key',
+test('rejects API-key mode for both Codex builders', () => {
+  assert.throws(
+    () =>
+      builderCodexAuthentication({
+        SITEFORGE_CODEX_AUTH_MODE: 'api_key',
+        SITEFORGE_CODEX_API_KEY: 'dedicated-builder-key',
+        OPENAI_API_KEY: 'shared-analysis-key',
+      }),
+    /subscription-only/,
   );
 });
 
@@ -3122,12 +3118,14 @@ test('registers the subscription tmux builder once above retained package versio
     packageLedger.indexOf('localSubscriptionBuilderPackage,') <
       packageLedger.indexOf('localCompactCodexComposerPackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.88`/);
-  assert.match(app, /saved conversations stay attached to the build/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.89`/);
+  assert.match(app, /reject API-key mode/);
+  assert.match(app, /fail closed if subscription authentication is unavailable/);
   assert.match(app, /Build conversation/);
-  assert.match(app, /separate\s+from Studio chat/);
   assert.match(worker, /billingMode: 'chatgpt_subscription'/);
   assert.match(worker, /logged in using chatgpt/i);
+  assert.match(worker, /forced_login_method="chatgpt"/);
+  assert.match(worker, /subscription-only/);
   assert.match(cloudRepository, /contains\('metadata', \{ stream: 'codex' \}\)/);
   assert.match(launcher, /-n builds/);
   assert.match(launcher, /scripts\/start-subscription-builder/);

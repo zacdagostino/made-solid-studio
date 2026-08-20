@@ -9,6 +9,10 @@ import {
   Clock3,
   ChevronDown,
   ChevronUp,
+  CircleCheck,
+  CircleDot,
+  CircleX,
+  GitBranch,
   ImageUp,
   LoaderCircle,
   Maximize2,
@@ -19,13 +23,18 @@ import {
   RotateCcw,
   Save,
   Send,
+  SlidersHorizontal,
   Square,
+  UsersRound,
   X,
 } from 'lucide-react';
 import { captureVisiblePage, warmMobileScreenCapture } from '../lib/mobile-screen-capture';
+import { studioRuntimeFetch } from '../lib/studio-runtime';
+import { isSupabaseConfigured, usesLocalStorage } from '../lib/supabase';
 import {
   useCallback,
   useEffect,
+  Fragment,
   useMemo,
   useRef,
   useState,
@@ -58,6 +67,7 @@ type CodexThread = {
   activeFlags?: string[];
   updatedAt?: number;
   workingStartedAt?: number;
+  activeTurnId?: string;
   lastTurnStatus?: string;
   interrupted?: boolean;
   discardable?: boolean;
@@ -73,10 +83,12 @@ type CodexStatus = {
     id: string;
     role: 'user' | 'assistant';
     text: string;
+    turnId?: string;
     phase?: string;
     attachmentId?: string;
     feedbackId?: string;
   }>;
+  agents: CodexAgent[];
   models: CodexModel[];
   queuedCount: number;
   interruptingCount?: number;
@@ -89,7 +101,35 @@ type CodexStatus = {
     createdAt: string;
     position: number;
     attachmentId?: string;
+    workMode?: 'direct' | 'team';
   }>;
+};
+
+type CodexAgentStatus =
+  'pendingInit' | 'running' | 'interrupted' | 'completed' | 'errored' | 'shutdown' | 'notFound';
+
+type CodexAgent = {
+  id: string;
+  parentThreadId?: string;
+  supervisorTurnId?: string;
+  nickname?: string;
+  role?: string;
+  name?: string;
+  task: string;
+  status: CodexAgentStatus;
+  statusMessage?: string;
+  working: boolean;
+  depth: number;
+  createdAt?: number;
+  updatedAt?: number;
+  workingStartedAt?: number;
+  messages: CodexStatus['messages'];
+};
+
+type TeamResumeState = {
+  threadId: string;
+  agentIds: string[];
+  failedAgentIds: string[];
 };
 
 type PanelPhase =
@@ -114,13 +154,42 @@ const codexDraftKey = 'made-solid-codex-draft-v1';
 const maximumPhotoBytes = 15 * 1024 * 1024;
 const supportedPhotoTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
+function RuntimeAttachmentImage({ attachmentId, alt }: { attachmentId: string; alt: string }) {
+  const directSource = `${codexAttachmentPrefix}${attachmentId}`;
+  const [source, setSource] = useState(
+    !isSupabaseConfigured || usesLocalStorage ? directSource : undefined,
+  );
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || usesLocalStorage) return;
+    let active = true;
+    let objectUrl: string | undefined;
+    void studioRuntimeFetch(directSource)
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Attachment unavailable.');
+        objectUrl = URL.createObjectURL(await response.blob());
+        if (active) setSource(objectUrl);
+      })
+      .catch(() => {
+        if (active) setSource(undefined);
+      });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [directSource]);
+
+  return source ? <img alt={alt} className="codex-chat-message__attachment" src={source} /> : null;
+}
+
 type CodexPreferences = {
   modelId: string;
   effortByModel: Record<string, string>;
+  workMode: 'direct' | 'team';
 };
 
 function readCodexPreferences(): CodexPreferences {
-  if (typeof window === 'undefined') return { modelId: '', effortByModel: {} };
+  if (typeof window === 'undefined') return { modelId: '', effortByModel: {}, workMode: 'team' };
   try {
     const stored = JSON.parse(
       window.localStorage.getItem(codexPreferencesKey) || '{}',
@@ -131,10 +200,198 @@ function readCodexPreferences(): CodexPreferences {
         stored.effortByModel && typeof stored.effortByModel === 'object'
           ? stored.effortByModel
           : {},
+      workMode: stored.workMode === 'direct' ? 'direct' : 'team',
     };
   } catch {
-    return { modelId: '', effortByModel: {} };
+    return { modelId: '', effortByModel: {}, workMode: 'team' };
   }
+}
+
+function agentStatusPresentation(status: CodexAgentStatus) {
+  if (status === 'running') return { label: 'Working', tone: 'working' } as const;
+  if (status === 'pendingInit') return { label: 'Starting', tone: 'pending' } as const;
+  if (status === 'completed') return { label: 'Complete', tone: 'complete' } as const;
+  if (status === 'interrupted') return { label: 'Interrupted', tone: 'warning' } as const;
+  if (status === 'errored' || status === 'notFound')
+    return { label: 'Needs attention', tone: 'danger' } as const;
+  return { label: 'Stopped', tone: 'muted' } as const;
+}
+
+function agentName(agent: CodexAgent, index: number) {
+  const role = agent.role?.replaceAll('_', ' ').trim();
+  if (role) return role.charAt(0).toUpperCase() + role.slice(1);
+  return agent.name?.trim() || agent.nickname?.trim() || `Agent ${index + 1}`;
+}
+
+function AgentTeamPanel({
+  agents,
+  clock,
+  expandedAgentId,
+  onExpandedAgentChange,
+  resumingAgentIds,
+  resumeState,
+  supervisorWorking,
+  teamKey,
+  teamLabel,
+}: {
+  agents: CodexAgent[];
+  clock: number;
+  expandedAgentId: string;
+  onExpandedAgentChange: (agentId: string) => void;
+  resumingAgentIds: Set<string>;
+  resumeState?: TeamResumeState;
+  supervisorWorking: boolean;
+  teamKey: string;
+  teamLabel: string;
+}) {
+  const activeAgents = agents.filter((agent) => agent.working);
+  const completedAgents = agents.filter((agent) => agent.status === 'completed').length;
+  const teamAgentIds = new Set(agents.map((agent) => agent.id));
+  const teamResumeState =
+    resumeState &&
+    [...resumeState.agentIds, ...resumeState.failedAgentIds].some((id) => teamAgentIds.has(id))
+      ? resumeState
+      : undefined;
+  const titleId = `codex-agent-team-title-${teamKey.replace(/[^A-Za-z0-9_-]/g, '-')}`;
+
+  return (
+    <section aria-label={teamLabel} className="codex-agent-team">
+      <header className="codex-agent-team__header">
+        <span aria-hidden="true" className="codex-agent-team__icon">
+          <UsersRound size={17} />
+        </span>
+        <span className="codex-agent-team__summary">
+          <strong id={titleId}>{teamLabel}</strong>
+          <small aria-live="polite">
+            {teamResumeState?.agentIds.length
+              ? `${teamResumeState.agentIds.length} interrupted ${teamResumeState.agentIds.length === 1 ? 'agent is' : 'agents are'} resuming`
+              : activeAgents.length
+                ? `${activeAgents.length} working in parallel`
+                : supervisorWorking
+                  ? 'Supervisor synthesizing results'
+                  : `${completedAgents} of ${agents.length} complete`}
+          </small>
+        </span>
+        <span className="codex-agent-team__count">
+          {completedAgents}/{agents.length}
+        </span>
+      </header>
+      {teamResumeState ? (
+        <div
+          className={`codex-agent-team__resume${teamResumeState.failedAgentIds.length ? ' has-failure' : ''}`}
+          role={teamResumeState.failedAgentIds.length ? 'alert' : 'status'}
+        >
+          {teamResumeState.agentIds.length ? (
+            <LoaderCircle aria-hidden="true" className="is-spinning" size={16} />
+          ) : (
+            <CircleAlert aria-hidden="true" size={16} />
+          )}
+          <span>
+            <strong>
+              {teamResumeState.agentIds.length
+                ? 'Resuming interrupted agents'
+                : 'Some agents need attention'}
+            </strong>
+            <small>
+              {teamResumeState.agentIds.length
+                ? `${teamResumeState.agentIds.length} ${teamResumeState.agentIds.length === 1 ? 'assignment is' : 'assignments are'} continuing from saved sub-chats.`
+                : ''}
+              {teamResumeState.failedAgentIds.length
+                ? ` ${teamResumeState.failedAgentIds.length} ${teamResumeState.failedAgentIds.length === 1 ? 'agent could' : 'agents could'} not be restarted.`
+                : ''}
+            </small>
+          </span>
+        </div>
+      ) : null}
+      <div className="codex-agent-team__list">
+        {agents.map((agent, index) => {
+          const expanded = expandedAgentId === agent.id;
+          const agentIsResuming = resumingAgentIds.has(agent.id);
+          const presentation = agentIsResuming
+            ? ({ label: 'Resuming', tone: 'working' } as const)
+            : agentStatusPresentation(agent.status);
+          const agentPanelId = `codex-agent-${agent.id}`;
+          return (
+            <article className="codex-agent-card" data-depth={agent.depth} key={agent.id}>
+              <Button
+                aria-controls={agentPanelId}
+                aria-expanded={expanded}
+                className="codex-agent-card__trigger"
+                onClick={() => onExpandedAgentChange(expanded ? '' : agent.id)}
+                variant="quiet"
+              >
+                <span
+                  aria-hidden="true"
+                  className={`codex-agent-card__state codex-agent-card__state--${presentation.tone}`}
+                >
+                  {agent.status === 'running' || agentIsResuming ? (
+                    <LoaderCircle className="is-spinning" size={15} />
+                  ) : agent.status === 'completed' ? (
+                    <CircleCheck size={15} />
+                  ) : agent.status === 'pendingInit' ? (
+                    <CircleDot size={15} />
+                  ) : (
+                    <CircleX size={15} />
+                  )}
+                </span>
+                <span className="codex-agent-card__copy">
+                  <span>
+                    <strong>{agentName(agent, index)}</strong>
+                    {agent.nickname && agent.role ? <small>{agent.nickname}</small> : null}
+                  </span>
+                  <small>{agent.task || 'Preparing an assigned task…'}</small>
+                </span>
+                <span className="codex-agent-card__meta">
+                  <strong>{presentation.label}</strong>
+                  <small>
+                    {agent.working
+                      ? elapsedTime(agent.workingStartedAt ?? agent.createdAt, clock)
+                      : 'View chat'}
+                  </small>
+                </span>
+                <ChevronDown
+                  aria-hidden="true"
+                  className={expanded ? 'is-expanded' : undefined}
+                  size={15}
+                />
+              </Button>
+              {expanded ? (
+                <div className="codex-agent-card__detail" id={agentPanelId}>
+                  <div className="codex-agent-card__assignment">
+                    <GitBranch aria-hidden="true" size={14} />
+                    <span>
+                      <strong>Assignment</strong>
+                      <small>{agent.task || 'Waiting for the supervisor.'}</small>
+                    </span>
+                  </div>
+                  {agent.messages.length ? (
+                    <div
+                      aria-label={`${agentName(agent, index)} sub-chat`}
+                      className="codex-agent-card__messages"
+                    >
+                      {agent.messages.map((message) => (
+                        <div
+                          className={`codex-agent-card__message codex-agent-card__message--${message.role}`}
+                          key={message.id}
+                        >
+                          <strong>
+                            {message.role === 'user' ? 'Supervisor' : agentName(agent, index)}
+                          </strong>
+                          <MarkdownContent>{message.text}</MarkdownContent>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="codex-agent-card__empty">The sub-chat is starting.</p>
+                  )}
+                </div>
+              ) : null}
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
 }
 
 function readCodexDraft() {
@@ -378,6 +635,9 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   const [effortPreferences, setEffortPreferences] = useState(
     () => readCodexPreferences().effortByModel,
   );
+  const [workMode, setWorkMode] = useState<'direct' | 'team'>(
+    () => readCodexPreferences().workMode,
+  );
   const [selectedThreadId, setSelectedThreadId] = useState('');
   const [conversationPickerOpen, setConversationPickerOpen] = useState(false);
   const selectedThreadIdRef = useRef('');
@@ -404,11 +664,14 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   const [queueActionError, setQueueActionError] = useState('');
   const [isCreatingThread, setIsCreatingThread] = useState(false);
   const [isResumingThread, setIsResumingThread] = useState(false);
+  const [teamResumeState, setTeamResumeState] = useState<TeamResumeState>();
   const [workspaceCaptureContext, setWorkspaceCaptureContext] = useState<WorkspaceCaptureContext>();
   const [captureDetail, setCaptureDetail] = useState('');
   const [isChatFollowingLatest, setIsChatFollowingLatest] = useState(true);
   const [isComposerExpanded, setIsComposerExpanded] = useState(false);
+  const [composerSettingsOpen, setComposerSettingsOpen] = useState(false);
   const [isPreparingPhoto, setIsPreparingPhoto] = useState(false);
+  const [expandedAgentId, setExpandedAgentId] = useState('');
 
   const updateChatFollowingLatest = useCallback((following: boolean) => {
     chatFollowingLatestRef.current = following;
@@ -441,6 +704,8 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
       selectedThreadIdRef.current = threadId;
       setSelectedThreadId(threadId);
       setConversationPickerOpen(false);
+      setExpandedAgentId('');
+      setTeamResumeState(undefined);
       updateChatFollowingLatest(true);
     },
     [updateChatFollowingLatest],
@@ -451,7 +716,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
       const requestedThreadId = threadIdOverride ?? selectedThreadIdRef.current;
       try {
         const query = requestedThreadId ? `?threadId=${encodeURIComponent(requestedThreadId)}` : '';
-        const response = await fetch(`${statusEndpoint}${query}`, {
+        const response = await studioRuntimeFetch(`${statusEndpoint}${query}`, {
           headers: { Accept: 'application/json' },
         });
         if (
@@ -582,7 +847,50 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
     if (pendingVisualAccepted) setPendingVisualMessage(undefined);
   }, [pendingVisualAccepted]);
 
-  const isCodexWorking = status?.thread?.working === true;
+  const activeAgents = status?.agents?.filter((agent) => agent.working) ?? [];
+  const interruptedAgents = status?.agents?.filter((agent) => agent.status === 'interrupted') ?? [];
+  const completedAgents =
+    status?.agents?.filter((agent) => agent.status === 'completed').length ?? 0;
+  const selectedTeamResumeState =
+    teamResumeState?.threadId === (selectedThreadId || status?.thread?.id)
+      ? teamResumeState
+      : undefined;
+  const resumingAgentIds = new Set(selectedTeamResumeState?.agentIds ?? []);
+  const isTeamResumePending = Boolean(selectedTeamResumeState?.agentIds.length);
+  const agentTeamsAfterMessage = useMemo(() => {
+    const messages = status?.messages ?? [];
+    const lastMessageByTurn = new Map<string, string>();
+    for (const message of messages) {
+      if (message.turnId) lastMessageByTurn.set(message.turnId, message.id);
+    }
+    const fallbackMessageId =
+      messages.find((message) => message.role === 'assistant')?.id ?? messages[0]?.id;
+    const teamsByTurn = new Map<string, CodexAgent[]>();
+    for (const agent of status?.agents ?? []) {
+      const teamKey = agent.supervisorTurnId || '__legacy-agent-team__';
+      teamsByTurn.set(teamKey, [...(teamsByTurn.get(teamKey) ?? []), agent]);
+    }
+    const teamsByMessage = new Map<
+      string,
+      Array<{ key: string; label: string; agents: CodexAgent[] }>
+    >();
+    let teamNumber = 0;
+    for (const [key, agents] of teamsByTurn) {
+      const messageId = lastMessageByTurn.get(key) || fallbackMessageId;
+      if (!messageId) continue;
+      teamNumber += 1;
+      teamsByMessage.set(messageId, [
+        ...(teamsByMessage.get(messageId) ?? []),
+        {
+          key,
+          label: teamsByTurn.size > 1 ? `Agent team ${teamNumber}` : 'Agent team',
+          agents,
+        },
+      ]);
+    }
+    return teamsByMessage;
+  }, [status?.agents, status?.messages]);
+  const isCodexWorking = status?.thread?.working === true || activeAgents.length > 0;
   const anyConversationWorking = status?.threads.some((thread) => thread.working) === true;
   const queuedCount = status?.queuedCount ?? 0;
   const interruptingCount = status?.interruptingCount ?? 0;
@@ -674,15 +982,16 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
       JSON.stringify({
         modelId: selectedModelId,
         effortByModel: { ...effortPreferences, [selectedModelId]: selectedEffort },
+        workMode,
       } satisfies CodexPreferences),
     );
-  }, [effortPreferences, selectedEffort, selectedModelId]);
+  }, [effortPreferences, selectedEffort, selectedModelId, workMode]);
 
   const discardEmptyConversation = async (threadId: string) => {
     const candidate = status?.threads.find((thread) => thread.id === threadId);
     if (!threadId || !candidate?.discardable) return;
     try {
-      const response = await fetch(feedbackEndpoint, {
+      const response = await studioRuntimeFetch(feedbackEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ action: 'delete-empty-thread', threadId }),
@@ -709,7 +1018,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
     setError(undefined);
     try {
       await discardEmptyConversation(selectedThreadId || status?.thread?.id || '');
-      const response = await fetch(feedbackEndpoint, {
+      const response = await studioRuntimeFetch(feedbackEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({
@@ -736,6 +1045,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                 ...current.threads.filter((thread) => thread.id !== newThread.id),
               ],
               messages: [],
+              agents: [],
               queuedCount: 0,
               interruptingCount: 0,
               queuedMessages: [],
@@ -754,11 +1064,27 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   };
 
   const continueInterruptedConversation = async () => {
-    if (!selectedThread?.id || !selectedModel || !selectedEffort || isResumingThread) return;
+    if (
+      !selectedThread?.id ||
+      !selectedModel ||
+      !selectedEffort ||
+      isResumingThread ||
+      isTeamResumePending
+    )
+      return;
     setIsResumingThread(true);
+    setTeamResumeState(
+      interruptedAgents.length
+        ? {
+            threadId: selectedThread.id,
+            agentIds: interruptedAgents.map((agent) => agent.id),
+            failedAgentIds: [],
+          }
+        : undefined,
+    );
     setError(undefined);
     try {
-      const response = await fetch(feedbackEndpoint, {
+      const response = await studioRuntimeFetch(feedbackEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({
@@ -768,13 +1094,28 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
           effort: selectedEffort,
         }),
       });
-      const result = (await response.json()) as { detail?: string };
+      const result = (await response.json()) as {
+        detail?: string;
+        resumeRequestedAgents?: Array<{ id: string; name: string }>;
+        resumedAgents?: Array<{ id: string; name: string }>;
+        agentResumeFailures?: Array<{ id: string; detail: string }>;
+      };
       if (!response.ok) {
         throw new Error(result.detail || 'The interrupted conversation could not be resumed.');
       }
+      const resumedAgentIds = (result.resumeRequestedAgents ?? result.resumedAgents ?? []).map(
+        (agent) => agent.id,
+      );
+      const failedAgentIds = (result.agentResumeFailures ?? []).map((agent) => agent.id);
+      setTeamResumeState(
+        resumedAgentIds.length || failedAgentIds.length
+          ? { threadId: selectedThread.id, agentIds: resumedAgentIds, failedAgentIds }
+          : undefined,
+      );
       await refreshStatus(selectedThread.id);
       scrollChatToLatest();
     } catch (cause) {
+      setTeamResumeState(undefined);
       setError(
         cause instanceof Error
           ? cause.message
@@ -784,6 +1125,21 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
       setIsResumingThread(false);
     }
   };
+
+  useEffect(() => {
+    if (!teamResumeState || teamResumeState.threadId !== selectedThread?.id) return;
+    setTeamResumeState((current) => {
+      if (!current || current.threadId !== selectedThread.id) return current;
+      const stillResuming = current.agentIds.filter(
+        (agentId) => status?.agents.find((agent) => agent.id === agentId)?.status === 'interrupted',
+      );
+      if (stillResuming.length === current.agentIds.length) return current;
+      if (stillResuming.length || current.failedAgentIds.length) {
+        return { ...current, agentIds: stillResuming };
+      }
+      return undefined;
+    });
+  }, [selectedThread?.id, status?.agents, teamResumeState?.threadId]);
 
   const beginCapture = async (preferCurrentTab = false) => {
     setError(undefined);
@@ -842,7 +1198,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
         viewportWidth: window.innerWidth,
         viewportHeight: window.innerHeight,
       };
-      const response = await fetch(localPageCaptureEndpoint, {
+      const response = await studioRuntimeFetch(localPageCaptureEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({
@@ -1014,7 +1370,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
     setQueueActionId(id);
     setQueueActionError('');
     try {
-      const response = await fetch(feedbackEndpoint, {
+      const response = await studioRuntimeFetch(feedbackEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ action, id, prompt: queuedPrompt }),
@@ -1055,7 +1411,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
     setPhase(kind === 'visual' ? 'sending' : 'sending-chat');
     setError(undefined);
     try {
-      const response = await fetch(feedbackEndpoint, {
+      const response = await studioRuntimeFetch(feedbackEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({
@@ -1063,6 +1419,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
           prompt: submittedPrompt,
           model: selectedModel.id,
           effort: selectedEffort,
+          workMode,
           context: `${document.title} · ${window.location.href}`,
           threadId: selectedThreadId || status?.thread?.id,
         }),
@@ -1147,10 +1504,16 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
               triggerRef.current?.focus();
             }}
             onEscapeKeyDown={(event) => {
-              if (!conversationPickerOpen) return;
-              event.preventDefault();
-              setConversationPickerOpen(false);
-              window.requestAnimationFrame(() => conversationTriggerRef.current?.focus());
+              if (conversationPickerOpen) {
+                event.preventDefault();
+                setConversationPickerOpen(false);
+                window.requestAnimationFrame(() => conversationTriggerRef.current?.focus());
+                return;
+              }
+              if (composerSettingsOpen) {
+                event.preventDefault();
+                setComposerSettingsOpen(false);
+              }
             }}
           >
             <header className="codex-feedback-dialog__header">
@@ -1159,23 +1522,31 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                   <Bot size={20} />
                 </span>
                 <div>
-                  <Dialog.Title>Codex</Dialog.Title>
+                  <Dialog.Title>
+                    Codex <span aria-hidden="true">Workspace Agent</span>
+                  </Dialog.Title>
                   <div className="codex-feedback-dialog__status">
                     <span
                       aria-hidden="true"
                       className={status?.status === 'ready' ? 'is-ready' : ''}
                     />
-                    <span>{status?.thread ? 'Connected to tmux' : 'Waiting for tmux'}</span>
+                    <span>
+                      {status?.thread
+                        ? 'ChatGPT subscription · connected'
+                        : 'ChatGPT subscription · waiting'}
+                    </span>
                     <StatusBadge tone={status?.thread ? 'success' : 'warning'}>
-                      {status?.thread?.working
-                        ? 'Working'
-                        : status?.queuedCount
-                          ? `${status.queuedCount} queued`
-                          : status?.thread?.interrupted
-                            ? 'Interrupted'
-                            : status?.thread
-                              ? 'Ready'
-                              : 'Waiting'}
+                      {activeAgents.length
+                        ? `${activeAgents.length} agent${activeAgents.length === 1 ? '' : 's'}`
+                        : status?.thread?.working
+                          ? 'Working'
+                          : status?.queuedCount
+                            ? `${status.queuedCount} queued`
+                            : status?.thread?.interrupted
+                              ? 'Interrupted'
+                              : status?.thread
+                                ? 'Ready'
+                                : 'Waiting'}
                     </StatusBadge>
                   </div>
                 </div>
@@ -1188,26 +1559,15 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
             </header>
 
             <Dialog.Description className="sr-only" id="codex-feedback-description">
-              Chat with the selected tmux Codex conversation and optionally attach a photo or
+              Chat with the subscription-only Codex Workspace Agent and optionally attach a photo or
               screenshot.
             </Dialog.Description>
 
             <div className="codex-thread-field">
               <div className="codex-thread-field__header">
-                <label htmlFor="codex-conversation">Conversation</label>
-                <Button
-                  disabled={!status?.thread || !selectedModel || isCreatingThread}
-                  onClick={() => void createConversation()}
-                  size="small"
-                  variant="quiet"
-                >
-                  {isCreatingThread ? (
-                    <LoaderCircle aria-hidden="true" className="is-spinning" size={14} />
-                  ) : (
-                    <Plus aria-hidden="true" size={14} />
-                  )}
-                  New chat
-                </Button>
+                <label className="sr-only" htmlFor="codex-conversation">
+                  Conversation
+                </label>
               </div>
               <div className="codex-conversation-picker" ref={conversationPickerRef}>
                 <Button
@@ -1242,6 +1602,19 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                     <ChevronDown aria-hidden="true" size={17} />
                   )}
                 </Button>
+                <IconButton
+                  className="codex-conversation-picker__new"
+                  disabled={!status?.thread || !selectedModel || isCreatingThread}
+                  label="New chat"
+                  onClick={() => void createConversation()}
+                  variant="quiet"
+                >
+                  {isCreatingThread ? (
+                    <LoaderCircle aria-hidden="true" className="is-spinning" size={16} />
+                  ) : (
+                    <Plus aria-hidden="true" size={17} />
+                  )}
+                </IconButton>
                 {conversationPickerOpen ? (
                   <div
                     aria-label="Available conversations"
@@ -1316,20 +1689,34 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
               >
                 {status?.messages.length
                   ? status.messages.map((message) => (
-                      <article
-                        className={`codex-chat-message codex-chat-message--${message.role}`}
-                        key={message.id}
-                      >
-                        <strong>{message.role === 'user' ? 'You' : 'Codex'}</strong>
-                        <MarkdownContent>{message.text}</MarkdownContent>
-                        {message.attachmentId ? (
-                          <img
-                            alt="Image attached to your message"
-                            className="codex-chat-message__attachment"
-                            src={`${codexAttachmentPrefix}${message.attachmentId}`}
+                      <Fragment key={message.id}>
+                        <article
+                          className={`codex-chat-message codex-chat-message--${message.role}`}
+                        >
+                          <strong>{message.role === 'user' ? 'You' : 'Codex'}</strong>
+                          <MarkdownContent>{message.text}</MarkdownContent>
+                          {message.attachmentId ? (
+                            <RuntimeAttachmentImage
+                              attachmentId={message.attachmentId}
+                              alt="Image attached to your message"
+                            />
+                          ) : null}
+                        </article>
+                        {(agentTeamsAfterMessage.get(message.id) ?? []).map((team) => (
+                          <AgentTeamPanel
+                            agents={team.agents}
+                            clock={clock}
+                            expandedAgentId={expandedAgentId}
+                            key={team.key}
+                            onExpandedAgentChange={setExpandedAgentId}
+                            resumeState={selectedTeamResumeState}
+                            resumingAgentIds={resumingAgentIds}
+                            supervisorWorking={status.thread?.activeTurnId === team.key}
+                            teamKey={team.key}
+                            teamLabel={team.label}
                           />
-                        ) : null}
-                      </article>
+                        ))}
+                      </Fragment>
                     ))
                   : null}
                 {!status?.messages.length &&
@@ -1350,7 +1737,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                         <span>
                           {message.deliveryMode === 'interrupt'
                             ? 'Interrupting'
-                            : `Queued · ${message.position}`}
+                            : `${message.workMode === 'team' ? 'Agent team · ' : ''}Queued · ${message.position}`}
                         </span>
                         <ButtonGroup>
                           <Button
@@ -1421,10 +1808,9 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                         <MarkdownContent>{message.prompt}</MarkdownContent>
                       )}
                       {message.attachmentId ? (
-                        <img
+                        <RuntimeAttachmentImage
+                          attachmentId={message.attachmentId}
                           alt="Image attached to your queued message"
-                          className="codex-chat-message__attachment"
-                          src={`${codexAttachmentPrefix}${message.attachmentId}`}
                         />
                       ) : null}
                       {queueActionError && expandedQueueId === message.id ? (
@@ -1456,34 +1842,197 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                     />
                   </article>
                 ) : null}
+                {status?.agents?.length && !agentTeamsAfterMessage.size ? (
+                  <section aria-labelledby="codex-agent-team-title" className="codex-agent-team">
+                    <header className="codex-agent-team__header">
+                      <span aria-hidden="true" className="codex-agent-team__icon">
+                        <UsersRound size={17} />
+                      </span>
+                      <span className="codex-agent-team__summary">
+                        <strong id="codex-agent-team-title">Agent team</strong>
+                        <small aria-live="polite">
+                          {selectedTeamResumeState?.agentIds.length
+                            ? `${selectedTeamResumeState.agentIds.length} interrupted ${selectedTeamResumeState.agentIds.length === 1 ? 'agent is' : 'agents are'} resuming`
+                            : activeAgents.length
+                              ? `${activeAgents.length} working in parallel`
+                              : status.thread?.working
+                                ? 'Supervisor synthesizing results'
+                                : `${completedAgents} of ${status.agents.length} complete`}
+                        </small>
+                      </span>
+                      <span className="codex-agent-team__count">
+                        {completedAgents}/{status.agents.length}
+                      </span>
+                    </header>
+                    {selectedTeamResumeState ? (
+                      <div
+                        className={`codex-agent-team__resume${selectedTeamResumeState.failedAgentIds.length ? ' has-failure' : ''}`}
+                        role={selectedTeamResumeState.failedAgentIds.length ? 'alert' : 'status'}
+                      >
+                        {selectedTeamResumeState.agentIds.length ? (
+                          <LoaderCircle aria-hidden="true" className="is-spinning" size={16} />
+                        ) : (
+                          <CircleAlert aria-hidden="true" size={16} />
+                        )}
+                        <span>
+                          <strong>
+                            {selectedTeamResumeState.agentIds.length
+                              ? 'Resuming interrupted agents'
+                              : 'Some agents need attention'}
+                          </strong>
+                          <small>
+                            {selectedTeamResumeState.agentIds.length
+                              ? `${selectedTeamResumeState.agentIds.length} ${selectedTeamResumeState.agentIds.length === 1 ? 'assignment is' : 'assignments are'} continuing from saved sub-chats.`
+                              : ''}
+                            {selectedTeamResumeState.failedAgentIds.length
+                              ? ` ${selectedTeamResumeState.failedAgentIds.length} ${selectedTeamResumeState.failedAgentIds.length === 1 ? 'agent could' : 'agents could'} not be restarted.`
+                              : ''}
+                          </small>
+                        </span>
+                      </div>
+                    ) : null}
+                    <div className="codex-agent-team__list">
+                      {status.agents.map((agent, index) => {
+                        const expanded = expandedAgentId === agent.id;
+                        const agentIsResuming = resumingAgentIds.has(agent.id);
+                        const presentation = agentIsResuming
+                          ? ({ label: 'Resuming', tone: 'working' } as const)
+                          : agentStatusPresentation(agent.status);
+                        const agentPanelId = `codex-agent-${agent.id}`;
+                        return (
+                          <article
+                            className="codex-agent-card"
+                            data-depth={agent.depth}
+                            key={agent.id}
+                          >
+                            <Button
+                              aria-controls={agentPanelId}
+                              aria-expanded={expanded}
+                              className="codex-agent-card__trigger"
+                              onClick={() => setExpandedAgentId(expanded ? '' : agent.id)}
+                              variant="quiet"
+                            >
+                              <span
+                                aria-hidden="true"
+                                className={`codex-agent-card__state codex-agent-card__state--${presentation.tone}`}
+                              >
+                                {agent.status === 'running' || agentIsResuming ? (
+                                  <LoaderCircle className="is-spinning" size={15} />
+                                ) : agent.status === 'completed' ? (
+                                  <CircleCheck size={15} />
+                                ) : agent.status === 'pendingInit' ? (
+                                  <CircleDot size={15} />
+                                ) : (
+                                  <CircleX size={15} />
+                                )}
+                              </span>
+                              <span className="codex-agent-card__copy">
+                                <span>
+                                  <strong>{agentName(agent, index)}</strong>
+                                  {agent.nickname && agent.role ? (
+                                    <small>{agent.nickname}</small>
+                                  ) : null}
+                                </span>
+                                <small>{agent.task || 'Preparing an assigned task…'}</small>
+                              </span>
+                              <span className="codex-agent-card__meta">
+                                <strong>{presentation.label}</strong>
+                                <small>
+                                  {agent.working
+                                    ? elapsedTime(agent.workingStartedAt ?? agent.createdAt, clock)
+                                    : 'View chat'}
+                                </small>
+                              </span>
+                              <ChevronDown
+                                aria-hidden="true"
+                                className={expanded ? 'is-expanded' : undefined}
+                                size={15}
+                              />
+                            </Button>
+                            {expanded ? (
+                              <div className="codex-agent-card__detail" id={agentPanelId}>
+                                <div className="codex-agent-card__assignment">
+                                  <GitBranch aria-hidden="true" size={14} />
+                                  <span>
+                                    <strong>Assignment</strong>
+                                    <small>{agent.task || 'Waiting for the supervisor.'}</small>
+                                  </span>
+                                </div>
+                                {agent.messages.length ? (
+                                  <div
+                                    aria-label={`${agentName(agent, index)} sub-chat`}
+                                    className="codex-agent-card__messages"
+                                  >
+                                    {agent.messages.map((message) => (
+                                      <div
+                                        className={`codex-agent-card__message codex-agent-card__message--${message.role}`}
+                                        key={message.id}
+                                      >
+                                        <strong>
+                                          {message.role === 'user'
+                                            ? 'Supervisor'
+                                            : agentName(agent, index)}
+                                        </strong>
+                                        <MarkdownContent>{message.text}</MarkdownContent>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="codex-agent-card__empty">
+                                    The sub-chat is starting.
+                                  </p>
+                                )}
+                              </div>
+                            ) : null}
+                          </article>
+                        );
+                      })}
+                    </div>
+                  </section>
+                ) : null}
                 {isInterrupted && !isCodexWorking ? (
                   <div className="codex-interrupted-status" role="status">
                     <span aria-hidden="true" className="codex-working-status__icon">
-                      <CircleAlert size={17} />
+                      {isTeamResumePending ? (
+                        <LoaderCircle className="is-spinning" size={17} />
+                      ) : (
+                        <CircleAlert size={17} />
+                      )}
                     </span>
                     <span className="codex-working-status__copy">
-                      <strong>Work was interrupted</strong>
+                      <strong>
+                        {isTeamResumePending ? 'Work is resuming' : 'Work was interrupted'}
+                      </strong>
                       <small>
-                        The Codespace paused before Codex finished. The saved transcript and edits
-                        are still available.
+                        {isTeamResumePending
+                          ? `The supervisor is restarting ${selectedTeamResumeState?.agentIds.length} interrupted attached ${selectedTeamResumeState?.agentIds.length === 1 ? 'agent' : 'agents'} from ${selectedTeamResumeState?.agentIds.length === 1 ? 'its' : 'their'} saved sub-chats.`
+                          : `The Codespace paused before Codex finished. The saved transcript and edits are still available.${
+                              interruptedAgents.length
+                                ? ` ${interruptedAgents.length} interrupted attached ${interruptedAgents.length === 1 ? 'agent will' : 'agents will'} resume from ${interruptedAgents.length === 1 ? 'its' : 'their'} saved sub-chats too.`
+                                : ''
+                            }`}
                       </small>
                     </span>
                     <Button
-                      disabled={isResumingThread || !selectedModel || !selectedEffort}
+                      disabled={
+                        isResumingThread || isTeamResumePending || !selectedModel || !selectedEffort
+                      }
                       onClick={() => void continueInterruptedConversation()}
                       size="small"
                       variant="secondary"
                     >
-                      {isResumingThread ? (
+                      {isResumingThread || isTeamResumePending ? (
                         <LoaderCircle aria-hidden="true" className="is-spinning" size={15} />
                       ) : (
                         <RotateCcw aria-hidden="true" size={15} />
                       )}
-                      {isResumingThread ? 'Resuming…' : 'Continue'}
+                      {isResumingThread || isTeamResumePending
+                        ? 'Work resuming…'
+                        : 'Resume working'}
                     </Button>
                   </div>
                 ) : null}
-                {isCodexWorking || queuedCount ? (
+                {(isCodexWorking && !status?.agents?.length) || queuedCount ? (
                   <div className="codex-working-status">
                     <span className="sr-only" role="status">
                       {isCodexWorking
@@ -1503,9 +2052,11 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                         {isCodexWorking
                           ? interruptingCount
                             ? workingDetail
-                            : queuedCount
-                              ? `${queuedCount} ${queuedCount === 1 ? 'request' : 'requests'} queued next`
-                              : workingDetail
+                            : activeAgents.length
+                              ? `${activeAgents.length} agent${activeAgents.length === 1 ? '' : 's'} working in parallel`
+                              : queuedCount
+                                ? `${queuedCount} ${queuedCount === 1 ? 'request' : 'requests'} queued next`
+                                : workingDetail
                           : `${queuedCount} ${queuedCount === 1 ? 'request' : 'requests'} queued`}
                       </small>
                     </span>
@@ -1543,7 +2094,12 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                     if (!prompt.trim() || !chatFollowingLatestRef.current)
                       setIsComposerExpanded(false);
                   }}
-                  onFocus={() => setIsComposerExpanded(true)}
+                  onFocus={() => {
+                    setIsComposerExpanded(true);
+                    if (chatFollowingLatestRef.current) {
+                      window.requestAnimationFrame(scrollChatToLatest);
+                    }
+                  }}
                   placeholder="Ask Codex to build, change, check, or explain…"
                   ref={composerTextareaRef}
                   rows={isComposerExpanded ? 3 : 1}
@@ -1597,7 +2153,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                 >
                   <MonitorUp aria-hidden="true" size={18} />
                 </IconButton>
-                <span aria-live="polite">
+                <span className="sr-only" aria-live="polite">
                   {isPreparingPhoto
                     ? 'Preparing photo…'
                     : `${prompt ? 'Draft saved · ' : ''}${
@@ -1610,55 +2166,17 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                               : 'Mobile screen capture ready'
                       }`}
                 </span>
-                <small>{prompt.length.toLocaleString()} / 4,000</small>
-              </div>
-
-              {error ? (
-                <p className="codex-feedback-error" role="alert">
-                  <CircleAlert aria-hidden="true" size={18} />
-                  {error}
-                </p>
-              ) : null}
-
-              <footer className="codex-composer-footer">
-                <div className="codex-chat-configuration">
-                  <label className="codex-model-field">
-                    <span>Model</span>
-                    <select
-                      disabled={!status?.thread}
-                      onChange={(event) => {
-                        const model = availableModels.find(
-                          (candidate) => candidate.id === event.target.value,
-                        );
-                        if (model) chooseModel(model);
-                      }}
-                      value={selectedModelId}
-                    >
-                      {availableModels.map((model) => (
-                        <option key={model.id} value={model.id}>
-                          {model.label}
-                          {model.supportsImages ? '' : ' · text only'}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  {selectedModel?.efforts.length ? (
-                    <label className="codex-effort-field">
-                      <span>Reasoning</span>
-                      <select
-                        onChange={(event) => chooseEffort(selectedModel.id, event.target.value)}
-                        value={modelEffort(selectedModel, selectedEffort)}
-                      >
-                        {selectedModel.efforts.map((effort) => (
-                          <option key={effort.id} value={effort.id}>
-                            {effort.id.charAt(0).toUpperCase() + effort.id.slice(1)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
-                </div>
+                <small className="sr-only">{prompt.length.toLocaleString()} / 4,000</small>
+                <IconButton
+                  aria-controls="codex-composer-settings"
+                  aria-expanded={composerSettingsOpen}
+                  className={composerSettingsOpen ? 'is-active' : ''}
+                  label="Chat settings"
+                  onClick={() => setComposerSettingsOpen((open) => !open)}
+                  variant="quiet"
+                >
+                  <SlidersHorizontal aria-hidden="true" size={18} />
+                </IconButton>
                 <IconButton
                   disabled={
                     phase === 'sending-chat' || !status?.thread || !selectedModel || !prompt.trim()
@@ -1679,7 +2197,86 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                     <Send aria-hidden="true" size={18} />
                   )}
                 </IconButton>
-              </footer>
+              </div>
+
+              {error ? (
+                <p className="codex-feedback-error" role="alert">
+                  <CircleAlert aria-hidden="true" size={18} />
+                  {error}
+                </p>
+              ) : null}
+
+              {composerSettingsOpen ? (
+                <div
+                  aria-label="Chat settings"
+                  className="codex-composer-settings"
+                  id="codex-composer-settings"
+                  role="group"
+                >
+                  <Button
+                    aria-pressed={workMode === 'team'}
+                    className={`codex-agent-mode${workMode === 'team' ? ' is-active' : ''}`}
+                    disabled={phase === 'sending-chat'}
+                    onClick={() =>
+                      setWorkMode((current) => (current === 'team' ? 'direct' : 'team'))
+                    }
+                    variant="quiet"
+                  >
+                    <UsersRound aria-hidden="true" size={17} />
+                    <span className="codex-agent-mode__copy">
+                      <strong>Agent team</strong>
+                      <small>
+                        {workMode === 'team'
+                          ? 'Codex can delegate independent work in parallel'
+                          : 'Use one Codex agent for this request'}
+                      </small>
+                    </span>
+                    <span aria-hidden="true" className="codex-agent-mode__state">
+                      {workMode === 'team' ? 'On' : 'Off'}
+                    </span>
+                  </Button>
+                  <footer className="codex-composer-footer">
+                    <div className="codex-chat-configuration">
+                      <label className="codex-model-field">
+                        <span>Model</span>
+                        <select
+                          disabled={!status?.thread}
+                          onChange={(event) => {
+                            const model = availableModels.find(
+                              (candidate) => candidate.id === event.target.value,
+                            );
+                            if (model) chooseModel(model);
+                          }}
+                          value={selectedModelId}
+                        >
+                          {availableModels.map((model) => (
+                            <option key={model.id} value={model.id}>
+                              {model.label}
+                              {model.supportsImages ? '' : ' · text only'}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      {selectedModel?.efforts.length ? (
+                        <label className="codex-effort-field">
+                          <span>Reasoning</span>
+                          <select
+                            onChange={(event) => chooseEffort(selectedModel.id, event.target.value)}
+                            value={modelEffort(selectedModel, selectedEffort)}
+                          >
+                            {selectedModel.efforts.map((effort) => (
+                              <option key={effort.id} value={effort.id}>
+                                {effort.id.charAt(0).toUpperCase() + effort.id.slice(1)}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      ) : null}
+                    </div>
+                  </footer>
+                </div>
+              ) : null}
             </section>
           </Dialog.Content>
         </Dialog.Portal>

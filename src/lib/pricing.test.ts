@@ -69,13 +69,33 @@ function manifest(
 }
 
 describe('build pricing', () => {
-  it('starts a preview-first build at $6,900 with a 50% opening payment', () => {
+  it('starts a preview-first build at $6,900 with fixed client choices', () => {
     const result = calculateBuildPricing(manifest(), defaultPricingOptions);
     expect(result.subtotalCents).toBe(690_000);
     expect(result.totalCents).toBe(690_000);
-    expect(result.depositCents).toBe(345_000);
-    expect(result.balanceCents).toBe(345_000);
+    expect(result.depositCents).toBe(276_000);
+    expect(result.balanceCents).toBe(414_000);
+    expect(result.schemaVersion).toBe(3);
+    expect(result.offerChoices.map((offer) => offer.kind)).toEqual([
+      'milestones',
+      'outright',
+      'managed',
+      'essentials',
+    ]);
+    expect(result.offerChoices.find((offer) => offer.kind === 'managed')).toMatchObject({
+      setupCents: 99_000,
+      recurringMonths: 24,
+    });
     expect(result.reviewRequired).toBe(false);
+  });
+
+  it('uses scale-aware route pricing and keeps the automatic cold offer below $9,900', () => {
+    const result = calculateBuildPricing(manifest({ pages: 47, uniquePageTypes: true }));
+    expect(result.lineItems.find((item) => item.id === 'additional-core-pages')?.quantity).toBe(12);
+    expect(result.fullScopeValueCents).toBeGreaterThan(result.totalCents);
+    expect(result.subtotalCents).toBe(990_000);
+    expect(result.automaticOfferCeilingCents).toBe(990_000);
+    expect(result.lineItems.map((item) => item.id)).toContain('cold-prospect-launch-credit');
   });
 
   it('derives pages, unique systems, capabilities, runtime and GST from reviewed scope', () => {

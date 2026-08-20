@@ -29,7 +29,7 @@ test('moves only an exact committed edit through a protected persisted handoff',
   assert.match(app, /sourceCommit: state\.commit/);
   assert.match(app, /madeSolidHandoffWorkerSource/);
   assert.match(app, /Made Solid handoff worker/);
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.88`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.89`/);
   assert.match(app, /capturedPublicEmail\(workspace\.researchPacket\)/);
   assert.match(app, /Prefilled from the public email captured in this Research Packet/);
   assert.match(domain, /type MadeSolidHandoffStatus = 'queued' \| 'running' \| 'ready'/);

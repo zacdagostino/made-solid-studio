@@ -20,6 +20,7 @@ import {
   FileCode2,
   FilePenLine,
   FileImage,
+  FileSearch,
   FileText,
   FolderTree,
   FormInput,
@@ -29,6 +30,7 @@ import {
   LayoutDashboard,
   Laptop,
   LoaderCircle,
+  Mail,
   PackageCheck,
   Play,
   Plus,
@@ -81,6 +83,10 @@ import { AgentArchitectureOverview } from './components/AgentArchitectureOvervie
 import { MarkdownContent } from './components/MarkdownContent';
 import { TaxExpensesPage } from './components/TaxExpensesPage';
 import { PricingCalculator } from './components/PricingCalculator';
+import { OutreachReadinessPanel } from './components/OutreachReadinessPanel';
+import { ClientEmailDesk } from './components/ClientEmailDesk';
+import { AuditReportPanel } from './components/AuditReportPanel';
+import { ClientReportPreview } from './components/ClientReportPreview';
 import {
   Button,
   ButtonGroup,
@@ -95,12 +101,15 @@ import {
   type ToastNotice,
 } from './components/ui';
 import type { PricingQuoteSnapshot, PricingSourceScope } from './lib/pricing';
+import { confirmOpenAiApiUsage, openAiApiFeaturesEnabled } from './lib/ai-billing';
 import {
   isOpenTask,
   stageLabels,
   type Audit,
   type Business,
   type AuditFinding,
+  type AuditObservation,
+  type AuditSpecialistTask,
   type AssetAnnotation,
   type AssetAnalysisStatus,
   type AiUsageRecord,
@@ -120,6 +129,7 @@ import {
   type BuilderEvent,
   type ClientPreviewPublicationInput,
   type MadeSolidHandoffInput,
+  type OutreachComplianceInput,
   type GithubWorkspacePublication,
   type GithubWorkspacePublicationInput,
   type CapturedPage,
@@ -141,6 +151,7 @@ import { brandColourEvidenceSummary, rankBrandColourEvidence } from './lib/brand
 import { detectCapabilities } from './lib/capability-inventory';
 import { siteforgeRepository, type WorkspaceRepository } from './lib/repository';
 import { getSupabaseClient, isSupabaseConfigured, usesLocalStorage } from './lib/supabase';
+import { studioRuntimeFetch } from './lib/studio-runtime';
 import {
   clearWorkspaceCache,
   readWorkspaceCache,
@@ -149,6 +160,7 @@ import {
 
 type WorkspaceTab =
   | 'overview'
+  | 'email'
   | 'research'
   | 'packet'
   | 'assets'
@@ -158,6 +170,7 @@ type WorkspaceTab =
   | 'editing'
   | 'handoff'
   | 'report'
+  | 'report-preview'
   | 'activity';
 type AgentStudioSection = 'refine' | 'learning' | 'agent' | 'versions';
 type Route =
@@ -179,6 +192,7 @@ function studioPreviewUrl(source: string) {
 
 const workspaceTabs = [
   { id: 'overview' as const, label: 'Overview', icon: LayoutDashboard },
+  { id: 'email' as const, label: 'Email desk', icon: Mail },
   { id: 'research' as const, label: 'Research', icon: Search },
   { id: 'packet' as const, label: 'Packet', icon: ClipboardCheck },
   { id: 'assets' as const, label: 'Assets', icon: FileImage },
@@ -188,6 +202,7 @@ const workspaceTabs = [
   { id: 'handoff' as const, label: 'Made Solid handoff', icon: PackageCheck },
   { id: 'audit' as const, label: 'Audit', icon: ShieldAlert },
   { id: 'report' as const, label: 'Report', icon: FileText },
+  { id: 'report-preview' as const, label: 'Client report preview', icon: FileSearch },
   { id: 'activity' as const, label: 'Activity', icon: Clock3 },
 ];
 
@@ -805,6 +820,50 @@ function Metric({ label, value, detail }: { label: string; value: number; detail
   );
 }
 
+function PipelineFunnel({ businesses }: { businesses: Business[] }) {
+  const atOrAfterOutreach = businesses.filter((business) =>
+    ['outreach_pending', 'responded', 'proposal', 'won'].includes(business.stage),
+  ).length;
+  const responded = businesses.filter((business) =>
+    ['responded', 'proposal', 'won'].includes(business.stage),
+  ).length;
+  const proposals = businesses.filter((business) =>
+    ['proposal', 'won'].includes(business.stage),
+  ).length;
+  const won = businesses.filter((business) => business.stage === 'won').length;
+  const responseRate = atOrAfterOutreach ? Math.round((responded / atOrAfterOutreach) * 100) : 0;
+  const closeRate = proposals ? Math.round((won / proposals) * 100) : 0;
+  return (
+    <section aria-labelledby="pipeline-funnel-title" className="pipeline-funnel">
+      <div className="section-heading">
+        <div>
+          <Eyebrow>Cold prospect funnel</Eyebrow>
+          <h2 id="pipeline-funnel-title">Pilot conversion evidence</h2>
+          <p>Scale from verified outcomes, not the number of previews generated.</p>
+        </div>
+        <WalletCards aria-hidden="true" size={19} />
+      </div>
+      <div className="pipeline-funnel__steps">
+        {[
+          ['Approved', atOrAfterOutreach, 'Compliant channel ready'],
+          ['Responded', responded, `${responseRate}% response rate`],
+          ['Proposal', proposals, 'Commercial conversation'],
+          ['Won', won, `${closeRate}% proposal close rate`],
+        ].map(([label, value, detail], index) => (
+          <article key={String(label)}>
+            <span>{index + 1}</span>
+            <div>
+              <strong>{value}</strong>
+              <small>{label}</small>
+            </div>
+            <small>{detail}</small>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function TodayPage({
   businesses,
   workspaces,
@@ -840,6 +899,7 @@ function TodayPage({
           value={businesses.filter((business) => business.stage === 'outreach_pending').length}
         />
       </section>
+      <PipelineFunnel businesses={businesses} />
 
       <div className="today-grid">
         <section aria-labelledby="next-actions-title" className="work-panel">
@@ -1027,6 +1087,7 @@ function ProspectsPage({
         title="Prospects"
       />
       <IntakeForm createProspect={createProspect} onCreated={createWorkspace} />
+      <PipelineFunnel businesses={businesses} />
 
       <section aria-labelledby="prospect-list-title" className="prospect-section">
         <div className="section-heading section-heading--controls">
@@ -1097,7 +1158,7 @@ function WorkspaceHeader({
 }: {
   workspace: ProspectWorkspace;
   onBack: () => void;
-  onApprove: () => void;
+  onApprove: (input: OutreachComplianceInput) => Promise<void>;
   onOpenSettings: () => void;
   onVersionChange?: (versionId: string) => void;
   settingsButtonRef: RefObject<HTMLButtonElement>;
@@ -1130,13 +1191,6 @@ function WorkspaceHeader({
             </IconButton>
           </div>
         </div>
-        {canApprove && !isApproved ? (
-          <div className="workspace-header__actions">
-            <Button onClick={onApprove} variant="primary">
-              <Check aria-hidden="true" size={16} /> Approve for outreach
-            </Button>
-          </div>
-        ) : null}
       </header>
       {workspace.redesignBriefs.length > 1 ? (
         <label className="workspace-version-picker">
@@ -1167,6 +1221,9 @@ function WorkspaceHeader({
           </span>
         </div>
       )}
+      {canApprove && !isApproved ? (
+        <OutreachReadinessPanel onApprove={onApprove} workspace={workspace} />
+      ) : null}
     </>
   );
 }
@@ -4420,6 +4477,7 @@ function AssetReviewPanel({
   }
 
   async function requestAnalysis() {
+    if (!confirmOpenAiApiUsage('AI asset enrichment')) return;
     setRequesting(true);
     setMessage('');
     try {
@@ -4445,7 +4503,9 @@ function AssetReviewPanel({
 
   const assetSelectionGrid = (
     <fieldset className="brief-assets" disabled={active || requesting || cancelling}>
-      <legend className="sr-only">Assets selected for private AI analysis</legend>
+      <legend className="sr-only">
+        Assets selected for {openAiApiFeaturesEnabled ? 'private AI analysis' : 'manual review'}
+      </legend>
       {analyzableGroups.map((group) => {
         const asset = group.asset;
         const type = recordValue(asset.metadata, 'assetType') || 'image';
@@ -4491,10 +4551,12 @@ function AssetReviewPanel({
           <Eyebrow>Private asset enrichment</Eyebrow>
           <h2>Asset review</h2>
           <p className="muted-copy">
-            One run analyses the selected images, reads recoverable image text, and detects
-            reviewable primary and accent colour evidence. Untick an image below before starting if
-            it should never be analysed or handed to the website agent. Nothing here verifies
-            business claims, ownership, partnerships, or qualifications.
+            {openAiApiFeaturesEnabled
+              ? 'OpenAI API charges apply to image descriptions and recoverable image text. Deterministic brand-colour evidence is collected in the same run.'
+              : 'OpenAI API workers are off. This run refreshes deterministic brand-colour evidence and creates manual-review placeholders without sending images to OpenAI.'}{' '}
+            Untick an image below before starting if it should never be reviewed or handed to the
+            website agent. Nothing here verifies business claims, ownership, partnerships, or
+            qualifications.
           </p>
         </div>
         <div className="brief-panel__actions">
@@ -4518,8 +4580,12 @@ function AssetReviewPanel({
               : active
                 ? 'Analysis in progress'
                 : analyzableAssets.length
-                  ? 'Analyse assets & detect colours'
-                  : 'Refresh analysis & detect colours'}
+                  ? openAiApiFeaturesEnabled
+                    ? 'Analyse assets & detect colours'
+                    : 'Detect colours for manual review'
+                  : openAiApiFeaturesEnabled
+                    ? 'Refresh analysis & detect colours'
+                    : 'Refresh deterministic colours'}
           </Button>
           {active ? (
             <Button
@@ -5150,9 +5216,9 @@ function VisualContentRecoveryPanel({
           <Eyebrow>Captured information recovery</Eyebrow>
           <h2>Recover image-based information</h2>
           <p className="muted-copy">
-            Turn saved screenshots, tables, testimonials and text graphics into editable semantic
-            information. This starts automatically from “Analyse assets &amp; detect colours” above;
-            the current capture is reused and the website is not visited again.
+            {openAiApiFeaturesEnabled
+              ? 'This separately billed OpenAI API worker turns saved screenshots, tables, testimonials and text graphics into editable semantic information. The current capture is reused and the website is not visited again.'
+              : 'Structured image-content recovery is off because OpenAI API workers are disabled. Saved images remain available for manual review and are not sent to OpenAI.'}
           </p>
           <div className="visual-content-panel__contract">
             <span>Page and section provenance retained</span>
@@ -5173,7 +5239,7 @@ function VisualContentRecoveryPanel({
                 : `Approve all ${approvableCount} for builds`}
             </Button>
           ) : null}
-          {candidates.length && !active ? (
+          {openAiApiFeaturesEnabled && candidates.length && !active ? (
             <Button
               disabled={extracting}
               onClick={() => void extract()}
@@ -7947,7 +8013,11 @@ function buildUsageSummary(records: AiUsageRecord[], builderRunId: string) {
     operationCount: buildRecords.length,
     totalTokens: buildRecords.reduce((total, record) => total + record.totalTokens, 0),
     recordedCost: pricedRecords.reduce((total, record) => total + (record.costUsd ?? 0), 0),
-    unpricedCount: buildRecords.length - pricedRecords.length,
+    unpricedCount: buildRecords.filter(
+      (record) =>
+        typeof record.costUsd !== 'number' &&
+        record.metadata.billingMode !== 'chatgpt_subscription',
+    ).length,
     subscriptionBacked: buildRecords.length > 0 && subscriptionCount === buildRecords.length,
   };
 }
@@ -8056,10 +8126,10 @@ function BuilderRunUsage({ records, run }: { records: AiUsageRecord[]; run: Buil
                     format={formatUsd}
                     value={usage.recordedCost}
                   />{' '}
-                  + {usage.unpricedCount} unpriced
+                  + {usage.unpricedCount} API cost unavailable
                 </>
               ) : (
-                'Unpriced'
+                'API cost unavailable'
               )
             ) : (
               <AnimatedBuildUsageValue
@@ -8769,12 +8839,30 @@ function BuilderRunPanel({
           },
           {
             id: 'visual-codex-feedback',
-            title: 'Visual feedback to the active Codex thread',
+            title: 'Codex Workspace Agent and visual feedback',
             detail:
-              'Build, test, private-preview, and website-editing reviews share one compact local Codex chat with an IDE-style conversation hierarchy. Saved builds, tests, committed edits, and validated local or same-Codespace development servers open inside the Studio preview shell so the panel remains above the website. Observable active-thread and queue state appears with a live elapsed timer and no invented percentage.',
-            revision: `v${selectedAgentPackage.version}.24`,
+              'The subscription-only Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy. Reviewers can choose direct work or Agent team delegation, then inspect each real attached sub-chat, assignment, state, timing, and transcript. Saved builds, tests, committed edits, and validated development servers open inside the Studio preview shell so the panel remains above the website. Observable activity and queue state appears without invented progress.',
+            revision: `v${selectedAgentPackage.version}.31`,
             change:
-              'Latest edit: app-owned turns now continue independently of the open panel, persist their active turn identity, and recover once from the saved transcript after a Codespace pause.',
+              'Latest edit: the Workspace Agent now runs behind the signed-in Studio on a persistent Railway service, keeps its ChatGPT login and editable repositories on durable storage, and resumes after the browser closes.',
+          },
+          {
+            id: 'inbound-client-email-review',
+            title: 'Context-aware inbound client email review',
+            detail:
+              'Each prospect has an email desk where inbound messages produce a review-only reply grounded in the saved client stage, matched contact, website research, current work and outreach safeguards. The reviewer is alerted, can ask AI for a targeted revision, can edit the subject and body directly, and can exercise the complete flow with visibly isolated dummy-account emails. No reply sends automatically.',
+            revision: `v${selectedAgentPackage.version}.2`,
+            change:
+              'Latest edit: the same review inbox now appears in each Clientspace Admin Emails section, grounded in the selected project’s client, commercial, release, message, document, and assistant state while retaining review alerts, prompted and direct edits, dummy testing, and no automatic sending.',
+          },
+          {
+            id: 'commercial-offer-strategy',
+            title: 'Automatic cold-prospect offer strategy',
+            detail:
+              'The newest working source produces a scale-aware fixed offer menu for Clientspace. Repeated routes receive capped volume pricing; page systems and approved capabilities drive value; the reviewer sees the full-scope value and automatic ceiling; and clients can choose milestones, outright payment, a fixed-term managed plan, or a clearly reduced essentials launch.',
+            revision: `v${selectedAgentPackage.version}.1`,
+            change:
+              'Latest edit: the selected offer and its full commitment now remain immutable through legal acceptance, Stripe checkout, managed billing and funnel reporting, while outreach approval requires a reviewed contact basis and channel safeguards.',
           },
           {
             id: 'hero-handoff',
@@ -8844,9 +8932,9 @@ function BuilderRunPanel({
             title: 'Framework and responsive quality gates',
             detail:
               'Generated source must pass formatting, lint, strict typing, production build, route and provenance checks, browser interactions, accessibility, and exact responsive evidence.',
-            revision: `v${selectedAgentPackage.version}.88`,
+            revision: `v${selectedAgentPackage.version}.89`,
             change:
-              'Latest edit: test and proper builds now run from the persistent tmux builder with ChatGPT subscription authentication, and their saved conversations stay attached to the build instead of entering Studio chat.',
+              'Latest edit: Codex Test Builder and Codex Website Builder now reject API-key mode, force a verified ChatGPT login, strip API credentials, and fail closed if subscription authentication is unavailable.',
           },
         ]
       : [];
@@ -11150,6 +11238,14 @@ function BuilderSettingsControl({
               <dd>gpt-5.6</dd>
             </div>
             <div>
+              <dt>Codex billing</dt>
+              <dd>ChatGPT subscription only</dd>
+            </div>
+            <div>
+              <dt>API-key fallback</dt>
+              <dd>Blocked</dd>
+            </div>
+            <div>
               <dt>Workspace access</dt>
               <dd>Workspace write only</dd>
             </div>
@@ -11216,9 +11312,10 @@ function BuilderSettingsControl({
           >
             <ShieldAlert aria-hidden="true" size={18} />
             <p>
-              To change the model, update <code>SITEFORGE_CODEX_MODEL</code> in the builder worker
-              environment, then restart the worker. That prevents a workspace member from changing a
-              protected runtime setting for other builds.
+              Codex Website Builder and Codex Test Builder stop unless the trusted worker is signed
+              in with ChatGPT. Separately billed OpenAI Analysis Workers are{' '}
+              {openAiApiFeaturesEnabled ? 'explicitly enabled' : 'off'} and never act as a builder
+              fallback.
             </p>
           </section>
         </Dialog.Content>
@@ -11638,9 +11735,22 @@ function UsageMetric({ label, value, detail }: { label: string; value: string; d
 }
 
 function usageSourceLabel(source: AiUsageRecord['source']) {
-  if (source === 'codex_build') return 'Codex build';
-  if (source === 'asset_analysis') return 'Asset analysis';
-  return 'Capability analysis';
+  if (source === 'codex_build') return 'Codex Website/Test Builder';
+  if (source === 'asset_analysis') return 'OpenAI Asset Analysis';
+  return 'OpenAI Capability Analysis';
+}
+
+function isSubscriptionUsage(record: AiUsageRecord) {
+  return record.metadata.billingMode === 'chatgpt_subscription';
+}
+
+function isUnpricedApiUsage(record: AiUsageRecord) {
+  return !isSubscriptionUsage(record) && typeof record.costUsd !== 'number';
+}
+
+function usageCostLabel(record: AiUsageRecord) {
+  if (isSubscriptionUsage(record)) return 'Included Codex usage';
+  return typeof record.costUsd === 'number' ? formatUsd(record.costUsd) : 'API cost unavailable';
 }
 
 function usageBuildLabel(
@@ -11688,6 +11798,7 @@ type BuildUsageAnalysisRow = {
   totalTokens: number;
   recordedCost: number;
   unpricedCount: number;
+  subscriptionCount: number;
   recordedAt: string;
 };
 
@@ -12146,9 +12257,7 @@ function BuildUsageAnalysis({
                     <td>{formatTokens(record.cachedInputTokens)}</td>
                     <td>{formatTokens(record.outputTokens)}</td>
                     <td>{formatTokens(record.totalTokens)}</td>
-                    <td>
-                      {typeof record.costUsd === 'number' ? formatUsd(record.costUsd) : 'Unpriced'}
-                    </td>
+                    <td>{usageCostLabel(record)}</td>
                   </tr>
                 ))}
             </tbody>
@@ -12264,9 +12373,10 @@ function UsagePage({
   const pricedRecords = scopedRecords.filter(({ record }) => typeof record.costUsd === 'number');
   const totalCost = pricedRecords.reduce((total, { record }) => total + (record.costUsd ?? 0), 0);
   const totalTokens = scopedRecords.reduce((total, { record }) => total + record.totalTokens, 0);
-  const unpricedCount = scopedRecords.filter(
-    ({ record }) => record.costSource === 'unavailable',
+  const subscriptionCount = scopedRecords.filter(({ record }) =>
+    isSubscriptionUsage(record),
   ).length;
+  const unpricedCount = scopedRecords.filter(({ record }) => isUnpricedApiUsage(record)).length;
   const prospectRows = workspaces
     .map((workspace) => {
       const usage = scopedRecords
@@ -12276,7 +12386,8 @@ function UsagePage({
         workspace,
         totalTokens: usage.reduce((total, record) => total + record.totalTokens, 0),
         cost: usage.reduce((total, record) => total + (record.costUsd ?? 0), 0),
-        unpriced: usage.filter((record) => record.costSource === 'unavailable').length,
+        unpriced: usage.filter(isUnpricedApiUsage).length,
+        subscription: usage.filter(isSubscriptionUsage).length,
         operations: usage.length,
         providers: [...new Set(usage.map((record) => record.provider))].join(', '),
       };
@@ -12297,7 +12408,8 @@ function UsagePage({
         row.reasoningTokens += record.reasoningTokens;
         row.totalTokens += record.totalTokens;
         row.recordedCost += record.costUsd ?? 0;
-        row.unpricedCount += typeof record.costUsd === 'number' ? 0 : 1;
+        row.unpricedCount += isUnpricedApiUsage(record) ? 1 : 0;
+        row.subscriptionCount += isSubscriptionUsage(record) ? 1 : 0;
         if (!row.models.includes(record.model)) row.models.push(record.model);
         if (record.createdAt > row.recordedAt) row.recordedAt = record.createdAt;
         return rows;
@@ -12326,7 +12438,8 @@ function UsagePage({
         reasoningTokens: record.reasoningTokens,
         totalTokens: record.totalTokens,
         recordedCost: record.costUsd ?? 0,
-        unpricedCount: typeof record.costUsd === 'number' ? 0 : 1,
+        unpricedCount: isUnpricedApiUsage(record) ? 1 : 0,
+        subscriptionCount: isSubscriptionUsage(record) ? 1 : 0,
         recordedAt: record.createdAt,
       });
       return rows;
@@ -12340,6 +12453,7 @@ function UsagePage({
         tokens: number;
         recordedCost: number;
         unpricedCount: number;
+        subscriptionCount: number;
         operations: number;
       }>
     >((days, { record }) => {
@@ -12350,14 +12464,16 @@ function UsagePage({
           date,
           tokens: record.totalTokens,
           recordedCost: record.costUsd ?? 0,
-          unpricedCount: typeof record.costUsd === 'number' ? 0 : 1,
+          unpricedCount: isUnpricedApiUsage(record) ? 1 : 0,
+          subscriptionCount: isSubscriptionUsage(record) ? 1 : 0,
           operations: 1,
         });
         return days;
       }
       current.tokens += record.totalTokens;
       current.recordedCost += record.costUsd ?? 0;
-      current.unpricedCount += typeof record.costUsd === 'number' ? 0 : 1;
+      current.unpricedCount += isUnpricedApiUsage(record) ? 1 : 0;
+      current.subscriptionCount += isSubscriptionUsage(record) ? 1 : 0;
       current.operations += 1;
       return days;
     }, [])
@@ -12381,7 +12497,7 @@ function UsagePage({
       <PageHeader
         eyebrow="Operations finance"
         title="AI usage & spend"
-        detail="Live provider usage grouped by prospect and build. Dollar totals include only calls with a recorded cost; unpriced usage remains visible instead of being estimated silently."
+        detail="Live usage grouped by prospect and build. ChatGPT-backed Codex work is labelled as included subscription usage; only separately enabled OpenAI API calls appear in dollar spend."
       />
 
       <section aria-labelledby="usage-filter-title" className="usage-filters">
@@ -12476,12 +12592,17 @@ function UsagePage({
           value={formatTokens(totalTokens)}
         />
         <UsageMetric
+          detail="Workspace Agent and Codex builders never use an API-key fallback"
+          label="Included Codex usage"
+          value={String(subscriptionCount)}
+        />
+        <UsageMetric
           detail={
             unpricedCount
-              ? 'needs provider billing or a rate configuration'
-              : 'every tracked call is priced'
+              ? 'API calls need provider billing or a rate configuration'
+              : 'no API call is missing a cost'
           }
-          label="Unpriced operations"
+          label="API cost unavailable"
           value={String(unpricedCount)}
         />
       </section>
@@ -12522,7 +12643,15 @@ function UsagePage({
                     <td>{row.operations}</td>
                     <td>{formatTokens(row.totalTokens)}</td>
                     <td>{formatUsd(row.cost)}</td>
-                    <td>{row.unpriced ? `${row.unpriced} unpriced` : 'Fully priced'}</td>
+                    <td>
+                      {[
+                        row.subscription ? `${row.subscription} included Codex` : '',
+                        row.unpriced ? `${row.unpriced} API cost unavailable` : '',
+                        !row.subscription && !row.unpriced ? 'API priced' : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -12548,19 +12677,20 @@ function UsagePage({
         {usageTimeline.length ? (
           <>
             <p className="muted-copy">
-              Recorded spend by day. When a day has no priced operation, token volume keeps the
-              activity visible without inventing a dollar amount.
+              Recorded API spend by day. Included Codex subscription operations remain visible by
+              token volume without being mislabelled as API spend.
             </p>
             <div className="usage-timeline-wrap">
               <ol className="usage-timeline" aria-label="Daily AI spend timeline">
                 {usageTimeline.map((day) => {
                   const barValue = day.recordedCost > 0 ? day.recordedCost : day.tokens;
                   const height = Math.max(8, (barValue / maxTimelineValue) * 100);
-                  const costLabel = day.unpricedCount
-                    ? day.recordedCost > 0
-                      ? `${formatUsd(day.recordedCost)} plus ${day.unpricedCount} unpriced`
-                      : `${day.unpricedCount} unpriced`
-                    : formatUsd(day.recordedCost);
+                  const costParts = [
+                    day.recordedCost > 0 ? formatUsd(day.recordedCost) : '',
+                    day.subscriptionCount ? `${day.subscriptionCount} included Codex` : '',
+                    day.unpricedCount ? `${day.unpricedCount} API cost unavailable` : '',
+                  ].filter(Boolean);
+                  const costLabel = costParts.join(' · ') || formatUsd(0);
                   return (
                     <li key={day.date}>
                       <div
@@ -12647,11 +12777,13 @@ function UsagePage({
                       <span>
                         <small>Spend</small>
                         <strong>
-                          {row.unpricedCount
-                            ? row.recordedCost > 0
-                              ? `${formatUsd(row.recordedCost)} + unpriced`
-                              : 'Unpriced'
-                            : formatUsd(row.recordedCost)}
+                          {row.subscriptionCount === row.records.length
+                            ? 'Included Codex usage'
+                            : row.unpricedCount
+                              ? row.recordedCost > 0
+                                ? `${formatUsd(row.recordedCost)} + API cost unavailable`
+                                : 'API cost unavailable'
+                              : formatUsd(row.recordedCost)}
                         </strong>
                       </span>
                     </span>
@@ -12688,8 +12820,7 @@ function UsagePage({
               {recordChart.map(({ record, workspace }) => {
                 const chartValue =
                   record.costUsd && record.costUsd > 0 ? record.costUsd : record.totalTokens;
-                const costLabel =
-                  typeof record.costUsd === 'number' ? formatUsd(record.costUsd) : 'Unpriced';
+                const costLabel = usageCostLabel(record);
                 return (
                   <li key={record.id}>
                     <div
@@ -12766,11 +12897,7 @@ function UsagePage({
                           : ''}
                       </td>
                       <td>{formatTokens(record.totalTokens)}</td>
-                      <td>
-                        {typeof record.costUsd === 'number'
-                          ? formatUsd(record.costUsd)
-                          : 'Unpriced'}
-                      </td>
+                      <td>{usageCostLabel(record)}</td>
                     </tr>
                   ))}
               </tbody>
@@ -12784,10 +12911,10 @@ function UsagePage({
       </section>
 
       <p className="usage-note">
-        Costs are shown in USD. The worker stores API token usage after each call. To turn
-        token-only records into priced totals, set a reviewed <code>SITEFORGE_AI_PRICING_JSON</code>{' '}
-        rate card in the protected worker environment; subscriptions and provider invoice
-        adjustments remain unpriced.
+        API costs are shown in USD. Included Codex usage belongs to the ChatGPT subscription and is
+        never converted into estimated API spend. To price an enabled API call whose provider cost
+        is unavailable, set a reviewed <code>SITEFORGE_AI_PRICING_JSON</code> rate card in the
+        protected worker environment.
       </p>
     </section>
   );
@@ -12800,6 +12927,25 @@ function BuilderSettingsPage() {
       <h1 id="settings-page-title">Settings</h1>
       <Card className="workspace-panel settings-page__card">
         <div>
+          <Eyebrow>Background coding</Eyebrow>
+          <h2>Codex Cloud</h2>
+          <p className="muted-copy">
+            Start repository tasks in ChatGPT and let them continue after Chrome or your phone
+            closes. Studio and the Made Solid website use separate Cloud environments because they
+            have separate Git histories.
+          </p>
+        </div>
+        <ButtonLink
+          href="https://chatgpt.com/codex"
+          rel="noreferrer"
+          target="_blank"
+          variant="secondary"
+        >
+          Open Codex Cloud <ExternalLink aria-hidden="true" size={16} />
+        </ButtonLink>
+      </Card>
+      <Card className="workspace-panel settings-page__card">
+        <div>
           <Eyebrow>Website builder</Eyebrow>
           <h2>Protected builder runtime</h2>
           <p className="muted-copy">
@@ -12807,6 +12953,19 @@ function BuilderSettingsPage() {
           </p>
         </div>
         <BuilderSettingsControl />
+      </Card>
+      <Card className="workspace-panel settings-page__card">
+        <div>
+          <Eyebrow>Separate billing boundary</Eyebrow>
+          <h2>OpenAI Analysis Workers</h2>
+          <p className="muted-copy">
+            These API-metered features are {openAiApiFeaturesEnabled ? 'enabled' : 'off'}. They are
+            never used as a fallback for the Codex Workspace Agent or either Codex builder.
+          </p>
+        </div>
+        <StatusBadge tone={openAiApiFeaturesEnabled ? 'warning' : 'success'}>
+          {openAiApiFeaturesEnabled ? 'API charges apply' : 'API calls blocked'}
+        </StatusBadge>
       </Card>
     </section>
   );
@@ -13359,6 +13518,7 @@ const agentBehaviourTitles: Record<string, string> = {
   'runtime-profiles': 'Production runtime and capability profiles',
   'framework-quality-gates': 'Framework and responsive quality gates',
   'website-tone-direction': 'Website tone direction',
+  'inbound-client-email-review': 'Context-aware inbound client email review',
 };
 
 const legacyProductionBehaviourIds = ['motion-runtime', 'scoped-revision'];
@@ -15931,7 +16091,7 @@ function useFinalEditState(workspace: ProspectWorkspace) {
   });
   const refresh = useCallback(async () => {
     try {
-      const response = await fetch(
+      const response = await studioRuntimeFetch(
         `/__made-solid/final-edit?directory=${encodeURIComponent(directory)}`,
         { cache: 'no-store' },
       );
@@ -15967,7 +16127,7 @@ function useLearningBundle(directory: string, enabled: boolean) {
     if (!enabled) return;
     setState((current) => ({ ...current, status: 'loading' }));
     try {
-      const response = await fetch(
+      const response = await studioRuntimeFetch(
         `/__made-solid/learning-bundle?directory=${encodeURIComponent(directory)}`,
         { cache: 'no-store' },
       );
@@ -16024,7 +16184,7 @@ function EditVersionHistory({
       detail: `Preparing committed edit v${version.version}.`,
     });
     try {
-      const response = await fetch('/__made-solid/committed-preview', {
+      const response = await studioRuntimeFetch('/__made-solid/committed-preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ directory, commit: version.commit }),
@@ -16234,7 +16394,7 @@ function LocalDevelopmentPublicationPanel({
     const pollLedger = async () => {
       activeRequest = new AbortController();
       try {
-        const response = await fetch(
+        const response = await studioRuntimeFetch(
           `/__made-solid/refinement-ledger?directory=${encodeURIComponent(localWorkspaceDirectoryName)}`,
           { cache: 'no-store', signal: activeRequest.signal },
         );
@@ -16346,7 +16506,7 @@ function LocalDevelopmentPublicationPanel({
       detail: 'Connecting to the local Studio workspace service.',
     });
     try {
-      const response = await fetch('/__made-solid/local-workspace', {
+      const response = await studioRuntimeFetch('/__made-solid/local-workspace', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -16879,7 +17039,7 @@ function WebsiteEditingPage({
     });
     setConfirmOpen(false);
     try {
-      const response = await fetch('/__made-solid/final-edit', {
+      const response = await studioRuntimeFetch('/__made-solid/final-edit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ directory }),
@@ -17491,6 +17651,27 @@ function MadeSolidHandoffPage({
             {finalised ? 'Source ready' : 'Waiting for final edit'}
           </StatusBadge>
         </div>
+        {workspace.report?.status === 'approved' &&
+        workspace.report.auditId === workspace.audit?.id &&
+        workspace.report.crawlRunId === workspace.latestCapture?.id ? (
+          <div className="audit-report-ready">
+            <div>
+              <Eyebrow>Before handoff</Eyebrow>
+              <h3>Review report version {workspace.report.version} as the client will see it</h3>
+              <p>
+                This opens a private Studio preview only. It does not create or change a client
+                project.
+              </p>
+            </div>
+            <ButtonLink
+              href={`#/prospects/${workspace.business.id}/report-preview`}
+              variant="primary"
+            >
+              Preview client report
+              <FileSearch aria-hidden="true" size={16} />
+            </ButtonLink>
+          </div>
+        ) : null}
       </section>
       <Card className="workspace-panel handoff-readiness">
         <div className="handoff-readiness__header">
@@ -18000,6 +18181,15 @@ function findingReviewTone(state: AuditFinding['reviewState']) {
   return 'warning' as const;
 }
 
+const auditSpecialistLabels: Record<AuditSpecialistTask['specialistKind'], string> = {
+  responsive_ui: 'Responsive UI',
+  accessibility: 'Accessibility',
+  performance_engineering: 'Performance engineering',
+  technical_seo: 'Technical SEO',
+  conversion_journey: 'Conversion journey',
+  platform_integrations: 'Platform and integrations',
+};
+
 function FindingEditor({
   finding,
   onUpdate,
@@ -18182,7 +18372,11 @@ function AuditPanel({
   const [isRequesting, setIsRequesting] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [isApprovingAll, setIsApprovingAll] = useState(false);
-  const [message, setMessage] = useState('');
+  const [message, setMessage] = useState<{
+    tone: 'success' | 'error';
+    title: string;
+    detail: string;
+  }>();
   const audit = workspace.audit;
   const captureReady = workspace.latestCapture?.status === 'ready';
   const isActive =
@@ -18196,20 +18390,40 @@ function AuditPanel({
       ? (audit?.status ?? 'not_started')
       : 'not_started';
   const findings = audit?.findings ?? [];
-  const approvedCount = findings.filter((finding) => finding.reviewState === 'approved').length;
+  const specialistTasks = (workspace.auditSpecialistTasks ?? []).filter(
+    (task) => task.auditId === audit?.id,
+  );
+  const specialistObservations = (workspace.auditObservations ?? []).filter(
+    (observation) => observation.auditId === audit?.id,
+  );
+  const visibleFindingCount = specialistObservations.length || findings.length;
+  const approvedCount = specialistObservations.length
+    ? specialistObservations.filter((observation) => observation.reviewState === 'approved').length
+    : findings.filter((finding) => finding.reviewState === 'approved').length;
   const pendingFindings = findings.filter((finding) => finding.reviewState === 'needs_review');
+  const failedSpecialists = specialistTasks.filter((task) => task.status === 'failed');
 
   async function requestAudit() {
+    if (!confirmOpenAiApiUsage('Responsive UX vision analysis')) return;
     setIsRequesting(true);
-    setMessage('');
+    setMessage(undefined);
     try {
       await onRequestAudit();
+      setMessage({
+        tone: 'success',
+        title: 'Audit request accepted',
+        detail:
+          'The latest capture was submitted to six specialist workers. Their saved states appear below as they update.',
+      });
     } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : 'The audit could not be queued. Confirm that the website capture is complete.',
-      );
+      setMessage({
+        tone: 'error',
+        title: 'Audit could not start',
+        detail:
+          error instanceof Error
+            ? error.message
+            : 'The audit could not be queued. Confirm that the website capture is complete.',
+      });
     } finally {
       setIsRequesting(false);
     }
@@ -18217,11 +18431,15 @@ function AuditPanel({
 
   async function cancelAudit() {
     setIsCancelling(true);
-    setMessage('');
+    setMessage(undefined);
     try {
       await onCancelAudit();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'The audit could not be cancelled.');
+      setMessage({
+        tone: 'error',
+        title: 'Audit cancellation failed',
+        detail: error instanceof Error ? error.message : 'The audit could not be cancelled.',
+      });
     } finally {
       setIsCancelling(false);
     }
@@ -18229,12 +18447,20 @@ function AuditPanel({
 
   async function approveAllFindings() {
     setIsApprovingAll(true);
-    setMessage('');
+    setMessage(undefined);
     try {
       await onApproveAllFindings();
-      setMessage(`${pendingFindings.length} findings approved.`);
-    } catch {
-      setMessage('The findings could not all be approved. Try again.');
+      setMessage({
+        tone: 'success',
+        title: 'Findings approved',
+        detail: `${pendingFindings.length} findings were approved.`,
+      });
+    } catch (error) {
+      setMessage({
+        tone: 'error',
+        title: 'Findings could not be approved',
+        detail: error instanceof Error ? error.message : 'Try the review action again.',
+      });
     } finally {
       setIsApprovingAll(false);
     }
@@ -18247,8 +18473,11 @@ function AuditPanel({
           <Eyebrow>Website audit</Eyebrow>
           <h2>Evidence-led audit</h2>
           <p className="muted-copy">
-            The private worker analyses the latest saved capture. Findings stay internal and need
-            your judgment before they guide a redesign or a client-facing report.
+            {openAiApiFeaturesEnabled
+              ? 'Deterministic specialist checks run first. Responsive UX vision uses the separately billed OpenAI API only after you confirm the audit action.'
+              : 'OpenAI API workers are off. Six deterministic specialist checks analyse the latest saved capture without a model call.'}{' '}
+            Findings stay internal and need your judgment before they guide a redesign or a
+            client-facing report.
           </p>
         </div>
         <div className="audit-panel__actions">
@@ -18312,17 +18541,43 @@ function AuditPanel({
         </div>
       ) : null}
       {displayedStatus === 'failed' ? (
-        <p className="form-message form-message--error" role="alert">
-          The audit could not complete. Confirm the saved capture is available, then generate it
-          again.
-        </p>
+        <div className="audit-operation-message audit-operation-message--error" role="alert">
+          <CircleAlert aria-hidden="true" size={19} />
+          <div>
+            <strong>The audit could not complete</strong>
+            <p>
+              {audit?.errorSummary ||
+                audit?.progressDetail ||
+                'Confirm the saved capture is available, inspect the specialist errors below, then generate it again.'}
+            </p>
+          </div>
+        </div>
       ) : null}
-      {isActive || displayedStatus === 'ready' || displayedStatus === 'cancelled' ? (
+      {message ? (
+        <div
+          className={`audit-operation-message audit-operation-message--${message.tone}`}
+          role={message.tone === 'error' ? 'alert' : 'status'}
+        >
+          {message.tone === 'error' ? (
+            <CircleAlert aria-hidden="true" size={19} />
+          ) : (
+            <Check aria-hidden="true" size={19} />
+          )}
+          <div>
+            <strong>{message.title}</strong>
+            <p>{message.detail}</p>
+          </div>
+        </div>
+      ) : null}
+      {isActive ||
+      displayedStatus === 'ready' ||
+      displayedStatus === 'failed' ||
+      displayedStatus === 'cancelled' ? (
         <>
           <dl className="audit-panel__metrics">
             <div>
               <dt>Findings generated</dt>
-              <dd>{findings.length}</dd>
+              <dd>{visibleFindingCount}</dd>
             </div>
             <div>
               <dt>Approved findings</dt>
@@ -18333,6 +18588,67 @@ function AuditPanel({
               <dd>{workspace.latestCapture?.capturedPageCount ?? 0} pages</dd>
             </div>
           </dl>
+          {specialistTasks.length ? (
+            <section aria-labelledby="audit-specialists-title" className="audit-specialists">
+              <div className="audit-specialists__heading">
+                <div>
+                  <Eyebrow>Specialist lifecycle</Eyebrow>
+                  <h3 id="audit-specialists-title">
+                    {audit?.version ? `Audit version ${audit.version}` : 'Current specialist audit'}
+                  </h3>
+                </div>
+                <span>
+                  {specialistTasks.filter((task) => task.status === 'ready').length} of{' '}
+                  {specialistTasks.length} complete
+                </span>
+              </div>
+              <ul className="audit-specialists__list">
+                {specialistTasks.map((task) => (
+                  <li key={task.id}>
+                    <div>
+                      <strong>{auditSpecialistLabels[task.specialistKind]}</strong>
+                      <p>
+                        {task.errorSummary ||
+                          task.progressDetail ||
+                          (task.status === 'research_pending'
+                            ? 'Waiting for a protected specialist worker.'
+                            : 'No worker detail has been saved yet.')}
+                      </p>
+                    </div>
+                    <StatusBadge tone={auditStatusTone(task.status)}>
+                      {auditStatusLabel(task.status).replace('Audit ', '')}
+                    </StatusBadge>
+                  </li>
+                ))}
+              </ul>
+              {failedSpecialists.length ? (
+                <div className="audit-specialists__error" role="alert">
+                  <CircleAlert aria-hidden="true" size={18} />
+                  <p>
+                    {failedSpecialists.length} specialist{' '}
+                    {failedSpecialists.length === 1 ? 'section failed' : 'sections failed'}. Review
+                    the details above before generating the audit again.
+                  </p>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+          {displayedStatus === 'ready' && specialistTasks.length ? (
+            <section className="audit-report-ready" aria-labelledby="audit-report-ready-title">
+              <div>
+                <Eyebrow>Next step</Eyebrow>
+                <h3 id="audit-report-ready-title">Specialist audit complete</h3>
+                <p>
+                  {specialistObservations.length}{' '}
+                  {specialistObservations.length === 1 ? 'observation is' : 'observations are'}{' '}
+                  ready for evidence and wording review.
+                </p>
+              </div>
+              <ButtonLink href={`#/prospects/${workspace.business.id}/report`} variant="primary">
+                Review report findings
+              </ButtonLink>
+            </section>
+          ) : null}
           {findings.length ? (
             <section aria-labelledby="audit-findings-title" className="audit-findings">
               <div className="audit-findings__heading">
@@ -18359,18 +18675,135 @@ function AuditPanel({
                 <FindingEditor finding={finding} key={finding.id} onUpdate={onUpdateFinding} />
               ))}
             </section>
-          ) : (
+          ) : specialistObservations.length === 0 ? (
             <EmptyState
               detail="The current automated checks did not produce findings. This does not replace a visual or manual review."
               icon={SearchCheck}
               title="No automated findings"
             />
-          )}
+          ) : null}
         </>
       ) : null}
-      {message ? (
+    </>
+  );
+}
+
+function AuditReportWorkspacePanel({
+  workspace,
+  onPrepareReport,
+  onRetryAudit,
+  onReviewObservation,
+}: {
+  workspace: ProspectWorkspace;
+  onPrepareReport: () => Promise<void>;
+  onRetryAudit: () => Promise<void>;
+  onReviewObservation: (
+    observationId: string,
+    reviewState: AuditObservation['reviewState'],
+  ) => Promise<void>;
+}) {
+  const screenshotArtifacts = workspace.artifacts.filter(
+    (artifact) => artifact.kind === 'screenshot',
+  );
+  const { urls: screenshotUrls, loadError } = usePrivateArtifactUrls(
+    screenshotArtifacts,
+    'Some private UX screenshots could not be loaded. Refresh the report review before approving those themes.',
+  );
+  const reportEvidence = [
+    ...workspace.facts,
+    ...workspace.artifacts.map((artifact) => {
+      const viewport = screenshotViewport(artifact);
+      return {
+        id: artifact.id,
+        crawlRunId: artifact.crawlRunId,
+        label: artifact.label || `${artifact.kind.replaceAll('_', ' ')} evidence`,
+        detail:
+          typeof artifact.metadata.observation === 'string'
+            ? artifact.metadata.observation
+            : undefined,
+        sourceUrl: artifactSourceUrl(artifact),
+        capturedAt: artifact.createdAt,
+        viewport: viewport ? `${viewport.width} × ${viewport.height}` : undefined,
+        kind: artifact.kind.replaceAll('_', ' '),
+        evidenceKind:
+          typeof artifact.metadata.evidenceKind === 'string'
+            ? artifact.metadata.evidenceKind
+            : undefined,
+        imageUrl: screenshotUrls[artifact.id],
+      };
+    }),
+  ];
+
+  return (
+    <Card className="workspace-panel">
+      <AuditReportPanel
+        activeCaptureRunId={workspace.latestCapture?.id}
+        audit={workspace.audit}
+        clientName={workspace.business.name}
+        evidence={reportEvidence}
+        observations={workspace.auditObservations ?? []}
+        onPrepareReport={onPrepareReport}
+        onRetryAudit={onRetryAudit}
+        onReviewObservation={onReviewObservation}
+        report={workspace.report}
+        tasks={workspace.auditSpecialistTasks ?? []}
+      />
+      {loadError ? (
         <p className="form-message form-message--error" role="alert">
-          {message}
+          {loadError}
+        </p>
+      ) : null}
+    </Card>
+  );
+}
+
+function ClientReportPreviewWorkspace({
+  workspace,
+  onRequestReportPreview,
+}: {
+  workspace: ProspectWorkspace;
+  onRequestReportPreview: (reportVersionId: string) => Promise<void>;
+}) {
+  const data = workspace.report?.data;
+  const findings = data && Array.isArray(data.findings) ? data.findings : [];
+  const evidenceArtifactIds = new Set(
+    findings.flatMap((finding) => {
+      if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return [];
+      const evidence = (finding as Record<string, unknown>).evidence;
+      if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) return [];
+      const artifactId = (evidence as Record<string, unknown>).artifactId;
+      return typeof artifactId === 'string' ? [artifactId] : [];
+    }),
+  );
+  const screenshotArtifacts = workspace.artifacts.filter(
+    (artifact) =>
+      artifact.kind === 'screenshot' &&
+      artifact.crawlRunId === workspace.report?.crawlRunId &&
+      evidenceArtifactIds.has(artifact.id),
+  );
+  const { urls, loadError } = usePrivateArtifactUrls(
+    screenshotArtifacts,
+    'Some private screenshots could not be loaded. The frozen report text remains available.',
+  );
+  const currentJob = workspace.reportPreviewJobs.find(
+    (job) => job.reportVersionId === workspace.report?.id,
+  );
+
+  return (
+    <>
+      <ClientReportPreview
+        activeCaptureRunId={workspace.latestCapture?.id}
+        audit={workspace.audit}
+        clientName={workspace.business.name}
+        evidenceUrls={urls}
+        onRequestRemotePreview={onRequestReportPreview}
+        remoteJob={currentJob}
+        report={workspace.report}
+        reportPreviewWorkerAvailable={workspace.reportPreviewWorkerAvailable}
+      />
+      {loadError ? (
+        <p className="form-message form-message--error" role="alert">
+          {loadError}
         </p>
       ) : null}
     </>
@@ -18451,6 +18884,9 @@ function WorkspaceContent({
   cancelMadeSolidHandoff,
   approveAllAuditFindings,
   updateAuditFinding,
+  updateAuditObservation,
+  createDecisionReport,
+  requestReportPreview,
   requestAgentLearningProposal,
   openAgentLearningInbox,
 }: {
@@ -18547,6 +18983,12 @@ function WorkspaceContent({
     finding: AuditFinding,
     patch: Pick<AuditFinding, 'title' | 'finding' | 'recommendation' | 'severity' | 'reviewState'>,
   ) => Promise<void>;
+  updateAuditObservation: (
+    observationId: string,
+    reviewState: AuditObservation['reviewState'],
+  ) => Promise<void>;
+  createDecisionReport: () => Promise<void>;
+  requestReportPreview: (reportVersionId: string) => Promise<void>;
   requestAgentLearningProposal: (basePackageId: string, direction: string) => Promise<void>;
   openAgentLearningInbox: () => void;
 }) {
@@ -18583,6 +19025,10 @@ function WorkspaceContent({
         <CommittedEditOverview workspace={workspace} />
       </div>
     );
+  }
+
+  if (tab === 'email') {
+    return <ClientEmailDesk workspace={workspace} />;
   }
 
   if (tab === 'research') {
@@ -18765,16 +19211,21 @@ function WorkspaceContent({
 
   if (tab === 'report') {
     return (
-      <Card className="workspace-panel">
-        <Eyebrow>Decision report</Eyebrow>
-        <h2>Nothing client-facing has been produced</h2>
-        <p className="muted-copy">{workspace.report?.summary}</p>
-        <EmptyState
-          detail="A report will be generated only from reviewed findings and an approved redesign concept."
-          icon={FileText}
-          title="Report not started"
-        />
-      </Card>
+      <AuditReportWorkspacePanel
+        onPrepareReport={createDecisionReport}
+        onRetryAudit={requestWebsiteAudit}
+        onReviewObservation={updateAuditObservation}
+        workspace={workspace}
+      />
+    );
+  }
+
+  if (tab === 'report-preview') {
+    return (
+      <ClientReportPreviewWorkspace
+        onRequestReportPreview={requestReportPreview}
+        workspace={workspace}
+      />
     );
   }
 
@@ -18857,6 +19308,9 @@ function WorkspacePage({
   onCancelMadeSolidHandoff,
   onApproveAllAuditFindings,
   onUpdateAuditFinding,
+  onUpdateAuditObservation,
+  onCreateDecisionReport,
+  onRequestReportPreview,
   onRequestAgentLearningProposal,
   onOpenAgentLearningInbox,
   onVersionChange,
@@ -18866,7 +19320,7 @@ function WorkspacePage({
   workspace: ProspectWorkspace;
   agentPackages: AgentPackage[];
   onBack: () => void;
-  onApprove: () => void;
+  onApprove: (input: OutreachComplianceInput) => Promise<void>;
   onDelete: () => Promise<void>;
   onToggleTask: (task: Task) => Promise<void>;
   onRequestResearchCapture: () => Promise<void>;
@@ -18958,6 +19412,12 @@ function WorkspacePage({
     finding: AuditFinding,
     patch: Pick<AuditFinding, 'title' | 'finding' | 'recommendation' | 'severity' | 'reviewState'>,
   ) => Promise<void>;
+  onUpdateAuditObservation: (
+    observationId: string,
+    reviewState: AuditObservation['reviewState'],
+  ) => Promise<void>;
+  onCreateDecisionReport: () => Promise<void>;
+  onRequestReportPreview: (reportVersionId: string) => Promise<void>;
   onRequestAgentLearningProposal: (basePackageId: string, direction: string) => Promise<void>;
   onOpenAgentLearningInbox: () => void;
   tab: WorkspaceTab;
@@ -19143,6 +19603,9 @@ function WorkspacePage({
           tab={tab}
           toggleTask={onToggleTask}
           updateAuditFinding={onUpdateAuditFinding}
+          updateAuditObservation={onUpdateAuditObservation}
+          createDecisionReport={onCreateDecisionReport}
+          requestReportPreview={onRequestReportPreview}
           updateAssetAnnotation={onUpdateAssetAnnotation}
           requestVisualContentExtraction={onRequestVisualContentExtraction}
           cancelVisualContentExtraction={onCancelVisualContentExtraction}
@@ -19664,6 +20127,9 @@ function WorkspaceApp({
   const activeMadeSolidHandoff = workspace?.madeSolidHandoffs.some(
     (handoff) => handoff.status === 'queued' || handoff.status === 'running',
   );
+  const activeReportPreview = workspace?.reportPreviewJobs.some(
+    (job) => job.status === 'queued' || job.status === 'running',
+  );
   const activeGithubPublication = workspace?.githubWorkspacePublications.some(
     (publication) => publication.status === 'queued' || publication.status === 'running',
   );
@@ -19684,6 +20150,7 @@ function WorkspaceApp({
       !activeBuilder &&
       !activeClientPublication &&
       !activeMadeSolidHandoff &&
+      !activeReportPreview &&
       !activeGithubPublication &&
       !awaitingPreferredLogo
     )
@@ -19700,6 +20167,7 @@ function WorkspaceApp({
     activeBuilder,
     activeClientPublication,
     activeMadeSolidHandoff,
+    activeReportPreview,
     activeGithubPublication,
     activeCapture,
     awaitingPreferredLogo,
@@ -19801,10 +20269,14 @@ function WorkspaceApp({
     await refreshData();
     setNotice({
       id: crypto.randomUUID(),
-      title: 'Website audit queued',
+      title:
+        audit.status === 'ready'
+          ? `Audit${audit.version ? ` version ${audit.version}` : ''} complete`
+          : `Audit${audit.version ? ` version ${audit.version}` : ''} accepted`,
       detail:
-        'The private worker will analyse the latest completed capture and save editable findings.',
-      tone: 'warning',
+        audit.progressDetail ||
+        'Six specialist workers will analyse the latest completed capture and save reviewable findings.',
+      tone: audit.status === 'ready' ? 'success' : 'warning',
     });
   }
 
@@ -19828,6 +20300,52 @@ function WorkspaceApp({
     await refreshData();
   }
 
+  async function updateAuditObservation(
+    observationId: string,
+    reviewState: AuditObservation['reviewState'],
+  ) {
+    await repository.updateAuditObservation(observationId, reviewState);
+    await refreshData();
+  }
+
+  async function createDecisionReport() {
+    if (!workspace?.audit) throw new Error('Complete a website audit before creating a report.');
+    const report = await repository.createDecisionReport(workspace.business.id, workspace.audit.id);
+    if (!report) throw new Error('The reviewed report could not be created.');
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: `Report version ${report.version} created`,
+      detail: 'Only approved, current-run observations were frozen into this report version.',
+      tone: 'success',
+    });
+  }
+
+  async function requestReportPreview(reportVersionId: string) {
+    if (!workspace?.report || workspace.report.id !== reportVersionId) {
+      throw new Error('Refresh the workspace before previewing this report version.');
+    }
+    if (
+      workspace.report.status !== 'approved' ||
+      workspace.report.auditId !== workspace.audit?.id ||
+      workspace.report.crawlRunId !== workspace.latestCapture?.id
+    ) {
+      throw new Error('Create a current approved report before opening a client preview.');
+    }
+    const job = await repository.requestReportPreview(reportVersionId);
+    if (!job) throw new Error('The private client report preview could not be queued.');
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: job.status === 'ready' ? 'Report preview ready' : 'Report preview queued',
+      detail:
+        job.status === 'ready'
+          ? 'The exact frozen report is ready for private Studio review.'
+          : 'The protected worker is preparing the exact client-facing report page.',
+      tone: job.status === 'ready' ? 'success' : 'warning',
+    });
+  }
+
   async function requestAssetAnalysis() {
     if (!workspace) return;
     const job = await repository.requestAssetAnalysis(workspace.business.id);
@@ -19836,7 +20354,9 @@ function WorkspaceApp({
     setNotice({
       id: crypto.randomUUID(),
       title: 'Asset analysis queued',
-      detail: 'The private worker will save editable visual descriptions for human review.',
+      detail: openAiApiFeaturesEnabled
+        ? 'The API-backed worker will save editable visual descriptions for human review.'
+        : 'OpenAI API workers are off. The private worker will refresh deterministic colour evidence and leave images for manual review.',
       tone: 'warning',
     });
   }
@@ -19857,6 +20377,12 @@ function WorkspaceApp({
 
   async function requestVisualContentExtraction() {
     if (!workspace) return;
+    if (!openAiApiFeaturesEnabled) {
+      throw new Error(
+        'Structured image-content recovery is off because separately billed OpenAI API workers are disabled.',
+      );
+    }
+    if (!confirmOpenAiApiUsage('Structured image-content recovery')) return;
     const job = await repository.requestVisualContentExtraction(workspace.business.id);
     if (!job) throw new Error('Structured image-content recovery could not be queued.');
     await refreshData();
@@ -20158,6 +20684,18 @@ function WorkspaceApp({
 
   async function createRedesignBrief() {
     if (!workspace) return;
+    const capabilityAnalysis = workspace.researchPacket?.data.capabilityAnalysis;
+    const capabilityStatus =
+      typeof capabilityAnalysis === 'object' && capabilityAnalysis !== null
+        ? (capabilityAnalysis as Record<string, unknown>).status
+        : undefined;
+    if (
+      openAiApiFeaturesEnabled &&
+      capabilityStatus !== 'ready' &&
+      !confirmOpenAiApiUsage('AI capability analysis')
+    ) {
+      return;
+    }
     const brief = await repository.createRedesignBrief(workspace.business.id);
     await refreshData();
     if (!brief) {
@@ -20235,6 +20773,12 @@ function WorkspaceApp({
   }
 
   async function requestAgentPackageProposal(basePackageId: string, direction: string) {
+    if (!openAiApiFeaturesEnabled) {
+      throw new Error(
+        'The Agent Package Drafter is off because separately billed OpenAI API workers are disabled.',
+      );
+    }
+    if (!confirmOpenAiApiUsage('The Agent Package Drafter')) return;
     const proposal = await repository.requestAgentPackageProposal(basePackageId, direction);
     if (!proposal) throw new Error('The agent package proposal could not be queued.');
     await refreshData();
@@ -20553,9 +21097,25 @@ function WorkspaceApp({
     await refreshData();
   }
 
-  async function approveWorkspace() {
+  async function approveWorkspace(input: OutreachComplianceInput) {
     if (!workspace) return;
-    await repository.approveForOutreach(workspace.business.id);
+    await repository.saveOutreachCompliance(workspace.business.id, input);
+    if (input.suppressedAt) {
+      await refreshData();
+      setNotice({
+        id: crypto.randomUUID(),
+        title: 'Prospect suppressed',
+        detail: 'The prospect remains blocked from email and phone outreach.',
+        tone: 'success',
+      });
+      return;
+    }
+    const approved = await repository.approveForOutreach(workspace.business.id);
+    if (!approved) {
+      throw new Error(
+        'Outreach remains blocked until the research and selected-channel safeguards are complete.',
+      );
+    }
     await refreshData();
   }
 
@@ -20760,6 +21320,9 @@ function WorkspaceApp({
             }
             tab={route.tab ?? 'overview'}
             onUpdateAuditFinding={updateAuditFinding}
+            onUpdateAuditObservation={updateAuditObservation}
+            onCreateDecisionReport={createDecisionReport}
+            onRequestReportPreview={requestReportPreview}
             onRequestAgentLearningProposal={requestAgentPackageProposal}
             onOpenAgentLearningInbox={() => navigate({ page: 'agent-studio', section: 'learning' })}
             onUpdateAssetAnnotation={updateAssetAnnotation}

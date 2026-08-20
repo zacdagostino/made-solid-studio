@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { hostname } from 'node:os';
 import { createClient } from '@supabase/supabase-js';
 import { chromium } from 'playwright';
+import { openAiApiEnabled } from './openai-api-policy.mjs';
 import { createResearchPacket } from './research-packet.mjs';
 import { assertPublicUrl, isRobotsAllowed } from './security.mjs';
 import { selectVisualAssets, visualAssetKey, visualAssetScore } from './visual-assets.mjs';
@@ -1813,6 +1814,15 @@ async function storeCompletedCapture(client, run, workerId, capture) {
     capture: completeCapture,
     capturedAt,
   });
+  packet.capabilityAnalysis = openAiApiEnabled()
+    ? {
+        status: 'requires_approval',
+        detail: 'OpenAI capability analysis requires an explicit separately billed action.',
+      }
+    : {
+        status: 'disabled',
+        detail: 'Using the deterministic capability inventory; OpenAI API workers are disabled.',
+      };
   const { error: packetError } = await client.from('research_packets').upsert(
     {
       organization_id: run.organization_id,
@@ -1851,19 +1861,6 @@ async function storeCompletedCapture(client, run, workerId, capture) {
   if (completeError) throw completeError;
   if (!completedRun?.length) await assertCaptureActive(client, run, workerId);
   if (!completedRun?.length) throw new Error('The worker lease was lost.');
-
-  const { error: capabilityJobError } = await client.from('capability_analysis_jobs').upsert(
-    {
-      organization_id: run.organization_id,
-      business_id: run.business_id,
-      crawl_run_id: run.id,
-      status: 'queued',
-      progress_phase: 'queued',
-      progress_detail: 'AI capability analysis queued from the completed private capture.',
-    },
-    { onConflict: 'crawl_run_id' },
-  );
-  if (capabilityJobError) throw new Error('The worker could not queue AI capability analysis.');
 
   const { error: websiteError } = await client
     .from('websites')

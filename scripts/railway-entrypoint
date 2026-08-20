@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+runtime_data_directory="${SITEFORGE_RUNTIME_DATA_DIR:-/data}"
+mkdir -p "$runtime_data_directory"
+chown node:node "$runtime_data_directory"
+
+exec gosu node "$@"

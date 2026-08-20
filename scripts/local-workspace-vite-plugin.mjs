@@ -6,6 +6,8 @@ import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright';
 import { CodexFeedbackBridge } from './codex-feedback-bridge.mjs';
+import { authorizeStudioRuntimeRequest } from './studio-runtime-auth.mjs';
+import { workspacePreviewUrl } from './workspace-preview-access.mjs';
 import { assertPublicUrl } from '../worker/security.mjs';
 
 const localWorkspaceEndpoint = '/__made-solid/local-workspace';
@@ -524,6 +526,12 @@ async function waitForWebsite(port) {
 }
 
 export function previewUrl(request, port, environment = process.env) {
+  const configuredOrigin = environment.SITEFORGE_WORKSPACE_PREVIEW_ORIGIN?.trim();
+  const previewSecret = environment.SITEFORGE_WORKSPACE_PREVIEW_SECRET?.trim();
+  const previewDirectory = environment.SITEFORGE_ACTIVE_PREVIEW_DIRECTORY?.trim();
+  if (configuredOrigin && previewSecret && previewDirectory) {
+    return workspacePreviewUrl(configuredOrigin, previewDirectory, previewSecret);
+  }
   const codespaceName = String(environment.CODESPACE_NAME || '').trim();
   const forwardingDomain = String(
     environment.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN || '',
@@ -539,12 +547,26 @@ export function previewUrl(request, port, environment = process.env) {
 }
 
 export function studioOrigin(request) {
+  const configuredOrigin = process.env.SITEFORGE_PUBLIC_ORIGIN?.trim().replace(/\/+$/, '');
+  if (configuredOrigin && /^https:\/\/[a-z0-9.-]+(?::\d{1,5})?$/i.test(configuredOrigin)) {
+    return configuredOrigin;
+  }
   const host = String(request.headers.host || '')
     .trim()
     .toLowerCase();
   if (/^(?:localhost|127\.0\.0\.1)(?::\d{1,5})?$/.test(host)) return `http://${host}`;
   if (/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?-\d{1,5}\.app\.github\.dev$/.test(host))
     return `https://${host}`;
+  const forwardedProtocol = String(request.headers['x-forwarded-proto'] || '')
+    .split(',')[0]
+    .trim()
+    .toLowerCase();
+  if (
+    forwardedProtocol === 'https' &&
+    /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::\d{1,5})?$/.test(host)
+  ) {
+    return `https://${host}`;
+  }
   return 'http://127.0.0.1:5173';
 }
 
@@ -593,6 +615,16 @@ async function launchWebsite({
     detail: `Waiting for the website to respond on port ${port}.`,
   });
   await waitForWebsite(port);
+  const activePreviewPath = process.env.SITEFORGE_ACTIVE_PREVIEW_PATH?.trim();
+  if (activePreviewPath) {
+    await mkdir(resolve(activePreviewPath, '..'), { recursive: true });
+    await writeFile(
+      activePreviewPath,
+      `${JSON.stringify({ directory, port, startedAt: new Date().toISOString() })}\n`,
+      { mode: 0o600 },
+    );
+    process.env.SITEFORGE_ACTIVE_PREVIEW_DIRECTORY = directory;
+  }
   if (nextEnvironmentSource) {
     const generatedDevelopmentSource = nextEnvironmentSource.replace(
       './.next/types/routes.d.ts',
@@ -648,360 +680,49 @@ async function launchCommittedPreview({ directory, commit, request, writeEvent, 
 }
 
 export function localWorkspacePlugin() {
-  const codexFeedbackBridge = new CodexFeedbackBridge();
+  const runtimeDataDirectory = process.env.SITEFORGE_RUNTIME_DATA_DIR?.trim();
+  const codexFeedbackBridge = new CodexFeedbackBridge({
+    cwd: process.env.SITEFORGE_STUDIO_WORKSPACE_DIR?.trim() || process.cwd(),
+    storageRoot: runtimeDataDirectory
+      ? resolve(runtimeDataDirectory, 'codex-feedback')
+      : resolve('.made-solid', 'codex-feedback'),
+  });
   let captureBrowserPromise;
   const captureBrowser = () => {
     captureBrowserPromise ??= chromium.launch({ headless: true });
     return captureBrowserPromise;
   };
-  return {
-    name: 'made-solid-local-prospect-workspace',
-    configureServer(server) {
-      const feedbackFlush = setInterval(() => void codexFeedbackBridge.maintain(), 2_000);
-      feedbackFlush.unref();
-      server.httpServer?.once('close', () => {
-        clearInterval(feedbackFlush);
-        void captureBrowserPromise?.then((browser) => browser.close()).catch(() => undefined);
-      });
-      server.middlewares.use(async (request, response, next) => {
-        const requestUrl = new URL(request.url ?? '/', 'http://made-solid.local');
-        if (requestUrl.pathname === captureAssetEndpoint) {
-          const fetchSite = request.headers['sec-fetch-site'];
-          if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
-            sendJson(response, 403, {
-              status: 'failed',
-              detail: 'This capture asset is only available from Made Solid Studio.',
-            });
-            return;
-          }
-          if (request.method !== 'POST') {
-            response.statusCode = 405;
-            response.end('Method not allowed');
-            return;
-          }
-          try {
-            const input = JSON.parse(await readRequestBody(request, 8_192));
-            sendJson(response, 200, await fetchPublicCaptureAsset(input.url));
-          } catch (error) {
-            sendJson(response, 400, {
-              status: 'failed',
-              detail: error instanceof Error ? error.message : 'The image could not be loaded.',
-            });
-          }
-          return;
-        }
-        if (requestUrl.pathname.startsWith(codexAttachmentPrefix)) {
-          const fetchSite = request.headers['sec-fetch-site'];
-          if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
-            response.statusCode = 403;
-            response.end('This attachment is only available from Made Solid Studio.');
-            return;
-          }
-          if (request.method !== 'GET') {
-            response.statusCode = 405;
-            response.end('Method not allowed');
-            return;
-          }
-          try {
-            const id = requestUrl.pathname.slice(codexAttachmentPrefix.length);
-            const attachment = await codexFeedbackBridge.attachment(id);
-            response.writeHead(200, {
-              'Cache-Control': 'private, no-store',
-              'Content-Type': attachment.mimeType,
-              'Content-Length': attachment.data.length,
-              'X-Content-Type-Options': 'nosniff',
-            });
-            response.end(attachment.data);
-          } catch (error) {
-            sendJson(response, 404, {
-              status: 'failed',
-              detail: error instanceof Error ? error.message : 'The screenshot is unavailable.',
-            });
-          }
-          return;
-        }
-        if (requestUrl.pathname === localPageCaptureEndpoint) {
-          const fetchSite = request.headers['sec-fetch-site'];
-          if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
-            sendJson(response, 403, {
-              status: 'failed',
-              detail: 'This capture is only available from Made Solid Studio.',
-            });
-            return;
-          }
-          if (request.method !== 'POST') {
-            response.statusCode = 405;
-            response.end('Method not allowed');
-            return;
-          }
-          let page;
-          try {
-            const input = JSON.parse(await readRequestBody(request, 8_192));
-            const targetUrl = localCaptureTarget(input.targetUrl);
-            const viewport = {
-              width: boundedInteger(input.viewportWidth, 1440, 320, 2560),
-              height: boundedInteger(input.viewportHeight, 900, 480, 1600),
-            };
-            const browser = await captureBrowser();
-            page = await browser.newPage({ viewport });
-            await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15_000 });
-            await page.addStyleTag({
-              content:
-                '[data-made-solid-codex-panel], .codex-feedback-trigger, .codex-feedback-overlay, .codex-feedback-dialog { display: none !important; }',
-            });
-            await page.evaluate(({ x, y }) => globalThis.scrollTo(x, y), {
-              x: boundedInteger(input.scrollX, 0, 0, 100_000),
-              y: boundedInteger(input.scrollY, 0, 0, 100_000),
-            });
-            await page.waitForTimeout(180);
-            const screenshot = await page.screenshot({ type: 'png' });
-            sendJson(response, 200, {
-              status: 'ready',
-              screenshot: `data:image/png;base64,${screenshot.toString('base64')}`,
-            });
-          } catch (error) {
-            sendJson(response, 400, {
-              status: 'failed',
-              detail:
-                error instanceof Error
-                  ? error.message
-                  : 'The local workspace could not be captured.',
-            });
-          } finally {
-            await page?.close().catch(() => undefined);
-          }
-          return;
-        }
-        if (
-          requestUrl.pathname === codexStatusEndpoint ||
-          requestUrl.pathname === codexFeedbackEndpoint
-        ) {
-          const fetchSite = request.headers['sec-fetch-site'];
-          if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
-            sendJson(response, 403, {
-              status: 'failed',
-              detail: 'This action is only available from Made Solid Studio.',
-            });
-            return;
-          }
-          if (requestUrl.pathname === codexStatusEndpoint) {
-            if (request.method !== 'GET') {
-              response.statusCode = 405;
-              response.end('Method not allowed');
-              return;
-            }
-            try {
-              await codexFeedbackBridge.flush();
-              sendJson(
-                response,
-                200,
-                await codexFeedbackBridge.inspect({
-                  threadId: requestUrl.searchParams.get('threadId') || undefined,
-                }),
-              );
-            } catch (error) {
-              sendJson(response, 503, {
-                status: 'unavailable',
-                detail:
-                  error instanceof Error
-                    ? error.message
-                    : 'The local Codex service is unavailable.',
-                models: [],
-                queuedCount: 0,
-              });
-            }
-            return;
-          }
-          if (request.method !== 'POST') {
-            response.statusCode = 405;
-            response.end('Method not allowed');
-            return;
-          }
-          try {
-            const input = JSON.parse(await readRequestBody(request, 22 * 1024 * 1024));
-            const result =
-              input.action === 'update-queued'
-                ? await codexFeedbackBridge.updateQueued(input.id, input)
-                : input.action === 'interrupt-queued'
-                  ? await codexFeedbackBridge.interruptQueued(input.id)
-                  : input.action === 'delete-empty-thread'
-                    ? await codexFeedbackBridge.deleteEmptyThread(input.threadId)
-                    : input.action === 'new-thread'
-                      ? await codexFeedbackBridge.createThread(input)
-                      : input.action === 'continue-interrupted-thread'
-                        ? await codexFeedbackBridge.continueInterruptedThread(input)
-                        : await codexFeedbackBridge.enqueue(input);
-            sendJson(response, 202, result);
-          } catch (error) {
-            sendJson(response, 400, {
-              status: 'failed',
-              detail:
-                error instanceof Error ? error.message : 'The visual feedback could not be queued.',
-            });
-          }
-          return;
-        }
-        if (requestUrl.pathname === committedPreviewEndpoint) {
-          const fetchSite = request.headers['sec-fetch-site'];
-          if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
-            response.statusCode = 403;
-            response.end('This action is only available from Made Solid Studio.');
-            return;
-          }
-          if (request.method !== 'POST') {
-            response.statusCode = 405;
-            response.end('Method not allowed');
-            return;
-          }
-          let directory;
-          let commit;
-          try {
-            const body = JSON.parse(await readRequestBody(request));
-            directory = typeof body.directory === 'string' ? body.directory.trim() : '';
-            commit = typeof body.commit === 'string' ? body.commit.trim() : '';
-          } catch {
-            sendJson(response, 400, {
-              status: 'failed',
-              detail: 'A valid preview request is required.',
-            });
-            return;
-          }
-          if (!directoryPattern.test(directory) || !/^[0-9a-f]{40}$/i.test(commit)) {
-            sendJson(response, 400, {
-              status: 'failed',
-              detail: 'Choose a valid committed edit version.',
-            });
-            return;
-          }
-          response.writeHead(200, {
-            'Cache-Control': 'no-store',
-            'Content-Type': 'application/x-ndjson; charset=utf-8',
-            'X-Content-Type-Options': 'nosniff',
-          });
-          let settled = false;
-          const writeEvent = (event) => {
-            if (!response.writableEnded) response.write(`${JSON.stringify(event)}\n`);
-          };
-          const finish = (event) => {
-            if (settled) return;
-            settled = true;
-            writeEvent(event);
-            response.end();
-          };
-          void launchCommittedPreview({ directory, commit, request, writeEvent, finish }).catch(
-            (error) =>
-              finish({
-                status: 'failed',
-                phase: 'failed',
-                detail:
-                  error instanceof Error
-                    ? error.message
-                    : 'The committed website version could not be opened.',
-              }),
-          );
-          return;
-        }
-        if (requestUrl.pathname === finalEditEndpoint) {
-          const fetchSite = request.headers['sec-fetch-site'];
-          if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
-            response.statusCode = 403;
-            response.end('This action is only available from Made Solid Studio.');
-            return;
-          }
-          if (request.method === 'GET') {
-            const directory = requestUrl.searchParams.get('directory')?.trim() ?? '';
-            const state = await readFinalEditState(directory);
-            sendJson(response, state.status === 'failed' ? 400 : 200, state);
-            return;
-          }
-          if (request.method !== 'POST') {
-            response.statusCode = 405;
-            response.end('Method not allowed');
-            return;
-          }
-          let directory;
-          try {
-            const body = JSON.parse(await readRequestBody(request));
-            directory = typeof body.directory === 'string' ? body.directory.trim() : '';
-          } catch {
-            sendJson(response, 400, {
-              status: 'failed',
-              phase: 'failed',
-              detail: 'A valid final-edit request is required.',
-            });
-            return;
-          }
-          if (!directoryPattern.test(directory)) {
-            sendJson(response, 400, {
-              status: 'failed',
-              phase: 'failed',
-              detail: 'A valid prospect workspace directory is required.',
-            });
-            return;
-          }
-          response.writeHead(200, {
-            'Cache-Control': 'no-store',
-            'Content-Type': 'application/x-ndjson; charset=utf-8',
-            'X-Content-Type-Options': 'nosniff',
-          });
-          const child = spawn(
-            process.execPath,
-            [resolve('scripts/finalize-prospect-workspace.mjs'), '--directory', directory],
-            { cwd: process.cwd(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'] },
-          );
-          child.stdout.pipe(response, { end: false });
-          child.stderr.resume();
-          child.once('error', () => {
-            if (!response.writableEnded) {
-              response.write(
-                `${JSON.stringify({ status: 'failed', phase: 'failed', detail: 'Studio could not start the final-edit process.' })}\n`,
-              );
-              response.end();
-            }
-          });
-          child.once('exit', () => {
-            if (!response.writableEnded) response.end();
+  const configureWorkspaceServer = (server) => {
+    void codexFeedbackBridge.maintain();
+    const feedbackFlush = setInterval(() => void codexFeedbackBridge.maintain(), 2_000);
+    feedbackFlush.unref();
+    server.httpServer?.once('close', () => {
+      clearInterval(feedbackFlush);
+      void captureBrowserPromise?.then((browser) => browser.close()).catch(() => undefined);
+    });
+    server.middlewares.use(async (request, response, next) => {
+      const requestUrl = new URL(request.url ?? '/', 'http://made-solid.local');
+      if (requestUrl.pathname === '/health') {
+        sendJson(response, 200, { status: 'ready' });
+        return;
+      }
+      if (requestUrl.pathname.startsWith('/__made-solid/')) {
+        const authorization = await authorizeStudioRuntimeRequest(request);
+        if (!authorization.authorized) {
+          sendJson(response, authorization.status || 401, {
+            status: 'unauthorized',
+            detail: authorization.detail,
           });
           return;
         }
-        if (
-          requestUrl.pathname === refinementLedgerEndpoint ||
-          requestUrl.pathname === learningBundleEndpoint
-        ) {
-          if (request.method !== 'GET') {
-            response.statusCode = 405;
-            response.end('Method not allowed');
-            return;
-          }
-          const fetchSite = request.headers['sec-fetch-site'];
-          if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
-            response.statusCode = 403;
-            response.end('This resource is only available from Made Solid Studio.');
-            return;
-          }
-          try {
-            const directory = requestUrl.searchParams.get('directory')?.trim() ?? '';
-            const result =
-              requestUrl.pathname === learningBundleEndpoint
-                ? await readLearningBundle(directory)
-                : await readRefinementLedger(directory);
-            sendJson(response, result.status === 'failed' ? 400 : 200, result);
-          } catch (error) {
-            sendJson(response, 500, {
-              status: 'failed',
-              detail:
-                error instanceof Error
-                  ? error.message
-                  : requestUrl.pathname === learningBundleEndpoint
-                    ? 'The learning bundle could not be read.'
-                    : 'The refinement ledger could not be read.',
-              entries: [],
-            });
-          }
-          return;
-        }
-        if (request.url !== localWorkspaceEndpoint) {
-          next();
+      }
+      if (requestUrl.pathname === captureAssetEndpoint) {
+        const fetchSite = request.headers['sec-fetch-site'];
+        if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
+          sendJson(response, 403, {
+            status: 'failed',
+            detail: 'This capture asset is only available from Made Solid Studio.',
+          });
           return;
         }
         if (request.method !== 'POST') {
@@ -1009,41 +730,196 @@ export function localWorkspacePlugin() {
           response.end('Method not allowed');
           return;
         }
+        try {
+          const input = JSON.parse(await readRequestBody(request, 8_192));
+          sendJson(response, 200, await fetchPublicCaptureAsset(input.url));
+        } catch (error) {
+          sendJson(response, 400, {
+            status: 'failed',
+            detail: error instanceof Error ? error.message : 'The image could not be loaded.',
+          });
+        }
+        return;
+      }
+      if (requestUrl.pathname.startsWith(codexAttachmentPrefix)) {
+        const fetchSite = request.headers['sec-fetch-site'];
+        if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
+          response.statusCode = 403;
+          response.end('This attachment is only available from Made Solid Studio.');
+          return;
+        }
+        if (request.method !== 'GET') {
+          response.statusCode = 405;
+          response.end('Method not allowed');
+          return;
+        }
+        try {
+          const id = requestUrl.pathname.slice(codexAttachmentPrefix.length);
+          const attachment = await codexFeedbackBridge.attachment(id);
+          response.writeHead(200, {
+            'Cache-Control': 'private, no-store',
+            'Content-Type': attachment.mimeType,
+            'Content-Length': attachment.data.length,
+            'X-Content-Type-Options': 'nosniff',
+          });
+          response.end(attachment.data);
+        } catch (error) {
+          sendJson(response, 404, {
+            status: 'failed',
+            detail: error instanceof Error ? error.message : 'The screenshot is unavailable.',
+          });
+        }
+        return;
+      }
+      if (requestUrl.pathname === localPageCaptureEndpoint) {
+        const fetchSite = request.headers['sec-fetch-site'];
+        if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
+          sendJson(response, 403, {
+            status: 'failed',
+            detail: 'This capture is only available from Made Solid Studio.',
+          });
+          return;
+        }
+        if (request.method !== 'POST') {
+          response.statusCode = 405;
+          response.end('Method not allowed');
+          return;
+        }
+        let page;
+        try {
+          const input = JSON.parse(await readRequestBody(request, 8_192));
+          const targetUrl = localCaptureTarget(input.targetUrl);
+          const viewport = {
+            width: boundedInteger(input.viewportWidth, 1440, 320, 2560),
+            height: boundedInteger(input.viewportHeight, 900, 480, 1600),
+          };
+          const browser = await captureBrowser();
+          page = await browser.newPage({ viewport });
+          await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15_000 });
+          await page.addStyleTag({
+            content:
+              '[data-made-solid-codex-panel], .codex-feedback-trigger, .codex-feedback-overlay, .codex-feedback-dialog { display: none !important; }',
+          });
+          await page.evaluate(({ x, y }) => globalThis.scrollTo(x, y), {
+            x: boundedInteger(input.scrollX, 0, 0, 100_000),
+            y: boundedInteger(input.scrollY, 0, 0, 100_000),
+          });
+          await page.waitForTimeout(180);
+          const screenshot = await page.screenshot({ type: 'png' });
+          sendJson(response, 200, {
+            status: 'ready',
+            screenshot: `data:image/png;base64,${screenshot.toString('base64')}`,
+          });
+        } catch (error) {
+          sendJson(response, 400, {
+            status: 'failed',
+            detail:
+              error instanceof Error ? error.message : 'The local workspace could not be captured.',
+          });
+        } finally {
+          await page?.close().catch(() => undefined);
+        }
+        return;
+      }
+      if (
+        requestUrl.pathname === codexStatusEndpoint ||
+        requestUrl.pathname === codexFeedbackEndpoint
+      ) {
+        const fetchSite = request.headers['sec-fetch-site'];
+        if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
+          sendJson(response, 403, {
+            status: 'failed',
+            detail: 'This action is only available from Made Solid Studio.',
+          });
+          return;
+        }
+        if (requestUrl.pathname === codexStatusEndpoint) {
+          if (request.method !== 'GET') {
+            response.statusCode = 405;
+            response.end('Method not allowed');
+            return;
+          }
+          try {
+            await codexFeedbackBridge.maintain();
+            sendJson(
+              response,
+              200,
+              await codexFeedbackBridge.inspect({
+                threadId: requestUrl.searchParams.get('threadId') || undefined,
+              }),
+            );
+          } catch (error) {
+            sendJson(response, 503, {
+              status: 'unavailable',
+              detail:
+                error instanceof Error ? error.message : 'The local Codex service is unavailable.',
+              models: [],
+              queuedCount: 0,
+            });
+          }
+          return;
+        }
+        if (request.method !== 'POST') {
+          response.statusCode = 405;
+          response.end('Method not allowed');
+          return;
+        }
+        try {
+          const input = JSON.parse(await readRequestBody(request, 22 * 1024 * 1024));
+          const result =
+            input.action === 'update-queued'
+              ? await codexFeedbackBridge.updateQueued(input.id, input)
+              : input.action === 'interrupt-queued'
+                ? await codexFeedbackBridge.interruptQueued(input.id)
+                : input.action === 'delete-empty-thread'
+                  ? await codexFeedbackBridge.deleteEmptyThread(input.threadId)
+                  : input.action === 'new-thread'
+                    ? await codexFeedbackBridge.createThread(input)
+                    : input.action === 'continue-interrupted-thread'
+                      ? await codexFeedbackBridge.continueInterruptedThread(input)
+                      : await codexFeedbackBridge.enqueue(input);
+          sendJson(response, 202, result);
+        } catch (error) {
+          sendJson(response, 400, {
+            status: 'failed',
+            detail:
+              error instanceof Error ? error.message : 'The visual feedback could not be queued.',
+          });
+        }
+        return;
+      }
+      if (requestUrl.pathname === committedPreviewEndpoint) {
         const fetchSite = request.headers['sec-fetch-site'];
         if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
           response.statusCode = 403;
           response.end('This action is only available from Made Solid Studio.');
           return;
         }
-
-        let repository;
-        let buildId;
+        if (request.method !== 'POST') {
+          response.statusCode = 405;
+          response.end('Method not allowed');
+          return;
+        }
         let directory;
-        let repositoryReady;
+        let commit;
         try {
           const body = JSON.parse(await readRequestBody(request));
-          repository = typeof body.repository === 'string' ? body.repository.trim() : '';
-          buildId = typeof body.buildId === 'string' ? body.buildId.trim() : '';
           directory = typeof body.directory === 'string' ? body.directory.trim() : '';
-          repositoryReady = body.repositoryReady === true;
+          commit = typeof body.commit === 'string' ? body.commit.trim() : '';
         } catch {
-          response.statusCode = 400;
-          response.end('A valid JSON request is required.');
+          sendJson(response, 400, {
+            status: 'failed',
+            detail: 'A valid preview request is required.',
+          });
           return;
         }
-        const hasRepository = repositoryPattern.test(repository);
-        const hasBuild = buildIdPattern.test(buildId) && directoryPattern.test(directory);
-        const hasLocalRepository =
-          directoryPattern.test(directory) &&
-          existsSync(resolve('prospect-workspaces', directory, '.git'));
-        const opensRepository = hasRepository && (repositoryReady || hasLocalRepository);
-        const exportsBuild = hasBuild && !opensRepository;
-        if (!opensRepository && !exportsBuild) {
-          response.statusCode = 400;
-          response.end('A valid repository or completed-build workspace is required.');
+        if (!directoryPattern.test(directory) || !/^[0-9a-f]{40}$/i.test(commit)) {
+          sendJson(response, 400, {
+            status: 'failed',
+            detail: 'Choose a valid committed edit version.',
+          });
           return;
         }
-
         response.writeHead(200, {
           'Cache-Control': 'no-store',
           'Content-Type': 'application/x-ndjson; charset=utf-8',
@@ -1059,154 +935,329 @@ export function localWorkspacePlugin() {
           writeEvent(event);
           response.end();
         };
-        writeEvent({
-          status: 'running',
-          phase: 'accessing',
-          detail: opensRepository
-            ? 'Checking private GitHub access.'
-            : 'Loading the completed private build source.',
-        });
-
-        const workspaceDirectory = directory || repository.split('/')[1];
-        const destination = resolve('prospect-workspaces', workspaceDirectory);
-        const launch = () =>
-          launchWebsite({
-            destination,
-            directory: workspaceDirectory,
-            request,
-            writeEvent,
-            finish,
-          }).catch((error) =>
+        void launchCommittedPreview({ directory, commit, request, writeEvent, finish }).catch(
+          (error) =>
             finish({
               status: 'failed',
               phase: 'failed',
               detail:
                 error instanceof Error
                   ? error.message
-                  : 'The workspace is ready, but its website server could not be launched.',
+                  : 'The committed website version could not be opened.',
             }),
-          );
+        );
+        return;
+      }
+      if (requestUrl.pathname === finalEditEndpoint) {
+        const fetchSite = request.headers['sec-fetch-site'];
+        if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
+          response.statusCode = 403;
+          response.end('This action is only available from Made Solid Studio.');
+          return;
+        }
+        if (request.method === 'GET') {
+          const directory = requestUrl.searchParams.get('directory')?.trim() ?? '';
+          const state = await readFinalEditState(directory);
+          sendJson(response, state.status === 'failed' ? 400 : 200, state);
+          return;
+        }
+        if (request.method !== 'POST') {
+          response.statusCode = 405;
+          response.end('Method not allowed');
+          return;
+        }
+        let directory;
+        try {
+          const body = JSON.parse(await readRequestBody(request));
+          directory = typeof body.directory === 'string' ? body.directory.trim() : '';
+        } catch {
+          sendJson(response, 400, {
+            status: 'failed',
+            phase: 'failed',
+            detail: 'A valid final-edit request is required.',
+          });
+          return;
+        }
+        if (!directoryPattern.test(directory)) {
+          sendJson(response, 400, {
+            status: 'failed',
+            phase: 'failed',
+            detail: 'A valid prospect workspace directory is required.',
+          });
+          return;
+        }
+        response.writeHead(200, {
+          'Cache-Control': 'no-store',
+          'Content-Type': 'application/x-ndjson; charset=utf-8',
+          'X-Content-Type-Options': 'nosniff',
+        });
         const child = spawn(
           process.execPath,
-          opensRepository
-            ? [resolve('scripts/open-prospect-workspace.mjs'), '--repository', repository]
-            : [
-                resolve('scripts/export-local-build.mjs'),
-                '--run',
-                buildId,
-                '--destination',
-                destination,
-              ],
-          {
-            cwd: process.cwd(),
-            env: process.env,
-            stdio: ['ignore', 'pipe', 'pipe'],
-          },
+          [resolve('scripts/finalize-prospect-workspace.mjs'), '--directory', directory],
+          { cwd: process.cwd(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'] },
         );
-        let output = '';
-        child.stdout.setEncoding('utf8');
-        child.stdout.on('data', (chunk) => {
-          output += chunk;
-          const lines = output.split(/\r?\n/);
-          output = lines.pop() ?? '';
-          for (const line of lines) {
-            if (line.includes('Cloning '))
-              writeEvent({
-                status: 'running',
-                phase: 'cloning',
-                detail: 'Cloning the private repository into prospect-workspaces.',
-              });
-            else if (line.includes('Updating '))
-              writeEvent({
-                status: 'running',
-                phase: 'updating',
-                detail:
-                  'Fast-forwarding the existing prospect workspace without overwriting local changes.',
-              });
-            else if (line.includes('Downloading the editable source'))
-              writeEvent({
-                status: 'running',
-                phase: 'cloning',
-                detail: 'Saving editable source and approved assets into prospect-workspaces.',
-              });
-            else if (line.includes('refinement logging is ready'))
-              writeEvent({
-                status: 'running',
-                phase: 'verifying',
-                detail: 'Made Solid refinement logging is ready.',
-              });
-            else if (line.includes('Adding the Made Solid refinement logging workflow'))
-              writeEvent({
-                status: 'running',
-                phase: 'verifying',
-                detail: 'Adding the Made Solid refinement logging workflow.',
-              });
-            else if (line.includes('Installing the prospect website dependencies'))
-              writeEvent({
-                status: 'running',
-                phase: 'installing',
-                detail: 'Installing the prospect website dependencies.',
-              });
-            else if (line.includes('dependencies are already installed'))
-              writeEvent({
-                status: 'running',
-                phase: 'installing',
-                detail: 'Website dependencies are already installed.',
-              });
-          }
-        });
+        child.stdout.pipe(response, { end: false });
         child.stderr.resume();
         child.once('error', () => {
+          if (!response.writableEnded) {
+            response.write(
+              `${JSON.stringify({ status: 'failed', phase: 'failed', detail: 'Studio could not start the final-edit process.' })}\n`,
+            );
+            response.end();
+          }
+        });
+        child.once('exit', () => {
+          if (!response.writableEnded) response.end();
+        });
+        return;
+      }
+      if (
+        requestUrl.pathname === refinementLedgerEndpoint ||
+        requestUrl.pathname === learningBundleEndpoint
+      ) {
+        if (request.method !== 'GET') {
+          response.statusCode = 405;
+          response.end('Method not allowed');
+          return;
+        }
+        const fetchSite = request.headers['sec-fetch-site'];
+        if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
+          response.statusCode = 403;
+          response.end('This resource is only available from Made Solid Studio.');
+          return;
+        }
+        try {
+          const directory = requestUrl.searchParams.get('directory')?.trim() ?? '';
+          const result =
+            requestUrl.pathname === learningBundleEndpoint
+              ? await readLearningBundle(directory)
+              : await readRefinementLedger(directory);
+          sendJson(response, result.status === 'failed' ? 400 : 200, result);
+        } catch (error) {
+          sendJson(response, 500, {
+            status: 'failed',
+            detail:
+              error instanceof Error
+                ? error.message
+                : requestUrl.pathname === learningBundleEndpoint
+                  ? 'The learning bundle could not be read.'
+                  : 'The refinement ledger could not be read.',
+            entries: [],
+          });
+        }
+        return;
+      }
+      if (request.url !== localWorkspaceEndpoint) {
+        next();
+        return;
+      }
+      if (request.method !== 'POST') {
+        response.statusCode = 405;
+        response.end('Method not allowed');
+        return;
+      }
+      const fetchSite = request.headers['sec-fetch-site'];
+      if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
+        response.statusCode = 403;
+        response.end('This action is only available from Made Solid Studio.');
+        return;
+      }
+
+      let repository;
+      let buildId;
+      let directory;
+      let repositoryReady;
+      try {
+        const body = JSON.parse(await readRequestBody(request));
+        repository = typeof body.repository === 'string' ? body.repository.trim() : '';
+        buildId = typeof body.buildId === 'string' ? body.buildId.trim() : '';
+        directory = typeof body.directory === 'string' ? body.directory.trim() : '';
+        repositoryReady = body.repositoryReady === true;
+      } catch {
+        response.statusCode = 400;
+        response.end('A valid JSON request is required.');
+        return;
+      }
+      const hasRepository = repositoryPattern.test(repository);
+      const hasBuild = buildIdPattern.test(buildId) && directoryPattern.test(directory);
+      const hasLocalRepository =
+        directoryPattern.test(directory) &&
+        existsSync(resolve('prospect-workspaces', directory, '.git'));
+      const opensRepository = hasRepository && (repositoryReady || hasLocalRepository);
+      const exportsBuild = hasBuild && !opensRepository;
+      if (!opensRepository && !exportsBuild) {
+        response.statusCode = 400;
+        response.end('A valid repository or completed-build workspace is required.');
+        return;
+      }
+
+      response.writeHead(200, {
+        'Cache-Control': 'no-store',
+        'Content-Type': 'application/x-ndjson; charset=utf-8',
+        'X-Content-Type-Options': 'nosniff',
+      });
+      let settled = false;
+      const writeEvent = (event) => {
+        if (!response.writableEnded) response.write(`${JSON.stringify(event)}\n`);
+      };
+      const finish = (event) => {
+        if (settled) return;
+        settled = true;
+        writeEvent(event);
+        response.end();
+      };
+      writeEvent({
+        status: 'running',
+        phase: 'accessing',
+        detail: opensRepository
+          ? 'Checking private GitHub access.'
+          : 'Loading the completed private build source.',
+      });
+
+      const workspaceDirectory = directory || repository.split('/')[1];
+      const destination = resolve('prospect-workspaces', workspaceDirectory);
+      const launch = () =>
+        launchWebsite({
+          destination,
+          directory: workspaceDirectory,
+          request,
+          writeEvent,
+          finish,
+        }).catch((error) =>
           finish({
             status: 'failed',
             phase: 'failed',
             detail:
-              'Studio could not start the local workspace process. Use the manual command below.',
-          });
-        });
-        child.once('exit', (code) => {
-          if (code === 0) {
-            if (exportsBuild) {
-              writeEvent({
-                status: 'running',
-                phase: 'installing',
-                detail: 'Installing the prospect website dependencies.',
-              });
-              const install = spawn(
-                'npm',
-                ['--prefix', destination, 'ci', '--no-audit', '--no-fund'],
-                { cwd: process.cwd(), env: process.env, stdio: ['ignore', 'ignore', 'ignore'] },
-              );
-              install.once('error', () =>
-                finish({
-                  status: 'failed',
-                  phase: 'failed',
-                  detail: 'The source was saved, but dependency installation could not start.',
-                }),
-              );
-              install.once('exit', (installCode) =>
-                installCode === 0
-                  ? void launch()
-                  : finish({
-                      status: 'failed',
-                      phase: 'failed',
-                      detail:
-                        'The source was saved, but its dependencies could not be installed. Open the manual fallback for recovery.',
-                    }),
-              );
-            } else {
-              void launch();
-            }
-          } else {
-            finish({
-              status: 'failed',
-              phase: 'failed',
-              detail:
-                'Workspace setup stopped before completion. Check GitHub access, then retry or use the manual command below.',
+              error instanceof Error
+                ? error.message
+                : 'The workspace is ready, but its website server could not be launched.',
+          }),
+        );
+      const child = spawn(
+        process.execPath,
+        opensRepository
+          ? [resolve('scripts/open-prospect-workspace.mjs'), '--repository', repository]
+          : [
+              resolve('scripts/export-local-build.mjs'),
+              '--run',
+              buildId,
+              '--destination',
+              destination,
+            ],
+        {
+          cwd: process.cwd(),
+          env: process.env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      );
+      let output = '';
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk) => {
+        output += chunk;
+        const lines = output.split(/\r?\n/);
+        output = lines.pop() ?? '';
+        for (const line of lines) {
+          if (line.includes('Cloning '))
+            writeEvent({
+              status: 'running',
+              phase: 'cloning',
+              detail: 'Cloning the private repository into prospect-workspaces.',
             });
-          }
+          else if (line.includes('Updating '))
+            writeEvent({
+              status: 'running',
+              phase: 'updating',
+              detail:
+                'Fast-forwarding the existing prospect workspace without overwriting local changes.',
+            });
+          else if (line.includes('Downloading the editable source'))
+            writeEvent({
+              status: 'running',
+              phase: 'cloning',
+              detail: 'Saving editable source and approved assets into prospect-workspaces.',
+            });
+          else if (line.includes('refinement logging is ready'))
+            writeEvent({
+              status: 'running',
+              phase: 'verifying',
+              detail: 'Made Solid refinement logging is ready.',
+            });
+          else if (line.includes('Adding the Made Solid refinement logging workflow'))
+            writeEvent({
+              status: 'running',
+              phase: 'verifying',
+              detail: 'Adding the Made Solid refinement logging workflow.',
+            });
+          else if (line.includes('Installing the prospect website dependencies'))
+            writeEvent({
+              status: 'running',
+              phase: 'installing',
+              detail: 'Installing the prospect website dependencies.',
+            });
+          else if (line.includes('dependencies are already installed'))
+            writeEvent({
+              status: 'running',
+              phase: 'installing',
+              detail: 'Website dependencies are already installed.',
+            });
+        }
+      });
+      child.stderr.resume();
+      child.once('error', () => {
+        finish({
+          status: 'failed',
+          phase: 'failed',
+          detail:
+            'Studio could not start the local workspace process. Use the manual command below.',
         });
       });
-    },
+      child.once('exit', (code) => {
+        if (code === 0) {
+          if (exportsBuild) {
+            writeEvent({
+              status: 'running',
+              phase: 'installing',
+              detail: 'Installing the prospect website dependencies.',
+            });
+            const install = spawn(
+              'npm',
+              ['--prefix', destination, 'ci', '--no-audit', '--no-fund'],
+              { cwd: process.cwd(), env: process.env, stdio: ['ignore', 'ignore', 'ignore'] },
+            );
+            install.once('error', () =>
+              finish({
+                status: 'failed',
+                phase: 'failed',
+                detail: 'The source was saved, but dependency installation could not start.',
+              }),
+            );
+            install.once('exit', (installCode) =>
+              installCode === 0
+                ? void launch()
+                : finish({
+                    status: 'failed',
+                    phase: 'failed',
+                    detail:
+                      'The source was saved, but its dependencies could not be installed. Open the manual fallback for recovery.',
+                  }),
+            );
+          } else {
+            void launch();
+          }
+        } else {
+          finish({
+            status: 'failed',
+            phase: 'failed',
+            detail:
+              'Workspace setup stopped before completion. Check GitHub access, then retry or use the manual command below.',
+          });
+        }
+      });
+    });
+  };
+  return {
+    name: 'made-solid-local-prospect-workspace',
+    configurePreviewServer: configureWorkspaceServer,
+    configureServer: configureWorkspaceServer,
   };
 }

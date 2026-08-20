@@ -14,6 +14,12 @@ const captureSvg = `data:image/svg+xml,${encodeURIComponent(`
 const capturePng =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+Xf5vAAAAAElFTkSuQmCC';
 
+async function openChatSettings(composer) {
+  const settings = composer.getByRole('button', { name: 'Chat settings' });
+  if ((await settings.getAttribute('aria-expanded')) !== 'true') await settings.click();
+  await expect(composer.getByRole('group', { name: 'Chat settings' })).toBeVisible();
+}
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(
     ({ screenshot, tabScreenshot }) => {
@@ -82,6 +88,7 @@ test.beforeEach(async ({ page }) => {
     const noWorkingStart = pageUrl.searchParams.has('codexWorkingNoStart');
     const working = pageUrl.searchParams.has('codexWorking') || noWorkingStart;
     const interrupted = pageUrl.searchParams.has('codexInterrupted');
+    const teamHistory = pageUrl.searchParams.has('codexTeamHistory');
     const workingSince = Math.floor(Date.now() / 1_000) - 65;
     const threadUpdatedAt = noWorkingStart
       ? Math.floor(Date.now() / 1_000) - 97 * 60 * 60
@@ -141,9 +148,101 @@ test.beforeEach(async ({ page }) => {
                 { id: 'old-codex', role: 'assistant', text: 'The earlier review is complete.' },
               ]
             : [
-                { id: 'current-user', role: 'user', text: 'Open the Studio chat.' },
-                { id: 'current-codex', role: 'assistant', text: 'Studio chat is connected.' },
+                {
+                  id: 'current-user',
+                  role: 'user',
+                  text: 'Open the Studio chat.',
+                  turnId: 'turn-team-1',
+                },
+                {
+                  id: 'current-codex',
+                  role: 'assistant',
+                  text: 'Studio chat is connected.',
+                  turnId: 'turn-team-1',
+                },
+                ...(teamHistory
+                  ? [
+                      {
+                        id: 'direct-user',
+                        role: 'user',
+                        text: 'Now make one direct copy change.',
+                        turnId: 'turn-direct-2',
+                      },
+                      {
+                        id: 'direct-codex',
+                        role: 'assistant',
+                        text: 'The direct copy change is complete.',
+                        turnId: 'turn-direct-2',
+                      },
+                      {
+                        id: 'second-team-user',
+                        role: 'user',
+                        text: 'Run a new agent team review.',
+                        turnId: 'turn-team-3',
+                      },
+                      {
+                        id: 'second-team-codex',
+                        role: 'assistant',
+                        text: 'The new team review is underway.',
+                        turnId: 'turn-team-3',
+                      },
+                    ]
+                  : []),
               ],
+        agents: pageUrl.searchParams.has('codexAgents')
+          ? [
+              {
+                id: 'agent-responsive',
+                parentThreadId: 'thread-1',
+                supervisorTurnId: 'turn-team-1',
+                nickname: 'Lime',
+                role: 'responsive reviewer',
+                task: 'Verify the agent team interface at mobile, tablet, and desktop widths.',
+                status: interrupted ? 'interrupted' : 'running',
+                working: !interrupted,
+                depth: 0,
+                createdAt: workingSince - 10,
+                workingStartedAt: workingSince,
+                messages: [
+                  {
+                    id: 'agent-responsive-task',
+                    role: 'user',
+                    text: 'Check layout, overflow, and touch targets at every required viewport.',
+                  },
+                  {
+                    id: 'agent-responsive-update',
+                    role: 'assistant',
+                    text: 'Mobile checks are complete. I am reviewing tablet and desktop now.',
+                  },
+                ],
+              },
+              {
+                id: 'agent-accessibility',
+                parentThreadId: 'thread-1',
+                supervisorTurnId: teamHistory ? 'turn-team-3' : 'turn-team-1',
+                nickname: 'Oak',
+                role: 'accessibility reviewer',
+                task: 'Test keyboard navigation, focus visibility, and accessible status updates.',
+                status: 'completed',
+                working: false,
+                depth: 0,
+                createdAt: workingSince - 24,
+                updatedAt: workingSince - 2,
+                messages: [
+                  {
+                    id: 'agent-accessibility-task',
+                    role: 'user',
+                    text: 'Audit keyboard and screen-reader behaviour.',
+                  },
+                  {
+                    id: 'agent-accessibility-result',
+                    role: 'assistant',
+                    text: 'The agent cards and work-mode control have clear names and focus states.',
+                  },
+                ],
+              },
+            ]
+          : [],
         queuedCount: working ? 2 : 0,
         queuedMessages: working
           ? [
@@ -254,6 +353,7 @@ test('sends a text-only chat message to the selected Codex model', async ({ page
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat with Codex' }).click();
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openChatSettings(composer);
   await composer.getByLabel('Model').selectOption('gpt-5.3-codex-spark');
   await expect(composer.getByRole('button', { name: 'Capture this tab' })).toBeDisabled();
   await expect(
@@ -276,8 +376,109 @@ test('sends a text-only chat message to the selected Codex model', async ({ page
   await expect(page.getByRole('dialog', { name: 'Message queued' })).toHaveCount(0);
   expect(delivered.model).toBe('gpt-5.3-codex-spark');
   expect(delivered.effort).toBe('high');
+  expect(delivered.workMode).toBe('team');
   expect(delivered.prompt).toContain('Review the current implementation');
   expect(delivered).not.toHaveProperty('screenshot');
+});
+
+test('shows the live attached agent hierarchy and opens each sub-chat', async ({ page }) => {
+  await page.goto('/?codexAgents=1');
+  await page.getByRole('button', { name: 'Codex is working' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  const team = composer.getByRole('region', { name: 'Agent team' });
+
+  await expect(team).toContainText('1 working in parallel');
+  await expect(team).toContainText('Responsive reviewer');
+  await expect(team).toContainText('Accessibility reviewer');
+  const responsiveAgent = team.getByRole('button', { name: /Responsive reviewer/ });
+  await responsiveAgent.click();
+  await expect(responsiveAgent).toHaveAttribute('aria-expanded', 'true');
+  await expect(team.getByLabel('Responsive reviewer sub-chat')).toContainText(
+    'Mobile checks are complete',
+  );
+  await expect(composer).toHaveScreenshot('codex-agent-team.png', {
+    mask: [team.locator('.codex-agent-card__meta small').first()],
+  });
+
+  const accessibility = await new AxeBuilder({ page }).include('.codex-chat-dialog').analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+test('keeps each agent team with the output that created it', async ({ page }) => {
+  await page.goto('/?codexAgents=1&codexTeamHistory=1');
+  await page.getByRole('button', { name: /Chat with Codex|Codex is working/ }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  const log = composer.getByRole('log', { name: 'Codex chat log' });
+  const teams = log.getByRole('region', { name: 'Agent team' });
+
+  await expect(teams).toHaveCount(2);
+  await expect(teams.nth(0)).toContainText('Responsive reviewer');
+  await expect(teams.nth(1)).toContainText('Accessibility reviewer');
+  const transcriptOrder = await log
+    .locator(':scope > *')
+    .evaluateAll((elements) =>
+      elements.map((element) => element.textContent?.replace(/\s+/g, ' ').trim() || ''),
+    );
+  const indexOfText = (text) => transcriptOrder.findIndex((item) => item.includes(text));
+  expect(indexOfText('Studio chat is connected.')).toBeLessThan(indexOfText('Responsive reviewer'));
+  expect(indexOfText('Responsive reviewer')).toBeLessThan(
+    indexOfText('Now make one direct copy change.'),
+  );
+  expect(indexOfText('The direct copy change is complete.')).toBeLessThan(
+    indexOfText('Run a new agent team review.'),
+  );
+  expect(indexOfText('The new team review is underway.')).toBeLessThan(
+    indexOfText('Accessibility reviewer'),
+  );
+  await log.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await expect(log).toHaveScreenshot('codex-agent-team-history.png');
+
+  const accessibility = await new AxeBuilder({ page }).include('.codex-chat-dialog').analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+test('keeps the live agent team usable at the compact 320px viewport', async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== 'mobile');
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto('/?codexAgents=1');
+  await page.getByRole('button', { name: 'Codex is working' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  const team = composer.getByRole('region', { name: 'Agent team' });
+  await expect(team.getByRole('button', { name: /Responsive reviewer/ })).toBeVisible();
+  await expect(team.getByRole('button', { name: /Accessibility reviewer/ })).toBeVisible();
+  await expect(composer).toHaveScreenshot('codex-agent-team-320.png', {
+    mask: [team.locator('.codex-agent-card__meta small').first()],
+  });
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+});
+
+test('lets the reviewer choose direct work instead of Agent team delegation', async ({ page }) => {
+  let delivered;
+  await page.route('**/__made-solid/codex-feedback', async (route) => {
+    delivered = route.request().postDataJSON();
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({ status: 'accepted', id: 'direct-chat-1' }),
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openChatSettings(composer);
+  const teamMode = composer.getByRole('button', { name: /Agent team/ });
+  await expect(teamMode).toHaveAttribute('aria-pressed', 'true');
+  await teamMode.click();
+  await expect(teamMode).toHaveAttribute('aria-pressed', 'false');
+  await composer.getByLabel('Message to Codex').fill('Explain this without delegating.');
+  await composer.getByRole('button', { name: 'Send message' }).click();
+  expect(delivered.workMode).toBe('direct');
 });
 
 test('reconciles a delivered request without leaving a duplicate Sending card', async ({
@@ -374,19 +575,40 @@ test('explains and continues a conversation interrupted by a Codespace pause', a
       contentType: 'application/json',
       body: JSON.stringify({
         status: 'accepted',
-        detail: 'Codex resumed the interrupted conversation from its saved transcript.',
+        detail:
+          'Codex resumed the supervisor with instructions to restart 1 interrupted attached agent from its saved sub-chat.',
+        resumeRequestedAgents: [{ id: 'agent-responsive', name: 'responsive reviewer' }],
+        resumedAgents: [{ id: 'agent-responsive', name: 'responsive reviewer' }],
+        agentResumeFailures: [],
       }),
     });
   });
 
-  await page.goto('/?codexInterrupted');
+  await page.goto('/?codexInterrupted&codexAgents=1');
   await page.getByRole('button', { name: 'Chat with Codex' }).click();
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  const log = composer.getByRole('log', { name: 'Codex chat log' });
+  await composer.getByLabel('Message to Codex').focus();
+  await expect(composer.locator('.codex-composer-surface')).toHaveClass(/is-expanded/);
   await expect(composer.getByText('Work was interrupted')).toBeVisible();
   await expect(composer).toContainText('The Codespace paused before Codex finished.');
+  await expect(composer).toContainText('1 interrupted attached agent will resume');
+  await log.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
   await expect(composer).toHaveScreenshot('codex-interrupted-conversation-mobile.png');
-  await composer.getByRole('button', { name: 'Continue' }).click();
+  await composer.getByRole('button', { name: 'Resume working' }).click();
   await expect.poll(() => continuation?.action).toBe('continue-interrupted-thread');
+  await expect(
+    composer.getByRole('region', { name: 'Agent team' }).getByRole('status'),
+  ).toContainText('Resuming interrupted agents');
+  await expect(composer.getByRole('button', { name: /Responsive reviewer/ })).toContainText(
+    'Resuming',
+  );
+  await log.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  await expect(composer).toHaveScreenshot('codex-resuming-agent-team.png');
   expect(continuation.threadId).toBe('thread-1');
   expect(continuation.model).toBe('gpt-5.6-sol');
 
@@ -572,7 +794,7 @@ for (const working of [false, true]) {
 
     await messageInput.click();
     await expect(composerSurface).toHaveClass(/is-expanded/);
-    await expect.poll(() => messageInput.evaluate((element) => element.clientHeight)).toBe(72);
+    await expect.poll(() => messageInput.evaluate((element) => element.clientHeight)).toBe(112);
 
     await latestButton.focus();
     await page.keyboard.press('Enter');
@@ -652,6 +874,7 @@ test('creates a new Codex conversation with the selected model and reasoning', a
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat with Codex' }).click();
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openChatSettings(composer);
   await composer.getByLabel('Model').selectOption('gpt-5.6-terra');
   await composer.getByLabel('Reasoning').selectOption('high');
   await composer.getByRole('button', { name: 'New chat' }).click();
@@ -679,12 +902,14 @@ test('keeps the selected model and reasoning after the panel and page reopen', a
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat with Codex' }).click();
   let composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openChatSettings(composer);
   await composer.getByLabel('Model').selectOption('gpt-5.6-terra');
   await composer.getByLabel('Reasoning').selectOption('high');
   await composer.getByRole('button', { name: 'Close Codex chat' }).click();
   await page.reload();
   await page.getByRole('button', { name: 'Chat with Codex' }).click();
   composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openChatSettings(composer);
   await expect(composer.getByLabel('Model')).toHaveValue('gpt-5.6-terra');
   await expect(composer.getByLabel('Reasoning')).toHaveValue('high');
 });
@@ -988,6 +1213,7 @@ test('captures a selected region and queues its prompt for the chosen Codex mode
 
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
   await expect(composer).toBeVisible();
+  await openChatSettings(composer);
   await expect(composer.getByLabel('Model')).toBeVisible();
   await expect(composer).toHaveScreenshot('codex-feedback-compose.png');
   await composer.getByLabel('Model').selectOption('gpt-5.6-terra');
@@ -1021,9 +1247,14 @@ test('captures a selected region and queues its prompt for the chosen Codex mode
   await expect(inlineAttachment).toBeVisible();
   await expect(inlineAttachment).toHaveAttribute('src', /^data:image\/svg\+xml/);
   await expect(page.getByRole('dialog', { name: 'Message queued' })).toHaveCount(0);
+  const agentMode = composer.getByRole('button', { name: /Agent team/ });
+  await expect(agentMode).toBeVisible();
+  const agentModeBounds = await agentMode.boundingBox();
+  expect(agentModeBounds?.height).toBeGreaterThanOrEqual(44);
   await expect(composer).toHaveScreenshot('codex-feedback-inline-attachment.png');
   expect(delivered.model).toBe('gpt-5.6-terra');
   expect(delivered.effort).toBe('high');
+  expect(delivered.workMode).toBe('team');
   expect(delivered.prompt).toContain('Fix this layout issue');
   expect(delivered.screenshot).toContain('data:image/svg+xml');
 
@@ -1133,8 +1364,13 @@ test('hides the chat and model controls before the browser capture chooser opens
 test('has no automated accessibility violations in the model control panel', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openChatSettings(composer);
   const results = await new AxeBuilder({ page }).include('.codex-feedback-dialog').analyze();
   expect(results.violations).toEqual([]);
+  await page.keyboard.press('Escape');
+  await expect(composer.getByRole('group', { name: 'Chat settings' })).toBeHidden();
+  await expect(composer.getByRole('button', { name: 'Chat settings' })).toBeFocused();
 });
 
 test('keeps visual feedback available on the private-preview surface', async ({ page }) => {
@@ -1180,8 +1416,19 @@ test('keeps the model control usable at the compact 320px viewport', async ({ pa
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
   await expect(composer).toBeVisible();
   await expect(composer.getByRole('button', { name: 'Capture this tab' })).toBeVisible();
+  await expect
+    .poll(() =>
+      composer.getByRole('region', { name: 'Message composer' }).evaluate((el) => el.clientHeight),
+    )
+    .toBeLessThanOrEqual(140);
+  await expect
+    .poll(() =>
+      composer.getByRole('log', { name: 'Codex chat log' }).evaluate((el) => el.clientHeight),
+    )
+    .toBeGreaterThanOrEqual(180);
   const overflow = await composer.evaluate((element) => element.scrollWidth - element.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
+  await openChatSettings(composer);
   await expect(composer.getByLabel('Model')).toBeVisible();
   await expect(composer).toHaveScreenshot('codex-feedback-compose-320.png');
 });

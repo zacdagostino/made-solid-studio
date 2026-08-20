@@ -10,6 +10,8 @@ import type {
   BrandKit,
   Audit,
   AuditFinding,
+  AuditObservation,
+  AuditSpecialistTask,
   BuildManifest,
   BuilderPreviewMode,
   BuilderRunEvidence,
@@ -19,12 +21,15 @@ import type {
   ClientPreviewPublicationInput,
   MadeSolidHandoff,
   MadeSolidHandoffInput,
+  OutreachCompliance,
+  OutreachComplianceInput,
   GithubWorkspacePublication,
   GithubWorkspacePublicationInput,
   CapturedPage,
   Business,
   Contact,
   DecisionReport,
+  ReportPreviewJob,
   EvidenceFact,
   ProspectWorkspace,
   ResearchArtifact,
@@ -79,6 +84,13 @@ export type WorkspaceRepository = {
     finding: AuditFinding,
     patch: Pick<AuditFinding, 'title' | 'finding' | 'recommendation' | 'severity' | 'reviewState'>,
   ): Promise<void>;
+  updateAuditObservation(
+    observationId: string,
+    reviewState: AuditObservation['reviewState'],
+  ): Promise<void>;
+  createDecisionReport(businessId: string, auditId: string): Promise<DecisionReport | undefined>;
+  requestReportPreview(reportVersionId: string): Promise<ReportPreviewJob | undefined>;
+  cancelReportPreview(jobId: string): Promise<void>;
   requestAssetAnalysis(businessId: string): Promise<AssetAnalysisJob | undefined>;
   requestBrandColourRefresh(businessId: string): Promise<AssetAnalysisJob | undefined>;
   requestEditableLogoRetry(
@@ -183,11 +195,15 @@ export type WorkspaceRepository = {
   cancelGithubWorkspacePublication(publicationId: string): Promise<void>;
   setTaskState(task: Task, state: Task['state']): Promise<void>;
   approveForOutreach(businessId: string): Promise<boolean>;
+  saveOutreachCompliance(
+    businessId: string,
+    input: OutreachComplianceInput,
+  ): Promise<OutreachCompliance>;
   deleteProspect(businessId: string): Promise<boolean>;
 };
 
 const databaseName = 'siteforge-os';
-const databaseVersion = 6;
+const databaseVersion = 8;
 const legacyStorageKey = 'siteforge-os.records.v2';
 const localAgentPackageKey = 'agent-package-v6';
 const localCreativePackageId = 'agent-package-local-v6-1-creative-composition';
@@ -301,10 +317,26 @@ const localReliableUnmaterializedChatCleanupPackageId =
   'agent-package-local-v14-8-reliable-unmaterialized-chat-cleanup';
 const localDurableCodexTurnRecoveryPackageId =
   'agent-package-local-v14-9-durable-codex-turn-recovery';
+const localAgentTeamChatPackageId = 'agent-package-local-v15-agent-team-chat';
+const localColdProspectOffersPackageId = 'agent-package-local-v15-1-cold-prospect-offers';
+const localInboundClientEmailReviewPackageId =
+  'agent-package-local-v15-2-inbound-client-email-review';
+const localClientspaceAdminEmailReviewPackageId =
+  'agent-package-local-v15-3-clientspace-admin-email-review';
+const localResumableAgentTeamPackageId = 'agent-package-local-v15-4-resumable-agent-team';
+const localSpaciousCodexChatPackageId = 'agent-package-local-v15-5-spacious-codex-chat';
+const localTurnScopedAgentTeamsPackageId = 'agent-package-local-v15-6-turn-scoped-agent-teams';
+const localUninterruptedCodexRecoveryPackageId =
+  'agent-package-local-v15-7-uninterrupted-codex-recovery';
+const localSubscriptionSafeCodexRuntimePackageId =
+  'agent-package-local-v15-8-subscription-safe-codex-runtime';
+const localPermanentRailwayRuntimePackageId = 'agent-package-local-v15-9-permanent-railway-runtime';
 
 type StoreName =
   | 'activities'
   | 'audits'
+  | 'auditObservations'
+  | 'auditSpecialistTasks'
   | 'artifacts'
   | 'businesses'
   | 'buildManifests'
@@ -316,7 +348,9 @@ type StoreName =
   | 'crawlRuns'
   | 'facts'
   | 'meta'
+  | 'outreachCompliance'
   | 'reports'
+  | 'reportVersions'
   | 'tasks'
   | 'taxExpenses'
   | 'websites';
@@ -360,12 +394,16 @@ function openDatabase() {
           'artifacts',
           'facts',
           'audits',
+          'auditObservations',
+          'auditSpecialistTasks',
           'concepts',
           'reports',
+          'reportVersions',
           'tasks',
           'taxExpenses',
           'activities',
           'meta',
+          'outreachCompliance',
         ] as StoreName[]
       ).forEach((name) => {
         const store = database.objectStoreNames.contains(name)
@@ -2111,10 +2149,190 @@ export class SiteforgeRepository {
         'Removes the browser-lifecycle dependency from embedded chats and makes Codespace suspension a recoverable server-side lifecycle event.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localAgentTeamChatPackage: AgentPackage = {
+      ...localDurableCodexTurnRecoveryPackage,
+      id: localAgentTeamChatPackageId,
+      version: 15,
+      basePackageId: localDurableCodexTurnRecoveryPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v15.0',
+      contractAddendum:
+        'The embedded Studio Codex composer offers an explicit Agent team work mode. An enabled request authorizes the parent Codex thread to supervise useful parallel sub-agents while the private bridge returns the real spawned-thread hierarchy, task, status, timing, and bounded sub-chat transcript.',
+      instructionsAddendum:
+        'Persist Direct or Agent team as a local reviewer preference and with each queued request. In Agent team mode, delegate only useful independent workstreams, keep final ownership in the parent thread, and never fabricate workers or progress. Discover descendants through the app-server ancestor-thread filter, preserve parent relationships, bound thread and transcript reads, and render live starting, working, completed, interrupted, and error states with accessible expandable sub-chats.',
+      summary:
+        'Agent team chat test package: adds explicit supervisor delegation and a live, inspectable hierarchy of attached Codex sub-chats.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Turns the Studio Codex modal into a transparent multi-agent workspace where reviewers can see delegated work happen and inspect each real sub-chat.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localColdProspectOffersPackage: AgentPackage = {
+      ...localAgentTeamChatPackage,
+      id: localColdProspectOffersPackageId,
+      version: 15.1,
+      basePackageId: localAgentTeamChatPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v15.1',
+      contractAddendum:
+        'Every approved prospect build produces an immutable scope-derived offer menu with a recommended milestone option, outright payment, an optional fixed-term managed plan, and a focused essentials launch. Repeated routes use capped volume pricing, the automatic cold-prospect offer ceiling is explicit, and company size never changes the price.',
+      instructionsAddendum:
+        'Calculate from the newest working source, show full-scope value internally, keep automatic first-engagement pricing within the reviewed ceiling, and require human review for complex application capability or unusually large value. Preserve every client choice and its total commitment through Clientspace acceptance. Require recorded channel compliance before human-controlled outreach.',
+      summary:
+        'Cold prospect offer test package: adds scale-aware automatic pricing, fixed client choices, managed-plan handoff, outreach safeguards and funnel visibility.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Standardises commercially clear cold-prospect offers without net-worth pricing and preserves the selected commitment through acceptance and billing.',
+      stagedBehaviourIds: ['commercial-offer-strategy'],
+    };
+    const localInboundClientEmailReviewPackage: AgentPackage = {
+      ...localColdProspectOffersPackage,
+      id: localInboundClientEmailReviewPackageId,
+      version: 15.2,
+      basePackageId: localColdProspectOffersPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v15.2',
+      contractAddendum:
+        'A prospect workspace includes a context-aware email desk for inbound client messages. Every suggested reply stays review-only, names the saved business context used, preserves direct human edits, supports instruction-led draft revision, and never sends automatically.',
+      instructionsAddendum:
+        'Keep inbound messages and reply drafts attached to the exact prospect. Surface business stage, matched contact, verified research, open work, outreach safeguards, and explicit uncertainties. Alert a human when a draft needs review, preserve direct editing and revision history, and keep test fixtures visibly isolated from real delivery. Do not add or imply automatic sending.',
+      summary:
+        'Inbound client email review test package: adds a contextual review inbox, editable suggested replies, prompted revisions, and a safe dummy-account test flow.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Demonstrates a human-controlled client email copilot using the prospect workspace as grounded context while keeping delivery outside the test boundary.',
+      stagedBehaviourIds: ['inbound-client-email-review'],
+    };
+    const localClientspaceAdminEmailReviewPackage: AgentPackage = {
+      ...localInboundClientEmailReviewPackage,
+      id: localClientspaceAdminEmailReviewPackageId,
+      version: 15.3,
+      basePackageId: localInboundClientEmailReviewPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v15.3',
+      contractAddendum:
+        'The context-aware inbound email review capability is available in both the Studio prospect workspace and the selected project’s Clientspace Admin Emails section. Clientspace keeps its reply inbox separate from the existing outbound composer and grounds every review-only draft in current project, commercial, release, message, document, and assistant state.',
+      instructionsAddendum:
+        'Default Clientspace Admin Emails to Inbox and replies while preserving Compose outbound as a separate view. Isolate dummy messages and drafts per project, persist the selected admin section in the URL, show the exact project context boundary, reset review after direct or prompted edits, and never route a test inbox reply through outbound delivery.',
+      summary:
+        'Clientspace Admin email review test package: extends contextual inbound replies into each admin client Email workspace without changing outbound delivery.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Gives Made Solid staff the same human-controlled reply review workflow at the client-administration stage with richer project and commercial context.',
+      stagedBehaviourIds: ['inbound-client-email-review'],
+    };
+    const localResumableAgentTeamPackage: AgentPackage = {
+      ...localClientspaceAdminEmailReviewPackage,
+      id: localResumableAgentTeamPackageId,
+      version: 15.4,
+      basePackageId: localClientspaceAdminEmailReviewPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v15.4',
+      contractAddendum:
+        'Resuming an interrupted Agent team conversation restarts the supervising thread and every interrupted attached agent from its own saved sub-chat. Completed agents remain complete, active thread state overrides stale collaboration records, and the response identifies every restarted or failed child thread.',
+      instructionsAddendum:
+        'Before continuing an interrupted supervisor, discover and read its bounded descendant hierarchy. Start a continuation turn only for descendants whose saved turn is interrupted, preserve both workspace roots, then continue the supervisor with the real restart outcome. Visually mark each accepted descendant as Resuming until live thread state becomes working or complete, and surface partial restart failures as needing attention.',
+      summary:
+        'Resumable Agent team test package: restarts interrupted attached agents and visibly confirms each resumed assignment.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes recovery truthful for multi-agent work by continuing interrupted child threads as well as the supervisor and exposing that lifecycle in the team UI.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localSpaciousCodexChatPackage: AgentPackage = {
+      ...localResumableAgentTeamPackage,
+      id: localSpaciousCodexChatPackageId,
+      version: 15.5,
+      basePackageId: localResumableAgentTeamPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v15.5',
+      contractAddendum:
+        'The Studio Codex client prioritizes readable prompts and technical output with a wider desktop panel, a compact conversation header, and a two-row composer. Model, reasoning, and Agent team preferences remain keyboard-accessible behind one clearly labelled settings control instead of permanently reducing transcript space.',
+      instructionsAddendum:
+        'Keep the empty or reviewing composer to a prompt row and a 44-pixel action toolbar. Expand the prompt only on deliberate focus, expose model, reasoning, and work mode in an anchored settings surface, close that surface with Escape, and preserve visible focus, accessible names, touch targets, and overflow-free layouts at every required viewport.',
+      summary:
+        'Spacious Codex chat test package: gives prompts and code output more room with a compact header, two-row composer, and on-demand settings panel.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes long prompts and technical responses easier to read without removing any capture, model, reasoning, or Agent team controls.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localTurnScopedAgentTeamsPackage: AgentPackage = {
+      ...localSpaciousCodexChatPackage,
+      id: localTurnScopedAgentTeamsPackageId,
+      version: 15.6,
+      basePackageId: localSpaciousCodexChatPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v15.6',
+      contractAddendum:
+        'Every visible Agent team is scoped to the exact supervisor turn that spawned its root agents. The team panel follows the final visible output from that turn, remains there when later direct prompts are submitted, and a later delegated turn receives a separate team panel.',
+      instructionsAddendum:
+        'Return the parent turn identifier with every transcript message and descendant agent. Resolve nested agents through their root child thread, prefer persisted collaboration tool-call state, and use turn timing only as a compatibility fallback. Group agents by supervisor turn and render each group immediately after that turn’s latest visible message rather than in one global transcript footer.',
+      summary:
+        'Turn-scoped Agent teams test package: keeps every team beside the output that created it instead of following later prompts.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes multi-agent history read like a truthful conversation by preserving which output each team produced across later direct and delegated prompts.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localUninterruptedCodexRecoveryPackage: AgentPackage = {
+      ...localTurnScopedAgentTeamsPackage,
+      id: localUninterruptedCodexRecoveryPackageId,
+      version: 15.7,
+      basePackageId: localTurnScopedAgentTeamsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v15.7',
+      contractAddendum:
+        'An accepted Studio Codex turn is owned by the server rather than its browser viewer. Closing or suspending Chrome never requests interruption. After any number of Codespace restarts, each newly interrupted continuation is recovered exactly once from its persisted turn. Because App Server prohibits direct input to multi-agent child threads, the recovered supervisor must restart each interrupted descendant through followup_task before synthesis.',
+      instructionsAddendum:
+        'Run Codex maintenance immediately when the Studio server starts and before returning conversation status. Persist a recovering lease before starting a continuation, rebind a continuation already accepted before a bridge disconnect, and remove the lifetime one-recovery cap. Discover interrupted descendants and inject or steer exact followup_task recovery instructions into the supervisor; never send direct App Server input to a multi-agent child. An explicit queued Interrupt or replacement remains terminal for the superseded turn and must never be auto-recovered.',
+      summary:
+        'Uninterrupted Codex recovery test package: detaches accepted work from Chrome and repeatedly restores solo and Agent team turns after Codespace restarts.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes embedded Codex work survive phone disconnects and repeated Codespace lifecycle events without duplicate continuations or abandoned child agents.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localSubscriptionSafeCodexRuntimePackage: AgentPackage = {
+      ...localUninterruptedCodexRecoveryPackage,
+      id: localSubscriptionSafeCodexRuntimePackageId,
+      version: 15.8,
+      basePackageId: localUninterruptedCodexRecoveryPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v15.8',
+      contractAddendum:
+        'The Studio Codex Workspace Agent, Codex Website Builder, Codex Test Builder, and exported prospect workspace accept only ChatGPT subscription authentication. Each runtime enforces the ChatGPT login method, verifies the active session, strips API-key credentials, and stops instead of falling back to usage-based access. Separately billed OpenAI Analysis Workers are disabled by default and require matching protected-worker and visible UI opt-ins.',
+      instructionsAddendum:
+        'Pass forced_login_method="chatgpt" to every Codex App Server, exec, and editable-workspace invocation. Reject non-chatgpt builder modes, validate codex login status before startup, and never forward OPENAI_API_KEY, SITEFORGE_CODEX_API_KEY, or CODEX_API_KEY into a Codex subscription process. Gate each direct Responses or Images API feature behind SITEFORGE_OPENAI_API_ENABLED=true, disclose its billing boundary before a user-triggered call, and preserve deterministic or human-review fallbacks when the gate is off.',
+      summary:
+        'Subscription-safe Codex runtime test package: blocks API-key fallback for every Codex coding path and makes separately billed analysis explicit and default-off.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the billing boundary enforceable across Studio chat, test builds, complete builds, exported workspaces, and optional analysis rather than relying on deployment convention.',
+      stagedBehaviourIds: ['visual-codex-feedback', 'framework-quality-gates'],
+    };
+    const localPermanentRailwayRuntimePackage: AgentPackage = {
+      ...localSubscriptionSafeCodexRuntimePackage,
+      id: localPermanentRailwayRuntimePackageId,
+      version: 15.9,
+      basePackageId: localSubscriptionSafeCodexRuntimePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v15.9',
+      contractAddendum:
+        'Made Solid Studio has a permanent Railway runtime in Singapore with a production-built authenticated web surface, supervised workers, loopback-only Codex App Server, persisted ChatGPT login and editable repositories, and expiring private build and workspace preview domains.',
+      instructionsAddendum:
+        'Serve Studio runtime actions only after validating the current Supabase session and organization membership. Persist Codex state, editable repositories, prospect workspaces, and private preview state on the mounted runtime volume. Keep the App Server on loopback, strip OpenAI API keys, force ChatGPT login, preserve dirty repositories during restart, and issue expiring capabilities for every separate preview origin.',
+      summary:
+        'Permanent Railway Studio runtime test package: keeps Studio, subscription-backed Codex, builds, workers, repositories, and private previews available after the browser closes.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Replaces the disposable Codespace lifecycle with a secured, persistent Studio runtime while retaining Supabase authorization and the existing ChatGPT subscription billing boundary.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localPermanentRailwayRuntimePackage,
+          localSubscriptionSafeCodexRuntimePackage,
+          localUninterruptedCodexRecoveryPackage,
+          localTurnScopedAgentTeamsPackage,
+          localSpaciousCodexChatPackage,
+          localResumableAgentTeamPackage,
+          localClientspaceAdminEmailReviewPackage,
+          localInboundClientEmailReviewPackage,
+          localColdProspectOffersPackage,
+          localAgentTeamChatPackage,
           localDurableCodexTurnRecoveryPackage,
           localReliableUnmaterializedChatCleanupPackage,
           localCodexExperimentalWorkspaceCapabilityPackage,
@@ -2212,6 +2430,16 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localPermanentRailwayRuntimePackage,
+          localSubscriptionSafeCodexRuntimePackage,
+          localUninterruptedCodexRecoveryPackage,
+          localTurnScopedAgentTeamsPackage,
+          localSpaciousCodexChatPackage,
+          localResumableAgentTeamPackage,
+          localClientspaceAdminEmailReviewPackage,
+          localInboundClientEmailReviewPackage,
+          localColdProspectOffersPackage,
+          localAgentTeamChatPackage,
           localDurableCodexTurnRecoveryPackage,
           localReliableUnmaterializedChatCleanupPackage,
           localCodexExperimentalWorkspaceCapabilityPackage,
@@ -2312,6 +2540,16 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localPermanentRailwayRuntimePackage,
+            localSubscriptionSafeCodexRuntimePackage,
+            localUninterruptedCodexRecoveryPackage,
+            localTurnScopedAgentTeamsPackage,
+            localSpaciousCodexChatPackage,
+            localResumableAgentTeamPackage,
+            localClientspaceAdminEmailReviewPackage,
+            localInboundClientEmailReviewPackage,
+            localColdProspectOffersPackage,
+            localAgentTeamChatPackage,
             localDurableCodexTurnRecoveryPackage,
             localReliableUnmaterializedChatCleanupPackage,
             localCodexExperimentalWorkspaceCapabilityPackage,
@@ -2569,13 +2807,17 @@ export class SiteforgeRepository {
       pages,
       artifacts,
       audits,
+      auditSpecialistTasks,
+      auditObservations,
       briefs,
       buildManifests,
       builderRuns,
       concepts,
       reports,
+      reportVersions,
       tasks,
       activity,
+      outreachCompliance,
     ] = await Promise.all([
       this.getAllForBusiness<Website>('websites', businessId),
       this.getAllForBusiness<Contact>('contacts', businessId),
@@ -2584,13 +2826,17 @@ export class SiteforgeRepository {
       this.getAllForBusiness<CapturedPage>('crawlPages', businessId),
       this.getAllForBusiness<ResearchArtifact>('artifacts', businessId),
       this.getAllForBusiness<Audit>('audits', businessId),
+      this.getAllForBusiness<AuditSpecialistTask>('auditSpecialistTasks', businessId),
+      this.getAllForBusiness<AuditObservation>('auditObservations', businessId),
       this.getAllForBusiness<RedesignBrief>('briefs', businessId),
       this.getAllForBusiness<BuildManifest>('buildManifests', businessId),
       this.getAllForBusiness<BuilderRun>('builderRuns', businessId),
       this.getAllForBusiness<RedesignConcept>('concepts', businessId),
       this.getAllForBusiness<DecisionReport>('reports', businessId),
+      this.getAllForBusiness<DecisionReport>('reportVersions', businessId),
       this.getAllForBusiness<Task>('tasks', businessId),
       this.getAllForBusiness<Activity>('activities', businessId),
+      this.getAllForBusiness<OutreachCompliance>('outreachCompliance', businessId),
     ]);
 
     const orderedCaptures = captures.sort((left, right) =>
@@ -2603,12 +2849,19 @@ export class SiteforgeRepository {
             (capture) => capture.id !== latestCapture.id && capture.status === 'ready',
           )
         : undefined;
+    const currentAudit = audits.sort((left, right) =>
+      right.createdAt.localeCompare(left.createdAt),
+    )[0];
+    const orderedReportVersions = reportVersions.sort(
+      (left, right) => right.version - left.version,
+    );
 
     return {
       business,
       website: websites[0],
       captures: orderedCaptures,
       contacts,
+      outreachCompliance: outreachCompliance[0],
       facts:
         latestCapture?.status === 'ready'
           ? facts.filter((fact) => fact.crawlRunId === latestCapture.id)
@@ -2632,7 +2885,13 @@ export class SiteforgeRepository {
       previousArtifacts: previousCapture
         ? artifacts.filter((artifact) => artifact.crawlRunId === previousCapture.id)
         : [],
-      audit: audits[0],
+      audit: currentAudit,
+      auditSpecialistTasks: auditSpecialistTasks.filter(
+        (task) => task.auditId === currentAudit?.id,
+      ),
+      auditObservations: auditObservations.filter(
+        (observation) => observation.auditId === currentAudit?.id,
+      ),
       redesignBrief: briefs.sort((left, right) => right.version - left.version)[0],
       redesignBriefs: briefs.sort((left, right) => right.version - left.version),
       buildManifest: buildManifests.sort((left, right) =>
@@ -2654,7 +2913,10 @@ export class SiteforgeRepository {
       builderRuns: builderRuns.sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
       aiUsageRecords: [],
       concept: concepts[0],
-      report: reports[0],
+      report: orderedReportVersions[0] ?? reports[0],
+      reportVersions: orderedReportVersions,
+      reportPreviewJobs: [],
+      reportPreviewWorkerAvailable: false,
       tasks: tasks.sort((left, right) => left.state.localeCompare(right.state)),
       activity: activity.sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
     };
@@ -2882,26 +3144,56 @@ export class SiteforgeRepository {
     if (!business || !completedCapture) {
       throw new Error('A completed website capture is required before an audit can be generated.');
     }
+    const activeAudit = audits
+      .filter(
+        (audit) =>
+          audit.crawlRunId === completedCapture.id &&
+          (audit.status === 'research_pending' || audit.status === 'running'),
+      )
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+    if (activeAudit) return activeAudit;
     const now = new Date().toISOString();
-    const audit = audits[0] ?? {
+    const audit: Audit = {
       id: id('audit'),
       businessId,
-      status: 'not_started' as const,
+      version: Math.max(0, ...audits.map((candidate) => candidate.version ?? 0)) + 1,
+      crawlRunId: completedCapture.id,
+      status: 'research_pending',
       findings: [],
-      totalItems: 0,
+      progressPhase: 'queued',
+      progressDetail: 'Six specialist sections are waiting for the protected audit workers.',
+      totalItems: 6,
       completedItems: 0,
       createdAt: now,
       updatedAt: now,
     };
-    const updatedAudit: Audit = {
-      ...audit,
-      status: 'ready',
-      findings: audit.findings,
+    const specialistKinds: AuditSpecialistTask['specialistKind'][] = [
+      'responsive_ui',
+      'accessibility',
+      'performance_engineering',
+      'technical_seo',
+      'conversion_journey',
+      'platform_integrations',
+    ];
+    const specialistTasks: AuditSpecialistTask[] = specialistKinds.map((specialistKind) => ({
+      id: id('audit-specialist-task'),
+      businessId,
+      auditId: audit.id,
+      crawlRunId: completedCapture.id,
+      specialistKind,
+      status: 'research_pending',
+      progressPhase: 'queued',
+      progressDetail: 'Waiting for the protected specialist worker.',
+      totalItems: 0,
+      completedItems: 0,
+      createdAt: now,
       updatedAt: now,
-    };
+    }));
     await this.putMany([
-      ['audits', updatedAudit],
-      ['businesses', { ...business, stage: 'audit_ready', updatedAt: now }],
+      ['audits', audit],
+      ...specialistTasks.map(
+        (task) => ['auditSpecialistTasks', task] as [StoreName, AuditSpecialistTask],
+      ),
       [
         'activities',
         {
@@ -2914,7 +3206,7 @@ export class SiteforgeRepository {
         } satisfies Activity,
       ],
     ]);
-    return updatedAudit;
+    return audit;
   }
 
   async cancelWebsiteAudit(businessId: string) {
@@ -2930,6 +3222,23 @@ export class SiteforgeRepository {
       progressPhase: 'cancelled',
       progressDetail: 'Audit cancelled in local mode.',
     });
+    const specialistTasks = await this.getAllForBusiness<AuditSpecialistTask>(
+      'auditSpecialistTasks',
+      businessId,
+    );
+    await Promise.all(
+      specialistTasks
+        .filter((task) => task.auditId === audit.id)
+        .map((task) =>
+          this.put('auditSpecialistTasks', {
+            ...task,
+            status: 'cancelled',
+            cancelRequestedAt: new Date().toISOString(),
+            progressPhase: 'cancelled',
+            progressDetail: 'Audit cancelled in local mode.',
+          }),
+        ),
+    );
   }
 
   async updateAuditFinding(
@@ -2949,6 +3258,135 @@ export class SiteforgeRepository {
       ),
       updatedAt: now,
     });
+  }
+
+  async updateAuditObservation(
+    observationId: string,
+    reviewState: AuditObservation['reviewState'],
+  ) {
+    const observation = await this.get<AuditObservation>('auditObservations', observationId);
+    if (!observation) throw new Error('The specialist observation could not be found.');
+    await this.put('auditObservations', {
+      ...observation,
+      reviewState,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  async createDecisionReport(businessId: string, auditId: string) {
+    const audit = await this.get<Audit>('audits', auditId);
+    const allObservations = (
+      await this.getAllForBusiness<AuditObservation>('auditObservations', businessId)
+    ).filter((observation) => observation.auditId === auditId);
+    const observations = allObservations.filter(
+      (observation) => observation.reviewState === 'approved',
+    );
+    const tasks = (
+      await this.getAllForBusiness<AuditSpecialistTask>('auditSpecialistTasks', businessId)
+    ).filter((task) => task.auditId === auditId);
+    const latestCapture = (await this.getAllForBusiness<ResearchCapture>('crawlRuns', businessId))
+      .filter((capture) => capture.status === 'ready')
+      .sort((left, right) => right.requestedAt.localeCompare(left.requestedAt))[0];
+    if (!audit || audit.status !== 'ready' || audit.crawlRunId !== latestCapture?.id) {
+      throw new Error('A completed specialist audit for the current capture is required.');
+    }
+    if (tasks.length !== 6 || tasks.some((task) => task.status !== 'ready')) {
+      throw new Error('Every required specialist section must complete before preparing a report.');
+    }
+    if (!observations.length) {
+      throw new Error(
+        'Approve at least one evidence-linked observation before preparing a report.',
+      );
+    }
+    if (observations.some((observation) => observation.confidence === 'low')) {
+      throw new Error('Low-confidence observations need stronger evidence or exclusion.');
+    }
+    const [facts, artifacts, business] = await Promise.all([
+      this.getAllForBusiness<EvidenceFact>('facts', businessId),
+      this.getAllForBusiness<ResearchArtifact>('artifacts', businessId),
+      this.get<Business>('businesses', businessId),
+    ]);
+    const currentEvidenceIds = new Set([
+      ...facts.filter((fact) => fact.crawlRunId === audit.crawlRunId).map((fact) => fact.id),
+      ...artifacts
+        .filter((artifact) => artifact.crawlRunId === audit.crawlRunId)
+        .map((artifact) => artifact.id),
+    ]);
+    if (
+      observations.some((observation) =>
+        [...observation.evidenceFactIds, ...observation.evidenceArtifactIds].every(
+          (evidenceId) => !currentEvidenceIds.has(evidenceId),
+        ),
+      )
+    ) {
+      throw new Error('Every approved observation needs evidence from the current capture.');
+    }
+    const existing = await this.getAllForBusiness<DecisionReport>('reportVersions', businessId);
+    const now = new Date().toISOString();
+    const report: DecisionReport = {
+      id: id('report-version'),
+      businessId,
+      auditId,
+      crawlRunId: audit.crawlRunId,
+      status: 'approved',
+      version: Math.max(0, ...existing.map((candidate) => candidate.version)) + 1,
+      schemaVersion: 1,
+      reviewState: 'approved',
+      summary: `${observations.length} approved website ${observations.length === 1 ? 'finding' : 'findings'} frozen in this reviewed report.`,
+      data: {
+        schemaVersion: 1,
+        auditId,
+        crawlRunId: audit.crawlRunId,
+        generatedAt: now,
+        title: `${business?.name ?? 'Client'} website report`,
+        summary:
+          'A practical, evidence-led review of the current website experience and the improvements worth prioritising.',
+        scope: [
+          'Responsive UI at 375 x 812, 768 x 1024, and 1440 x 900',
+          'Accessibility and keyboard-relevant structure',
+          'Performance engineering and page delivery',
+          'Technical SEO and content structure',
+          'Conversion journeys and visible trust',
+          'Platform and integration signals',
+        ],
+        findings: observations.map((observation) => ({
+          id: observation.id,
+          area: observation.area,
+          priority: observation.severity,
+          title: observation.title,
+          observation: observation.observation,
+          impact: observation.customerImpact,
+          recommendation: observation.recommendation,
+          sourceUrls: observation.sourceUrls,
+          evidenceFactIds: observation.evidenceFactIds,
+          evidenceArtifactIds: observation.evidenceArtifactIds,
+          viewport: observation.viewport,
+          measurement: observation.measurement,
+          confidence: observation.confidence,
+        })),
+        methodology: [
+          'One bounded public-site capture supplied the immutable evidence used by independent specialist checks.',
+          'Every client-facing finding was approved by a human reviewer before this report version was frozen.',
+          'Unselected observations remain private audit material and are not presented to the client.',
+        ],
+        limitations: [
+          'The review does not include private analytics, authenticated pages, submitted forms, or claims about future traffic, rankings, or revenue.',
+        ],
+        nextStep: 'Talk through which improvements best match the business and its customers.',
+      },
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.put('reportVersions', report);
+    return report;
+  }
+
+  async requestReportPreview(): Promise<ReportPreviewJob | undefined> {
+    throw new Error('Private report previews require the protected cloud workspace.');
+  }
+
+  async cancelReportPreview(): Promise<void> {
+    throw new Error('Private report previews require the protected cloud workspace.');
   }
 
   async requestAssetAnalysis(): Promise<AssetAnalysisJob | undefined> {
@@ -3058,16 +3496,6 @@ export class SiteforgeRepository {
       currentManifestContentMatchesBrief(workspace, latestBrief)
     ) {
       return latestBrief;
-    }
-    const capabilityAnalysis = workspace.researchPacket.data.capabilityAnalysis;
-    const capabilityAnalysisIsReady =
-      capabilityAnalysis &&
-      typeof capabilityAnalysis === 'object' &&
-      (capabilityAnalysis as Record<string, unknown>).status === 'ready';
-    if (!capabilityAnalysisIsReady && !Array.isArray(latestBrief?.draft.capabilityInventory)) {
-      throw new Error(
-        'AI capability analysis must complete from the saved capture before the first brief can be drafted.',
-      );
     }
     const now = new Date().toISOString();
     const generated = createBriefDraft(
@@ -3396,11 +3824,36 @@ export class SiteforgeRepository {
 
   async approveForOutreach(businessId: string) {
     const business = await this.get<Business>('businesses', businessId);
-    const [audits, concepts] = await Promise.all([
+    const [audits, concepts, contacts] = await Promise.all([
       this.getAllForBusiness<Audit>('audits', businessId),
       this.getAllForBusiness<RedesignConcept>('concepts', businessId),
+      this.getAllForBusiness<Contact>('contacts', businessId),
     ]);
-    if (!business || audits[0]?.status !== 'ready' || concepts[0]?.status !== 'ready') return false;
+    const compliance = (
+      await this.getAllForBusiness<OutreachCompliance>('outreachCompliance', businessId)
+    )[0];
+    const phoneReady =
+      compliance?.phoneAllowed &&
+      contacts.some((contact) => Boolean(contact.phone)) &&
+      compliance.doNotCallClear &&
+      compliance.doNotCallCheckedAt;
+    const emailReady =
+      compliance?.emailAllowed &&
+      contacts.some((contact) => Boolean(contact.email)) &&
+      compliance.senderIdentificationConfirmed &&
+      compliance.unsubscribeProcessConfirmed;
+    if (
+      !business ||
+      audits[0]?.status !== 'ready' ||
+      concepts[0]?.status !== 'ready' ||
+      !compliance ||
+      compliance.consentBasis === 'not_established' ||
+      !compliance.sourceNote.trim() ||
+      (compliance.consentBasis === 'public_role_relevant' && !compliance.sourceUrl?.trim()) ||
+      compliance.suppressedAt ||
+      (!emailReady && !phoneReady)
+    )
+      return false;
     const now = new Date().toISOString();
     const updatedBusiness: Business = {
       ...business,
@@ -3422,6 +3875,22 @@ export class SiteforgeRepository {
     return true;
   }
 
+  async saveOutreachCompliance(businessId: string, input: OutreachComplianceInput) {
+    const existing = (
+      await this.getAllForBusiness<OutreachCompliance>('outreachCompliance', businessId)
+    )[0];
+    const now = new Date().toISOString();
+    const record: OutreachCompliance = {
+      ...input,
+      id: existing?.id ?? id('outreach-compliance'),
+      businessId,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+    await this.put('outreachCompliance', record);
+    return record;
+  }
+
   async deleteProspect(businessId: string) {
     const business = await this.get<Business>('businesses', businessId);
     if (!business || business.kind !== 'prospect') return false;
@@ -3434,11 +3903,15 @@ export class SiteforgeRepository {
       this.getAllForBusiness<ResearchArtifact>('artifacts', businessId),
       this.getAllForBusiness<EvidenceFact>('facts', businessId),
       this.getAllForBusiness<Audit>('audits', businessId),
+      this.getAllForBusiness<AuditSpecialistTask>('auditSpecialistTasks', businessId),
+      this.getAllForBusiness<AuditObservation>('auditObservations', businessId),
       this.getAllForBusiness<BuildManifest>('buildManifests', businessId),
       this.getAllForBusiness<RedesignConcept>('concepts', businessId),
       this.getAllForBusiness<DecisionReport>('reports', businessId),
+      this.getAllForBusiness<DecisionReport>('reportVersions', businessId),
       this.getAllForBusiness<Task>('tasks', businessId),
       this.getAllForBusiness<Activity>('activities', businessId),
+      this.getAllForBusiness<OutreachCompliance>('outreachCompliance', businessId),
     ]);
     const stores: StoreName[] = [
       'businesses',
@@ -3449,11 +3922,15 @@ export class SiteforgeRepository {
       'artifacts',
       'facts',
       'audits',
+      'auditSpecialistTasks',
+      'auditObservations',
       'buildManifests',
       'concepts',
       'reports',
+      'reportVersions',
       'tasks',
       'activities',
+      'outreachCompliance',
     ];
     const database = await this.database();
     const transaction = database.transaction(stores, 'readwrite');
@@ -3467,11 +3944,15 @@ export class SiteforgeRepository {
       'artifacts',
       'facts',
       'audits',
+      'auditSpecialistTasks',
+      'auditObservations',
       'buildManifests',
       'concepts',
       'reports',
+      'reportVersions',
       'tasks',
       'activities',
+      'outreachCompliance',
     ] as const;
     relatedRecords.forEach((records, index) => {
       records.forEach((record) => transaction.objectStore(storesByRecord[index]).delete(record.id));
