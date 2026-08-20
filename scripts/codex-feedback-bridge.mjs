@@ -354,6 +354,26 @@ function parseScreenshot(dataUrl) {
   return { data, extension: supportedImageTypes.get(match[1]), mimeType: match[1] };
 }
 
+function workspaceWriteThreadSettings(runtimeWorkspaceRoots) {
+  return {
+    runtimeWorkspaceRoots,
+    sandbox: 'workspace-write',
+    approvalPolicy: 'never',
+  };
+}
+
+function workspaceWriteTurnSettings(runtimeWorkspaceRoots) {
+  return {
+    runtimeWorkspaceRoots,
+    sandboxPolicy: {
+      type: 'workspaceWrite',
+      writableRoots: runtimeWorkspaceRoots,
+      networkAccess: true,
+    },
+    approvalPolicy: 'never',
+  };
+}
+
 export class CodexFeedbackBridge {
   constructor({
     cwd = process.cwd(),
@@ -680,10 +700,8 @@ export class CodexFeedbackBridge {
       }
       const result = await client.request('thread/start', {
         cwd: this.cwd,
-        runtimeWorkspaceRoots: this.runtimeWorkspaceRoots,
+        ...workspaceWriteThreadSettings(this.runtimeWorkspaceRoots),
         model,
-        sandbox: 'danger-full-access',
-        approvalPolicy: 'never',
         config: { model_reasoning_effort: effort },
         ephemeral: false,
         sessionStartSource: 'clear',
@@ -742,7 +760,7 @@ export class CodexFeedbackBridge {
       if (thread?.status?.type === 'notLoaded') {
         await client.request('thread/resume', {
           threadId,
-          runtimeWorkspaceRoots: this.runtimeWorkspaceRoots,
+          ...workspaceWriteThreadSettings(this.runtimeWorkspaceRoots),
         });
       }
       let agentThreads = [];
@@ -808,7 +826,7 @@ export class CodexFeedbackBridge {
           },
         ],
         cwd: this.cwd,
-        runtimeWorkspaceRoots: this.runtimeWorkspaceRoots,
+        ...workspaceWriteTurnSettings(this.runtimeWorkspaceRoots),
         model,
         effort,
       });
@@ -1089,7 +1107,7 @@ export class CodexFeedbackBridge {
           if (thread.status?.type === 'notLoaded') {
             await client.request('thread/resume', {
               threadId: thread.id,
-              runtimeWorkspaceRoots: this.runtimeWorkspaceRoots,
+              ...workspaceWriteThreadSettings(this.runtimeWorkspaceRoots),
             });
             const resumedThread = await client.request('thread/read', {
               threadId: thread.id,
@@ -1115,7 +1133,7 @@ export class CodexFeedbackBridge {
                 ...(record.imagePath ? [{ type: 'localImage', path: record.imagePath }] : []),
               ],
               cwd: this.cwd,
-              runtimeWorkspaceRoots: this.runtimeWorkspaceRoots,
+              ...workspaceWriteTurnSettings(this.runtimeWorkspaceRoots),
               model: record.model,
               effort: record.effort,
             });
@@ -1236,7 +1254,7 @@ export class CodexFeedbackBridge {
           if (detailedThread.status?.type === 'notLoaded') {
             await client.request('thread/resume', {
               threadId: detailedThread.id,
-              runtimeWorkspaceRoots: this.runtimeWorkspaceRoots,
+              ...workspaceWriteThreadSettings(this.runtimeWorkspaceRoots),
             });
             const resumedDetail = await client.request('thread/read', {
               threadId: detailedThread.id,
@@ -1336,7 +1354,7 @@ export class CodexFeedbackBridge {
               },
             ],
             cwd: this.cwd,
-            runtimeWorkspaceRoots: this.runtimeWorkspaceRoots,
+            ...workspaceWriteTurnSettings(this.runtimeWorkspaceRoots),
             model: record.model,
             effort: record.effort,
           });

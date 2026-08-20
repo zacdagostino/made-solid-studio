@@ -123,6 +123,8 @@ function fakeConnection(state) {
         };
       }
       if (method === 'thread/resume') {
+        state.threadResumes ??= [];
+        state.threadResumes.push(params);
         if (state.reactivateOnResume) {
           state.threadStatus = { type: 'active', activeFlags: ['turn'] };
           const lastTurnId = state.turnIds?.at(-1);
@@ -577,6 +579,14 @@ test('uses an app-server reactivated turn instead of starting a duplicate contin
 
   assert.equal(state.turns.length, 1);
   assert.equal(state.turnStatuses['turn-1'], 'inProgress');
+  assert.deepEqual(state.threadResumes, [
+    {
+      threadId: 'thread-2',
+      runtimeWorkspaceRoots: ['/workspaces/siteforge-os', '/workspaces/made-solid-website'],
+      sandbox: 'workspace-write',
+      approvalPolicy: 'never',
+    },
+  ]);
   const running = (await bridge.readRecords('running'))[0];
   assert.equal(running.turnId, 'turn-1');
   assert.equal(running.recoveryCount, undefined);
@@ -883,7 +893,7 @@ test('uses the Codex title after the first prompt and deletes only abandoned emp
   assert.equal(retained.deleted, false);
 });
 
-test('creates and returns a new persistent full-access Codex conversation', async () => {
+test('creates and returns a new persistent repository-scoped Codex conversation', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-new-thread-'));
   const state = { busy: false, turns: [], threadStarts: [] };
   const bridge = new CodexFeedbackBridge({
@@ -902,13 +912,42 @@ test('creates and returns a new persistent full-access Codex conversation', asyn
       cwd: '/workspaces/siteforge-os',
       runtimeWorkspaceRoots: ['/workspaces/siteforge-os', '/workspaces/made-solid-website'],
       model: 'gpt-image-capable',
-      sandbox: 'danger-full-access',
+      sandbox: 'workspace-write',
       approvalPolicy: 'never',
       config: { model_reasoning_effort: 'medium' },
       ephemeral: false,
       sessionStartSource: 'clear',
     },
   ]);
+});
+
+test('applies the repository-scoped workspace-write policy to every delivered turn', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-workspace-write-'));
+  const state = { busy: false, turns: [] };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+
+  const accepted = await bridge.enqueue({
+    prompt: 'Update both Made Solid repositories.',
+    model: 'gpt-text-only',
+    effort: 'medium',
+    threadId: 'thread-2',
+  });
+
+  assert.equal(accepted.status, 'accepted');
+  assert.deepEqual(state.turns[0].runtimeWorkspaceRoots, [
+    '/workspaces/siteforge-os',
+    '/workspaces/made-solid-website',
+  ]);
+  assert.deepEqual(state.turns[0].sandboxPolicy, {
+    type: 'workspaceWrite',
+    writableRoots: ['/workspaces/siteforge-os', '/workspaces/made-solid-website'],
+    networkAccess: true,
+  });
+  assert.equal(state.turns[0].approvalPolicy, 'never');
 });
 
 test('deletes an abandoned new chat before its rollout is materialized', async () => {

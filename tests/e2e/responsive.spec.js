@@ -3692,7 +3692,8 @@ test('displays the newest test package above retained package versions', async (
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const packagePicker = page.getByLabel('Test agent package');
-  await expect(packagePicker).toHaveValue('agent-package-local-v15-9-permanent-railway-runtime');
+  await expect(packagePicker).toHaveValue('agent-package-local-v16-0-railway-workspace-write');
+  await expect(packagePicker).toContainText('v16.0 · Approved test');
   await expect(packagePicker).toContainText('v15.9 · Approved test');
   await expect(packagePicker).toContainText('v15.8 · Approved test');
   await expect(packagePicker).toContainText('v15.7 · Approved test');
@@ -3798,6 +3799,7 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v16.0', 'Railway workspace-write'],
     ['v15.9', 'Permanent Railway Studio runtime'],
     ['v15.8', 'Subscription-safe Codex runtime'],
     ['v15.7', 'Uninterrupted Codex recovery'],

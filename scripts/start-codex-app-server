@@ -23,9 +23,32 @@ fi
 # in depth if the surrounding worker host also runs OpenAI API features.
 unset OPENAI_API_KEY SITEFORGE_CODEX_API_KEY CODEX_API_KEY
 
-cd "${SITEFORGE_STUDIO_WORKSPACE_DIR:-$project_directory}"
+studio_workspace_directory="${SITEFORGE_STUDIO_WORKSPACE_DIR:-$project_directory}"
+declare -a codex_configuration=(--config 'forced_login_method="chatgpt"')
 
-exec codex --config 'forced_login_method="chatgpt"' app-server \
+if [[ "${SITEFORGE_RUNTIME_AUTH_REQUIRED:-0}" == "1" ]]; then
+  runtime_workspaces_directory="${SITEFORGE_RUNTIME_WORKSPACES_DIR:?SITEFORGE_RUNTIME_WORKSPACES_DIR is required}"
+  expected_studio_workspace="$runtime_workspaces_directory/siteforge-os"
+  expected_website_workspace="$runtime_workspaces_directory/made-solid-website"
+  website_workspace_directory="${MADE_SOLID_WEBSITE_DIRECTORY:?MADE_SOLID_WEBSITE_DIRECTORY is required}"
+  if [[ "$studio_workspace_directory" != "$expected_studio_workspace" ||
+        "$website_workspace_directory" != "$expected_website_workspace" ||
+        ! "$runtime_workspaces_directory" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+    echo "The Railway Codex workspace roots must be the two configured Made Solid repositories."
+    exit 1
+  fi
+  writable_roots="[\"$studio_workspace_directory\",\"$website_workspace_directory\"]"
+  codex_configuration+=(
+    --config 'sandbox_mode="workspace-write"'
+    --config 'approval_policy="never"'
+    --config "sandbox_workspace_write.writable_roots=$writable_roots"
+    --config 'sandbox_workspace_write.network_access=true'
+  )
+fi
+
+cd "$studio_workspace_directory"
+
+exec codex "${codex_configuration[@]}" --strict-config app-server \
   --listen ws://127.0.0.1:4500 \
   --enable prevent_idle_sleep \
   --disable shell_snapshot

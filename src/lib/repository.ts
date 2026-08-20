@@ -331,6 +331,7 @@ const localUninterruptedCodexRecoveryPackageId =
 const localSubscriptionSafeCodexRuntimePackageId =
   'agent-package-local-v15-8-subscription-safe-codex-runtime';
 const localPermanentRailwayRuntimePackageId = 'agent-package-local-v15-9-permanent-railway-runtime';
+const localRailwayWorkspaceWritePackageId = 'agent-package-local-v16-0-railway-workspace-write';
 
 type StoreName =
   | 'activities'
@@ -2319,10 +2320,28 @@ export class SiteforgeRepository {
         'Replaces the disposable Codespace lifecycle with a secured, persistent Studio runtime while retaining Supabase authorization and the existing ChatGPT subscription billing boundary.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localRailwayWorkspaceWritePackage: AgentPackage = {
+      ...localPermanentRailwayRuntimePackage,
+      id: localRailwayWorkspaceWritePackageId,
+      version: 16,
+      basePackageId: localPermanentRailwayRuntimePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v16.0',
+      contractAddendum:
+        'Every owner-authorized Railway Studio Codex conversation uses the workspace-write sandbox with only /data/workspaces/siteforge-os and /data/workspaces/made-solid-website as durable writable repository roots. New, resumed, queued, and recovered turns retain the same boundary.',
+      instructionsAddendum:
+        'Force ChatGPT subscription authentication and fail closed when it is unavailable. Start and resume threads with workspace-write, never danger-full-access, and override every turn with the two exact runtime repository roots, workspace-write policy, and no-approval escape boundary. Permit network access for builds and reviewed Git or deployment workflows without broadening filesystem writes beyond the repositories and standard ephemeral sandbox paths.',
+      summary:
+        'Railway workspace-write test package: confines every owner Codex chat to both Made Solid repositories while retaining subscription auth, builds, and deployment access.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Replaces the Railway Workspace Agent’s full-filesystem profile with an explicit two-repository write boundary that persists across every chat lifecycle.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localRailwayWorkspaceWritePackage,
           localPermanentRailwayRuntimePackage,
           localSubscriptionSafeCodexRuntimePackage,
           localUninterruptedCodexRecoveryPackage,

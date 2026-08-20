@@ -48,21 +48,22 @@ test('registers a single-volume Singapore Railway runtime with a health check', 
   );
 });
 
-test('keeps the permanent runtime package newest in the local package ledger', async () => {
+test('keeps the Railway workspace-write package newest in the local package ledger', async () => {
   const repository = await readFile('src/lib/repository.ts', 'utf8');
-  assert.match(repository, /version: 15\.9,/);
-  assert.match(repository, /builderContractVersion: 'made-solid-studio-builder-agent-v15\.9'/);
+  assert.match(repository, /version: 16,/);
+  assert.match(repository, /builderContractVersion: 'made-solid-studio-builder-agent-v16\.0'/);
   const ledger = repository.slice(repository.indexOf('value: JSON.stringify(['));
   assert.ok(
-    ledger.indexOf('localPermanentRailwayRuntimePackage,') <
-      ledger.indexOf('localSubscriptionSafeCodexRuntimePackage,'),
+    ledger.indexOf('localRailwayWorkspaceWritePackage,') <
+      ledger.indexOf('localPermanentRailwayRuntimePackage,'),
   );
 });
 
 test('keeps OpenAI API credentials out of the subscription-backed Railway processes', async () => {
-  const [dockerfile, launcher] = await Promise.all([
+  const [dockerfile, launcher, appServerLauncher] = await Promise.all([
     readFile('Dockerfile', 'utf8'),
     readFile('scripts/start-railway-runtime', 'utf8'),
+    readFile('scripts/start-codex-app-server', 'utf8'),
   ]);
   assert.match(dockerfile, /@openai\/codex@0\.148\.0/);
   assert.match(launcher, /SITEFORGE_CODEX_AUTH_MODE=chatgpt/);
@@ -71,4 +72,12 @@ test('keeps OpenAI API credentials out of the subscription-backed Railway proces
   assert.match(launcher, /SITEFORGE_RUNTIME_AUTH_REQUIRED=1/);
   assert.match(launcher, /SITEFORGE_RUNTIME_OWNER_USER_ID/);
   assert.match(launcher, /SITEFORGE_RUNTIME_OWNER_ORGANIZATION_ID/);
+  assert.match(appServerLauncher, /forced_login_method="chatgpt"/);
+  assert.match(appServerLauncher, /sandbox_mode="workspace-write"/);
+  assert.match(appServerLauncher, /approval_policy="never"/);
+  assert.match(appServerLauncher, /sandbox_workspace_write\.writable_roots=/);
+  assert.match(appServerLauncher, /sandbox_workspace_write\.network_access=true/);
+  assert.match(appServerLauncher, /--strict-config app-server/);
+  assert.match(appServerLauncher, /expected_studio_workspace=.*siteforge-os/);
+  assert.match(appServerLauncher, /expected_website_workspace=.*made-solid-website/);
 });
