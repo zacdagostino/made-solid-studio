@@ -6,6 +6,7 @@ import test from 'node:test';
 import { CodexFeedbackBridge } from '../../scripts/codex-feedback-bridge.mjs';
 
 const imageDataUrl = `data:image/png;base64,${Buffer.from('private screenshot').toString('base64')}`;
+const secondImageDataUrl = `data:image/webp;base64,${Buffer.from('second private image').toString('base64')}`;
 
 function fakeConnection(state) {
   return async () => ({
@@ -21,6 +22,10 @@ function fakeConnection(state) {
               displayName: 'Image capable',
               defaultReasoningEffort: 'medium',
               inputModalities: ['text', 'image'],
+              serviceTiers: [
+                { id: 'priority', name: 'Fast', description: '1.5x speed, increased usage' },
+              ],
+              defaultServiceTier: 'default',
               isDefault: true,
               supportedReasoningEfforts: [
                 { reasoningEffort: 'low', description: 'Faster' },
@@ -227,6 +232,9 @@ test('discovers ChatGPT models, image support, efforts, and the active Studio th
   assert.equal(status.messages[0].turnId, 'turn-active');
   assert.equal(status.messages[1].text, 'The Studio page is ready.');
   assert.equal(status.models[0].supportsImages, true);
+  assert.deepEqual(status.models[0].serviceTiers, [
+    { id: 'priority', name: 'Fast', description: '1.5x speed, increased usage' },
+  ]);
   assert.deepEqual(
     status.models[0].efforts.map((effort) => effort.id),
     ['low', 'medium'],
@@ -348,10 +356,7 @@ test('identifies and safely continues a turn interrupted by a Codespace pause', 
   assert.equal(resumed.status, 'accepted');
   assert.equal(state.turns.length, 1);
   assert.equal(state.turns[0].threadId, 'thread-1');
-  assert.deepEqual(state.turns[0].runtimeWorkspaceRoots, [
-    '/workspaces/siteforge-os',
-    '/workspaces/made-solid-website',
-  ]);
+  assert.deepEqual(state.turns[0].runtimeWorkspaceRoots, bridge.runtimeWorkspaceRoots);
   assert.match(state.turns[0].input[0].text, /Codespace paused/);
   assert.match(state.turns[0].input[0].text, /preserve existing changes/);
 });
@@ -470,7 +475,7 @@ test('keeps a newly started empty thread selectable before thread/list includes 
   assert.deepEqual(polledStatus.messages, []);
 });
 
-test('keeps feedback queued while Codex is busy, then delivers the image and model override', async () => {
+test('keeps feedback queued while Codex is busy, then delivers every image and model override', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-queue-'));
   const state = { busy: true, turns: [] };
   const bridge = new CodexFeedbackBridge({
@@ -484,20 +489,28 @@ test('keeps feedback queued while Codex is busy, then delivers the image and mod
   assert.equal(typeof activeStatus.thread.updatedAt, 'number');
   assert.equal(typeof activeStatus.thread.workingStartedAt, 'number');
   const queued = await bridge.enqueue({
-    screenshot: imageDataUrl,
+    screenshots: [imageDataUrl, secondImageDataUrl],
     prompt: 'Fix the clipped navigation and verify every viewport.',
     model: 'gpt-image-capable',
     effort: 'medium',
+    serviceTier: 'priority',
     context: 'Made Solid private preview',
   });
   await new Promise((resolveWait) => setTimeout(resolveWait, 20));
   assert.equal((await bridge.readRecords('queued')).length, 1);
   assert.equal(state.turns.length, 0);
   const queuedStatus = await bridge.inspect();
-  assert.equal(queuedStatus.queuedMessages[0].attachmentId, queued.id);
-  const attachment = await bridge.attachment(queued.id);
-  assert.equal(attachment.mimeType, 'image/png');
-  assert.equal(attachment.data.toString('utf8'), 'private screenshot');
+  assert.equal(queuedStatus.queuedMessages[0].attachmentIds.length, 2);
+  assert.equal(
+    queuedStatus.queuedMessages[0].attachmentId,
+    queuedStatus.queuedMessages[0].attachmentIds[0],
+  );
+  const firstAttachment = await bridge.attachment(queuedStatus.queuedMessages[0].attachmentIds[0]);
+  const secondAttachment = await bridge.attachment(queuedStatus.queuedMessages[0].attachmentIds[1]);
+  assert.equal(firstAttachment.mimeType, 'image/png');
+  assert.equal(firstAttachment.data.toString('utf8'), 'private screenshot');
+  assert.equal(secondAttachment.mimeType, 'image/webp');
+  assert.equal(secondAttachment.data.toString('utf8'), 'second private image');
 
   state.busy = false;
   await bridge.flush();
@@ -506,9 +519,12 @@ test('keeps feedback queued while Codex is busy, then delivers the image and mod
   assert.equal(state.turns.length, 1);
   assert.equal(state.turns[0].model, 'gpt-image-capable');
   assert.equal(state.turns[0].effort, 'medium');
+  assert.equal(state.turns[0].serviceTier, 'priority');
   assert.equal(state.turns[0].input[1].type, 'localImage');
+  assert.equal(state.turns[0].input[2].type, 'localImage');
   assert.match(state.turns[0].input[0].text, /Made Solid private preview/);
   assert.equal(await readFile(state.turns[0].input[1].path, 'utf8'), 'private screenshot');
+  assert.equal(await readFile(state.turns[0].input[2].path, 'utf8'), 'second private image');
   assert.equal(running[0].id, queued.id);
   assert.equal(running[0].turnId, 'turn-1');
 });
@@ -741,15 +757,13 @@ test('delivers a text-only chat turn without creating an image attachment', asyn
   assert.equal(state.turns.length, 1);
   assert.equal(state.turns[0].model, 'gpt-text-only');
   assert.equal(state.turns[0].threadId, 'thread-2');
-  assert.deepEqual(state.turns[0].runtimeWorkspaceRoots, [
-    '/workspaces/siteforge-os',
-    '/workspaces/made-solid-website',
-  ]);
+  assert.deepEqual(state.turns[0].runtimeWorkspaceRoots, bridge.runtimeWorkspaceRoots);
   assert.deepEqual(
     state.turns[0].input.map((input) => input.type),
     ['text'],
   );
   assert.match(state.turns[0].input[0].text, /Made Solid Studio/);
+  assert.match(state.turns[0].input[0].text, /keep the user oriented with concise commentary/i);
   const deliveredStatus = await bridge.inspect({ threadId: 'thread-2' });
   const deliveredMessage = deliveredStatus.messages.at(-1);
   assert.equal(deliveredMessage.text, 'Explain the next implementation step.');
@@ -779,6 +793,7 @@ test('authorizes real delegation only for an Agent team request and keeps the vi
   assert.equal(accepted.status, 'accepted');
   assert.match(state.turns[0].input[0].text, /Agent team is enabled/);
   assert.match(state.turns[0].input[0].text, /Delegate useful independent workstreams/);
+  assert.match(state.turns[0].input[0].text, /what you learned or changed, and what remains/i);
   assert.equal((await bridge.readRecords('running'))[0].workMode, 'team');
   const status = await bridge.inspect({ threadId: 'thread-2' });
   assert.equal(status.messages.at(-1).text, 'Build and verify the new workspace navigation.');
@@ -904,14 +919,16 @@ test('creates and returns a new persistent repository-scoped Codex conversation'
   const created = await bridge.createThread({
     model: 'gpt-image-capable',
     effort: 'medium',
+    serviceTier: 'priority',
   });
 
   assert.equal(created.thread.id, 'thread-new-1');
   assert.deepEqual(state.threadStarts, [
     {
       cwd: '/workspaces/siteforge-os',
-      runtimeWorkspaceRoots: ['/workspaces/siteforge-os', '/workspaces/made-solid-website'],
+      runtimeWorkspaceRoots: bridge.runtimeWorkspaceRoots,
       model: 'gpt-image-capable',
+      serviceTier: 'priority',
       sandbox: 'danger-full-access',
       approvalPolicy: 'never',
       config: { model_reasoning_effort: 'medium' },
@@ -996,7 +1013,8 @@ test('edits a queued message and interrupts the active turn from that exact queu
   assert.match(interrupted.detail, /active Codex turn is stopping/i);
   assert.deepEqual(state.interrupts, [{ threadId: 'thread-1', turnId: 'turn-active' }]);
   assert.equal(state.turns.length, 1);
-  assert.equal(state.turns[0].input[0].text, 'Stop and use this updated direction instead.');
+  assert.match(state.turns[0].input[0].text, /^Stop and use this updated direction instead\./);
+  assert.match(state.turns[0].input[0].text, /Send an update before a long tool run/);
 });
 
 test('rejects unsupported models and prompts before creating a Codex turn', async () => {

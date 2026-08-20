@@ -4,10 +4,13 @@ import { extname, resolve } from 'node:path';
 
 const defaultServerUrl = 'ws://127.0.0.1:4500';
 const maximumImageBytes = 15 * 1024 * 1024;
+const maximumImageAttachments = 5;
 const maximumPromptLength = 4_000;
 const maximumAgentThreads = 24;
 const teamDelegationInstruction =
   'Agent team is enabled for this request. You are the supervisor. Delegate useful independent workstreams to attached sub-agents with clear, non-overlapping assignments, run them concurrently when practical, monitor their outcomes, and synthesize the result in this parent conversation. Keep work that is trivial or inherently sequential in the parent agent.';
+const progressUpdateInstruction =
+  'During longer work, keep the user oriented with concise commentary at meaningful transitions: explain what you are checking, what you learned or changed, and what remains. Send an update before a long tool run. Do not narrate routine actions, repeat yourself, expose hidden reasoning, or claim unverified progress.';
 const supportedImageTypes = new Map([
   ['image/png', '.png'],
   ['image/jpeg', '.jpg'],
@@ -107,14 +110,36 @@ function publicModel(model) {
   const modalities = Array.isArray(model.inputModalities)
     ? model.inputModalities
     : ['text', 'image'];
+  const serviceTiers = Array.isArray(model.serviceTiers)
+    ? model.serviceTiers
+        .map((tier) => ({
+          id: String(tier.id || ''),
+          name: String(tier.name || tier.id || ''),
+          description: String(tier.description || ''),
+        }))
+        .filter((tier) => tier.id)
+    : [];
   return {
     id: String(model.id || model.model || ''),
     label: String(model.displayName || model.id || model.model || 'Codex model'),
     defaultEffort: String(model.defaultReasoningEffort || supportedEfforts[0]?.id || 'medium'),
     efforts: supportedEfforts,
     supportsImages: modalities.includes('image'),
+    serviceTiers,
+    defaultServiceTier: String(model.defaultServiceTier || 'default'),
     isDefault: model.isDefault === true,
   };
+}
+
+function selectedServiceTier(input, model) {
+  const serviceTier = input.serviceTier === 'priority' ? 'priority' : 'default';
+  if (
+    serviceTier === 'priority' &&
+    !model.serviceTiers.some((candidate) => candidate.id === 'priority')
+  ) {
+    throw new Error('Fast mode is unavailable for this model.');
+  }
+  return serviceTier;
 }
 
 function selectThread(threads, cwd) {
@@ -323,13 +348,18 @@ function messagesWithFeedbackRecords(thread, records, threadId) {
           !used.has(candidate.id) &&
           (message.text === candidate.prompt ||
             message.text.startsWith(`${candidate.prompt}\n\nCaptured from:`) ||
-            message.text.startsWith(`${candidate.prompt}\n\nAgent team is enabled`)),
+            message.text.startsWith(`${candidate.prompt}\n\nAgent team is enabled`) ||
+            message.text.startsWith(`${candidate.prompt}\n\n${progressUpdateInstruction}`)),
       );
     if (!record) continue;
     used.add(record.id);
     message.text = record.prompt;
     message.feedbackId = record.id;
-    if (record.imagePath) message.attachmentId = record.id;
+    const attachmentIds = recordAttachmentIds(record);
+    if (attachmentIds.length) {
+      message.attachmentIds = attachmentIds;
+      message.attachmentId = attachmentIds[0];
+    }
   }
   return messages;
 }
@@ -352,6 +382,39 @@ function parseScreenshot(dataUrl) {
     throw new Error('The screenshot must be smaller than 15 MB.');
   }
   return { data, extension: supportedImageTypes.get(match[1]), mimeType: match[1] };
+}
+
+function recordAttachmentIds(record) {
+  const ids = Array.isArray(record?.attachments)
+    ? record.attachments
+        .map((attachment) => String(attachment?.id || ''))
+        .filter((id) => /^[0-9a-f-]{36}$/i.test(id))
+    : [];
+  if (ids.length) return ids;
+  return record?.imagePath && /^[0-9a-f-]{36}$/i.test(String(record.id)) ? [String(record.id)] : [];
+}
+
+function recordImageAttachments(record, storageRoot) {
+  const attachments = Array.isArray(record?.attachments)
+    ? record.attachments.flatMap((attachment) => {
+        const id = String(attachment?.id || '');
+        const mimeType = String(attachment?.mimeType || '');
+        const extension = supportedImageTypes.get(mimeType);
+        if (!/^[0-9a-f-]{36}$/i.test(id) || !extension) return [];
+        return [{ id, mimeType, path: resolve(storageRoot, `${id}${extension}`) }];
+      })
+    : [];
+  if (attachments.length) return attachments;
+  const legacyExtension = supportedImageTypes.get(record?.mimeType);
+  return record?.imagePath && legacyExtension
+    ? [
+        {
+          id: String(record.id),
+          mimeType: record.mimeType,
+          path: resolve(storageRoot, `${record.id}${legacyExtension}`),
+        },
+      ]
+    : [];
 }
 
 function railwayContainerThreadSettings(runtimeWorkspaceRoots) {
@@ -606,10 +669,12 @@ export class CodexFeedbackBridge {
           prompt: record.prompt,
           model: record.model,
           effort: record.effort,
+          serviceTier: record.serviceTier || 'default',
           deliveryMode: record.deliveryMode || 'queue',
           createdAt: record.createdAt,
           position: index + 1,
-          attachmentId: record.imagePath ? record.id : undefined,
+          attachmentIds: recordAttachmentIds(record),
+          attachmentId: recordAttachmentIds(record)[0],
           workMode: record.workMode === 'team' ? 'team' : 'direct',
         })),
       };
@@ -628,7 +693,12 @@ export class CodexFeedbackBridge {
     if (!/^[A-Za-z0-9._-]{1,100}$/.test(model) || !/^[A-Za-z0-9_-]{1,30}$/.test(effort)) {
       throw new Error('Choose an available Codex model and reasoning level.');
     }
-    const screenshot = parseScreenshot(input.screenshot);
+    const screenshotInputs =
+      input.screenshots ?? (input.screenshot === undefined ? [] : [input.screenshot]);
+    if (!Array.isArray(screenshotInputs) || screenshotInputs.length > maximumImageAttachments) {
+      throw new Error(`Attach no more than ${maximumImageAttachments} images to one message.`);
+    }
+    const screenshots = screenshotInputs.map(parseScreenshot).filter(Boolean);
     const workMode = input.workMode === 'team' ? 'team' : 'direct';
     const threadId =
       typeof input.threadId === 'string' && /^[A-Za-z0-9-]{1,100}$/.test(input.threadId)
@@ -636,21 +706,34 @@ export class CodexFeedbackBridge {
         : undefined;
     await mkdir(this.storageRoot, { recursive: true, mode: 0o700 });
     const id = randomUUID();
-    const imagePath = screenshot
-      ? resolve(this.storageRoot, `${id}${screenshot.extension}`)
-      : undefined;
+    const attachments = screenshots.map((screenshot) => {
+      const attachmentId = randomUUID();
+      return {
+        id: attachmentId,
+        mimeType: screenshot.mimeType,
+        path: resolve(this.storageRoot, `${attachmentId}${screenshot.extension}`),
+        screenshot,
+      };
+    });
     const recordPath = resolve(this.storageRoot, `${id}.json`);
-    if (imagePath && screenshot) await writeFile(imagePath, screenshot.data, { mode: 0o600 });
+    await Promise.all(
+      attachments.map((attachment) =>
+        writeFile(attachment.path, attachment.screenshot.data, { mode: 0o600 }),
+      ),
+    );
     const record = {
       id,
       status: 'queued',
       prompt,
       model,
       effort,
+      serviceTier: input.serviceTier === 'priority' ? 'priority' : 'default',
       workMode,
       deliveryMode: 'queue',
-      imagePath,
-      mimeType: screenshot?.mimeType,
+      attachments: attachments.map((attachment) => ({
+        id: attachment.id,
+        mimeType: attachment.mimeType,
+      })),
       context:
         typeof input.context === 'string'
           ? input.context.replace(/[\r\n]+/g, ' ').slice(0, 1_000)
@@ -668,7 +751,7 @@ export class CodexFeedbackBridge {
       id,
       detail: accepted
         ? 'Codex started this request in the selected conversation.'
-        : screenshot
+        : attachments.length
           ? 'Visual feedback is queued for the selected Codex conversation.'
           : 'Your message is queued for the selected Codex conversation.',
     };
@@ -696,10 +779,12 @@ export class CodexFeedbackBridge {
       ) {
         throw new Error('The selected reasoning level is unavailable for this model.');
       }
+      const serviceTier = selectedServiceTier(input, availableModel);
       const result = await client.request('thread/start', {
         cwd: this.cwd,
         ...railwayContainerThreadSettings(this.runtimeWorkspaceRoots),
         model,
+        serviceTier,
         config: { model_reasoning_effort: effort },
         ephemeral: false,
         sessionStartSource: 'clear',
@@ -745,6 +830,7 @@ export class CodexFeedbackBridge {
       ) {
         throw new Error('The selected reasoning level is unavailable for this model.');
       }
+      const serviceTier = selectedServiceTier(input, availableModel);
       const thread = threadResult.thread;
       if (thread?.status?.type === 'active') {
         throw new Error('This conversation is already working.');
@@ -820,13 +906,14 @@ export class CodexFeedbackBridge {
         input: [
           {
             type: 'text',
-            text: `The previous turn was interrupted when the Codespace paused. Continue the original request from the saved work and transcript. Inspect the current shared workspace first, preserve existing changes, finish the remaining implementation and verification, and report the final result.${teamContinuation}`,
+            text: `The previous turn was interrupted when the Codespace paused. Continue the original request from the saved work and transcript. Inspect the current shared workspace first, preserve existing changes, finish the remaining implementation and verification, and report the final result.${teamContinuation}\n\n${progressUpdateInstruction}`,
           },
         ],
         cwd: this.cwd,
         ...railwayContainerTurnSettings(this.runtimeWorkspaceRoots),
         model,
         effort,
+        serviceTier,
       });
       const records = await this.readRecords();
       const interruptedRecord = [...records]
@@ -989,14 +1076,13 @@ export class CodexFeedbackBridge {
     if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id)) {
       throw new Error('Choose a valid screenshot attachment.');
     }
-    const record = (await this.readRecords()).find(
-      (candidate) => candidate.id === id && candidate.imagePath && candidate.mimeType,
-    );
-    const extension = supportedImageTypes.get(record?.mimeType);
-    if (!record || !extension) throw new Error('That screenshot attachment is unavailable.');
+    const attachment = (await this.readRecords())
+      .flatMap((record) => recordImageAttachments(record, this.storageRoot))
+      .find((candidate) => candidate.id === id);
+    if (!attachment) throw new Error('That screenshot attachment is unavailable.');
     return {
-      data: await readFile(resolve(this.storageRoot, `${id}${extension}`)),
-      mimeType: record.mimeType,
+      data: await readFile(attachment.path),
+      mimeType: attachment.mimeType,
     };
   }
 
@@ -1064,12 +1150,14 @@ export class CodexFeedbackBridge {
           const availableModel = (modelResult.data || [])
             .map(publicModel)
             .find(
-              (model) => model.id === record.model && (!record.imagePath || model.supportsImages),
+              (model) =>
+                model.id === record.model &&
+                (!recordAttachmentIds(record).length || model.supportsImages),
             );
           if (!availableModel) {
             await this.markFailed(
               record,
-              record.imagePath
+              recordAttachmentIds(record).length
                 ? 'The selected Codex model no longer accepts images.'
                 : 'The selected Codex model is no longer available.',
             );
@@ -1115,25 +1203,32 @@ export class CodexFeedbackBridge {
           }
           if (thread.status?.type === 'active' || activeTurn(thread)) continue;
           try {
+            const imageAttachments = recordImageAttachments(record, this.storageRoot);
             const turnResult = await client.request('turn/start', {
               threadId: thread.id,
               input: [
                 {
                   type: 'text',
-                  text: record.context
-                    ? `${record.prompt}\n\nCaptured from: ${record.context}${
-                        record.workMode === 'team' ? `\n\n${teamDelegationInstruction}` : ''
-                      }`
-                    : `${record.prompt}${
-                        record.workMode === 'team' ? `\n\n${teamDelegationInstruction}` : ''
-                      }`,
+                  text: `${
+                    record.context
+                      ? `${record.prompt}\n\nCaptured from: ${record.context}${
+                          record.workMode === 'team' ? `\n\n${teamDelegationInstruction}` : ''
+                        }`
+                      : `${record.prompt}${
+                          record.workMode === 'team' ? `\n\n${teamDelegationInstruction}` : ''
+                        }`
+                  }\n\n${progressUpdateInstruction}`,
                 },
-                ...(record.imagePath ? [{ type: 'localImage', path: record.imagePath }] : []),
+                ...imageAttachments.map((attachment) => ({
+                  type: 'localImage',
+                  path: attachment.path,
+                })),
               ],
               cwd: this.cwd,
               ...railwayContainerTurnSettings(this.runtimeWorkspaceRoots),
               model: record.model,
               effort: record.effort,
+              serviceTier: record.serviceTier || 'default',
             });
             await atomicWriteJson(resolve(this.storageRoot, `${record.id}.json`), {
               ...record,
@@ -1348,13 +1443,14 @@ export class CodexFeedbackBridge {
             input: [
               {
                 type: 'text',
-                text: `The Codespace paused while this turn was still running. Continue the same request from the saved transcript and current workspace. Preserve existing changes, finish the remaining implementation and verification, and report the final result.${teamRecoveryInstruction}`,
+                text: `The Codespace paused while this turn was still running. Continue the same request from the saved transcript and current workspace. Preserve existing changes, finish the remaining implementation and verification, and report the final result.${teamRecoveryInstruction}\n\n${progressUpdateInstruction}`,
               },
             ],
             cwd: this.cwd,
             ...railwayContainerTurnSettings(this.runtimeWorkspaceRoots),
             model: record.model,
             effort: record.effort,
+            serviceTier: record.serviceTier || 'default',
           });
           await this.updateRecordStatus(record, 'running', {
             turnId:

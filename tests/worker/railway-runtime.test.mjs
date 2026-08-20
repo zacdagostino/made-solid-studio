@@ -28,6 +28,11 @@ test('creates expiring private workspace preview capabilities', () => {
     undefined,
   );
   assert.equal(verifyWorkspacePreviewToken(token, secret, { now: () => 61_001 }), undefined);
+  assert.equal(
+    verifyWorkspacePreviewToken(createWorkspacePreviewToken('prospect-site', secret), secret)
+      ?.directory,
+    'prospect-site',
+  );
   const url = new URL(
     workspacePreviewUrl('https://workspace.example.com', 'prospect-site', secret),
   );
@@ -96,7 +101,7 @@ test('preserves verified persistent repositories when GitHub is temporarily unav
   }
 });
 
-test('keeps the Railway container-access package newest in the local package ledger', async () => {
+test('retains Railway container access below the newer chat and preview packages', async () => {
   const repository = await readFile('src/lib/repository.ts', 'utf8');
   assert.match(repository, /version: 16\.2,/);
   assert.match(repository, /builderContractVersion: 'made-solid-studio-builder-agent-v16\.2'/);

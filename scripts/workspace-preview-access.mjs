@@ -27,7 +27,7 @@ export function createWorkspacePreviewToken(
   return `${payload}.${signature(payload, secret)}`;
 }
 
-export function verifyWorkspacePreviewToken(token, secret, { now = Date.now() } = {}) {
+export function verifyWorkspacePreviewToken(token, secret, { now = Date.now } = {}) {
   if (typeof token !== 'string' || token.length > 2_048 || typeof secret !== 'string') {
     return undefined;
   }

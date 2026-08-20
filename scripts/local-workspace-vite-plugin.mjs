@@ -865,7 +865,7 @@ export function localWorkspacePlugin() {
           return;
         }
         try {
-          const input = JSON.parse(await readRequestBody(request, 22 * 1024 * 1024));
+          const input = JSON.parse(await readRequestBody(request, 110 * 1024 * 1024));
           const result =
             input.action === 'update-queued'
               ? await codexFeedbackBridge.updateQueued(input.id, input)

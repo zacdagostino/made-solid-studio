@@ -70,6 +70,26 @@ const permanentRailwayRuntimeMigrationUrl = new URL(
   '../../supabase/migrations/20260819210000_permanent_railway_runtime_test_package.sql',
   import.meta.url,
 );
+const fastCodexChatMigrationUrl = new URL(
+  '../../supabase/migrations/20260820174000_fast_codex_chat_test_package.sql',
+  import.meta.url,
+);
+const animatedCodexChatMigrationUrl = new URL(
+  '../../supabase/migrations/20260820175000_animated_codex_chat_test_package.sql',
+  import.meta.url,
+);
+const inlineMultiImageCodexChatMigrationUrl = new URL(
+  '../../supabase/migrations/20260820180000_inline_multi_image_codex_chat_test_package.sql',
+  import.meta.url,
+);
+const contextualCodexChatMigrationUrl = new URL(
+  '../../supabase/migrations/20260820181000_contextual_codex_chat_test_package.sql',
+  import.meta.url,
+);
+const privateWorkspacePreviewAccessMigrationUrl = new URL(
+  '../../supabase/migrations/20260820182000_private_workspace_preview_access_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -144,9 +164,135 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.ok(Number(revision[1]) >= 34);
+  assert.equal(Number(revision[1]), 37);
   assert.match(app, /container-level full access/);
   assert.match(app, /both configured Made Solid workspace roots/);
+  assert.match(app, /private expiring workspace links/);
+  assert.match(app, /see edits immediately/);
+  assert.match(app, /before production publication/);
+});
+
+test('registers private workspace preview access as the newest immutable package', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(privateWorkspacePreviewAccessMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Private workspace preview access test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v16\.7/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 16\.7,/);
+  assert.match(repository, /basePackageId: localContextualCodexChatPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localPrivateWorkspacePreviewAccessPackage,') <
+      packageLedger.indexOf('localContextualCodexChatPackage,'),
+  );
+  const freshLedger = repository.slice(
+    repository.indexOf('if (!localPackageRecord)'),
+    repository.indexOf('} else {', repository.indexOf('if (!localPackageRecord)')),
+  );
+  const upgradeLedger = repository.slice(
+    repository.indexOf('const missingPackages = ['),
+    repository.indexOf('].filter(', repository.indexOf('const missingPackages = [')),
+  );
+  const recoveryLedger = repository.slice(repository.indexOf('} catch {'));
+  for (const packageName of [
+    'localPrivateWorkspacePreviewAccessPackage',
+    'localContextualCodexChatPackage',
+    'localInlineMultiImageCodexChatPackage',
+    'localAnimatedCodexChatPackage',
+    'localFastCodexChatPackage',
+    'localRailwayContainerAccessPackage',
+    'localRailwayPersistentCheckoutPackage',
+    'localRailwayWorkspaceWritePackage',
+  ]) {
+    assert.match(freshLedger, new RegExp(`${packageName},`));
+    assert.match(upgradeLedger, new RegExp(`${packageName},`));
+    assert.match(recoveryLedger, new RegExp(`${packageName},`));
+  }
+});
+
+test('registers contextual Codex chat as the newest immutable package', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(contextualCodexChatMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Contextual Codex chat test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v16\.6/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 16\.6,/);
+  assert.match(repository, /basePackageId: localInlineMultiImageCodexChatPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localContextualCodexChatPackage,') <
+      packageLedger.indexOf('localInlineMultiImageCodexChatPackage,'),
+  );
+});
+
+test('registers inline multi-image Codex chat as the newest immutable package', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(inlineMultiImageCodexChatMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Inline multi-image Codex chat test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v16\.5/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 16\.5,/);
+  assert.match(repository, /basePackageId: localAnimatedCodexChatPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localInlineMultiImageCodexChatPackage,') <
+      packageLedger.indexOf('localAnimatedCodexChatPackage,'),
+  );
+});
+
+test('registers animated Codex chat as the newest immutable package', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(animatedCodexChatMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Animated Codex chat test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v16\.4/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 16\.4,/);
+  assert.match(repository, /basePackageId: localFastCodexChatPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localAnimatedCodexChatPackage,') <
+      packageLedger.indexOf('localFastCodexChatPackage,'),
+  );
+});
+
+test('registers Fast Codex chat as the newest immutable package', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(fastCodexChatMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Fast Codex chat test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v16\.3/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 16\.3,/);
+  assert.match(repository, /basePackageId: localRailwayContainerAccessPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localFastCodexChatPackage,') <
+      packageLedger.indexOf('localRailwayContainerAccessPackage,'),
+  );
 });
 
 test('registers Railway container access while preserving auth and workspace roots', async () => {
@@ -255,7 +401,7 @@ test('registers the subscription-safe Codex runtime as the newest immutable pack
     packageLedger.indexOf('localSubscriptionSafeCodexRuntimePackage,') <
       packageLedger.indexOf('localUninterruptedCodexRecoveryPackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.89`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.37`/);
   assert.match(launcher, /forced_login_method="chatgpt"/);
   assert.match(launcher, /unset OPENAI_API_KEY SITEFORGE_CODEX_API_KEY CODEX_API_KEY/);
 });
@@ -652,7 +798,7 @@ test('uses shared controls, a compact model selector, and live model discovery f
   assert.match(service, /localCaptureTarget/);
   assert.match(service, /chromium\.launch/);
   assert.match(service, /sec-fetch-site/);
-  assert.match(service, /22 \* 1024 \* 1024/);
+  assert.match(service, /110 \* 1024 \* 1024/);
   assert.match(service, /configurePreviewServer: configureWorkspaceServer/);
   assert.match(service, /configureServer: configureWorkspaceServer/);
 });

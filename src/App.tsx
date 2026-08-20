@@ -8842,9 +8842,9 @@ function BuilderRunPanel({
             title: 'Codex Workspace Agent and visual feedback',
             detail:
               'The subscription-only Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy. Reviewers can choose direct work or Agent team delegation, then inspect each real attached sub-chat, assignment, state, timing, and transcript. Saved builds, tests, committed edits, and validated development servers open inside the Studio preview shell so the panel remains above the website. Observable activity and queue state appears without invented progress.',
-            revision: `v${selectedAgentPackage.version}.34`,
+            revision: `v${selectedAgentPackage.version}.37`,
             change:
-              'Latest edit: owner-authorized Railway chats now use container-level full access because Railway cannot create Bubblewrap namespaces, while retaining ChatGPT subscription login and both configured Made Solid workspace roots.',
+              'Latest edits: owner-authorized Railway chats use container-level full access with both configured Made Solid workspace roots, and private expiring workspace links open the active Studio or website source so reviewers can see edits immediately before production publication.',
           },
           {
             id: 'inbound-client-email-review',
