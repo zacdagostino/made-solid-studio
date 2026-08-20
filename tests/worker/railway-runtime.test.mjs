@@ -96,14 +96,14 @@ test('preserves verified persistent repositories when GitHub is temporarily unav
   }
 });
 
-test('keeps the Railway persistent-checkout package newest in the local package ledger', async () => {
+test('keeps the Railway container-access package newest in the local package ledger', async () => {
   const repository = await readFile('src/lib/repository.ts', 'utf8');
-  assert.match(repository, /version: 16\.1,/);
-  assert.match(repository, /builderContractVersion: 'made-solid-studio-builder-agent-v16\.1'/);
+  assert.match(repository, /version: 16\.2,/);
+  assert.match(repository, /builderContractVersion: 'made-solid-studio-builder-agent-v16\.2'/);
   const ledger = repository.slice(repository.indexOf('value: JSON.stringify(['));
   assert.ok(
-    ledger.indexOf('localRailwayPersistentCheckoutPackage,') <
-      ledger.indexOf('localRailwayWorkspaceWritePackage,'),
+    ledger.indexOf('localRailwayContainerAccessPackage,') <
+      ledger.indexOf('localRailwayPersistentCheckoutPackage,'),
   );
 });
 
@@ -121,10 +121,9 @@ test('keeps OpenAI API credentials out of the subscription-backed Railway proces
   assert.match(launcher, /SITEFORGE_RUNTIME_OWNER_USER_ID/);
   assert.match(launcher, /SITEFORGE_RUNTIME_OWNER_ORGANIZATION_ID/);
   assert.match(appServerLauncher, /forced_login_method="chatgpt"/);
-  assert.match(appServerLauncher, /sandbox_mode="workspace-write"/);
+  assert.match(appServerLauncher, /sandbox_mode="danger-full-access"/);
   assert.match(appServerLauncher, /approval_policy="never"/);
-  assert.match(appServerLauncher, /sandbox_workspace_write\.writable_roots=/);
-  assert.match(appServerLauncher, /sandbox_workspace_write\.network_access=true/);
+  assert.doesNotMatch(appServerLauncher, /sandbox_workspace_write/);
   assert.match(appServerLauncher, /--strict-config app-server/);
   assert.match(appServerLauncher, /expected_studio_workspace=.*siteforge-os/);
   assert.match(appServerLauncher, /expected_website_workspace=.*made-solid-website/);

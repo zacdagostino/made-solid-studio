@@ -334,6 +334,7 @@ const localPermanentRailwayRuntimePackageId = 'agent-package-local-v15-9-permane
 const localRailwayWorkspaceWritePackageId = 'agent-package-local-v16-0-railway-workspace-write';
 const localRailwayPersistentCheckoutPackageId =
   'agent-package-local-v16-1-railway-persistent-checkout';
+const localRailwayContainerAccessPackageId = 'agent-package-local-v16-2-railway-container-access';
 
 type StoreName =
   | 'activities'
@@ -2356,10 +2357,28 @@ export class SiteforgeRepository {
         'Makes permanent Studio startup resilient without weakening the two-repository workspace-write boundary, owner gate, or ChatGPT subscription authentication.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localRailwayContainerAccessPackage: AgentPackage = {
+      ...localRailwayPersistentCheckoutPackage,
+      id: localRailwayContainerAccessPackageId,
+      version: 16.2,
+      basePackageId: localRailwayPersistentCheckoutPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v16.2',
+      contractAddendum:
+        'Every owner-authorized Railway Studio Codex conversation uses danger-full-access inside the isolated Railway service container because that host cannot create Bubblewrap namespaces. New, resumed, queued, and recovered turns retain both configured workspace roots: /data/workspaces/siteforge-os and /data/workspaces/made-solid-website.',
+      instructionsAddendum:
+        'Force ChatGPT subscription authentication and fail closed when it is unavailable. Validate the exact owner user and organization before any runtime action. Start and resume threads and override every turn with danger-full-access plus no approvals inside the isolated Railway container, while continuing to pass only the two configured Made Solid repository roots as the conversation workspaces.',
+      summary:
+        'Railway container-access test package: avoids unsupported Bubblewrap namespaces while retaining owner-only access, subscription authentication, and both persistent repository workspaces.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Moves command isolation to the dedicated Railway container so Codex commands can run reliably without changing the application authentication or workspace configuration.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localRailwayContainerAccessPackage,
           localRailwayPersistentCheckoutPackage,
           localRailwayWorkspaceWritePackage,
           localPermanentRailwayRuntimePackage,

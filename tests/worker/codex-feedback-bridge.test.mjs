@@ -583,7 +583,7 @@ test('uses an app-server reactivated turn instead of starting a duplicate contin
     {
       threadId: 'thread-2',
       runtimeWorkspaceRoots: ['/workspaces/siteforge-os', '/workspaces/made-solid-website'],
-      sandbox: 'workspace-write',
+      sandbox: 'danger-full-access',
       approvalPolicy: 'never',
     },
   ]);
@@ -912,7 +912,7 @@ test('creates and returns a new persistent repository-scoped Codex conversation'
       cwd: '/workspaces/siteforge-os',
       runtimeWorkspaceRoots: ['/workspaces/siteforge-os', '/workspaces/made-solid-website'],
       model: 'gpt-image-capable',
-      sandbox: 'workspace-write',
+      sandbox: 'danger-full-access',
       approvalPolicy: 'never',
       config: { model_reasoning_effort: 'medium' },
       ephemeral: false,
@@ -921,8 +921,8 @@ test('creates and returns a new persistent repository-scoped Codex conversation'
   ]);
 });
 
-test('applies the repository-scoped workspace-write policy to every delivered turn', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-workspace-write-'));
+test('uses container-level full access while preserving both Railway workspace roots', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-container-access-'));
   const state = { busy: false, turns: [] };
   const bridge = new CodexFeedbackBridge({
     cwd: '/workspaces/siteforge-os',
@@ -943,9 +943,7 @@ test('applies the repository-scoped workspace-write policy to every delivered tu
     '/workspaces/made-solid-website',
   ]);
   assert.deepEqual(state.turns[0].sandboxPolicy, {
-    type: 'workspaceWrite',
-    writableRoots: ['/workspaces/siteforge-os', '/workspaces/made-solid-website'],
-    networkAccess: true,
+    type: 'dangerFullAccess',
   });
   assert.equal(state.turns[0].approvalPolicy, 'never');
 });

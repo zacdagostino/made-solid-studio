@@ -37,12 +37,9 @@ if [[ "${SITEFORGE_RUNTIME_AUTH_REQUIRED:-0}" == "1" ]]; then
     echo "The Railway Codex workspace roots must be the two configured Made Solid repositories."
     exit 1
   fi
-  writable_roots="[\"$studio_workspace_directory\",\"$website_workspace_directory\"]"
   codex_configuration+=(
-    --config 'sandbox_mode="workspace-write"'
+    --config 'sandbox_mode="danger-full-access"'
     --config 'approval_policy="never"'
-    --config "sandbox_workspace_write.writable_roots=$writable_roots"
-    --config 'sandbox_workspace_write.network_access=true'
   )
 fi
 

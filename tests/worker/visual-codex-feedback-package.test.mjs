@@ -78,6 +78,10 @@ const railwayPersistentCheckoutMigrationUrl = new URL(
   '../../supabase/migrations/20260820171500_railway_persistent_checkout_test_package.sql',
   import.meta.url,
 );
+const railwayContainerAccessMigrationUrl = new URL(
+  '../../supabase/migrations/20260820173000_railway_container_access_test_package.sql',
+  import.meta.url,
+);
 const agentTeamChatMigrationUrl = new URL(
   '../../supabase/migrations/20260818090000_agent_team_chat_test_package.sql',
   import.meta.url,
@@ -140,9 +144,36 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.ok(Number(revision[1]) >= 33);
-  assert.match(app, /verified persistent repository checkouts/);
-  assert.match(app, /two-repository workspace-write boundary/);
+  assert.ok(Number(revision[1]) >= 34);
+  assert.match(app, /container-level full access/);
+  assert.match(app, /both configured Made Solid workspace roots/);
+});
+
+test('registers Railway container access while preserving auth and workspace roots', async () => {
+  const [migration, repository, bridge, launcher] = await Promise.all([
+    readFile(railwayContainerAccessMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(new URL('../../scripts/codex-feedback-bridge.mjs', import.meta.url), 'utf8'),
+    readFile(new URL('../../scripts/start-codex-app-server', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /Railway container-access test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v16\.2/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 16\.2,/);
+  assert.match(repository, /basePackageId: localRailwayPersistentCheckoutPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localRailwayContainerAccessPackage,') <
+      packageLedger.indexOf('localRailwayPersistentCheckoutPackage,'),
+  );
+  assert.match(bridge, /sandbox: 'danger-full-access'/);
+  assert.match(bridge, /type: 'dangerFullAccess'/);
+  assert.match(bridge, /runtimeWorkspaceRoots/);
+  assert.match(launcher, /forced_login_method="chatgpt"/);
+  assert.match(launcher, /sandbox_mode="danger-full-access"/);
+  assert.match(launcher, /expected_studio_workspace=.*siteforge-os/);
+  assert.match(launcher, /expected_website_workspace=.*made-solid-website/);
 });
 
 test('registers the Railway persistent-checkout package as newest', async () => {
@@ -166,11 +197,10 @@ test('registers the Railway persistent-checkout package as newest', async () => 
   assert.match(bootstrap, /preserving both verified persistent repository checkouts/);
 });
 
-test('registers the Railway repository-scoped workspace-write package as newest', async () => {
-  const [migration, repository, bridge] = await Promise.all([
+test('retains the immutable Railway repository-scoped workspace-write package', async () => {
+  const [migration, repository] = await Promise.all([
     readFile(railwayWorkspaceWriteMigrationUrl, 'utf8'),
     readFile(repositoryUrl, 'utf8'),
-    readFile(new URL('../../scripts/codex-feedback-bridge.mjs', import.meta.url), 'utf8'),
   ]);
   assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
   assert.match(migration, /Railway workspace-write test package:/);
@@ -185,10 +215,6 @@ test('registers the Railway repository-scoped workspace-write package as newest'
     packageLedger.indexOf('localRailwayWorkspaceWritePackage,') <
       packageLedger.indexOf('localPermanentRailwayRuntimePackage,'),
   );
-  assert.match(bridge, /sandbox: 'workspace-write'/);
-  assert.match(bridge, /type: 'workspaceWrite'/);
-  assert.match(bridge, /writableRoots: runtimeWorkspaceRoots/);
-  assert.doesNotMatch(bridge, /sandbox: 'danger-full-access'/);
 });
 
 test('registers the permanent Railway runtime as the newest immutable package', async () => {
@@ -437,8 +463,8 @@ test('registers the dual-repository Codex workspace above interrupted-chat recov
     packageLedger.indexOf('localDualRepositoryCodexWorkspacePackage,') <
       packageLedger.indexOf('localCodespaceInterruptedChatRecoveryPackage,'),
   );
-  assert.match(bridge, /workspaceWriteThreadSettings\(this\.runtimeWorkspaceRoots\)/);
-  assert.match(bridge, /workspaceWriteTurnSettings\(this\.runtimeWorkspaceRoots\)/);
+  assert.match(bridge, /railwayContainerThreadSettings\(this\.runtimeWorkspaceRoots\)/);
+  assert.match(bridge, /railwayContainerTurnSettings\(this\.runtimeWorkspaceRoots\)/);
   assert.match(bridge, /resolve\(this\.cwd, '\.\.', 'made-solid-website'\)/);
   assert.match(bridge, /capabilities:\s*\{\s*experimentalApi: true/);
 });

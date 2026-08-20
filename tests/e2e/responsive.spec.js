@@ -3692,7 +3692,8 @@ test('displays the newest test package above retained package versions', async (
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const packagePicker = page.getByLabel('Test agent package');
-  await expect(packagePicker).toHaveValue('agent-package-local-v16-1-railway-persistent-checkout');
+  await expect(packagePicker).toHaveValue('agent-package-local-v16-2-railway-container-access');
+  await expect(packagePicker).toContainText('v16.2 · Approved test');
   await expect(packagePicker).toContainText('v16.1 · Approved test');
   await expect(packagePicker).toContainText('v16.0 · Approved test');
   await expect(packagePicker).toContainText('v15.9 · Approved test');
@@ -3800,6 +3801,7 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v16.2', 'Railway container-access'],
     ['v16.1', 'Railway persistent-checkout'],
     ['v16.0', 'Railway workspace-write'],
     ['v15.9', 'Permanent Railway Studio runtime'],
@@ -4050,7 +4052,7 @@ test('keeps a failed test available without blocking another test', async ({ pag
   const chooser = page.locator('.builder-run__tests');
   await expect(chooser).toBeVisible();
   await expect(page.getByLabel('Test agent package')).toHaveValue(
-    'agent-package-local-v16-1-railway-persistent-checkout',
+    'agent-package-local-v16-2-railway-container-access',
   );
   await expect(chooser.getByLabel('Create page from scratch')).toBeChecked();
   await expect(chooser.getByLabel('Previous built page')).toHaveCount(0);
