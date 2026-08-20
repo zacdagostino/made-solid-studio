@@ -9,7 +9,7 @@ select
   (select coalesce(max(existing.version), 0) + 0.1
    from public.agent_packages as existing
    where existing.organization_id = base.organization_id),
-  'test_ready', base.id, 'made-solid-studio-builder-agent-v16.1',
+  'test_ready', base.id, 'made-solid-studio-builder-agent-v16.4',
   base.foundation_version, base.foundation_checksum,
   'The Studio Codex chat enters and exits with a restrained, directional panel transition while preserving the dialog lifecycle, focus restoration, and immediate access to the workspace trigger.',
   'Animate both the opening and closing dialog states with short opacity, translation, and scale transitions anchored to the launcher edge. Keep the exit state mounted until its animation completes and disable all panel and overlay motion for prefers-reduced-motion.',

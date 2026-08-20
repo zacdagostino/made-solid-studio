@@ -417,6 +417,24 @@ function recordImageAttachments(record, storageRoot) {
     : [];
 }
 
+function railwayContainerThreadSettings(runtimeWorkspaceRoots) {
+  return {
+    runtimeWorkspaceRoots,
+    sandbox: 'danger-full-access',
+    approvalPolicy: 'never',
+  };
+}
+
+function railwayContainerTurnSettings(runtimeWorkspaceRoots) {
+  return {
+    runtimeWorkspaceRoots,
+    sandboxPolicy: {
+      type: 'dangerFullAccess',
+    },
+    approvalPolicy: 'never',
+  };
+}
+
 export class CodexFeedbackBridge {
   constructor({
     cwd = process.cwd(),
@@ -764,11 +782,9 @@ export class CodexFeedbackBridge {
       const serviceTier = selectedServiceTier(input, availableModel);
       const result = await client.request('thread/start', {
         cwd: this.cwd,
-        runtimeWorkspaceRoots: this.runtimeWorkspaceRoots,
+        ...railwayContainerThreadSettings(this.runtimeWorkspaceRoots),
         model,
         serviceTier,
-        sandbox: 'danger-full-access',
-        approvalPolicy: 'never',
         config: { model_reasoning_effort: effort },
         ephemeral: false,
         sessionStartSource: 'clear',
@@ -828,7 +844,7 @@ export class CodexFeedbackBridge {
       if (thread?.status?.type === 'notLoaded') {
         await client.request('thread/resume', {
           threadId,
-          runtimeWorkspaceRoots: this.runtimeWorkspaceRoots,
+          ...railwayContainerThreadSettings(this.runtimeWorkspaceRoots),
         });
       }
       let agentThreads = [];
@@ -894,7 +910,7 @@ export class CodexFeedbackBridge {
           },
         ],
         cwd: this.cwd,
-        runtimeWorkspaceRoots: this.runtimeWorkspaceRoots,
+        ...railwayContainerTurnSettings(this.runtimeWorkspaceRoots),
         model,
         effort,
         serviceTier,
@@ -1177,7 +1193,7 @@ export class CodexFeedbackBridge {
           if (thread.status?.type === 'notLoaded') {
             await client.request('thread/resume', {
               threadId: thread.id,
-              runtimeWorkspaceRoots: this.runtimeWorkspaceRoots,
+              ...railwayContainerThreadSettings(this.runtimeWorkspaceRoots),
             });
             const resumedThread = await client.request('thread/read', {
               threadId: thread.id,
@@ -1209,7 +1225,7 @@ export class CodexFeedbackBridge {
                 })),
               ],
               cwd: this.cwd,
-              runtimeWorkspaceRoots: this.runtimeWorkspaceRoots,
+              ...railwayContainerTurnSettings(this.runtimeWorkspaceRoots),
               model: record.model,
               effort: record.effort,
               serviceTier: record.serviceTier || 'default',
@@ -1331,7 +1347,7 @@ export class CodexFeedbackBridge {
           if (detailedThread.status?.type === 'notLoaded') {
             await client.request('thread/resume', {
               threadId: detailedThread.id,
-              runtimeWorkspaceRoots: this.runtimeWorkspaceRoots,
+              ...railwayContainerThreadSettings(this.runtimeWorkspaceRoots),
             });
             const resumedDetail = await client.request('thread/read', {
               threadId: detailedThread.id,
@@ -1431,7 +1447,7 @@ export class CodexFeedbackBridge {
               },
             ],
             cwd: this.cwd,
-            runtimeWorkspaceRoots: this.runtimeWorkspaceRoots,
+            ...railwayContainerTurnSettings(this.runtimeWorkspaceRoots),
             model: record.model,
             effort: record.effort,
             serviceTier: record.serviceTier || 'default',

@@ -9,7 +9,7 @@ select
   (select coalesce(max(existing.version), 0) + 0.1
    from public.agent_packages as existing
    where existing.organization_id = base.organization_id),
-  'test_ready', base.id, 'made-solid-studio-builder-agent-v16.4',
+  'test_ready', base.id, 'made-solid-studio-builder-agent-v16.7',
   base.foundation_version, base.foundation_checksum,
   'The permanent Studio runtime issues working, expiring capabilities for the private editable-workspace preview domain so authenticated reviewers can see the current source immediately without publishing it.',
   'Verify private workspace-preview capabilities against the current clock, reject expired or invalid signatures, exchange a valid query capability for the secure preview cookie, and proxy only the active matching workspace. Keep the preview private, expiring, no-index, and separate from production publication.',

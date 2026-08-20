@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { execFile as execFileCallback } from 'node:child_process';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
+import { promisify } from 'node:util';
 import {
   createWorkspacePreviewToken,
   verifyWorkspacePreviewToken,
@@ -8,6 +12,7 @@ import {
 } from '../../scripts/workspace-preview-access.mjs';
 
 const secret = 'a-private-preview-secret-that-is-longer-than-thirty-two-characters';
+const execFile = promisify(execFileCallback);
 
 test('creates expiring private workspace preview capabilities', () => {
   const token = createWorkspacePreviewToken('prospect-site', secret, {
@@ -53,21 +58,65 @@ test('registers a single-volume Singapore Railway runtime with a health check', 
   );
 });
 
-test('keeps the permanent runtime package newest in the local package ledger', async () => {
+test('preserves verified persistent repositories when GitHub is temporarily unavailable', async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'siteforge-railway-workspaces-'));
+  const workspaceRoot = join(fixtureRoot, 'workspaces');
+  const fakeBin = join(fixtureRoot, 'bin');
+  await mkdir(fakeBin, { recursive: true });
+  const fakeGh = join(fakeBin, 'gh');
+  await writeFile(fakeGh, '#!/usr/bin/env bash\nexit 1\n');
+  await chmod(fakeGh, 0o755);
+
+  try {
+    for (const [directory, repository] of [
+      ['siteforge-os', 'zacdagostino/made-solid-studio'],
+      ['made-solid-website', 'zacdagostino/made-solid-website'],
+    ]) {
+      const destination = join(workspaceRoot, directory);
+      await mkdir(destination, { recursive: true });
+      await execFile('git', ['init', '-q', destination]);
+      await execFile('git', [
+        '-C',
+        destination,
+        'remote',
+        'add',
+        'origin',
+        `https://github.com/${repository}.git`,
+      ]);
+    }
+
+    const { stdout } = await execFile('bash', ['scripts/bootstrap-railway-workspaces'], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+        SITEFORGE_GITHUB_TOKEN: 'unavailable-test-token',
+        SITEFORGE_RUNTIME_WORKSPACES_DIR: workspaceRoot,
+      },
+    });
+    assert.match(stdout, /preserving both verified persistent repository checkouts/);
+    assert.match(stdout, /editable repositories are ready/);
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test('retains Railway container access below the newer chat and preview packages', async () => {
   const repository = await readFile('src/lib/repository.ts', 'utf8');
-  assert.match(repository, /version: 15\.9,/);
-  assert.match(repository, /builderContractVersion: 'made-solid-studio-builder-agent-v15\.9'/);
+  assert.match(repository, /version: 16\.2,/);
+  assert.match(repository, /builderContractVersion: 'made-solid-studio-builder-agent-v16\.2'/);
   const ledger = repository.slice(repository.indexOf('value: JSON.stringify(['));
   assert.ok(
-    ledger.indexOf('localPermanentRailwayRuntimePackage,') <
-      ledger.indexOf('localSubscriptionSafeCodexRuntimePackage,'),
+    ledger.indexOf('localRailwayContainerAccessPackage,') <
+      ledger.indexOf('localRailwayPersistentCheckoutPackage,'),
   );
 });
 
 test('keeps OpenAI API credentials out of the subscription-backed Railway processes', async () => {
-  const [dockerfile, launcher] = await Promise.all([
+  const [dockerfile, launcher, appServerLauncher] = await Promise.all([
     readFile('Dockerfile', 'utf8'),
     readFile('scripts/start-railway-runtime', 'utf8'),
+    readFile('scripts/start-codex-app-server', 'utf8'),
   ]);
   assert.match(dockerfile, /@openai\/codex@0\.148\.0/);
   assert.match(launcher, /SITEFORGE_CODEX_AUTH_MODE=chatgpt/);
@@ -76,4 +125,11 @@ test('keeps OpenAI API credentials out of the subscription-backed Railway proces
   assert.match(launcher, /SITEFORGE_RUNTIME_AUTH_REQUIRED=1/);
   assert.match(launcher, /SITEFORGE_RUNTIME_OWNER_USER_ID/);
   assert.match(launcher, /SITEFORGE_RUNTIME_OWNER_ORGANIZATION_ID/);
+  assert.match(appServerLauncher, /forced_login_method="chatgpt"/);
+  assert.match(appServerLauncher, /sandbox_mode="danger-full-access"/);
+  assert.match(appServerLauncher, /approval_policy="never"/);
+  assert.doesNotMatch(appServerLauncher, /sandbox_workspace_write/);
+  assert.match(appServerLauncher, /--strict-config app-server/);
+  assert.match(appServerLauncher, /expected_studio_workspace=.*siteforge-os/);
+  assert.match(appServerLauncher, /expected_website_workspace=.*made-solid-website/);
 });

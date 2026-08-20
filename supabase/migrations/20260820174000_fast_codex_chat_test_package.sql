@@ -9,7 +9,7 @@ select
   (select coalesce(max(existing.version), 0) + 0.1
    from public.agent_packages as existing
    where existing.organization_id = base.organization_id),
-  'test_ready', base.id, 'made-solid-studio-builder-agent-v16.0',
+  'test_ready', base.id, 'made-solid-studio-builder-agent-v16.3',
   base.foundation_version, base.foundation_checksum,
   'The Studio Codex chat settings expose the selected model''s Fast service tier independently from its reasoning level. The preference persists locally and applies consistently to new conversations, queued turns, interrupted continuations, and recovered work.',
   'Discover service tiers from the live Codex model catalog. Enable Fast only when the selected model advertises the priority tier, label its increased usage clearly, default safely to Standard, and pass the selected service tier through every app-server thread and turn lifecycle without silently changing reasoning effort.',

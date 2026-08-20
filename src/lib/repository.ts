@@ -331,13 +331,17 @@ const localUninterruptedCodexRecoveryPackageId =
 const localSubscriptionSafeCodexRuntimePackageId =
   'agent-package-local-v15-8-subscription-safe-codex-runtime';
 const localPermanentRailwayRuntimePackageId = 'agent-package-local-v15-9-permanent-railway-runtime';
-const localFastCodexChatPackageId = 'agent-package-local-v16-fast-codex-chat';
-const localAnimatedCodexChatPackageId = 'agent-package-local-v16-1-animated-codex-chat';
+const localRailwayWorkspaceWritePackageId = 'agent-package-local-v16-0-railway-workspace-write';
+const localRailwayPersistentCheckoutPackageId =
+  'agent-package-local-v16-1-railway-persistent-checkout';
+const localRailwayContainerAccessPackageId = 'agent-package-local-v16-2-railway-container-access';
+const localFastCodexChatPackageId = 'agent-package-local-v16-3-fast-codex-chat';
+const localAnimatedCodexChatPackageId = 'agent-package-local-v16-4-animated-codex-chat';
 const localInlineMultiImageCodexChatPackageId =
-  'agent-package-local-v16-2-inline-multi-image-codex-chat';
-const localContextualCodexChatPackageId = 'agent-package-local-v16-3-contextual-codex-chat';
+  'agent-package-local-v16-5-inline-multi-image-codex-chat';
+const localContextualCodexChatPackageId = 'agent-package-local-v16-6-contextual-codex-chat';
 const localPrivateWorkspacePreviewAccessPackageId =
-  'agent-package-local-v16-4-private-workspace-preview-access';
+  'agent-package-local-v16-7-private-workspace-preview-access';
 
 type StoreName =
   | 'activities'
@@ -2326,12 +2330,63 @@ export class SiteforgeRepository {
         'Replaces the disposable Codespace lifecycle with a secured, persistent Studio runtime while retaining Supabase authorization and the existing ChatGPT subscription billing boundary.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
-    const localFastCodexChatPackage: AgentPackage = {
+    const localRailwayWorkspaceWritePackage: AgentPackage = {
       ...localPermanentRailwayRuntimePackage,
-      id: localFastCodexChatPackageId,
+      id: localRailwayWorkspaceWritePackageId,
       version: 16,
       basePackageId: localPermanentRailwayRuntimePackage.id,
       builderContractVersion: 'made-solid-studio-builder-agent-v16.0',
+      contractAddendum:
+        'Every owner-authorized Railway Studio Codex conversation uses the workspace-write sandbox with only /data/workspaces/siteforge-os and /data/workspaces/made-solid-website as durable writable repository roots. New, resumed, queued, and recovered turns retain the same boundary.',
+      instructionsAddendum:
+        'Force ChatGPT subscription authentication and fail closed when it is unavailable. Start and resume threads with workspace-write, never danger-full-access, and override every turn with the two exact runtime repository roots, workspace-write policy, and no-approval escape boundary. Permit network access for builds and reviewed Git or deployment workflows without broadening filesystem writes beyond the repositories and standard ephemeral sandbox paths.',
+      summary:
+        'Railway workspace-write test package: confines every owner Codex chat to both Made Solid repositories while retaining subscription auth, builds, and deployment access.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Replaces the Railway Workspace Agent’s full-filesystem profile with an explicit two-repository write boundary that persists across every chat lifecycle.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localRailwayPersistentCheckoutPackage: AgentPackage = {
+      ...localRailwayWorkspaceWritePackage,
+      id: localRailwayPersistentCheckoutPackageId,
+      version: 16.1,
+      basePackageId: localRailwayWorkspaceWritePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v16.1',
+      contractAddendum:
+        'The permanent Railway runtime verifies both persisted repository origins before launch. When GitHub authentication is temporarily unavailable, it preserves and starts from those existing checkouts instead of replacing them or crash-looping; a missing or mismatched checkout still fails closed.',
+      instructionsAddendum:
+        'Require GitHub access to both private repositories for initial provisioning and normal refresh. If that access is unavailable after both exact repositories have already been verified on the mounted volume, skip network refresh and preserve their current clean or dirty state. Never create, replace, or accept an unexpected repository while offline.',
+      summary:
+        'Railway persistent-checkout test package: keeps the private Studio available from verified volume checkouts during a temporary GitHub credential or provider outage.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes permanent Studio startup resilient without weakening the two-repository workspace-write boundary, owner gate, or ChatGPT subscription authentication.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localRailwayContainerAccessPackage: AgentPackage = {
+      ...localRailwayPersistentCheckoutPackage,
+      id: localRailwayContainerAccessPackageId,
+      version: 16.2,
+      basePackageId: localRailwayPersistentCheckoutPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v16.2',
+      contractAddendum:
+        'Every owner-authorized Railway Studio Codex conversation uses danger-full-access inside the isolated Railway service container because that host cannot create Bubblewrap namespaces. New, resumed, queued, and recovered turns retain both configured workspace roots: /data/workspaces/siteforge-os and /data/workspaces/made-solid-website.',
+      instructionsAddendum:
+        'Force ChatGPT subscription authentication and fail closed when it is unavailable. Validate the exact owner user and organization before any runtime action. Start and resume threads and override every turn with danger-full-access plus no approvals inside the isolated Railway container, while continuing to pass only the two configured Made Solid repository roots as the conversation workspaces.',
+      summary:
+        'Railway container-access test package: avoids unsupported Bubblewrap namespaces while retaining owner-only access, subscription authentication, and both persistent repository workspaces.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Moves command isolation to the dedicated Railway container so Codex commands can run reliably without changing the application authentication or workspace configuration.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localFastCodexChatPackage: AgentPackage = {
+      ...localRailwayContainerAccessPackage,
+      id: localFastCodexChatPackageId,
+      version: 16.3,
+      basePackageId: localRailwayContainerAccessPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v16.3',
       contractAddendum:
         'The Studio Codex chat settings expose the selected model’s Fast service tier independently from its reasoning level. The preference persists locally and applies consistently to new conversations, queued turns, interrupted continuations, and recovered work.',
       instructionsAddendum:
@@ -2346,9 +2401,9 @@ export class SiteforgeRepository {
     const localAnimatedCodexChatPackage: AgentPackage = {
       ...localFastCodexChatPackage,
       id: localAnimatedCodexChatPackageId,
-      version: 16.1,
+      version: 16.4,
       basePackageId: localFastCodexChatPackage.id,
-      builderContractVersion: 'made-solid-studio-builder-agent-v16.1',
+      builderContractVersion: 'made-solid-studio-builder-agent-v16.4',
       contractAddendum:
         'The Studio Codex chat enters and exits with a restrained, directional panel transition while preserving the dialog lifecycle, focus restoration, and immediate access to the workspace trigger.',
       instructionsAddendum:
@@ -2363,9 +2418,9 @@ export class SiteforgeRepository {
     const localInlineMultiImageCodexChatPackage: AgentPackage = {
       ...localAnimatedCodexChatPackage,
       id: localInlineMultiImageCodexChatPackageId,
-      version: 16.2,
+      version: 16.5,
       basePackageId: localAnimatedCodexChatPackage.id,
-      builderContractVersion: 'made-solid-studio-builder-agent-v16.2',
+      builderContractVersion: 'made-solid-studio-builder-agent-v16.5',
       contractAddendum:
         'The active Studio Codex composer accepts up to five JPEG, PNG, or WebP images in one message. Selected images remain inside the current draft, can be removed individually, and move into the submitted user message without a separate visual-review dialog.',
       instructionsAddendum:
@@ -2380,9 +2435,9 @@ export class SiteforgeRepository {
     const localContextualCodexChatPackage: AgentPackage = {
       ...localInlineMultiImageCodexChatPackage,
       id: localContextualCodexChatPackageId,
-      version: 16.3,
+      version: 16.6,
       basePackageId: localInlineMultiImageCodexChatPackage.id,
-      builderContractVersion: 'made-solid-studio-builder-agent-v16.3',
+      builderContractVersion: 'made-solid-studio-builder-agent-v16.6',
       contractAddendum:
         'Studio chat distinguishes concise Codex progress commentary from final answers, asks for useful context at meaningful transitions, and gives new user, assistant, queued, and working states restrained directional easing with a static reduced-motion fallback.',
       instructionsAddendum:
@@ -2397,9 +2452,9 @@ export class SiteforgeRepository {
     const localPrivateWorkspacePreviewAccessPackage: AgentPackage = {
       ...localContextualCodexChatPackage,
       id: localPrivateWorkspacePreviewAccessPackageId,
-      version: 16.4,
+      version: 16.7,
       basePackageId: localContextualCodexChatPackage.id,
-      builderContractVersion: 'made-solid-studio-builder-agent-v16.4',
+      builderContractVersion: 'made-solid-studio-builder-agent-v16.7',
       contractAddendum:
         'The permanent Studio runtime issues working, expiring capabilities for the private editable-workspace preview domain so authenticated reviewers can see the current source immediately without publishing it.',
       instructionsAddendum:
@@ -2420,6 +2475,9 @@ export class SiteforgeRepository {
           localInlineMultiImageCodexChatPackage,
           localAnimatedCodexChatPackage,
           localFastCodexChatPackage,
+          localRailwayContainerAccessPackage,
+          localRailwayPersistentCheckoutPackage,
+          localRailwayWorkspaceWritePackage,
           localPermanentRailwayRuntimePackage,
           localSubscriptionSafeCodexRuntimePackage,
           localUninterruptedCodexRecoveryPackage,
@@ -2532,6 +2590,9 @@ export class SiteforgeRepository {
           localInlineMultiImageCodexChatPackage,
           localAnimatedCodexChatPackage,
           localFastCodexChatPackage,
+          localRailwayContainerAccessPackage,
+          localRailwayPersistentCheckoutPackage,
+          localRailwayWorkspaceWritePackage,
           localPermanentRailwayRuntimePackage,
           localSubscriptionSafeCodexRuntimePackage,
           localUninterruptedCodexRecoveryPackage,
@@ -2647,6 +2708,9 @@ export class SiteforgeRepository {
             localInlineMultiImageCodexChatPackage,
             localAnimatedCodexChatPackage,
             localFastCodexChatPackage,
+            localRailwayContainerAccessPackage,
+            localRailwayPersistentCheckoutPackage,
+            localRailwayWorkspaceWritePackage,
             localPermanentRailwayRuntimePackage,
             localSubscriptionSafeCodexRuntimePackage,
             localUninterruptedCodexRecoveryPackage,

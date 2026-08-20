@@ -9,7 +9,7 @@ select
   (select coalesce(max(existing.version), 0) + 0.1
    from public.agent_packages as existing
    where existing.organization_id = base.organization_id),
-  'test_ready', base.id, 'made-solid-studio-builder-agent-v16.3',
+  'test_ready', base.id, 'made-solid-studio-builder-agent-v16.6',
   base.foundation_version, base.foundation_checksum,
   'Studio chat distinguishes concise Codex progress commentary from final answers, asks for useful context at meaningful transitions, and gives new user, assistant, queued, and working states restrained directional easing with a static reduced-motion fallback.',
   'During longer work, provide concise verified commentary before long tool runs and after meaningful findings or changes. Explain what is being checked, what changed, and what remains without exposing hidden reasoning or fabricating progress. Preserve message roles and commentary phases in the transcript, animate newly rendered states with restrained directional easing, and disable non-essential motion for prefers-reduced-motion.',

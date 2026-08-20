@@ -9,7 +9,7 @@ select
   (select coalesce(max(existing.version), 0) + 0.1
    from public.agent_packages as existing
    where existing.organization_id = base.organization_id),
-  'test_ready', base.id, 'made-solid-studio-builder-agent-v16.2',
+  'test_ready', base.id, 'made-solid-studio-builder-agent-v16.5',
   base.foundation_version, base.foundation_checksum,
   'The active Studio Codex composer accepts up to five JPEG, PNG, or WebP images in one message. Selected images remain inside the current draft, can be removed individually, and move into the submitted user message without a separate visual-review dialog.',
   'Append valid multi-file selections to the active draft, preserve the message and ready images after failures, reject invalid or excess files without discarding valid selections, and deliver every ready image as a localImage input in original selection order. Keep screenshot region selection available, then return the result to the same composer.',

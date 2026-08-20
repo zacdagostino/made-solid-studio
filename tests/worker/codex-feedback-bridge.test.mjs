@@ -128,6 +128,8 @@ function fakeConnection(state) {
         };
       }
       if (method === 'thread/resume') {
+        state.threadResumes ??= [];
+        state.threadResumes.push(params);
         if (state.reactivateOnResume) {
           state.threadStatus = { type: 'active', activeFlags: ['turn'] };
           const lastTurnId = state.turnIds?.at(-1);
@@ -593,6 +595,14 @@ test('uses an app-server reactivated turn instead of starting a duplicate contin
 
   assert.equal(state.turns.length, 1);
   assert.equal(state.turnStatuses['turn-1'], 'inProgress');
+  assert.deepEqual(state.threadResumes, [
+    {
+      threadId: 'thread-2',
+      runtimeWorkspaceRoots: ['/workspaces/siteforge-os', '/workspaces/made-solid-website'],
+      sandbox: 'danger-full-access',
+      approvalPolicy: 'never',
+    },
+  ]);
   const running = (await bridge.readRecords('running'))[0];
   assert.equal(running.turnId, 'turn-1');
   assert.equal(running.recoveryCount, undefined);
@@ -898,7 +908,7 @@ test('uses the Codex title after the first prompt and deletes only abandoned emp
   assert.equal(retained.deleted, false);
 });
 
-test('creates and returns a new persistent full-access Codex conversation', async () => {
+test('creates and returns a new persistent repository-scoped Codex conversation', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-new-thread-'));
   const state = { busy: false, turns: [], threadStarts: [] };
   const bridge = new CodexFeedbackBridge({
@@ -926,6 +936,33 @@ test('creates and returns a new persistent full-access Codex conversation', asyn
       sessionStartSource: 'clear',
     },
   ]);
+});
+
+test('uses container-level full access while preserving both Railway workspace roots', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-container-access-'));
+  const state = { busy: false, turns: [] };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+
+  const accepted = await bridge.enqueue({
+    prompt: 'Update both Made Solid repositories.',
+    model: 'gpt-text-only',
+    effort: 'medium',
+    threadId: 'thread-2',
+  });
+
+  assert.equal(accepted.status, 'accepted');
+  assert.deepEqual(state.turns[0].runtimeWorkspaceRoots, [
+    '/workspaces/siteforge-os',
+    '/workspaces/made-solid-website',
+  ]);
+  assert.deepEqual(state.turns[0].sandboxPolicy, {
+    type: 'dangerFullAccess',
+  });
+  assert.equal(state.turns[0].approvalPolicy, 'never');
 });
 
 test('deletes an abandoned new chat before its rollout is materialized', async () => {
