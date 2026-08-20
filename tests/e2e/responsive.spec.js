@@ -4048,7 +4048,7 @@ test('keeps a failed test available without blocking another test', async ({ pag
   const chooser = page.locator('.builder-run__tests');
   await expect(chooser).toBeVisible();
   await expect(page.getByLabel('Test agent package')).toHaveValue(
-    'agent-package-local-v15-9-permanent-railway-runtime',
+    'agent-package-local-v16-0-railway-workspace-write',
   );
   await expect(chooser.getByLabel('Create page from scratch')).toBeChecked();
   await expect(chooser.getByLabel('Previous built page')).toHaveCount(0);
