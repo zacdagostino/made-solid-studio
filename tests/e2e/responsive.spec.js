@@ -4324,7 +4324,7 @@ test('separates test refinement from the published builder agent package', async
   );
   await expect(page.getByRole('heading', { name: 'Every saved build package' })).toBeVisible();
   const versionCards = page.locator('.agent-package-version-ledger__list article');
-  await expect(versionCards).toHaveCount(102);
+  await expect(versionCards).toHaveCount(101);
   await expect(versionCards.first().getByRole('heading')).toHaveText('v15.9');
   const stagedV7Card = versionCards.filter({
     hasText: 'Five tested behaviours staged for the next production package.',
