@@ -10,6 +10,14 @@ function requiredEnvironment(name, environment) {
   return value;
 }
 
+function requiredUuidEnvironment(name, environment) {
+  const value = requiredEnvironment(name, environment);
+  if (!/^[0-9a-f-]{36}$/i.test(value)) {
+    throw new Error(`${name} must be a UUID when Studio runtime authentication is enabled.`);
+  }
+  return value.toLowerCase();
+}
+
 export function studioRuntimeAuthenticationRequired(environment = process.env) {
   return environment.SITEFORGE_RUNTIME_AUTH_REQUIRED?.trim() === '1';
 }
@@ -52,7 +60,12 @@ export async function authorizeStudioRuntimeRequest(
   const tokenKey = cacheKey(token);
   const cached = successfulAuthorizations.get(tokenKey);
   if (cached && cached.expiresAt > now()) {
-    return { authorized: true, source: 'cache', userId: cached.userId };
+    return {
+      authorized: true,
+      source: 'cache',
+      userId: cached.userId,
+      organizationId: cached.organizationId,
+    };
   }
 
   const supabaseUrl = requiredEnvironment('SITEFORGE_SUPABASE_URL', environment).replace(
@@ -60,6 +73,11 @@ export async function authorizeStudioRuntimeRequest(
     '',
   );
   const serviceRoleKey = requiredEnvironment('SITEFORGE_SUPABASE_SERVICE_ROLE_KEY', environment);
+  const ownerUserId = requiredUuidEnvironment('SITEFORGE_RUNTIME_OWNER_USER_ID', environment);
+  const ownerOrganizationId = requiredUuidEnvironment(
+    'SITEFORGE_RUNTIME_OWNER_ORGANIZATION_ID',
+    environment,
+  );
 
   try {
     const userResponse = await fetchImplementation(`${supabaseUrl}/auth/v1/user`, {
@@ -86,10 +104,19 @@ export async function authorizeStudioRuntimeRequest(
         detail: 'Made Solid Studio could not verify this account.',
       };
     }
+    if (userId.toLowerCase() !== ownerUserId) {
+      return {
+        authorized: false,
+        status: 403,
+        detail: 'This account is not authorized to use the private Made Solid Studio runtime.',
+      };
+    }
 
     const membershipUrl = new URL(`${supabaseUrl}/rest/v1/organization_members`);
     membershipUrl.searchParams.set('user_id', `eq.${userId}`);
-    membershipUrl.searchParams.set('select', 'organization_id');
+    membershipUrl.searchParams.set('organization_id', `eq.${ownerOrganizationId}`);
+    membershipUrl.searchParams.set('role', 'eq.owner');
+    membershipUrl.searchParams.set('select', 'organization_id,role');
     membershipUrl.searchParams.set('limit', '1');
     const membershipResponse = await fetchImplementation(membershipUrl, {
       headers: serviceHeaders(serviceRoleKey),
@@ -100,19 +127,25 @@ export async function authorizeStudioRuntimeRequest(
       return {
         authorized: false,
         status: 403,
-        detail: 'This account does not have access to a Made Solid Studio workspace.',
+        detail: 'This account is not the owner of the private Made Solid Studio workspace.',
       };
     }
 
     successfulAuthorizations.set(tokenKey, {
       expiresAt: now() + authorizationCacheMs,
       userId,
+      organizationId: ownerOrganizationId,
     });
     if (successfulAuthorizations.size > 100) {
       const oldestKey = successfulAuthorizations.keys().next().value;
       if (oldestKey) successfulAuthorizations.delete(oldestKey);
     }
-    return { authorized: true, source: 'supabase', userId };
+    return {
+      authorized: true,
+      source: 'supabase',
+      userId,
+      organizationId: ownerOrganizationId,
+    };
   } catch {
     return {
       authorized: false,

@@ -23,6 +23,10 @@ export default defineConfig(({ mode }) => {
     plugins: [react(), localWorkspacePlugin()],
     preview: {
       allowedHosts: railwayAllowedHosts,
+      headers: {
+        'Content-Security-Policy':
+          "frame-ancestors 'self' https://madesolid.com.au https://www.madesolid.com.au",
+      },
     },
     server: {
       allowedHosts: ['silver-fiesta-xg6xjqvw4pvhp477-5173.app.github.dev'],
