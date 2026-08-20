@@ -15,7 +15,11 @@ if [[ ! "$port" =~ ^[0-9]+$ ]] || ((port < 1 || port > 65535)); then
   echo "PORT must be a valid TCP port."
   exit 1
 fi
-for required_name in SITEFORGE_SUPABASE_URL SITEFORGE_SUPABASE_SERVICE_ROLE_KEY; do
+for required_name in \
+  SITEFORGE_SUPABASE_URL \
+  SITEFORGE_SUPABASE_SERVICE_ROLE_KEY \
+  SITEFORGE_RUNTIME_OWNER_USER_ID \
+  SITEFORGE_RUNTIME_OWNER_ORGANIZATION_ID; do
   if [[ -z "${!required_name:-}" ]]; then
     echo "$required_name is required by the Railway Studio runtime."
     exit 1

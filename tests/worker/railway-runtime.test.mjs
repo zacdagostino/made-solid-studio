@@ -42,6 +42,10 @@ test('registers a single-volume Singapore Railway runtime with a health check', 
   assert.equal(configuration.deploy.restartPolicyType, 'ALWAYS');
   assert.match(viteConfiguration, /healthcheck\.railway\.app/);
   assert.match(viteConfiguration, /SITEFORGE_PUBLIC_ORIGIN/);
+  assert.match(
+    viteConfiguration,
+    /frame-ancestors 'self' https:\/\/madesolid\.com\.au https:\/\/www\.madesolid\.com\.au/,
+  );
 });
 
 test('keeps the permanent runtime package newest in the local package ledger', async () => {
@@ -65,4 +69,6 @@ test('keeps OpenAI API credentials out of the subscription-backed Railway proces
   assert.match(launcher, /SITEFORGE_OPENAI_API_ENABLED=false/);
   assert.match(launcher, /unset OPENAI_API_KEY SITEFORGE_CODEX_API_KEY CODEX_API_KEY/);
   assert.match(launcher, /SITEFORGE_RUNTIME_AUTH_REQUIRED=1/);
+  assert.match(launcher, /SITEFORGE_RUNTIME_OWNER_USER_ID/);
+  assert.match(launcher, /SITEFORGE_RUNTIME_OWNER_ORGANIZATION_ID/);
 });
