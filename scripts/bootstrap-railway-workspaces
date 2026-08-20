@@ -8,19 +8,42 @@ studio_repository="${SITEFORGE_STUDIO_REPOSITORY:-zacdagostino/made-solid-studio
 website_repository="${SITEFORGE_WEBSITE_REPOSITORY:-zacdagostino/made-solid-website}"
 github_token="${SITEFORGE_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
 
-if [[ -z "$github_token" ]]; then
-  echo "SITEFORGE_GITHUB_TOKEN is required to prepare the two editable private repositories."
-  exit 1
-fi
-
 mkdir -p "$workspace_root"
-export GH_TOKEN="$github_token"
+studio_destination="$workspace_root/siteforge-os"
+website_destination="$workspace_root/made-solid-website"
 
-if ! gh auth status >/dev/null 2>&1; then
-  echo "The configured GitHub token cannot access the Made Solid repositories."
-  exit 1
+repository_matches() {
+  local repository="$1"
+  local destination="$2"
+  [[ -d "$destination/.git" ]] || return 1
+
+  local current_origin
+  current_origin="$(git -C "$destination" remote get-url origin 2>/dev/null || true)"
+  current_origin="${current_origin#https://github.com/}"
+  current_origin="${current_origin#git@github.com:}"
+  current_origin="${current_origin%.git}"
+  [[ "${current_origin,,}" == "${repository,,}" ]]
+}
+
+github_available=false
+if [[ -n "$github_token" ]]; then
+  export GH_TOKEN="$github_token"
+  if gh auth status >/dev/null 2>&1 \
+    && gh repo view "$studio_repository" >/dev/null 2>&1 \
+    && gh repo view "$website_repository" >/dev/null 2>&1; then
+    gh auth setup-git >/dev/null
+    github_available=true
+  fi
 fi
-gh auth setup-git >/dev/null
+
+if [[ "$github_available" != true ]]; then
+  if ! repository_matches "$studio_repository" "$studio_destination" \
+    || ! repository_matches "$website_repository" "$website_destination"; then
+    echo "SITEFORGE_GITHUB_TOKEN must access both Made Solid repositories before the persistent workspaces can be prepared."
+    exit 1
+  fi
+  echo "[railway-runtime] GitHub is unavailable; preserving both verified persistent repository checkouts without refreshing them."
+fi
 
 prepare_repository() {
   local label="$1"
@@ -38,18 +61,20 @@ prepare_repository() {
     return
   fi
 
-  local current_origin
-  current_origin="$(git -C "$destination" remote get-url origin 2>/dev/null || true)"
-  current_origin="${current_origin#https://github.com/}"
-  current_origin="${current_origin#git@github.com:}"
-  current_origin="${current_origin%.git}"
-  if [[ "${current_origin,,}" != "${repository,,}" ]]; then
+  if ! repository_matches "$repository" "$destination"; then
+    local current_origin
+    current_origin="$(git -C "$destination" remote get-url origin 2>/dev/null || true)"
     echo "$destination belongs to $current_origin, not $repository."
     exit 1
   fi
 
   if [[ -n "$(git -C "$destination" status --porcelain)" ]]; then
     echo "[railway-runtime] preserving uncommitted $label changes; automatic update skipped."
+    return
+  fi
+
+  if [[ "$github_available" != true ]]; then
+    echo "[railway-runtime] preserving the clean $label checkout; automatic update skipped while GitHub is unavailable."
     return
   fi
 
@@ -62,7 +87,7 @@ prepare_repository() {
   fi
 }
 
-prepare_repository "Studio" "$studio_repository" "$workspace_root/siteforge-os"
-prepare_repository "Made Solid website" "$website_repository" "$workspace_root/made-solid-website"
+prepare_repository "Studio" "$studio_repository" "$studio_destination"
+prepare_repository "Made Solid website" "$website_repository" "$website_destination"
 
 echo "[railway-runtime] editable repositories are ready in $workspace_root."

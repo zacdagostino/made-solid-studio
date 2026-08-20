@@ -332,6 +332,8 @@ const localSubscriptionSafeCodexRuntimePackageId =
   'agent-package-local-v15-8-subscription-safe-codex-runtime';
 const localPermanentRailwayRuntimePackageId = 'agent-package-local-v15-9-permanent-railway-runtime';
 const localRailwayWorkspaceWritePackageId = 'agent-package-local-v16-0-railway-workspace-write';
+const localRailwayPersistentCheckoutPackageId =
+  'agent-package-local-v16-1-railway-persistent-checkout';
 
 type StoreName =
   | 'activities'
@@ -2337,10 +2339,28 @@ export class SiteforgeRepository {
         'Replaces the Railway Workspace Agent’s full-filesystem profile with an explicit two-repository write boundary that persists across every chat lifecycle.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localRailwayPersistentCheckoutPackage: AgentPackage = {
+      ...localRailwayWorkspaceWritePackage,
+      id: localRailwayPersistentCheckoutPackageId,
+      version: 16.1,
+      basePackageId: localRailwayWorkspaceWritePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v16.1',
+      contractAddendum:
+        'The permanent Railway runtime verifies both persisted repository origins before launch. When GitHub authentication is temporarily unavailable, it preserves and starts from those existing checkouts instead of replacing them or crash-looping; a missing or mismatched checkout still fails closed.',
+      instructionsAddendum:
+        'Require GitHub access to both private repositories for initial provisioning and normal refresh. If that access is unavailable after both exact repositories have already been verified on the mounted volume, skip network refresh and preserve their current clean or dirty state. Never create, replace, or accept an unexpected repository while offline.',
+      summary:
+        'Railway persistent-checkout test package: keeps the private Studio available from verified volume checkouts during a temporary GitHub credential or provider outage.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes permanent Studio startup resilient without weakening the two-repository workspace-write boundary, owner gate, or ChatGPT subscription authentication.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localRailwayPersistentCheckoutPackage,
           localRailwayWorkspaceWritePackage,
           localPermanentRailwayRuntimePackage,
           localSubscriptionSafeCodexRuntimePackage,

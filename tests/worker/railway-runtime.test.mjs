@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { execFile as execFileCallback } from 'node:child_process';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
+import { promisify } from 'node:util';
 import {
   createWorkspacePreviewToken,
   verifyWorkspacePreviewToken,
@@ -8,6 +12,7 @@ import {
 } from '../../scripts/workspace-preview-access.mjs';
 
 const secret = 'a-private-preview-secret-that-is-longer-than-thirty-two-characters';
+const execFile = promisify(execFileCallback);
 
 test('creates expiring private workspace preview capabilities', () => {
   const token = createWorkspacePreviewToken('prospect-site', secret, {
@@ -48,14 +53,57 @@ test('registers a single-volume Singapore Railway runtime with a health check', 
   );
 });
 
-test('keeps the Railway workspace-write package newest in the local package ledger', async () => {
+test('preserves verified persistent repositories when GitHub is temporarily unavailable', async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'siteforge-railway-workspaces-'));
+  const workspaceRoot = join(fixtureRoot, 'workspaces');
+  const fakeBin = join(fixtureRoot, 'bin');
+  await mkdir(fakeBin, { recursive: true });
+  const fakeGh = join(fakeBin, 'gh');
+  await writeFile(fakeGh, '#!/usr/bin/env bash\nexit 1\n');
+  await chmod(fakeGh, 0o755);
+
+  try {
+    for (const [directory, repository] of [
+      ['siteforge-os', 'zacdagostino/made-solid-studio'],
+      ['made-solid-website', 'zacdagostino/made-solid-website'],
+    ]) {
+      const destination = join(workspaceRoot, directory);
+      await mkdir(destination, { recursive: true });
+      await execFile('git', ['init', '-q', destination]);
+      await execFile('git', [
+        '-C',
+        destination,
+        'remote',
+        'add',
+        'origin',
+        `https://github.com/${repository}.git`,
+      ]);
+    }
+
+    const { stdout } = await execFile('bash', ['scripts/bootstrap-railway-workspaces'], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+        SITEFORGE_GITHUB_TOKEN: 'unavailable-test-token',
+        SITEFORGE_RUNTIME_WORKSPACES_DIR: workspaceRoot,
+      },
+    });
+    assert.match(stdout, /preserving both verified persistent repository checkouts/);
+    assert.match(stdout, /editable repositories are ready/);
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test('keeps the Railway persistent-checkout package newest in the local package ledger', async () => {
   const repository = await readFile('src/lib/repository.ts', 'utf8');
-  assert.match(repository, /version: 16,/);
-  assert.match(repository, /builderContractVersion: 'made-solid-studio-builder-agent-v16\.0'/);
+  assert.match(repository, /version: 16\.1,/);
+  assert.match(repository, /builderContractVersion: 'made-solid-studio-builder-agent-v16\.1'/);
   const ledger = repository.slice(repository.indexOf('value: JSON.stringify(['));
   assert.ok(
-    ledger.indexOf('localRailwayWorkspaceWritePackage,') <
-      ledger.indexOf('localPermanentRailwayRuntimePackage,'),
+    ledger.indexOf('localRailwayPersistentCheckoutPackage,') <
+      ledger.indexOf('localRailwayWorkspaceWritePackage,'),
   );
 });
 

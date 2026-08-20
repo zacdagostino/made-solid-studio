@@ -74,6 +74,10 @@ const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
 );
+const railwayPersistentCheckoutMigrationUrl = new URL(
+  '../../supabase/migrations/20260820171500_railway_persistent_checkout_test_package.sql',
+  import.meta.url,
+);
 const agentTeamChatMigrationUrl = new URL(
   '../../supabase/migrations/20260818090000_agent_team_chat_test_package.sql',
   import.meta.url,
@@ -136,9 +140,30 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.ok(Number(revision[1]) >= 32);
-  assert.match(app, /owner-authorized Railway chat/);
-  assert.match(app, /limiting workspace-write access/);
+  assert.ok(Number(revision[1]) >= 33);
+  assert.match(app, /verified persistent repository checkouts/);
+  assert.match(app, /two-repository workspace-write boundary/);
+});
+
+test('registers the Railway persistent-checkout package as newest', async () => {
+  const [migration, repository, bootstrap] = await Promise.all([
+    readFile(railwayPersistentCheckoutMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(new URL('../../scripts/bootstrap-railway-workspaces', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /Railway persistent-checkout test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v16\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 16\.1,/);
+  assert.match(repository, /basePackageId: localRailwayWorkspaceWritePackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localRailwayPersistentCheckoutPackage,') <
+      packageLedger.indexOf('localRailwayWorkspaceWritePackage,'),
+  );
+  assert.match(bootstrap, /repository_matches/);
+  assert.match(bootstrap, /preserving both verified persistent repository checkouts/);
 });
 
 test('registers the Railway repository-scoped workspace-write package as newest', async () => {
