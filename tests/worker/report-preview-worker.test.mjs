@@ -36,5 +36,7 @@ test('worker keeps the secret server-side and resolves canonical screenshot prov
   assert.match(worker, /async function rendererAvailable/);
   assert.match(worker, /return response\.status === 400/);
   assert.match(worker, /while \(!\(await rendererAvailable\(\)\)\)/);
+  assert.match(worker, /Releasing a best-effort worker lease/);
+  assert.doesNotMatch(worker, /\.rpc\([^;]+\)\s*\.catch/s);
   assert.doesNotMatch(worker, /VITE_/);
 });

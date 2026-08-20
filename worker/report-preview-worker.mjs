@@ -265,9 +265,14 @@ async function heartbeat() {
 }
 
 async function release() {
-  await supabase
-    .rpc('release_report_preview_worker', { worker_identity: workerId })
-    .catch(() => undefined);
+  try {
+    const { error } = await supabase.rpc('release_report_preview_worker', {
+      worker_identity: workerId,
+    });
+    if (error) throw error;
+  } catch {
+    // Releasing a best-effort worker lease must not stop the polling process.
+  }
 }
 
 async function run() {
