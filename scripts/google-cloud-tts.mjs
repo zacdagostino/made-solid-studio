@@ -182,7 +182,7 @@ async function googleAccessToken(account, fetchImplementation, now) {
   const response = await fetchImplementation(googleTokenEndpoint, {
     body: new URLSearchParams({
       assertion: serviceAccountAssertion(account, now),
-      grant_type: 'urn:ietf:params:oauth2:grant-type:jwt-bearer',
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
     }),
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     method: 'POST',

@@ -372,6 +372,8 @@ const localLiveEditableStudioRuntimePackageId =
   'agent-package-local-v18-5-live-editable-studio-runtime';
 const localGlobalGoogleVoiceCataloguePackageId =
   'agent-package-local-v18-6-global-google-voice-catalogue';
+const localAuthenticatedGoogleVoiceCataloguePackageId =
+  'agent-package-local-v18-7-authenticated-google-voice-catalogue';
 
 type StoreName =
   | 'activities'
@@ -2819,10 +2821,28 @@ export class SiteforgeRepository {
         'Lets the reviewer compare Google voices worldwide and understand which models favor natural quality, narration, or lower cost before saving a choice.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localAuthenticatedGoogleVoiceCataloguePackage: AgentPackage = {
+      ...localGlobalGoogleVoiceCataloguePackage,
+      id: localAuthenticatedGoogleVoiceCataloguePackageId,
+      version: 18.7,
+      basePackageId: localGlobalGoogleVoiceCataloguePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v18.7',
+      contractAddendum:
+        'Google Cloud authentication uses the standards-compliant JWT bearer grant so the live global voice catalogue and selected cloud playback load instead of silently falling back to Australian device voices.',
+      instructionsAddendum:
+        'Exchange the signed service-account assertion with the exact OAuth JWT bearer grant identifier urn:ietf:params:oauth:grant-type:jwt-bearer. Keep a regression assertion for the full identifier before accepting global catalogue or synthesis behavior.',
+      summary:
+        'Authenticated Google voice catalogue test package: loads the worldwide Google catalogue and cloud playback with the valid OAuth grant.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Restores the intended worldwide voice selection and Google audio while retaining the safe Australian fallback for genuine upstream outages.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localAuthenticatedGoogleVoiceCataloguePackage,
           localGlobalGoogleVoiceCataloguePackage,
           localLiveEditableStudioRuntimePackage,
           localImageOnlyCodexMessagePackage,
@@ -2957,6 +2977,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localAuthenticatedGoogleVoiceCataloguePackage,
           localGlobalGoogleVoiceCataloguePackage,
           localLiveEditableStudioRuntimePackage,
           localImageOnlyCodexMessagePackage,
@@ -3094,6 +3115,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localAuthenticatedGoogleVoiceCataloguePackage,
             localGlobalGoogleVoiceCataloguePackage,
             localLiveEditableStudioRuntimePackage,
             localImageOnlyCodexMessagePackage,

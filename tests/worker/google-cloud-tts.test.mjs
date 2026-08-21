@@ -165,6 +165,7 @@ test('uses the selected catalogue voice and its own language for MP3 audio', asy
   assert.equal(result.audio.toString(), 'mock mp3');
   assert.equal(requests.length, 3);
   const tokenBody = new URLSearchParams(requests[0].init.body);
+  assert.equal(tokenBody.get('grant_type'), 'urn:ietf:params:oauth:grant-type:jwt-bearer');
   const assertionParts = tokenBody.get('assertion').split('.');
   const claims = JSON.parse(Buffer.from(assertionParts[1], 'base64url').toString());
   assert.equal(claims.iss, 'speech@example.iam.gserviceaccount.com');

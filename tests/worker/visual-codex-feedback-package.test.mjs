@@ -166,6 +166,10 @@ const globalGoogleVoiceCatalogueMigrationUrl = new URL(
   '../../supabase/migrations/20260821220000_global_google_voice_catalogue_test_package.sql',
   import.meta.url,
 );
+const authenticatedGoogleVoiceCatalogueMigrationUrl = new URL(
+  '../../supabase/migrations/20260821221000_authenticated_google_voice_catalogue_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -242,9 +246,32 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 58);
-  assert.match(app, /Google’s full voice catalogue/);
-  assert.match(app, /language and model filters/);
+  assert.equal(Number(revision[1]), 59);
+  assert.match(app, /Google authentication now loads the worldwide voice catalogue/);
+  assert.match(app, /Australian device voices/);
+});
+
+test('registers authenticated Google voices as the newest immutable package', async () => {
+  const [migration, repository, speech] = await Promise.all([
+    readFile(authenticatedGoogleVoiceCatalogueMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(new URL('../../scripts/google-cloud-tts.mjs', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /Authenticated Google voice catalogue test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v18\.7/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v18\.6'/,
+  );
+  assert.match(repository, /version: 18\.7,/);
+  assert.match(repository, /basePackageId: localGlobalGoogleVoiceCataloguePackage\.id/);
+  const ledger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    ledger.indexOf('localAuthenticatedGoogleVoiceCataloguePackage,') <
+      ledger.indexOf('localGlobalGoogleVoiceCataloguePackage,'),
+  );
+  assert.match(speech, /urn:ietf:params:oauth:grant-type:jwt-bearer/);
+  assert.doesNotMatch(speech, /urn:ietf:params:oauth2:grant-type:jwt-bearer/);
 });
 
 test('registers the global Google voice catalogue as the newest immutable package', async () => {
