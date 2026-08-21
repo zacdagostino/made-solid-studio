@@ -110,6 +110,10 @@ const renderableWorkspacePreviewMigrationUrl = new URL(
   '../../supabase/migrations/20260820212000_renderable_workspace_preview_test_package.sql',
   import.meta.url,
 );
+const authenticatedStudioControlsMigrationUrl = new URL(
+  '../../supabase/migrations/20260820213000_authenticated_studio_controls_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -184,13 +188,41 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 42);
+  assert.equal(Number(revision[1]), 43);
+  assert.match(app, /signed-out Studio and workspace entry routes no longer mount/);
   assert.match(app, /stable private workspace domain/);
   assert.match(app, /authenticated Studio session/);
   assert.match(app, /consistent browser-renderable development environment/);
   assert.match(app, /sent messages move immediately from the composer/);
   assert.match(app, /current assignment and child-owned results/);
   assert.match(app, /without inherited supervisor history/);
+});
+
+test('registers authenticated Studio controls as the newest immutable package', async () => {
+  const [migration, repository, main, panelGate] = await Promise.all([
+    readFile(authenticatedStudioControlsMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(new URL('../../src/main.tsx', import.meta.url), 'utf8'),
+    readFile(
+      new URL('../../src/components/AuthenticatedCodexFeedbackPanel.tsx', import.meta.url),
+      'utf8',
+    ),
+  ]);
+  assert.match(migration, /Authenticated Studio controls test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v17\.3/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(repository, /version: 17\.3,/);
+  assert.match(repository, /basePackageId: localRenderableWorkspacePreviewPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localAuthenticatedStudioControlsPackage,') <
+      packageLedger.indexOf('localRenderableWorkspacePreviewPackage,'),
+  );
+  assert.doesNotMatch(main, /<CodexFeedbackPanel/);
+  assert.match(main, /<AuthenticatedCodexFeedbackPanel/);
+  assert.match(panelGate, /getSession\(\)/);
+  assert.match(panelGate, /onAuthStateChange/);
+  assert.match(panelGate, /authenticated \? <CodexFeedbackPanel/);
 });
 
 test('registers renderable workspace previews as the newest immutable package', async () => {
@@ -559,7 +591,7 @@ test('registers the subscription-safe Codex runtime as the newest immutable pack
     packageLedger.indexOf('localSubscriptionSafeCodexRuntimePackage,') <
       packageLedger.indexOf('localUninterruptedCodexRecoveryPackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.42`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.43`/);
   assert.match(launcher, /forced_login_method="chatgpt"/);
   assert.match(launcher, /unset OPENAI_API_KEY SITEFORGE_CODEX_API_KEY CODEX_API_KEY/);
 });
@@ -934,7 +966,10 @@ test('uses shared controls, a compact model selector, and live model discovery f
   assert.match(component, /workingStartedAt/);
   assert.doesNotMatch(component, /Interrupt and send message/);
   assert.match(component, /expanded: phase === 'selecting'/);
-  assert.match(main, /<App\s*\/>[\s\S]*<CodexFeedbackPanel embedded=\{isCodexPanelRoute\}\s*\/>/);
+  assert.match(
+    main,
+    /<App\s*\/>[\s\S]*<AuthenticatedCodexFeedbackPanel embedded=\{isCodexPanelRoute\}\s*\/>/,
+  );
   assert.match(main, /document\.documentElement\.dataset\.codexPanel = 'embedded'/);
   assert.match(app, /studioPreviewUrl\(previewUrl\)/);
   assert.match(app, /studioPreviewUrl\(event\.previewUrl\)/);

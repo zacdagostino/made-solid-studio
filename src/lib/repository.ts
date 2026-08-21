@@ -349,6 +349,8 @@ const localRestartableWorkspacePreviewPackageId =
   'agent-package-local-v17-1-restartable-workspace-preview';
 const localRenderableWorkspacePreviewPackageId =
   'agent-package-local-v17-2-renderable-workspace-preview';
+const localAuthenticatedStudioControlsPackageId =
+  'agent-package-local-v17-3-authenticated-studio-controls';
 
 type StoreName =
   | 'activities'
@@ -2558,10 +2560,28 @@ export class SiteforgeRepository {
         'Makes successful HTTP recovery match actual browser readiness instead of treating an empty React root as a working preview.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localAuthenticatedStudioControlsPackage: AgentPackage = {
+      ...localRenderableWorkspacePreviewPackage,
+      id: localAuthenticatedStudioControlsPackageId,
+      version: 17.3,
+      basePackageId: localRenderableWorkspacePreviewPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v17.3',
+      contractAddendum:
+        'Studio-only controls, including the Codex Workspace Agent, mount only after the configured Supabase client confirms an authenticated session. Signed-out, loading, error, preview-access, and embedded-panel entry states expose no chat control and initiate no Codex runtime request.',
+      instructionsAddendum:
+        'Keep all privileged Studio tools behind the confirmed session boundary. Test every public entry route while signed out at mobile, tablet, and desktop sizes; assert that no Codex launcher, dialog, embedded panel, stored draft, or Codex runtime request is exposed before authentication.',
+      summary:
+        'Authenticated Studio controls test package: removes private chat controls and internal sign-in details from public workspace entry states.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents anonymous visitors from mounting private Studio tools while retaining server-side authorization on every runtime endpoint.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localAuthenticatedStudioControlsPackage,
           localRenderableWorkspacePreviewPackage,
           localRestartableWorkspacePreviewPackage,
           localStableWorkspacePreviewPackage,
@@ -2682,6 +2702,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localAuthenticatedStudioControlsPackage,
           localRenderableWorkspacePreviewPackage,
           localRestartableWorkspacePreviewPackage,
           localStableWorkspacePreviewPackage,
@@ -2805,6 +2826,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localAuthenticatedStudioControlsPackage,
             localRenderableWorkspacePreviewPackage,
             localRestartableWorkspacePreviewPackage,
             localStableWorkspacePreviewPackage,

@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { PreviewFrame } from './PreviewFrame';
 import { WorkspacePreviewAccess } from './WorkspacePreviewAccess';
-import { CodexFeedbackPanel } from './components/CodexFeedbackPanel';
+import { AuthenticatedCodexFeedbackPanel } from './components/AuthenticatedCodexFeedbackPanel';
 import './styles.css';
 
 const isPreviewRoute = window.location.hash.startsWith('#/preview?');
@@ -23,6 +23,6 @@ createRoot(document.getElementById('root')!).render(
     ) : (
       <App />
     )}
-    <CodexFeedbackPanel embedded={isCodexPanelRoute} />
+    <AuthenticatedCodexFeedbackPanel embedded={isCodexPanelRoute} />
   </StrictMode>,
 );
