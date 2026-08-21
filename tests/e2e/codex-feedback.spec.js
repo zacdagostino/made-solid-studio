@@ -20,10 +20,176 @@ async function openChatSettings(composer) {
   await expect(composer.getByRole('group', { name: 'Chat settings' })).toBeVisible();
 }
 
+async function enableGoogleSpeech(page, onSpeechRequest = () => {}) {
+  await page.route('**/__made-solid/codex-speech', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          available: true,
+          defaultVoice: 'Aoede',
+          language: 'en-AU',
+          provider: 'Google Chirp 3 HD',
+          voices: [
+            { id: 'Aoede', gender: 'Female' },
+            { id: 'Leda', gender: 'Female' },
+            { id: 'Charon', gender: 'Male' },
+          ],
+        }),
+      });
+      return;
+    }
+    onSpeechRequest(route.request().postDataJSON());
+    await route.fulfill({
+      contentType: 'audio/mpeg',
+      body: Buffer.from('deterministic mocked mp3 audio'),
+    });
+  });
+}
+
 test.beforeEach(async ({ page }) => {
   let statusRequestCount = 0;
   await page.addInitScript(
     ({ screenshot, tabScreenshot }) => {
+      class MockSpeechSynthesisUtterance extends EventTarget {
+        constructor(text = '') {
+          super();
+          this.text = text;
+          this.lang = '';
+          this.voice = null;
+          this.volume = 1;
+          this.rate = 1;
+          this.pitch = 1;
+          this.onend = null;
+          this.onerror = null;
+        }
+      }
+      const speechEvents = [];
+      const audioEvents = [];
+      let currentUtterance;
+      const utterances = [];
+      const speechSynthesis = {
+        paused: false,
+        pending: false,
+        speaking: false,
+        getVoices: () => [
+          {
+            default: true,
+            lang: 'fr-FR',
+            localService: true,
+            name: 'Voix française par défaut',
+            voiceURI: 'playwright-french-default',
+          },
+          {
+            default: false,
+            lang: 'en-AU',
+            localService: true,
+            name: 'Playwright device voice',
+            voiceURI: 'playwright-device-voice',
+          },
+        ],
+        speak(utterance) {
+          utterances.push(utterance);
+          currentUtterance = utterance;
+          this.paused = false;
+          this.pending = false;
+          this.speaking = true;
+          speechEvents.push({
+            type: 'speak',
+            text: utterance.text,
+            lang: utterance.lang,
+            voiceLang: utterance.voice?.lang ?? '',
+            voiceName: utterance.voice?.name ?? '',
+            utteranceIndex: utterances.length - 1,
+          });
+        },
+        cancel() {
+          currentUtterance = undefined;
+          this.paused = false;
+          this.pending = false;
+          this.speaking = false;
+          speechEvents.push({ type: 'cancel' });
+        },
+        pause() {
+          this.paused = true;
+          speechEvents.push({ type: 'pause' });
+        },
+        resume() {
+          this.paused = false;
+          speechEvents.push({ type: 'resume' });
+        },
+        addEventListener() {},
+        removeEventListener() {},
+      };
+      Object.defineProperty(window, 'SpeechSynthesisUtterance', {
+        configurable: true,
+        value: MockSpeechSynthesisUtterance,
+      });
+      Object.defineProperty(window, 'speechSynthesis', {
+        configurable: true,
+        value: speechSynthesis,
+      });
+      window.__speechHarness = {
+        events: speechEvents,
+        utteranceCount: () => utterances.length,
+        currentText: () => currentUtterance?.text ?? '',
+        finishUtterance: (index) => {
+          const utterance = utterances[index];
+          if (!utterance) return;
+          if (currentUtterance === utterance) {
+            currentUtterance = undefined;
+            speechSynthesis.paused = false;
+            speechSynthesis.speaking = false;
+          }
+          utterance.onend?.(new Event('end'));
+          utterance.dispatchEvent(new Event('end'));
+        },
+      };
+      window.__speechHarness.finishCurrent = () => {
+        const index = utterances.indexOf(currentUtterance);
+        window.__speechHarness.finishUtterance(index);
+      };
+      class MockAudio extends EventTarget {
+        constructor(source = '') {
+          super();
+          this.src = source;
+          this.currentTime = 0;
+          this.duration = 12;
+          this.preload = '';
+          this.onended = null;
+          this.onerror = null;
+          this.ontimeupdate = null;
+        }
+        load() {
+          window.__currentAudio = this;
+          queueMicrotask(() => this.dispatchEvent(new Event('loadedmetadata')));
+        }
+        async play() {
+          window.__currentAudio = this;
+          audioEvents.push({ type: 'play', source: this.src, currentTime: this.currentTime });
+        }
+        pause() {
+          audioEvents.push({ type: 'pause', source: this.src, currentTime: this.currentTime });
+        }
+        dispatchEvent(event) {
+          const dispatched = super.dispatchEvent(event);
+          this[`on${event.type}`]?.(event);
+          return dispatched;
+        }
+      }
+      Object.defineProperty(window, 'Audio', { configurable: true, value: MockAudio });
+      window.__audioHarness = {
+        events: audioEvents,
+        advance(seconds) {
+          if (!window.__currentAudio) return;
+          window.__currentAudio.currentTime = seconds;
+          window.__currentAudio.dispatchEvent(new Event('timeupdate'));
+        },
+        finish() {
+          window.__currentAudio?.dispatchEvent(new Event('ended'));
+        },
+        currentTime: () => window.__currentAudio?.currentTime ?? 0,
+      };
       window.addEventListener('message', (event) => {
         if (event.source !== window || event.data?.source !== 'made-solid-browser-capture') return;
         if (new URL(window.location.href).searchParams.has('noCaptureHelper')) return;
@@ -83,6 +249,26 @@ test.beforeEach(async ({ page }) => {
     },
     { screenshot: captureSvg, tabScreenshot: capturePng },
   );
+  await page.route('**/__made-solid/codex-speech', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          available: false,
+          defaultVoice: 'Aoede',
+          language: 'en-AU',
+          provider: 'Google Chirp 3 HD',
+          voices: [{ id: 'Aoede', gender: 'Female' }],
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ status: 'unavailable' }),
+    });
+  });
   await page.route('**/__made-solid/codex-status*', async (route) => {
     statusRequestCount += 1;
     const selectedThreadId = new URL(route.request().url()).searchParams.get('threadId');
@@ -93,6 +279,11 @@ test.beforeEach(async ({ page }) => {
     const teamHistory = pageUrl.searchParams.has('codexTeamHistory');
     const directWorkingTurn = pageUrl.searchParams.has('codexDirectWorking');
     const incomingProgress = pageUrl.searchParams.has('codexIncoming');
+    const incomingActivity = pageUrl.searchParams.has('codexIncomingActivity');
+    const activityHistory = pageUrl.searchParams.has('codexActivityHistory');
+    const evidenceNarrative = pageUrl.searchParams.has('codexEvidenceNarrative');
+    const usageUnavailable = pageUrl.searchParams.has('codexUsageUnavailable');
+    const twoUsageWindows = pageUrl.searchParams.has('codexTwoUsage');
     const workingSince = Math.floor(Date.now() / 1_000) - 65;
     const threadUpdatedAt = noWorkingStart
       ? Math.floor(Date.now() / 1_000) - 97 * 60 * 60
@@ -103,6 +294,22 @@ test.beforeEach(async ({ page }) => {
         status: 'ready',
         detail: 'Connected to the local Codex conversation.',
         account: { type: 'chatgpt', planType: 'plus' },
+        subscriptionUsage: usageUnavailable
+          ? undefined
+          : {
+              primary: {
+                usedPercent: twoUsageWindows ? 42 : 51,
+                windowDurationMins: twoUsageWindows ? 300 : 10_080,
+                resetsAt: twoUsageWindows ? 1_787_339_400 : 1_787_823_574,
+              },
+              secondary: twoUsageWindows
+                ? {
+                    usedPercent: 18,
+                    windowDurationMins: 10_080,
+                    resetsAt: 1_787_827_574,
+                  }
+                : undefined,
+            },
         thread:
           selectedThreadId === 'thread-2'
             ? {
@@ -164,15 +371,31 @@ test.beforeEach(async ({ page }) => {
                   role: 'user',
                   text: 'Open the Studio chat.',
                   turnId: 'turn-team-1',
+                  position: 0,
                 },
                 ...(!incomingProgress || statusRequestCount > 2
                   ? [
                       {
                         id: 'current-codex',
                         role: 'assistant',
-                        text: 'Studio chat is connected.',
+                        text: evidenceNarrative
+                          ? 'I found the public services page, so I’m preserving its supported service structure while updating the interface.'
+                          : 'Studio chat is connected.',
                         turnId: 'turn-team-1',
                         phase: working ? 'commentary' : 'final_answer',
+                        position: 2,
+                      },
+                    ]
+                  : []),
+                ...(evidenceNarrative
+                  ? [
+                      {
+                        id: 'current-codex-evidence',
+                        role: 'assistant',
+                        text: 'The implementation updates are saved and the checks completed, so I’m reviewing the responsive result next.',
+                        turnId: 'turn-team-1',
+                        phase: 'commentary',
+                        position: 6,
                       },
                     ]
                   : []),
@@ -183,28 +406,84 @@ test.beforeEach(async ({ page }) => {
                         role: 'user',
                         text: 'Now make one direct copy change.',
                         turnId: 'turn-direct-2',
+                        position: 10,
                       },
                       {
                         id: 'direct-codex',
                         role: 'assistant',
                         text: 'The direct copy change is complete.',
                         turnId: 'turn-direct-2',
+                        position: 11,
                       },
                       {
                         id: 'second-team-user',
                         role: 'user',
                         text: 'Run a new agent team review.',
                         turnId: 'turn-team-3',
+                        position: 12,
                       },
                       {
                         id: 'second-team-codex',
                         role: 'assistant',
                         text: 'The new team review is underway.',
                         turnId: 'turn-team-3',
+                        position: 13,
                       },
                     ]
                   : []),
               ],
+        activities:
+          selectedThreadId !== 'thread-2' && (working || activityHistory)
+            ? [
+                {
+                  id: 'activity-search',
+                  kind: 'search',
+                  label: 'Opening workspace.madesolid.com.au/services',
+                  detail: 'Reviewing workspace.madesolid.com.au/services.',
+                  status: 'completed',
+                  outcome: 'workspace.madesolid.com.au/services was opened for inspection.',
+                  turnId: 'turn-team-1',
+                  position: 1,
+                },
+                {
+                  id: 'activity-files',
+                  kind: 'file',
+                  label: 'Updated 2 files',
+                  detail: 'src/components/CodexFeedbackPanel.tsx · src/styles.css',
+                  status: 'completed',
+                  outcome: '2 file changes were saved.',
+                  turnId: 'turn-team-1',
+                  position: 3,
+                },
+                {
+                  id: 'activity-checks',
+                  kind: 'command',
+                  label: 'Running project checks',
+                  detail: 'Workspace: siteforge-os',
+                  status: 'completed',
+                  outcome: 'Project checks completed successfully.',
+                  durationMs: 4_280,
+                  turnId: 'turn-team-1',
+                  position: 4,
+                },
+                ...(!incomingActivity || statusRequestCount > 2
+                  ? [
+                      {
+                        id: 'activity-browser',
+                        kind: 'tool',
+                        label: 'Using browser checks',
+                        detail: 'Reviewing the required responsive viewports.',
+                        status: working ? 'running' : 'completed',
+                        outcome: working
+                          ? 'The browser review is still running.'
+                          : 'The browser review completed.',
+                        turnId: 'turn-team-1',
+                        position: 5,
+                      },
+                    ]
+                  : []),
+              ]
+            : [],
         agents: pageUrl.searchParams.has('codexAgents')
           ? [
               {
@@ -642,7 +921,18 @@ test('reconciles a delivered request without leaving a duplicate Sending card', 
   await expect(composer.locator('.codex-working-status')).toContainText('Codex is working');
 });
 
-test('shows the tmux chat log and switches between saved Codex conversations', async ({ page }) => {
+test('shows an accessible loading state while switching saved Codex conversations', async ({
+  page,
+}) => {
+  let releaseConversation;
+  const conversationReady = new Promise((resolve) => {
+    releaseConversation = resolve;
+  });
+  await page.route('**/__made-solid/codex-status*', async (route) => {
+    const selectedThreadId = new URL(route.request().url()).searchParams.get('threadId');
+    if (selectedThreadId === 'thread-2') await conversationReady;
+    await route.fallback();
+  });
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat with Codex' }).click();
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
@@ -658,8 +948,62 @@ test('shows the tmux chat log and switches between saved Codex conversations', a
   });
   await expect(earlierConversation).toContainText('Last used 1h ago');
   await earlierConversation.click();
+  const loading = composer.locator('.codex-conversation-loading');
+  await expect(loading).toBeVisible();
+  await expect(loading).toContainText('Opening conversation');
+  await expect(loading).toContainText('Loading Review the earlier homepage.');
+  await expect(log).toHaveAttribute('aria-busy', 'true');
+  await expect(log).not.toContainText('Studio chat is connected.');
+  await expect(composer.getByRole('button', { name: 'Conversation' })).toBeDisabled();
+  await expect(composer.getByRole('button', { name: 'New chat' })).toBeDisabled();
+  await expect(composer.getByLabel('Message to Codex')).toBeDisabled();
+  await expect(composer).toHaveScreenshot('codex-conversation-loading.png');
+  const accessibility = await new AxeBuilder({ page }).include('.codex-chat-dialog').analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+
+  releaseConversation();
   await expect(log).toContainText('Review the earlier homepage.');
   await expect(log).toContainText('The earlier review is complete.');
+  await expect(loading).toBeHidden();
+  await expect(log).toHaveAttribute('aria-busy', 'false');
+});
+
+test('keeps conversation loading motion static when reduced motion is requested', async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== 'mobile');
+  let releaseConversation;
+  const conversationReady = new Promise((resolve) => {
+    releaseConversation = resolve;
+  });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.route('**/__made-solid/codex-status*', async (route) => {
+    const selectedThreadId = new URL(route.request().url()).searchParams.get('threadId');
+    if (selectedThreadId === 'thread-2') await conversationReady;
+    await route.fallback();
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await composer.getByRole('button', { name: 'Conversation' }).click();
+  await composer.getByRole('menuitemradio', { name: /Review the earlier homepage\./ }).click();
+  await expect(composer.locator('.codex-conversation-loading')).toBeVisible();
+  await expect(composer.locator('.codex-conversation-loading__icon')).toHaveCSS(
+    'animation-name',
+    'none',
+  );
+  await expect(composer.locator('.codex-conversation-loading__skeleton i').first()).toHaveCSS(
+    'animation-name',
+    'none',
+  );
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  releaseConversation();
 });
 
 test('explains and continues a conversation interrupted by a Codespace pause', async ({ page }) => {
@@ -784,6 +1128,630 @@ const result = "this-code-line-scrolls-horizontally-on-small-screens";
   expect(accessibility.violations).toEqual([]);
 });
 
+test('selects, previews, and remembers an Australian Google voice in chat settings', async ({
+  page,
+}) => {
+  const speechRequests = [];
+  await enableGoogleSpeech(page, (request) => speechRequests.push(request));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  let composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openChatSettings(composer);
+
+  const voiceSettings = composer.getByRole('region', { name: 'Read aloud voice' });
+  await expect(voiceSettings).toContainText('Google Chirp 3 HD · Australian English');
+  await expect(voiceSettings.getByRole('combobox', { name: 'Voice', exact: true })).toHaveValue(
+    'Aoede',
+  );
+  await voiceSettings.getByRole('combobox', { name: 'Voice', exact: true }).selectOption('Leda');
+  await voiceSettings.getByRole('button', { name: 'Preview Leda voice' }).click();
+  await expect(voiceSettings.getByRole('button', { name: 'Stop voice preview' })).toBeVisible();
+  await expect.poll(() => speechRequests.length).toBe(1);
+  expect(speechRequests[0]).toMatchObject({ voice: 'Leda' });
+  expect(speechRequests[0].text).toContain('Studio Codex Chat voice');
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.__audioHarness.events.filter((event) => event.type === 'play').length,
+      ),
+    )
+    .toBeGreaterThan(0);
+  await expect(composer).toHaveScreenshot('codex-google-voice-settings.png');
+  const accessibility = await new AxeBuilder({ page }).include('.codex-feedback-dialog').analyze();
+  expect(accessibility.violations).toEqual([]);
+
+  await voiceSettings.getByRole('button', { name: 'Stop voice preview' }).click();
+  await composer.getByRole('button', { name: 'Close Codex chat' }).click();
+  await page.reload();
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openChatSettings(composer);
+  await expect(composer.getByRole('combobox', { name: 'Voice', exact: true })).toHaveValue('Leda');
+});
+
+test('keeps Google voice settings usable at the compact 320px viewport', async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== 'mobile');
+  await enableGoogleSpeech(page);
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openChatSettings(composer);
+  const voiceSettings = composer.getByRole('region', { name: 'Read aloud voice' });
+  await expect(voiceSettings.getByRole('combobox', { name: 'Voice', exact: true })).toBeVisible();
+  await expect(voiceSettings.getByRole('button', { name: /Preview Aoede voice/ })).toBeVisible();
+  await expect
+    .poll(() => composer.evaluate((element) => element.scrollWidth - element.clientWidth))
+    .toBeLessThanOrEqual(1);
+  await expect(voiceSettings).toHaveScreenshot('codex-google-voice-settings-320.png');
+  const accessibility = await new AxeBuilder({ page }).include('.codex-feedback-dialog').analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+test('plays Google speech with exact seekable seconds and no device utterance', async ({
+  page,
+}) => {
+  const speechRequests = [];
+  await enableGoogleSpeech(page, (request) => speechRequests.push(request));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const reply = page.locator('.codex-chat-message--assistant', {
+    hasText: 'Studio chat is connected.',
+  });
+  await reply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
+  await expect(reply.getByRole('button', { name: 'Pause reading', exact: true })).toBeVisible();
+  expect(speechRequests).toEqual([{ text: 'Studio chat is connected.', voice: 'Aoede' }]);
+  expect(
+    await page.evaluate(
+      () => window.__speechHarness.events.filter((event) => event.type === 'speak').length,
+    ),
+  ).toBe(0);
+
+  const timeline = reply.getByLabel('Speech playback position');
+  await expect(timeline).toHaveAttribute('max', '12');
+  await expect(reply.getByText('0:00 / 0:12', { exact: true })).toBeVisible();
+  await page.evaluate(() => window.__audioHarness.advance(5));
+  await expect(timeline).toHaveValue('5');
+  await expect(reply.getByText('0:05 / 0:12', { exact: true })).toBeVisible();
+  await timeline.fill('8');
+  await expect.poll(() => page.evaluate(() => window.__audioHarness.currentTime())).toBe(8);
+
+  await reply.getByRole('button', { name: 'Pause reading', exact: true }).click();
+  await expect(reply.getByRole('button', { name: 'Resume reading', exact: true })).toBeVisible();
+  await reply.getByRole('button', { name: 'Resume reading', exact: true }).click();
+  await expect(reply.getByRole('button', { name: 'Pause reading', exact: true })).toBeVisible();
+  await reply.getByRole('button', { name: 'Stop reading', exact: true }).click();
+  await expect(reply.getByLabel('Speech playback position')).toHaveCount(0);
+  await expect(reply.getByRole('button', { name: 'Read Codex reply', exact: true })).toBeVisible();
+});
+
+test('falls back to the English device voice when Google synthesis fails', async ({ page }) => {
+  await page.route('**/__made-solid/codex-speech', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          available: true,
+          defaultVoice: 'Aoede',
+          language: 'en-AU',
+          provider: 'Google Chirp 3 HD',
+          voices: [{ id: 'Aoede', gender: 'Female' }],
+        }),
+      });
+      return;
+    }
+    await route.fulfill({ status: 502, contentType: 'application/json', body: '{}' });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const reply = page.locator('.codex-chat-message--assistant', {
+    hasText: 'Studio chat is connected.',
+  });
+  await reply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => window.__speechHarness.currentText()))
+    .toContain('Studio chat is connected.');
+  const spoken = await page.evaluate(() =>
+    window.__speechHarness.events.findLast((event) => event.type === 'speak'),
+  );
+  expect(spoken.lang).toMatch(/^en(?:-|$)/i);
+  expect(spoken.voiceName).toBe('Playwright device voice');
+});
+
+test('offers device-voice reading only for completed Codex replies', async ({ page }) => {
+  await page.route('**/__made-solid/codex-status*', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'ready',
+        detail: 'Connected to the local Codex conversation.',
+        thread: { id: 'thread-speech', name: 'Speech review', status: 'idle' },
+        threads: [{ id: 'thread-speech', name: 'Speech review', status: 'idle' }],
+        messages: [
+          { id: 'speech-user', role: 'user', text: 'Read the completed answer.' },
+          {
+            id: 'speech-progress',
+            role: 'assistant',
+            phase: 'commentary',
+            text: 'I am still checking the workspace.',
+          },
+          {
+            id: 'speech-final',
+            role: 'assistant',
+            phase: 'final_answer',
+            text: 'The completed answer is ready to read.',
+          },
+        ],
+        agents: [],
+        queuedCount: 0,
+        queuedMessages: [],
+        models: [
+          {
+            id: 'gpt-5.6-sol',
+            label: 'GPT-5.6-Sol',
+            defaultEffort: 'medium',
+            isDefault: true,
+            supportsImages: true,
+            efforts: [{ id: 'medium', description: 'Balanced reasoning' }],
+            serviceTiers: [],
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+
+  const userMessage = page.locator('.codex-chat-message--user', {
+    hasText: 'Read the completed answer.',
+  });
+  const progressMessage = page.locator('.codex-chat-message--progress', {
+    hasText: 'I am still checking the workspace.',
+  });
+  const finalMessage = page.locator('.codex-chat-message--assistant', {
+    hasText: 'The completed answer is ready to read.',
+  });
+  await expect(
+    userMessage.getByRole('button', { name: 'Read Codex reply', exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    progressMessage.getByRole('button', { name: 'Read Codex reply', exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    finalMessage.getByRole('button', { name: 'Read Codex reply', exact: true }),
+  ).toBeVisible();
+  const readButton = finalMessage.getByRole('button', {
+    name: 'Read Codex reply',
+    exact: true,
+  });
+  await expect(readButton).toHaveCSS('min-height', '44px');
+  await expect
+    .poll(async () => (await readButton.boundingBox())?.height ?? 0)
+    .toBeGreaterThanOrEqual(44);
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await expect
+    .poll(() => composer.evaluate((element) => element.scrollWidth - element.clientWidth))
+    .toBeLessThanOrEqual(1);
+  const accessibility = await new AxeBuilder({ page }).include('.codex-chat-dialog').analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+test('keeps device-voice controls usable at the compact 320px viewport', async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== 'mobile');
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  const reply = composer.locator('.codex-chat-message--assistant', {
+    hasText: 'Studio chat is connected.',
+  });
+
+  await reply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
+  const pauseButton = reply.getByRole('button', { name: 'Pause reading', exact: true });
+  await expect(pauseButton).toBeVisible();
+  expect((await pauseButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  await expect(reply.getByRole('button', { name: 'Stop reading', exact: true })).toBeVisible();
+  await expect(
+    reply.getByRole('progressbar', { name: 'Estimated reading progress' }),
+  ).toBeVisible();
+  await expect(reply.getByText(/^\d+:\d{2} \/ about \d+:\d{2}$/)).toBeVisible();
+  await expect
+    .poll(() => composer.evaluate((element) => element.scrollWidth - element.clientWidth))
+    .toBeLessThanOrEqual(1);
+  await expect(reply.locator('.codex-chat-message__speech')).toHaveScreenshot(
+    'codex-device-voice-reading-320-controls.png',
+  );
+  await expect(composer).toHaveScreenshot('codex-device-voice-reading-320.png');
+
+  const accessibility = await new AxeBuilder({ page }).include('.codex-chat-dialog').analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+test('starts, pauses, resumes, and stops device-voice reading', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const reply = page.locator('.codex-chat-message--assistant', {
+    hasText: 'Studio chat is connected.',
+  });
+
+  await reply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
+  await expect(reply.getByRole('button', { name: 'Pause reading', exact: true })).toBeVisible();
+  await expect(
+    reply.getByRole('progressbar', { name: 'Estimated reading progress' }),
+  ).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => window.__speechHarness.currentText()))
+    .toContain('Studio chat is connected.');
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await expect
+    .poll(() => composer.evaluate((element) => element.scrollWidth - element.clientWidth))
+    .toBeLessThanOrEqual(1);
+  await expect(reply).toHaveScreenshot('codex-device-voice-reading.png');
+  const playingAccessibility = await new AxeBuilder({ page })
+    .include('.codex-chat-dialog')
+    .analyze();
+  expect(playingAccessibility.violations).toEqual([]);
+
+  const cancelCountBeforePause = await page.evaluate(
+    () => window.__speechHarness.events.filter((event) => event.type === 'cancel').length,
+  );
+  await reply.getByRole('button', { name: 'Pause reading', exact: true }).click();
+  await expect(reply.getByRole('button', { name: 'Resume reading', exact: true })).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.__speechHarness.events.filter((event) => event.type === 'cancel').length,
+      ),
+    )
+    .toBeGreaterThan(cancelCountBeforePause);
+
+  const speakCountBeforeResume = await page.evaluate(
+    () => window.__speechHarness.events.filter((event) => event.type === 'speak').length,
+  );
+  await reply.getByRole('button', { name: 'Resume reading', exact: true }).click();
+  await expect(reply.getByRole('button', { name: 'Pause reading', exact: true })).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.__speechHarness.events.filter((event) => event.type === 'speak').length,
+      ),
+    )
+    .toBeGreaterThan(speakCountBeforeResume);
+
+  const cancelCountBeforeStop = await page.evaluate(
+    () => window.__speechHarness.events.filter((event) => event.type === 'cancel').length,
+  );
+  await reply.getByRole('button', { name: 'Stop reading', exact: true }).click();
+  await expect(reply.getByRole('button', { name: 'Read Codex reply', exact: true })).toBeVisible();
+  await expect(reply.getByRole('button', { name: 'Stop reading', exact: true })).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.__speechHarness.events.filter((event) => event.type === 'cancel').length,
+      ),
+    )
+    .toBeGreaterThan(cancelCountBeforeStop);
+});
+
+test('tracks estimated reading seconds, freezes while paused, and resets after stop', async ({
+  page,
+}) => {
+  const timelineReply = Array.from(
+    { length: 5 },
+    () =>
+      'The device voice reads this complete sentence while the visible timeline reports an honest estimated duration.',
+  ).join(' ');
+  await page.route('**/__made-solid/codex-status*', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'ready',
+        detail: 'Connected to the local Codex conversation.',
+        thread: { id: 'thread-speech-timeline', name: 'Speech timeline', status: 'idle' },
+        threads: [{ id: 'thread-speech-timeline', name: 'Speech timeline', status: 'idle' }],
+        messages: [{ id: 'speech-timeline', role: 'assistant', text: timelineReply }],
+        agents: [],
+        queuedCount: 0,
+        queuedMessages: [],
+        models: [
+          {
+            id: 'gpt-5.6-sol',
+            label: 'GPT-5.6-Sol',
+            defaultEffort: 'medium',
+            isDefault: true,
+            supportsImages: true,
+            efforts: [{ id: 'medium', description: 'Balanced reasoning' }],
+            serviceTiers: [],
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const reply = page.locator('.codex-chat-message--assistant', { hasText: timelineReply });
+  await reply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
+
+  const progress = reply.getByRole('progressbar', { name: 'Estimated reading progress' });
+  const visibleTimeline = reply.getByText(/^\d+:\d{2} \/ about \d+:\d{2}$/);
+  await expect(progress).toHaveAttribute('aria-valuemin', '0');
+  await expect(progress).toHaveAttribute('aria-valuetext', /^\d+:\d{2} of about \d+:\d{2}$/);
+  await expect(visibleTimeline).toBeVisible();
+  const estimatedTotal = Number(await progress.getAttribute('aria-valuemax'));
+  expect(estimatedTotal).toBeGreaterThan(1);
+  await expect
+    .poll(async () => Number(await progress.getAttribute('aria-valuenow')))
+    .toBeGreaterThan(0);
+
+  await reply.getByRole('button', { name: 'Pause reading', exact: true }).click();
+  const pausedElapsed = await progress.getAttribute('aria-valuenow');
+  const pausedTimeline = await visibleTimeline.textContent();
+  await page.waitForTimeout(1_200);
+  await expect(progress).toHaveAttribute('aria-valuenow', pausedElapsed);
+  await expect(visibleTimeline).toHaveText(pausedTimeline);
+
+  await reply.getByRole('button', { name: 'Resume reading', exact: true }).click();
+  await expect
+    .poll(async () => Number(await progress.getAttribute('aria-valuenow')))
+    .toBeGreaterThan(Number(pausedElapsed));
+
+  await reply.getByRole('button', { name: 'Stop reading', exact: true }).click();
+  await expect(progress).toHaveCount(0);
+  await expect(visibleTimeline).toHaveCount(0);
+  await reply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
+  const restartedProgress = reply.getByRole('progressbar', {
+    name: 'Estimated reading progress',
+  });
+  await expect(restartedProgress).toHaveAttribute('aria-valuenow', '0');
+  await expect(restartedProgress).toHaveAttribute('aria-valuetext', /^0:00 of about \d+:\d{2}$/);
+});
+
+test('selects an English device voice even when the browser default voice is not English', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const reply = page.locator('.codex-chat-message--assistant', {
+    hasText: 'Studio chat is connected.',
+  });
+
+  await reply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
+
+  const spoken = await page.evaluate(() =>
+    window.__speechHarness.events.findLast((event) => event.type === 'speak'),
+  );
+  expect(spoken.lang).toMatch(/^en(?:-|$)/i);
+  expect(spoken.voiceLang).toMatch(/^en(?:-|$)/i);
+  expect(spoken.voiceName).toBe('Playwright device voice');
+});
+
+test('speaks every chunk before completing and ignores stale utterance end events', async ({
+  page,
+}) => {
+  const sentence =
+    'This completed reply explains the captured evidence, the design decision, and the practical next action for the reviewer.';
+  const longReply = Array.from({ length: 12 }, (_, index) => `${index + 1}. ${sentence}`).join(
+    '\n\n',
+  );
+  await page.route('**/__made-solid/codex-status*', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'ready',
+        detail: 'Connected to the local Codex conversation.',
+        thread: { id: 'thread-chunked-speech', name: 'Speech review', status: 'idle' },
+        threads: [{ id: 'thread-chunked-speech', name: 'Speech review', status: 'idle' }],
+        messages: [
+          { id: 'speech-stale', role: 'assistant', text: 'This older reply will be replaced.' },
+          { id: 'speech-long', role: 'assistant', text: longReply },
+        ],
+        agents: [],
+        queuedCount: 0,
+        queuedMessages: [],
+        models: [
+          {
+            id: 'gpt-5.6-sol',
+            label: 'GPT-5.6-Sol',
+            defaultEffort: 'medium',
+            isDefault: true,
+            supportsImages: true,
+            efforts: [{ id: 'medium', description: 'Balanced reasoning' }],
+            serviceTiers: [],
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const staleReply = page.locator('.codex-chat-message--assistant', {
+    hasText: 'This older reply will be replaced.',
+  });
+  const longReplyMessage = page.locator('.codex-chat-message--assistant', {
+    hasText: sentence,
+  });
+
+  await staleReply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
+  const staleUtteranceIndex = await page.evaluate(
+    () => window.__speechHarness.utteranceCount() - 1,
+  );
+  await longReplyMessage.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
+  const activeProgress = longReplyMessage.getByRole('progressbar', {
+    name: 'Estimated reading progress',
+  });
+  await expect(activeProgress).toBeVisible();
+  const activeTextBeforeStaleEnd = await page.evaluate(() => window.__speechHarness.currentText());
+  const speakCountBeforeStaleEnd = await page.evaluate(
+    () => window.__speechHarness.events.filter((event) => event.type === 'speak').length,
+  );
+
+  await page.evaluate(
+    (index) => window.__speechHarness.finishUtterance(index),
+    staleUtteranceIndex,
+  );
+
+  await expect(
+    longReplyMessage.getByRole('button', { name: 'Pause reading', exact: true }),
+  ).toBeVisible();
+  expect(await page.evaluate(() => window.__speechHarness.currentText())).toBe(
+    activeTextBeforeStaleEnd,
+  );
+  expect(
+    await page.evaluate(
+      () => window.__speechHarness.events.filter((event) => event.type === 'speak').length,
+    ),
+  ).toBe(speakCountBeforeStaleEnd);
+
+  for (let completedChunks = 0; completedChunks < 20; completedChunks += 1) {
+    const readButton = longReplyMessage.getByRole('button', {
+      name: 'Read Codex reply',
+      exact: true,
+    });
+    if (await readButton.isVisible()) break;
+    const utteranceCountBeforeEnd = await page.evaluate(() =>
+      window.__speechHarness.utteranceCount(),
+    );
+    await page.evaluate(() => window.__speechHarness.finishCurrent());
+    await expect
+      .poll(async () => {
+        if (await readButton.isVisible()) return true;
+        return (
+          (await page.evaluate(() => window.__speechHarness.utteranceCount())) >
+          utteranceCountBeforeEnd
+        );
+      })
+      .toBe(true);
+  }
+
+  await expect(
+    longReplyMessage.getByRole('button', { name: 'Read Codex reply', exact: true }),
+  ).toBeVisible();
+  await expect(longReplyMessage.getByRole('button', { name: 'Stop reading' })).toHaveCount(0);
+  await expect(activeProgress).toHaveCount(0);
+  const spokenChunks = await page.evaluate(() =>
+    window.__speechHarness.events
+      .filter(
+        (event) => event.type === 'speak' && event.text !== 'This older reply will be replaced.',
+      )
+      .map((event) => event.text),
+  );
+  expect(spokenChunks.length).toBeGreaterThan(1);
+  expect(spokenChunks.join(' ').match(/This completed reply explains/g)).toHaveLength(12);
+});
+
+test('replaces the active reply when another completed reply starts reading', async ({ page }) => {
+  await page.route('**/__made-solid/codex-status*', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'ready',
+        detail: 'Connected to the local Codex conversation.',
+        thread: { id: 'thread-replace-speech', name: 'Speech review', status: 'idle' },
+        threads: [{ id: 'thread-replace-speech', name: 'Speech review', status: 'idle' }],
+        messages: [
+          { id: 'speech-first', role: 'assistant', text: 'This is the first completed reply.' },
+          { id: 'speech-second', role: 'assistant', text: 'This is the second completed reply.' },
+        ],
+        agents: [],
+        queuedCount: 0,
+        queuedMessages: [],
+        models: [
+          {
+            id: 'gpt-5.6-sol',
+            label: 'GPT-5.6-Sol',
+            defaultEffort: 'medium',
+            isDefault: true,
+            supportsImages: true,
+            efforts: [{ id: 'medium', description: 'Balanced reasoning' }],
+            serviceTiers: [],
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const firstReply = page.locator('.codex-chat-message--assistant', {
+    hasText: 'This is the first completed reply.',
+  });
+  const secondReply = page.locator('.codex-chat-message--assistant', {
+    hasText: 'This is the second completed reply.',
+  });
+  await firstReply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
+  const cancelCountBeforeReplacement = await page.evaluate(
+    () => window.__speechHarness.events.filter((event) => event.type === 'cancel').length,
+  );
+
+  await secondReply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
+
+  await expect(
+    firstReply.getByRole('button', { name: 'Read Codex reply', exact: true }),
+  ).toBeVisible();
+  await expect(
+    secondReply.getByRole('button', { name: 'Pause reading', exact: true }),
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.__speechHarness.events.filter((event) => event.type === 'cancel').length,
+      ),
+    )
+    .toBeGreaterThan(cancelCountBeforeReplacement);
+  await expect
+    .poll(() => page.evaluate(() => window.__speechHarness.currentText()))
+    .toContain('This is the second completed reply.');
+});
+
+test('stops device-voice reading when the chat closes or changes conversation', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  const firstReply = composer.locator('.codex-chat-message--assistant', {
+    hasText: 'Studio chat is connected.',
+  });
+  await firstReply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
+  const cancelCountBeforeSwitch = await page.evaluate(
+    () => window.__speechHarness.events.filter((event) => event.type === 'cancel').length,
+  );
+
+  await composer.getByRole('button', { name: 'Conversation', exact: true }).click();
+  await composer.getByRole('menuitemradio', { name: /Review the earlier homepage\./ }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.__speechHarness.events.filter((event) => event.type === 'cancel').length,
+      ),
+    )
+    .toBeGreaterThan(cancelCountBeforeSwitch);
+
+  const earlierReply = composer.locator('.codex-chat-message--assistant', {
+    hasText: 'The earlier review is complete.',
+  });
+  await earlierReply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
+  const cancelCountBeforeClose = await page.evaluate(
+    () => window.__speechHarness.events.filter((event) => event.type === 'cancel').length,
+  );
+  await composer.getByRole('button', { name: 'Close Codex chat', exact: true }).click();
+  await expect(composer).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.__speechHarness.events.filter((event) => event.type === 'cancel').length,
+      ),
+    )
+    .toBeGreaterThan(cancelCountBeforeClose);
+});
+
 for (const working of [false, true]) {
   test(`preserves a manual transcript position while Codex is ${working ? 'working' : 'idle'}`, async ({
     page,
@@ -906,10 +1874,137 @@ for (const working of [false, true]) {
   });
 }
 
+test('restores the open conversation and exact transcript position after refresh', async ({
+  page,
+}) => {
+  const statusThreadIds = [];
+  const threadMessages = (threadId) =>
+    Array.from({ length: 28 }, (_, index) => ({
+      id: `${threadId}-message-${index + 1}`,
+      role: index % 2 ? 'assistant' : 'user',
+      text: `${threadId} conversation entry ${index + 1}. This saved response is deliberately long enough to provide a stable transcript reading position across a full Studio refresh.`,
+    }));
+  await page.route('**/__made-solid/codex-status*', async (route) => {
+    const requestedThreadId =
+      new URL(route.request().url()).searchParams.get('threadId') || 'thread-1';
+    statusThreadIds.push(requestedThreadId);
+    const thread = {
+      id: requestedThreadId,
+      name: requestedThreadId === 'thread-2' ? 'Saved redesign review' : 'Studio',
+      status: 'idle',
+      working: false,
+    };
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'ready',
+        detail: 'Connected to the local Codex conversation.',
+        thread,
+        threads: [
+          { id: 'thread-1', name: 'Studio', status: 'idle', working: false },
+          { id: 'thread-2', name: 'Saved redesign review', status: 'idle', working: false },
+        ],
+        messages: threadMessages(requestedThreadId),
+        agents: [],
+        queuedCount: 0,
+        queuedMessages: [],
+        models: [
+          {
+            id: 'gpt-5.6-sol',
+            label: 'GPT-5.6-Sol',
+            defaultEffort: 'medium',
+            isDefault: true,
+            supportsImages: true,
+            serviceTiers: [],
+            efforts: [{ id: 'medium', description: 'Balanced reasoning' }],
+          },
+        ],
+      }),
+    });
+  });
+
+  const workspaceRoute = '/#/prospects/business-demo-local-services/report-preview';
+  await page.goto(workspaceRoute);
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  let composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await composer.getByRole('button', { name: 'Conversation', exact: true }).click();
+  await composer.getByRole('menuitemradio', { name: /Saved redesign review/ }).click();
+  let log = composer.getByRole('log', { name: 'Codex chat log' });
+  await expect(log).toContainText('thread-2 conversation entry 28');
+  await expect
+    .poll(() => log.evaluate((element) => element.scrollHeight > element.clientHeight))
+    .toBe(true);
+  await log.evaluate((element) => element.scrollTo({ top: 520, behavior: 'instant' }));
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        JSON.parse(localStorage.getItem('made-solid-codex-chat-session-v1') || '{}'),
+      ),
+    )
+    .toMatchObject({
+      isOpen: true,
+      positions: { 'thread-2': { followingLatest: false, scrollTop: 520 } },
+      selectedThreadId: 'thread-2',
+    });
+
+  const savedViewport = await page.evaluate(
+    () =>
+      JSON.parse(localStorage.getItem('made-solid-codex-chat-session-v1') || '{}').positions[
+        'thread-2'
+      ],
+  );
+
+  const requestCountBeforeReload = statusThreadIds.length;
+  await page.reload();
+  await expect(page).toHaveURL(new RegExp(`${workspaceRoute.replaceAll('/', '\\/')}$`));
+  composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await expect(composer).toBeVisible();
+  await expect(composer.getByText('Saved redesign review', { exact: true })).toBeVisible();
+  log = composer.getByRole('log', { name: 'Codex chat log' });
+  await expect(log).toContainText('thread-2 conversation entry 28');
+  await expect.poll(() => statusThreadIds.slice(requestCountBeforeReload)[0]).toBe('thread-2');
+  await expect
+    .poll(() =>
+      log.evaluate((element) => {
+        const top = element.getBoundingClientRect().top;
+        const anchor = [...element.querySelectorAll('[data-message-id], [data-activity-id]')].find(
+          (candidate) => candidate.getBoundingClientRect().bottom > top,
+        );
+        return anchor?.dataset.messageId || anchor?.dataset.activityId;
+      }),
+    )
+    .toBe(savedViewport.anchorId);
+  await expect
+    .poll(() =>
+      log.evaluate((element, savedOffset) => {
+        const top = element.getBoundingClientRect().top;
+        const anchor = [...element.querySelectorAll('[data-message-id], [data-activity-id]')].find(
+          (candidate) => candidate.getBoundingClientRect().bottom > top,
+        );
+        return Math.abs((anchor ? anchor.getBoundingClientRect().top - top : 0) - savedOffset);
+      }, savedViewport.anchorOffset),
+    )
+    .toBeLessThanOrEqual(4);
+  await expect.poll(() => log.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect(composer.getByRole('button', { name: 'Back to latest' })).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+
+  await composer.getByRole('button', { name: 'Close Codex chat' }).click();
+  await page.reload();
+  await expect(page.getByRole('dialog', { name: 'Codex', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Chat with Codex' })).toBeVisible();
+});
+
 test('creates a new Codex conversation with the selected model and reasoning', async ({ page }) => {
   let createRequest;
   let deletedThreadId;
   let createdThread;
+  let releaseCreate;
+  const createReady = new Promise((resolve) => {
+    releaseCreate = resolve;
+  });
   let unselectedStatusRequests = 0;
   await page.route('**/__made-solid/codex-feedback', async (route) => {
     const request = route.request().postDataJSON();
@@ -924,6 +2019,7 @@ test('creates a new Codex conversation with the selected model and reasoning', a
     }
     createRequest = request;
     createdThread = { id: 'thread-new', status: 'idle', discardable: true };
+    await createReady;
     await route.fulfill({
       status: 202,
       contentType: 'application/json',
@@ -975,6 +2071,16 @@ test('creates a new Codex conversation with the selected model and reasoning', a
   await composer.getByLabel('Model').selectOption('gpt-5.6-terra');
   await composer.getByLabel('Reasoning').selectOption('high');
   await composer.getByRole('button', { name: 'New chat' }).click();
+  const loading = composer.locator('.codex-conversation-loading');
+  await expect(loading).toBeVisible();
+  await expect(loading).toContainText('Starting a new chat');
+  await expect(loading).toContainText('Preparing a fresh Codex workspace');
+  await expect(composer.getByRole('log', { name: 'Codex chat log' })).not.toContainText(
+    'Studio chat is connected.',
+  );
+  await expect(composer.getByRole('button', { name: 'New chat' })).toBeDisabled();
+  await expect(composer.getByLabel('Message to Codex')).toBeDisabled();
+  releaseCreate();
   await expect(composer.getByRole('button', { name: 'New chat' })).toBeEnabled();
   await expect(composer.getByRole('button', { name: 'Conversation' })).toContainText('New chat');
   await expect(composer.getByRole('log', { name: 'Codex chat log' })).toContainText(
@@ -1039,7 +2145,7 @@ test('keeps an unsent draft across Studio and preview workspaces until it is sen
   await expect(page.getByLabel('Message to Codex')).toHaveValue(draft);
 });
 
-test('stacks editable queued messages with an exact per-message interrupt action', async ({
+test('stacks editable queued messages with exact interrupt and delete actions', async ({
   page,
 }) => {
   const actions = [];
@@ -1066,6 +2172,10 @@ test('stacks editable queued messages with an exact per-message interrupt action
     .fill('Use the revised nav direction.');
   await queuedCards.first().getByRole('button', { name: 'Save changes' }).click();
   await queuedCards.nth(1).getByRole('button', { name: 'Interrupt' }).click();
+  await queuedCards.first().getByRole('button', { name: 'Delete' }).click();
+  const confirmation = page.getByRole('dialog', { name: 'Delete queued message?' });
+  await expect(confirmation).toContainText('before Codex receives it');
+  await confirmation.getByRole('button', { name: 'Delete message' }).click();
   expect(actions).toEqual([
     {
       action: 'update-queued',
@@ -1076,21 +2186,76 @@ test('stacks editable queued messages with an exact per-message interrupt action
       action: 'interrupt-queued',
       id: '22222222-2222-4222-8222-222222222222',
     },
+    {
+      action: 'delete-queued',
+      id: '11111111-1111-4111-8111-111111111111',
+    },
   ]);
 });
 
 test('shows real Codex working state, queued work, and a live elapsed timer', async ({ page }) => {
-  await page.goto('/?codexWorking=1');
+  await page.goto('/?codexWorking=1&codexEvidenceNarrative=1');
   await page.getByRole('button', { name: 'Codex is working' }).click();
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
   const workingState = composer.locator('.codex-working-status');
+  const chatLog = composer.getByRole('log', { name: 'Codex chat log' });
+  const activityRows = chatLog.locator('.codex-chat-activity');
 
+  await expect(activityRows).toHaveCount(4);
+  await expect(chatLog.locator('.codex-chat-activity-boundary')).toContainText(
+    'Verified actions are logged in conversation order',
+  );
+  await expect(composer.locator('.codex-activity-workbench')).toHaveCount(0);
+  await expect(
+    activityRows.locator('button, a, summary, input, select, textarea, [tabindex]'),
+  ).toHaveCount(0);
+  const activity = (id) => chatLog.locator(`[data-activity-id="${id}"]`);
+  await expect(activity('activity-search')).toContainText(
+    'Opening workspace.madesolid.com.au/services',
+  );
+  await expect(activity('activity-search')).toContainText(
+    'workspace.madesolid.com.au/services was opened for inspection',
+  );
+  await expect(activity('activity-files')).toContainText('Updated 2 files');
+  await expect(activity('activity-files')).toContainText('2 file changes were saved');
+  await expect(activity('activity-checks')).toContainText('Complete · 4.3 s');
+  await expect(activity('activity-checks')).toContainText('Project checks completed successfully');
+  await expect(activity('activity-browser')).toContainText('Running');
+  await expect(activity('activity-browser')).toContainText('browser review is still running');
+  await expect(chatLog).not.toContainText(
+    /reasoning tokens|raw terminal|safe to merge|proved ownership/,
+  );
+  const transcriptOrder = await chatLog
+    .locator(':scope > *')
+    .evaluateAll((elements) =>
+      elements.map((element) => element.textContent?.replace(/\s+/g, ' ').trim() || ''),
+    );
+  const indexOf = (text) => transcriptOrder.findIndex((entry) => entry.includes(text));
+  expect(indexOf('Open the Studio chat.')).toBeLessThan(
+    indexOf('Opening workspace.madesolid.com.au/services'),
+  );
+  expect(indexOf('Opening workspace.madesolid.com.au/services')).toBeLessThan(
+    indexOf('I found the public services page'),
+  );
+  expect(indexOf('I found the public services page')).toBeLessThan(indexOf('Updated 2 files'));
+  expect(indexOf('Updated 2 files')).toBeLessThan(indexOf('Running project checks'));
+  expect(indexOf('Running project checks')).toBeLessThan(indexOf('Using browser checks'));
+  expect(indexOf('Using browser checks')).toBeLessThan(
+    indexOf('The implementation updates are saved'),
+  );
   await expect(workingState).toHaveClass(/codex-generating-message/);
   await expect(workingState).toContainText('Working through the next step');
   await expect(workingState).toContainText('The latest progress is above');
   await expect(workingState).toContainText('2 requests queued next');
   const progressUpdate = composer.locator('.codex-chat-message--progress');
-  await expect(progressUpdate).toContainText('Progress update');
+  await expect(progressUpdate).toHaveCount(2);
+  await expect(progressUpdate.nth(0)).toContainText('Codex update · after 1 recorded action');
+  await expect(progressUpdate.nth(1)).toContainText('Codex update · after 3 recorded actions');
+  await expect(progressUpdate.nth(0)).toContainText('I found the public services page');
+  await expect(progressUpdate.nth(1)).toContainText(
+    'The implementation updates are saved and the checks completed',
+  );
+  await expect(workingState).not.toContainText('after 3 recorded actions');
   await expect(workingState.locator('time')).toHaveText(/1m (?:0[5-9]|1\d)s/);
   await expect(workingState.locator('.codex-generating-message__dots > span').first()).toHaveCSS(
     'animation-name',
@@ -1110,11 +2275,66 @@ test('shows real Codex working state, queued work, and a live elapsed timer', as
   await page.keyboard.press('Escape');
   await expect(composer.getByRole('menu', { name: 'Available conversations' })).toBeHidden();
   await expect(conversationPicker).toBeFocused();
+  await chatLog.evaluate((element) => element.scrollTo({ top: 0 }));
   await expect(composer).toHaveScreenshot('codex-feedback-working.png', {
     mask: [workingState.locator('time')],
   });
   const accessibility = await new AxeBuilder({ page }).include('.codex-chat-dialog').analyze();
   expect(accessibility.violations).toEqual([]);
+});
+
+test('keeps observable Codex activity readable at the compact 320px viewport', async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== 'mobile');
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto('/?codexWorking=1&codexEvidenceNarrative=1');
+  await page.getByRole('button', { name: 'Codex is working' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  const chatLog = composer.getByRole('log', { name: 'Codex chat log' });
+
+  const fileActivity = chatLog.locator('[data-activity-id="activity-files"]');
+  await fileActivity.evaluate((element) => element.scrollIntoView({ block: 'center' }));
+  await expect(chatLog).toContainText('src/components/CodexFeedbackPanel.tsx');
+  await expect
+    .poll(() => composer.evaluate((element) => element.scrollWidth - element.clientWidth))
+    .toBeLessThanOrEqual(1);
+  await expect
+    .poll(() => chatLog.evaluate((element) => element.scrollWidth - element.clientWidth))
+    .toBeLessThanOrEqual(1);
+  await expect(fileActivity).toHaveScreenshot('codex-activity-timeline-320.png');
+});
+
+test('logs a newly observed workspace action into the live transcript', async ({ page }) => {
+  await page.goto('/?codexWorking=1&codexIncomingActivity=1');
+  await page.getByRole('button', { name: 'Codex is working' }).click();
+  const chatLog = page.getByRole('log', { name: 'Codex chat log' });
+  const existingActivity = chatLog.locator('[data-activity-id="activity-search"]');
+  const incomingActivity = chatLog.locator('[data-activity-id="activity-browser"]');
+
+  await expect(existingActivity).toBeVisible();
+  await expect(incomingActivity).toHaveClass(/is-entering/, { timeout: 7_000 });
+  await expect(incomingActivity).toHaveCSS('animation-name', 'codex-activity-entry');
+  await expect(existingActivity).not.toHaveClass(/is-entering/);
+});
+
+test('keeps completed workspace activity in the conversation history', async ({ page }) => {
+  await page.goto('/?codexActivityHistory=1&codexTeamHistory=1');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+
+  await expect(composer.locator('[data-activity-id="activity-browser"]')).toContainText('Complete');
+  await expect(
+    composer
+      .locator('[data-message-id="current-codex"]')
+      .locator('.codex-chat-message__activity-context'),
+  ).toContainText('Codex conclusion · after 1 recorded action');
+  await expect(
+    composer
+      .locator('[data-message-id="direct-codex"]')
+      .locator('.codex-chat-message__activity-context'),
+  ).toHaveCount(0);
+  await expect(composer.locator('.codex-working-status')).toHaveCount(0);
 });
 
 test('eases a new Codex progress update into the active transcript', async ({ page }) => {
@@ -1151,6 +2371,9 @@ test('keeps chat progress and message states static when reduced motion is prefe
   );
   await expect(composer.locator('.codex-chat-message__pulse')).toHaveCSS('animation-name', 'none');
   await expect(composer.locator('.codex-working-status')).toHaveCSS('animation-name', 'none');
+  await expect(
+    composer.locator('.codex-chat-activity--running .codex-chat-activity__marker'),
+  ).toHaveCSS('animation-name', 'none');
   await expect(composer.locator('.codex-generating-message__dots > span').first()).toHaveCSS(
     'animation-name',
     'none',
@@ -1499,11 +2722,25 @@ test('uploads, removes, and sends multiple camera-roll photos inside the active 
   await expect(composer).toHaveScreenshot('codex-feedback-multi-image-draft.png');
   const accessibility = await new AxeBuilder({ page }).include('.codex-chat-dialog').analyze();
   expect(accessibility.violations).toEqual([]);
-  await composer.getByRole('button', { name: 'Send message' }).click();
+  await composer.getByLabel('Message to Codex').fill('');
+  const sendButton = composer.getByRole('button', { name: 'Send message' });
+  await expect(sendButton).toBeEnabled();
+  await sendButton.click();
 
   await expect(composer.locator('.codex-chat-message__attachment')).toHaveCount(2);
-  expect(delivered.prompt).toBe('Use these photos as visual context.');
+  expect(delivered.prompt).toBe('');
   expect(delivered.screenshots).toEqual([capturePng, capturePng]);
+
+  await composer.getByRole('button', { name: 'Conversation' }).click();
+  await composer.getByRole('menuitemradio', { name: /Review the earlier homepage\./ }).click();
+  await expect(composer.locator('.codex-chat-message__attachment')).toHaveCount(0);
+  await expect(composer.getByRole('log', { name: 'Codex chat log' })).toContainText(
+    'The earlier review is complete.',
+  );
+
+  await composer.getByRole('button', { name: 'Conversation' }).click();
+  await composer.getByRole('menuitemradio', { name: /Open the Studio chat\./ }).click();
+  await expect(composer.locator('.codex-chat-message__attachment')).toHaveCount(2);
 });
 
 test('restores focus when Escape dismisses the control panel', async ({ page }) => {
@@ -1603,6 +2840,41 @@ test('has no automated accessibility violations in the model control panel', asy
   await page.keyboard.press('Escape');
   await expect(composer.getByRole('group', { name: 'Chat settings' })).toBeHidden();
   await expect(composer.getByRole('button', { name: 'Chat settings' })).toBeFocused();
+});
+
+test('shows live Codex subscription usage in chat settings', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openChatSettings(composer);
+
+  const usage = composer.getByRole('region', { name: 'Codex subscription usage' });
+  await expect(usage).toContainText('51% used');
+  await expect(usage).toContainText('7-day usage');
+  await expect(usage).toContainText('Resets');
+  await expect(usage.getByRole('progressbar', { name: '7-day usage: 51% used' })).toHaveAttribute(
+    'aria-valuenow',
+    '51',
+  );
+});
+
+test('keeps separate Codex quota windows and reports unavailable usage truthfully', async ({
+  page,
+}) => {
+  await page.goto('/?codexTwoUsage=1');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  let composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openChatSettings(composer);
+  await expect(composer.getByRole('progressbar', { name: '5-hour usage: 42% used' })).toBeVisible();
+  await expect(composer.getByRole('progressbar', { name: '7-day usage: 18% used' })).toBeVisible();
+
+  await composer.getByRole('button', { name: 'Close Codex chat' }).click();
+  await page.goto('/?codexUsageUnavailable=1');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openChatSettings(composer);
+  await expect(composer.getByText('Usage is temporarily unavailable.')).toBeVisible();
+  await expect(composer.getByRole('progressbar')).toHaveCount(0);
 });
 
 test('keeps visual feedback available on the private-preview surface', async ({ page }) => {

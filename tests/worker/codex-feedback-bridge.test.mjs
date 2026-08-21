@@ -14,6 +14,30 @@ function fakeConnection(state) {
       if (method === 'account/read') {
         return { account: { type: 'chatgpt', planType: 'plus' } };
       }
+      if (method === 'account/rateLimits/read') {
+        if (state.rateLimitsUnavailable) throw new Error('Rate limits unavailable');
+        if (state.rateLimits) return { rateLimits: state.rateLimits };
+        const codexRateLimits = {
+          limitId: 'codex',
+          primary: {
+            usedPercent: 42,
+            windowDurationMins: 300,
+            resetsAt: 1_787_339_400,
+          },
+          secondary: {
+            usedPercent: 18,
+            windowDurationMins: 10_080,
+            resetsAt: 1_787_827_574,
+          },
+        };
+        return {
+          rateLimits: {
+            limitId: 'model-specific-fallback',
+            primary: { usedPercent: 91, windowDurationMins: 60 },
+          },
+          rateLimitsByLimitId: { codex: codexRateLimits },
+        };
+      }
       if (method === 'model/list') {
         return {
           data: [
@@ -113,12 +137,14 @@ function fakeConnection(state) {
                     type: 'userMessage',
                     content: [{ type: 'text', text: 'Inspect this Studio page.' }],
                   },
+                  ...(state.activityItems || []).slice(0, state.activityItemsBeforeAgentCount || 0),
                   {
                     id: 'message-agent',
                     type: 'agentMessage',
                     phase: 'final',
                     text: 'The Studio page is ready.',
                   },
+                  ...(state.activityItems || []).slice(state.activityItemsBeforeAgentCount || 0),
                   ...(state.collabItems || []),
                 ],
               },
@@ -226,6 +252,10 @@ test('discovers ChatGPT models, image support, efforts, and the active Studio th
   });
   const status = await bridge.inspect();
   assert.equal(status.account.type, 'chatgpt');
+  assert.deepEqual(status.subscriptionUsage, {
+    primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: 1_787_339_400 },
+    secondary: { usedPercent: 18, windowDurationMins: 10_080, resetsAt: 1_787_827_574 },
+  });
   assert.equal(status.thread.id, 'thread-1');
   assert.equal(status.threads.length, 2);
   assert.equal(status.messages[0].role, 'user');
@@ -241,6 +271,177 @@ test('discovers ChatGPT models, image support, efforts, and the active Studio th
   );
   assert.equal(status.models[1].supportsImages, false);
   assert.deepEqual(status.agents, []);
+});
+
+test('keeps chat available when subscription usage cannot be read', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-status-no-usage-'));
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection({ busy: false, turns: [], rateLimitsUnavailable: true }),
+  });
+  const status = await bridge.inspect();
+  assert.equal(status.status, 'ready');
+  assert.equal(status.thread.id, 'thread-1');
+  assert.equal(status.subscriptionUsage, undefined);
+});
+
+test('bounds subscription percentages and omits malformed window metadata', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-status-bounded-usage-'));
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection({
+      busy: false,
+      turns: [],
+      rateLimits: {
+        primary: { usedPercent: 140, windowDurationMins: -5, resetsAt: 'unknown' },
+        secondary: { usedPercent: -4, windowDurationMins: 10_080, resetsAt: 1_787_827_574 },
+      },
+    }),
+  });
+  const status = await bridge.inspect();
+  assert.deepEqual(status.subscriptionUsage, {
+    primary: { usedPercent: 100, windowDurationMins: undefined, resetsAt: undefined },
+    secondary: { usedPercent: 0, windowDurationMins: 10_080, resetsAt: 1_787_827_574 },
+  });
+});
+
+test('returns bounded observable activity without raw commands, diffs, arguments, or reasoning', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-activity-'));
+  const state = {
+    busy: true,
+    turns: [],
+    activityItemsBeforeAgentCount: 2,
+    activityItems: [
+      {
+        id: 'private-reasoning',
+        type: 'reasoning',
+        summary: ['never expose this reasoning'],
+        content: ['private chain of thought'],
+      },
+      {
+        id: 'inspect-command',
+        type: 'commandExecution',
+        command: 'rg SECRET_API_KEY /private/workspaces/siteforge-os/src',
+        cwd: '/private/workspaces/siteforge-os',
+        status: 'completed',
+        aggregatedOutput: 'SECRET_API_KEY=do-not-expose',
+        exitCode: 0,
+        durationMs: 812,
+      },
+      {
+        id: 'file-change',
+        type: 'fileChange',
+        status: 'completed',
+        changes: [
+          {
+            path: '/private/workspaces/siteforge-os/src/components/CodexFeedbackPanel.tsx',
+            kind: 'update',
+            diff: '+ const privateToken = "do-not-expose";',
+          },
+          {
+            path: '/workspaces/siteforge-os/src/styles.css',
+            kind: { type: 'update' },
+            diff: '+ .private-token { content: "do-not-expose"; }',
+          },
+        ],
+      },
+      {
+        id: 'connected-tool',
+        type: 'mcpToolCall',
+        server: 'github',
+        tool: 'get_pull_request',
+        status: 'inProgress',
+        arguments: { token: 'do-not-expose' },
+        result: { text: 'This PR is definitely safe to merge.' },
+        appContext: { appName: 'GitHub', actionName: 'inspect_pull_request' },
+      },
+      {
+        id: 'web-search',
+        type: 'webSearch',
+        query: 'official responsive design guidance',
+      },
+      {
+        id: 'web-open',
+        type: 'webSearch',
+        query: 'made solid services',
+        action: {
+          type: 'openPage',
+          url: 'https://workspace.madesolid.com.au/prospects/example?token=do-not-expose',
+        },
+        body: 'This proves the prospect owns the business.',
+      },
+      {
+        id: 'secret-search',
+        type: 'webSearch',
+        query: 'SECRET_API_KEY private customer data',
+      },
+    ],
+  };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+
+  const status = await bridge.inspect({ threadId: 'thread-1' });
+
+  assert.deepEqual(
+    status.activities.map((activity) => activity.kind),
+    ['command', 'file', 'tool', 'search', 'search', 'search'],
+  );
+  assert.equal(status.activities[0].label, 'Inspecting workspace files');
+  assert.equal(status.activities[0].detail, 'Working inside the approved Studio workspace.');
+  assert.equal(status.activities[0].durationMs, 812);
+  assert.equal(status.activities[0].outcome, 'The workspace inspection completed.');
+  assert.equal(status.activities[1].detail, 'src/styles.css');
+  assert.equal(status.activities[1].outcome, '2 file changes were saved: 2 updated.');
+  assert.equal(status.activities[2].label, 'Using GitHub');
+  assert.equal(status.activities[2].status, 'running');
+  assert.equal(status.activities[2].outcome, 'The connected action is still running.');
+  assert.equal(status.activities[3].detail, 'official responsive design guidance');
+  assert.match(status.activities[3].outcome, /source search completed/i);
+  assert.equal(status.activities[4].label, 'Opening workspace.madesolid.com.au/prospects/example');
+  assert.equal(
+    status.activities[4].outcome,
+    'workspace.madesolid.com.au/prospects/example was opened for inspection.',
+  );
+  assert.equal(status.activities[5].detail, 'Looking up current source material.');
+  assert.deepEqual(
+    status.messages.map((message) => message.position),
+    [0, 3],
+  );
+  assert.deepEqual(
+    status.activities.map((activity) => activity.position),
+    [2, 4, 5, 6, 7, 8],
+  );
+  assert.ok(status.activities.every((activity) => activity.turnId === 'turn-active'));
+  const publicPayload = JSON.stringify(status.activities);
+  assert.doesNotMatch(
+    publicPayload,
+    /SECRET_API_KEY|do-not-expose|private\/workspaces|private chain of thought|safe to merge|proves the prospect/,
+  );
+  assert.equal(status.activities.length, 6);
+
+  state.busy = false;
+  const completedStatus = await bridge.inspect({ threadId: 'thread-1' });
+  assert.deepEqual(
+    completedStatus.activities.map((activity) => activity.id),
+    status.activities.map((activity) => activity.id),
+  );
+
+  state.activityItemsBeforeAgentCount = 0;
+  state.activityItems = Array.from({ length: 70 }, (_, index) => ({
+    id: `bounded-${index}`,
+    type: 'webSearch',
+    query: `public source ${index}`,
+    status: 'completed',
+  }));
+  const boundedStatus = await bridge.inspect({ threadId: 'thread-1' });
+  assert.equal(boundedStatus.activities.length, 60);
+  assert.equal(boundedStatus.activities[0].id, 'bounded-10');
+  assert.equal(boundedStatus.activities.at(-1).id, 'bounded-69');
 });
 
 test('returns the live hierarchy and bounded sub-chat transcript for attached agents', async () => {
@@ -569,6 +770,41 @@ test('keeps feedback queued while Codex is busy, then delivers every image and m
   assert.equal(await readFile(state.turns[0].input[2].path, 'utf8'), 'second private image');
   assert.equal(running[0].id, queued.id);
   assert.equal(running[0].turnId, 'turn-1');
+});
+
+test('accepts an image as the complete Codex message without prompt text', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-image-only-'));
+  const state = { busy: true, turns: [] };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+
+  const queued = await bridge.enqueue({
+    screenshots: [imageDataUrl],
+    prompt: '',
+    model: 'gpt-image-capable',
+    effort: 'medium',
+  });
+
+  assert.equal(queued.status, 'queued');
+  const [record] = await bridge.readRecords('queued');
+  assert.equal(record.prompt, '');
+  assert.equal(record.attachments.length, 1);
+
+  state.busy = false;
+  await bridge.flush();
+  assert.equal(state.turns.length, 1);
+  assert.equal(state.turns[0].input[1].type, 'localImage');
+  assert.equal(await readFile(state.turns[0].input[1].path, 'utf8'), 'private screenshot');
+  const deliveredStatus = await bridge.inspect({ threadId: 'thread-1' });
+  const deliveredMessage = deliveredStatus.messages.at(-1);
+  assert.equal(deliveredMessage.text, '');
+  assert.equal(deliveredMessage.feedbackId, queued.id);
+  assert.equal(deliveredMessage.attachmentIds.length, 1);
+  assert.doesNotMatch(JSON.stringify(deliveredStatus.messages), /Captured from:/);
+  assert.doesNotMatch(JSON.stringify(deliveredStatus.messages), /keep the user oriented/i);
 });
 
 test('durably resumes every newly interrupted app-owned continuation', async () => {
@@ -1098,6 +1334,41 @@ test('edits a queued message and interrupts the active turn from that exact queu
   assert.match(state.turns[0].input[0].text, /Send an update before a long tool run/);
 });
 
+test('deletes only the selected queued message before it can be dispatched', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-delete-queued-'));
+  const state = { busy: true, turns: [], interrupts: [] };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+  const first = await bridge.enqueue({
+    prompt: 'Delete this queued direction.',
+    model: 'gpt-text-only',
+    effort: 'medium',
+    threadId: 'thread-1',
+  });
+  const second = await bridge.enqueue({
+    prompt: 'Keep this queued direction.',
+    model: 'gpt-text-only',
+    effort: 'medium',
+    threadId: 'thread-1',
+  });
+
+  const deleted = await bridge.deleteQueued(first.id);
+  const waiting = await bridge.inspect({ threadId: 'thread-1' });
+
+  assert.equal(deleted.status, 'cancelled');
+  assert.equal(deleted.id, first.id);
+  assert.deepEqual(
+    waiting.queuedMessages.map((message) => ({ id: message.id, position: message.position })),
+    [{ id: second.id, position: 1 }],
+  );
+  assert.deepEqual(state.turns, []);
+  assert.deepEqual(state.interrupts, []);
+  await assert.rejects(() => bridge.deleteQueued(first.id), /no longer queued/i);
+});
+
 test('rejects unsupported models and prompts before creating a Codex turn', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-validation-'));
   const state = { busy: false, turns: [] };
@@ -1108,12 +1379,11 @@ test('rejects unsupported models and prompts before creating a Codex turn', asyn
   });
   await assert.rejects(
     bridge.enqueue({
-      screenshot: imageDataUrl,
       prompt: '',
       model: 'gpt-image-capable',
       effort: 'medium',
     }),
-    /prompt/i,
+    /prompt or attach an image/i,
   );
   await bridge.enqueue({
     screenshot: imageDataUrl,

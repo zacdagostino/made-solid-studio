@@ -6,7 +6,10 @@ artifact store.
 
 ## Runtime topology
 
-One Railway service exposes three HTTPS domains mapped to separate target ports:
+One Railway service exposes three HTTPS domains mapped to separate target ports. Studio runs its
+Vite development server from the persistent editable checkout, so reviewed source edits appear in
+the signed-in Studio immediately and survive container replacement without falling back to the
+older image build:
 
 | Domain purpose                        | Suggested hostname           |     Target port |
 | ------------------------------------- | ---------------------------- | --------------: |
@@ -38,6 +41,12 @@ redirect, and signed-out or non-owner requests remain unavailable.
 A volume-backed Railway service has a short restart window during deployment because two
 deployments cannot mount the same volume simultaneously. Supabase-backed jobs and Codex threads
 remain durable across that restart.
+
+The image retains the locked dependency installation and production build fallback, but the Studio
+domain starts Vite from `/data/workspaces/siteforge-os` with `NODE_ENV=development`. If the
+persistent checkout has no `node_modules`, the launcher links the image's locked installation rather
+than installing packages during startup. Do not point `studio.madesolid.com.au` at the packaged
+`/app/dist` preview: that would hide saved source edits after every deployment.
 
 ## Configure variables
 

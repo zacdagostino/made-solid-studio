@@ -4,9 +4,10 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { basename, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
-import { CodexFeedbackBridge } from './codex-feedback-bridge.mjs';
 import { authorizeStudioRuntimeRequest } from './studio-runtime-auth.mjs';
+import { googleSpeechConfiguration, synthesizeGoogleSpeech } from './google-cloud-tts.mjs';
 import { workspacePreviewUrl } from './workspace-preview-access.mjs';
 import { assertPublicUrl } from '../worker/security.mjs';
 
@@ -18,6 +19,7 @@ const finalEditEndpoint = '/__made-solid/final-edit';
 const committedPreviewEndpoint = '/__made-solid/committed-preview';
 const codexFeedbackEndpoint = '/__made-solid/codex-feedback';
 const codexStatusEndpoint = '/__made-solid/codex-status';
+const codexSpeechEndpoint = '/__made-solid/codex-speech';
 const codexAttachmentPrefix = '/__made-solid/codex-attachment/';
 const localPageCaptureEndpoint = '/__made-solid/page-screenshot';
 const captureAssetEndpoint = '/__made-solid/capture-asset';
@@ -728,12 +730,47 @@ async function launchCommittedPreview({ directory, commit, request, writeEvent, 
 
 export function localWorkspacePlugin() {
   const runtimeDataDirectory = process.env.SITEFORGE_RUNTIME_DATA_DIR?.trim();
-  const codexFeedbackBridge = new CodexFeedbackBridge({
+  const codexFeedbackBridgeSource = pathToFileURL(
+    resolve(process.cwd(), 'scripts/codex-feedback-bridge.mjs'),
+  );
+  const codexFeedbackBridgeOptions = {
     cwd: process.env.SITEFORGE_STUDIO_WORKSPACE_DIR?.trim() || process.cwd(),
     storageRoot: runtimeDataDirectory
       ? resolve(runtimeDataDirectory, 'codex-feedback')
       : resolve('.made-solid', 'codex-feedback'),
-  });
+  };
+  let activeCodexFeedbackBridge;
+  let activeCodexFeedbackBridgeModifiedAt = 0;
+  let codexFeedbackBridgeLoadPromise;
+  const codexFeedbackBridge = async () => {
+    const modifiedAt = (await stat(codexFeedbackBridgeSource)).mtimeMs;
+    if (
+      activeCodexFeedbackBridge &&
+      (modifiedAt === activeCodexFeedbackBridgeModifiedAt ||
+        activeCodexFeedbackBridge.maintenancePromise ||
+        activeCodexFeedbackBridge.flushPromise)
+    ) {
+      return activeCodexFeedbackBridge;
+    }
+    if (!codexFeedbackBridgeLoadPromise) {
+      codexFeedbackBridgeLoadPromise = import(
+        `${codexFeedbackBridgeSource.href}?updated=${modifiedAt}`
+      )
+        .then(({ CodexFeedbackBridge }) => {
+          const nextBridge = new CodexFeedbackBridge(codexFeedbackBridgeOptions);
+          if (activeCodexFeedbackBridge?.startedThreads) {
+            nextBridge.startedThreads = activeCodexFeedbackBridge.startedThreads;
+          }
+          activeCodexFeedbackBridge = nextBridge;
+          activeCodexFeedbackBridgeModifiedAt = modifiedAt;
+          return nextBridge;
+        })
+        .finally(() => {
+          codexFeedbackBridgeLoadPromise = undefined;
+        });
+    }
+    return codexFeedbackBridgeLoadPromise;
+  };
   let captureBrowserPromise;
   let workspacePreviewRecoveryPromise;
   const captureBrowser = () => {
@@ -769,8 +806,12 @@ export function localWorkspacePlugin() {
     }
   };
   const configureWorkspaceServer = (server) => {
-    void codexFeedbackBridge.maintain();
-    const feedbackFlush = setInterval(() => void codexFeedbackBridge.maintain(), 2_000);
+    const maintainCodexFeedbackBridge = () =>
+      void codexFeedbackBridge()
+        .then((bridge) => bridge.maintain())
+        .catch(() => undefined);
+    maintainCodexFeedbackBridge();
+    const feedbackFlush = setInterval(maintainCodexFeedbackBridge, 2_000);
     feedbackFlush.unref();
     server.httpServer?.once('close', () => {
       clearInterval(feedbackFlush);
@@ -855,7 +896,7 @@ export function localWorkspacePlugin() {
         }
         try {
           const id = requestUrl.pathname.slice(codexAttachmentPrefix.length);
-          const attachment = await codexFeedbackBridge.attachment(id);
+          const attachment = await (await codexFeedbackBridge()).attachment(id);
           response.writeHead(200, {
             'Cache-Control': 'private, no-store',
             'Content-Type': attachment.mimeType,
@@ -867,6 +908,56 @@ export function localWorkspacePlugin() {
           sendJson(response, 404, {
             status: 'failed',
             detail: error instanceof Error ? error.message : 'The screenshot is unavailable.',
+          });
+        }
+        return;
+      }
+      if (requestUrl.pathname === codexSpeechEndpoint) {
+        const fetchSite = request.headers['sec-fetch-site'];
+        if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
+          sendJson(response, 403, {
+            status: 'failed',
+            detail: 'Speech is only available from Made Solid Studio.',
+          });
+          return;
+        }
+        if (request.method === 'GET') {
+          sendJson(response, 200, googleSpeechConfiguration());
+          return;
+        }
+        if (request.method !== 'POST') {
+          response.statusCode = 405;
+          response.end('Method not allowed');
+          return;
+        }
+        if (!googleSpeechConfiguration().available) {
+          sendJson(response, 503, {
+            status: 'unavailable',
+            detail: 'Google speech is not configured. Using the English device voice instead.',
+          });
+          return;
+        }
+        try {
+          const input = JSON.parse(await readRequestBody(request, 8_192));
+          const speech = await synthesizeGoogleSpeech(input);
+          response.writeHead(200, {
+            'Cache-Control': 'private, no-store',
+            'Content-Length': speech.audio.length,
+            'Content-Type': 'audio/mpeg',
+            'X-Content-Type-Options': 'nosniff',
+            'X-Speech-Voice': speech.voice,
+          });
+          response.end(speech.audio);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : '';
+          const invalidInput = /required|4,500 bytes|available Australian English voice/i.test(
+            detail,
+          );
+          sendJson(response, invalidInput ? 400 : 502, {
+            status: 'failed',
+            detail: invalidInput
+              ? detail
+              : 'Google speech is temporarily unavailable. Use the device voice and retry later.',
           });
         }
         return;
@@ -940,11 +1031,12 @@ export function localWorkspacePlugin() {
             return;
           }
           try {
-            await codexFeedbackBridge.maintain();
+            const bridge = await codexFeedbackBridge();
+            await bridge.maintain();
             sendJson(
               response,
               200,
-              await codexFeedbackBridge.inspect({
+              await bridge.inspect({
                 threadId: requestUrl.searchParams.get('threadId') || undefined,
               }),
             );
@@ -966,18 +1058,21 @@ export function localWorkspacePlugin() {
         }
         try {
           const input = JSON.parse(await readRequestBody(request, 110 * 1024 * 1024));
+          const bridge = await codexFeedbackBridge();
           const result =
             input.action === 'update-queued'
-              ? await codexFeedbackBridge.updateQueued(input.id, input)
-              : input.action === 'interrupt-queued'
-                ? await codexFeedbackBridge.interruptQueued(input.id)
-                : input.action === 'delete-empty-thread'
-                  ? await codexFeedbackBridge.deleteEmptyThread(input.threadId)
-                  : input.action === 'new-thread'
-                    ? await codexFeedbackBridge.createThread(input)
-                    : input.action === 'continue-interrupted-thread'
-                      ? await codexFeedbackBridge.continueInterruptedThread(input)
-                      : await codexFeedbackBridge.enqueue(input);
+              ? await bridge.updateQueued(input.id, input)
+              : input.action === 'delete-queued'
+                ? await bridge.deleteQueued(input.id)
+                : input.action === 'interrupt-queued'
+                  ? await bridge.interruptQueued(input.id)
+                  : input.action === 'delete-empty-thread'
+                    ? await bridge.deleteEmptyThread(input.threadId)
+                    : input.action === 'new-thread'
+                      ? await bridge.createThread(input)
+                      : input.action === 'continue-interrupted-thread'
+                        ? await bridge.continueInterruptedThread(input)
+                        : await bridge.enqueue(input);
           sendJson(response, 202, result);
         } catch (error) {
           sendJson(response, 400, {

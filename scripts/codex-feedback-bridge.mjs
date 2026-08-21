@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
-import { extname, resolve } from 'node:path';
+import { extname, isAbsolute, relative, resolve } from 'node:path';
 
 const defaultServerUrl = 'ws://127.0.0.1:4500';
 const maximumImageBytes = 15 * 1024 * 1024;
@@ -10,7 +10,7 @@ const maximumAgentThreads = 24;
 const teamDelegationInstruction =
   'Agent team is enabled for this request. You are the supervisor. Delegate useful independent workstreams to attached sub-agents with clear, non-overlapping assignments, run them concurrently when practical, monitor their outcomes, and synthesize the result in this parent conversation. Keep work that is trivial or inherently sequential in the parent agent.';
 const progressUpdateInstruction =
-  'During longer work, keep the user oriented with concise commentary at meaningful transitions: explain what you are checking, what you learned or changed, and what remains. Send an update before a long tool run. Do not narrate routine actions, repeat yourself, expose hidden reasoning, or claim unverified progress.';
+  'During longer work, keep the user oriented with concise commentary at meaningful transitions: explain what you are checking, what you learned or changed, and what remains. When a website search, tool, file change, or check produces a meaningful verified result, include that result in the next commentary and explain how it affects the remaining work. Send an update before a long tool run. Do not narrate routine actions, repeat yourself, expose hidden reasoning, or claim unverified progress.';
 const supportedImageTypes = new Map([
   ['image/png', '.png'],
   ['image/jpeg', '.jpg'],
@@ -128,6 +128,31 @@ function publicModel(model) {
     serviceTiers,
     defaultServiceTier: String(model.defaultServiceTier || 'default'),
     isDefault: model.isDefault === true,
+  };
+}
+
+function publicRateLimitWindow(window) {
+  const usedPercent = Number(window?.usedPercent);
+  if (!Number.isFinite(usedPercent)) return undefined;
+  const windowDurationMins = Number(window?.windowDurationMins);
+  const resetsAt = Number(window?.resetsAt);
+  return {
+    usedPercent: Math.min(100, Math.max(0, Math.round(usedPercent))),
+    windowDurationMins:
+      Number.isFinite(windowDurationMins) && windowDurationMins > 0
+        ? Math.round(windowDurationMins)
+        : undefined,
+    resetsAt: Number.isFinite(resetsAt) && resetsAt > 0 ? Math.round(resetsAt) : undefined,
+  };
+}
+
+function publicSubscriptionUsage(snapshot) {
+  const primary = publicRateLimitWindow(snapshot?.primary);
+  const secondary = publicRateLimitWindow(snapshot?.secondary);
+  if (!primary && !secondary) return undefined;
+  return {
+    primary,
+    secondary,
   };
 }
 
@@ -352,37 +377,406 @@ function supervisorAgentRecoveryInstruction(agents) {
   return ` Agent team recovery is required for these interrupted attached agents: ${targets}. Before continuing the parent work, use the followup_task collaboration tool once for each exact thread ID and tell that agent to continue its original assignment from its saved sub-chat. Do not call App Server directly for a child, do not merely monitor an interrupted child, and do not spawn a replacement unless followup_task reports that the saved child cannot resume. Wait for fresh completion results from every resumed child before final synthesis.`;
 }
 
-function publicMessages(thread) {
-  const messages = [];
+function* orderedThreadItems(thread) {
+  let position = 0;
   for (const turn of Array.isArray(thread?.turns) ? thread.turns : []) {
     for (const item of Array.isArray(turn.items) ? turn.items : []) {
-      if (item.type === 'userMessage') {
-        const text = (Array.isArray(item.content) ? item.content : [])
-          .filter((part) => part?.type === 'text' && typeof part.text === 'string')
-          .map((part) => part.text)
-          .join('\n')
-          .trim();
-        if (text)
-          messages.push({
-            id: String(item.id || randomUUID()),
-            role: 'user',
-            text: text.slice(0, maximumPromptLength),
-            turnId: typeof turn.id === 'string' ? turn.id : undefined,
-          });
-      } else if (item.type === 'agentMessage' && typeof item.text === 'string') {
-        const text = item.text.trim();
-        if (text)
-          messages.push({
-            id: String(item.id || randomUUID()),
-            role: 'assistant',
-            text: text.slice(0, 12_000),
-            phase: typeof item.phase === 'string' ? item.phase : undefined,
-            turnId: typeof turn.id === 'string' ? turn.id : undefined,
-          });
-      }
+      yield { item, position, turn };
+      position += 1;
+    }
+  }
+}
+
+function publicMessages(thread) {
+  const messages = [];
+  for (const { item, position, turn } of orderedThreadItems(thread)) {
+    if (item.type === 'userMessage') {
+      const text = (Array.isArray(item.content) ? item.content : [])
+        .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+        .map((part) => part.text)
+        .join('\n')
+        .trim();
+      if (text)
+        messages.push({
+          id: String(item.id || randomUUID()),
+          role: 'user',
+          text: text.slice(0, maximumPromptLength),
+          turnId: typeof turn.id === 'string' ? turn.id : undefined,
+          position,
+        });
+    } else if (item.type === 'agentMessage' && typeof item.text === 'string') {
+      const text = item.text.trim();
+      if (text)
+        messages.push({
+          id: String(item.id || randomUUID()),
+          role: 'assistant',
+          text: text.slice(0, 12_000),
+          phase: typeof item.phase === 'string' ? item.phase : undefined,
+          turnId: typeof turn.id === 'string' ? turn.id : undefined,
+          position,
+        });
     }
   }
   return messages.slice(-60);
+}
+
+function publicActivityStatus(value) {
+  if (value === 'inProgress' || value === 'running') return 'running';
+  if (value === 'failed' || value === 'declined') return 'failed';
+  return 'completed';
+}
+
+function publicActivityPath(value, workspaceRoots = []) {
+  if (typeof value !== 'string') return '';
+  const safeRelativePath = (candidate) => {
+    const segments = candidate.split(/[\\/]+/).filter(Boolean);
+    if (
+      !segments.length ||
+      segments.some(
+        (segment) =>
+          segment === '..' || /^\.env(?:\.|$)/i.test(segment) || !publicActivityText(segment, 80),
+      )
+    ) {
+      return '';
+    }
+    return segments.join('/');
+  };
+  let publicValue = '';
+  if (isAbsolute(value)) {
+    const target = resolve(value);
+    for (const root of workspaceRoots) {
+      const candidate = relative(resolve(root), target);
+      if (candidate && !candidate.startsWith('..') && !isAbsolute(candidate)) {
+        publicValue = safeRelativePath(candidate);
+        if (publicValue) break;
+      }
+    }
+  } else {
+    publicValue = safeRelativePath(value);
+  }
+  return publicValue.length > 180 ? `…${publicValue.slice(-179)}` : publicValue;
+}
+
+function humanizeActivityName(value) {
+  const label = String(value || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return label ? `${label.charAt(0).toUpperCase()}${label.slice(1)}` : '';
+}
+
+function publicActivityText(value, maximumLength = 180) {
+  if (typeof value !== 'string') return '';
+  const text = value.replace(/\s+/g, ' ').trim();
+  if (
+    /(api[ _-]?key|access[ _-]?token|auth(?:orization)?|bearer|cookie|password|secret|session[ _-]?id)/i.test(
+      text,
+    ) ||
+    /\b[A-Za-z0-9_-]{40,}\b/.test(text)
+  ) {
+    return '';
+  }
+  return text.slice(0, maximumLength);
+}
+
+function publicWebLocation(value) {
+  if (typeof value !== 'string') return '';
+  try {
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol)) return '';
+    const safeSegments = url.pathname
+      .split('/')
+      .filter(Boolean)
+      .filter(
+        (segment) =>
+          segment.length <= 32 &&
+          !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(segment) &&
+          Boolean(publicActivityText(decodeURIComponent(segment), 32)),
+      )
+      .slice(0, 3);
+    return `${url.hostname}${safeSegments.length ? `/${safeSegments.join('/')}` : ''}`.slice(
+      0,
+      180,
+    );
+  } catch {
+    return '';
+  }
+}
+
+function activityOutcome(status, { completed, failed, running }) {
+  if (status === 'running') return running;
+  if (status === 'failed') return failed;
+  return completed;
+}
+
+function commandActivityOutcome(label, status, exitCode) {
+  const subject =
+    label === 'Running project checks'
+      ? 'Project checks'
+      : label === 'Building the project'
+        ? 'The project build'
+        : label === 'Reviewing workspace changes'
+          ? 'The workspace change review'
+          : label === 'Inspecting workspace files'
+            ? 'The workspace inspection'
+            : 'The local command';
+  if (status === 'running')
+    return `${subject} ${subject === 'Project checks' ? 'are' : 'is'} still running.`;
+  if (status === 'failed') return `${subject} reported a failure.`;
+  if (typeof exitCode === 'number' && exitCode !== 0) {
+    return `${subject} finished with exit code ${exitCode}.`;
+  }
+  if (label === 'Running project checks') return 'Project checks completed successfully.';
+  if (label === 'Building the project') return 'The project build completed successfully.';
+  if (label === 'Reviewing workspace changes') return 'The workspace change review completed.';
+  if (label === 'Inspecting workspace files') return 'The workspace inspection completed.';
+  return 'The local command completed.';
+}
+
+function fileChangeActivityOutcome(changes, status) {
+  if (status === 'running') return 'The scoped file update is being applied.';
+  if (status === 'failed') return 'The scoped file update did not complete.';
+  const counts = new Map();
+  for (const change of changes) {
+    const kind =
+      typeof change?.kind === 'string'
+        ? change.kind
+        : typeof change?.kind?.type === 'string'
+          ? change.kind.type
+          : '';
+    const label = /add|create/i.test(kind)
+      ? 'added'
+      : /delete|remove/i.test(kind)
+        ? 'deleted'
+        : /update|modify/i.test(kind)
+          ? 'updated'
+          : '';
+    if (label) counts.set(label, (counts.get(label) || 0) + 1);
+  }
+  const summary = [...counts].map(([label, count]) => `${count} ${label}`).join(', ');
+  const subject = changes.length
+    ? `${changes.length} file ${changes.length === 1 ? 'change was' : 'changes were'} saved`
+    : 'Workspace file changes were saved';
+  return `${subject}${summary ? `: ${summary}` : ''}.`;
+}
+
+function commandActivityLabel(command) {
+  const value = String(command || '').toLowerCase();
+  if (/\b(playwright|axe|vitest|jest|test|lint|typecheck|type-check|verify)\b/.test(value)) {
+    return 'Running project checks';
+  }
+  if (/\b(build|compile|vite build|tsc)\b/.test(value)) return 'Building the project';
+  if (/\bgit\s+(status|diff|log)\b/.test(value)) return 'Reviewing workspace changes';
+  if (/\b(rg|grep|find|sed|ls)\b/.test(value)) return 'Inspecting workspace files';
+  return 'Running a local command';
+}
+
+function publicActivities(thread, workspaceRoots = []) {
+  const activities = [];
+  for (const { item, position, turn } of orderedThreadItems(thread)) {
+    const id = String(item?.id || `${turn.id || 'turn'}-activity-${position + 1}`);
+    const status =
+      item?.type === 'dynamicToolCall' && item.success === false
+        ? 'failed'
+        : publicActivityStatus(item?.status);
+    const createdAt =
+      typeof item?.createdAt === 'number'
+        ? item.createdAt
+        : typeof item?.startedAt === 'number'
+          ? item.startedAt
+          : typeof turn.startedAt === 'number'
+            ? turn.startedAt
+            : undefined;
+    if (item?.type === 'commandExecution') {
+      const label = commandActivityLabel(item.command);
+      activities.push({
+        id,
+        kind: 'command',
+        label,
+        detail: 'Working inside the approved Studio workspace.',
+        status,
+        outcome: commandActivityOutcome(label, status, item.exitCode),
+        durationMs: typeof item.durationMs === 'number' ? item.durationMs : undefined,
+        createdAt,
+        turnId: typeof turn.id === 'string' ? turn.id : undefined,
+        position,
+      });
+      continue;
+    }
+    if (item?.type === 'fileChange') {
+      const changes = (Array.isArray(item.changes) ? item.changes : []).slice(0, 6);
+      const paths = changes
+        .map((change) => publicActivityPath(change?.path, workspaceRoots))
+        .filter(Boolean);
+      const fileAction =
+        status === 'running' ? 'Updating' : status === 'failed' ? 'Could not update' : 'Updated';
+      activities.push({
+        id,
+        kind: 'file',
+        label: `${fileAction} ${changes.length || 'workspace'} ${changes.length === 1 ? 'file' : 'files'}`,
+        detail: paths.length ? paths.join(' · ') : 'Applying a scoped workspace file change.',
+        status,
+        outcome: fileChangeActivityOutcome(changes, status),
+        createdAt,
+        turnId: typeof turn.id === 'string' ? turn.id : undefined,
+        position,
+      });
+      continue;
+    }
+    if (item?.type === 'mcpToolCall') {
+      const app = item.appContext?.appName || item.server;
+      const tool = humanizeActivityName(item.appContext?.actionName || item.tool).slice(0, 120);
+      activities.push({
+        id,
+        kind: 'tool',
+        label: app ? `Using ${String(app).slice(0, 80)}` : 'Using a connected tool',
+        detail: tool || 'Running a connected workspace action.',
+        status,
+        outcome: activityOutcome(status, {
+          completed: 'The connected action completed.',
+          failed: 'The connected action reported a failure.',
+          running: 'The connected action is still running.',
+        }),
+        createdAt,
+        turnId: typeof turn.id === 'string' ? turn.id : undefined,
+        position,
+      });
+      continue;
+    }
+    if (item?.type === 'dynamicToolCall') {
+      activities.push({
+        id,
+        kind: 'tool',
+        label: `Using ${humanizeActivityName(item.tool).slice(0, 100) || 'a workspace tool'}`,
+        detail: 'Running an observable tool action for this task.',
+        status,
+        outcome:
+          typeof item.success === 'boolean' && status === 'completed'
+            ? item.success
+              ? 'The workspace tool reported success.'
+              : 'The workspace tool did not report success.'
+            : activityOutcome(status, {
+                completed: 'The workspace tool completed.',
+                failed: 'The workspace tool reported a failure.',
+                running: 'The workspace tool is still running.',
+              }),
+        durationMs: typeof item.durationMs === 'number' ? item.durationMs : undefined,
+        createdAt,
+        turnId: typeof turn.id === 'string' ? turn.id : undefined,
+        position,
+      });
+      continue;
+    }
+    if (item?.type === 'webSearch') {
+      const query = publicActivityText(item.query);
+      const action = item.action && typeof item.action === 'object' ? item.action : undefined;
+      const actionType = typeof action?.type === 'string' ? action.type : 'search';
+      const location = publicWebLocation(action?.url);
+      const pattern = publicActivityText(action?.pattern, 100);
+      const isOpenPage = actionType === 'openPage';
+      const isFindInPage = actionType === 'findInPage';
+      activities.push({
+        id,
+        kind: 'search',
+        label: isOpenPage
+          ? location
+            ? `Opening ${location}`
+            : 'Opening a web source'
+          : isFindInPage
+            ? 'Checking a web page'
+            : 'Searching the web',
+        detail: isFindInPage
+          ? pattern
+            ? `Looking on ${location || 'the current page'} for “${pattern}”.`
+            : `Inspecting ${location || 'the current web page'}.`
+          : isOpenPage
+            ? `Reviewing ${location || 'the selected source page'}.`
+            : query || 'Looking up current source material.',
+        status,
+        outcome: isOpenPage
+          ? `${location || 'The source page'} was opened for inspection.`
+          : isFindInPage
+            ? `The on-page check completed${pattern ? ` for “${pattern}”` : ''}.`
+            : 'The source search completed; Codex will report any useful finding in its next update.',
+        createdAt,
+        turnId: typeof turn.id === 'string' ? turn.id : undefined,
+        position,
+      });
+      continue;
+    }
+    if (item?.type === 'imageView') {
+      activities.push({
+        id,
+        kind: 'image',
+        label: 'Inspecting an image',
+        detail:
+          publicActivityPath(item.path, workspaceRoots) || 'Reviewing supplied visual context.',
+        status,
+        outcome: activityOutcome(status, {
+          completed: 'The image was opened for visual inspection.',
+          failed: 'The image could not be inspected.',
+          running: 'The image is being inspected.',
+        }),
+        createdAt,
+        turnId: typeof turn.id === 'string' ? turn.id : undefined,
+        position,
+      });
+      continue;
+    }
+    if (item?.type === 'plan') {
+      activities.push({
+        id,
+        kind: 'plan',
+        label: 'Updating the work plan',
+        detail:
+          publicActivityText(item.text, 220) ||
+          'Organising the remaining verified steps for this request.',
+        status,
+        outcome: activityOutcome(status, {
+          completed: 'The remaining work sequence was updated.',
+          failed: 'The work plan update did not complete.',
+          running: 'The remaining work sequence is being organised.',
+        }),
+        createdAt,
+        turnId: typeof turn.id === 'string' ? turn.id : undefined,
+        position,
+      });
+      continue;
+    }
+    if (item?.type === 'collabToolCall' || item?.type === 'collabAgentToolCall') {
+      activities.push({
+        id,
+        kind: 'agent',
+        label: 'Coordinating the agent team',
+        detail: humanizeActivityName(item.tool).slice(0, 120) || 'Managing a delegated workstream.',
+        status,
+        outcome: activityOutcome(status, {
+          completed: 'The agent-team coordination step completed.',
+          failed: 'The agent-team coordination step reported a failure.',
+          running: 'The agent-team coordination step is in progress.',
+        }),
+        createdAt,
+        turnId: typeof turn.id === 'string' ? turn.id : undefined,
+        position,
+      });
+      continue;
+    }
+    if (item?.type === 'contextCompaction') {
+      activities.push({
+        id,
+        kind: 'context',
+        label: 'Organising conversation context',
+        detail: 'Keeping the long-running task focused without changing its goal.',
+        status: 'completed',
+        outcome: 'Conversation context was compacted so work can continue on the same goal.',
+        createdAt,
+        turnId: typeof turn.id === 'string' ? turn.id : undefined,
+        position,
+      });
+    }
+  }
+  return activities.slice(-60);
 }
 
 function messagesWithFeedbackRecords(thread, records, threadId) {
@@ -401,7 +795,8 @@ function messagesWithFeedbackRecords(thread, records, threadId) {
       .find(
         (candidate) =>
           !used.has(candidate.id) &&
-          (message.text === candidate.prompt ||
+          ((candidate.turnId && String(candidate.turnId) === String(message.turnId || '')) ||
+            message.text === candidate.prompt ||
             message.text.startsWith(`${candidate.prompt}\n\nCaptured from:`) ||
             message.text.startsWith(`${candidate.prompt}\n\nAgent team is enabled`) ||
             message.text.startsWith(`${candidate.prompt}\n\n${progressUpdateInstruction}`)),
@@ -521,8 +916,9 @@ export class CodexFeedbackBridge {
   async inspect({ threadId } = {}) {
     const client = await this.connect();
     try {
-      const [accountResult, modelResult, threadResult] = await Promise.all([
+      const [accountResult, rateLimitResult, modelResult, threadResult] = await Promise.all([
         client.request('account/read', {}),
+        client.request('account/rateLimits/read', null).catch(() => undefined),
         client.request('model/list', { limit: 100, includeHidden: false }),
         client.request('thread/list', { limit: 50, cwd: this.cwd, sortKey: 'updated_at' }),
       ]);
@@ -690,6 +1086,9 @@ export class CodexFeedbackBridge {
               planType: String(accountResult.account.planType || ''),
             }
           : undefined,
+        subscriptionUsage: publicSubscriptionUsage(
+          rateLimitResult?.rateLimitsByLimitId?.codex ?? rateLimitResult?.rateLimits,
+        ),
         thread: detailedThread
           ? publicThread(detailedThread, {
               discardable:
@@ -715,6 +1114,7 @@ export class CodexFeedbackBridge {
               }),
         ),
         messages: messagesWithFeedbackRecords(threadDetail?.thread, records, thread?.id),
+        activities: publicActivities(threadDetail?.thread, this.runtimeWorkspaceRoots),
         agents: agentThreads.map((agentThread, index) =>
           publicAgent(
             agentThread,
@@ -751,8 +1151,8 @@ export class CodexFeedbackBridge {
 
   async enqueue(input) {
     const prompt = typeof input.prompt === 'string' ? input.prompt.trim() : '';
-    if (!prompt || prompt.length > maximumPromptLength) {
-      throw new Error('Add a prompt between 1 and 4,000 characters.');
+    if (prompt.length > maximumPromptLength) {
+      throw new Error('Keep the prompt within 4,000 characters.');
     }
     const model = typeof input.model === 'string' ? input.model.trim() : '';
     const effort = typeof input.effort === 'string' ? input.effort.trim() : '';
@@ -765,6 +1165,9 @@ export class CodexFeedbackBridge {
       throw new Error(`Attach no more than ${maximumImageAttachments} images to one message.`);
     }
     const screenshots = screenshotInputs.map(parseScreenshot).filter(Boolean);
+    if (!prompt && screenshots.length === 0) {
+      throw new Error('Add a prompt or attach an image.');
+    }
     const workMode = input.workMode === 'team' ? 'team' : 'direct';
     const threadId =
       typeof input.threadId === 'string' && /^[A-Za-z0-9-]{1,100}$/.test(input.threadId)
@@ -1054,6 +1457,17 @@ export class CodexFeedbackBridge {
     return { status: 'queued', id: record.id, detail: 'Queued message updated.' };
   }
 
+  async deleteQueued(id) {
+    const record = await this.queuedRecord(id);
+    await atomicWriteJson(resolve(this.storageRoot, `${record.id}.json`), {
+      ...record,
+      status: 'cancelled',
+      cancelledAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    return { status: 'cancelled', id: record.id, detail: 'Queued message deleted.' };
+  }
+
   async interruptQueued(id) {
     const record = await this.queuedRecord(id);
     const queued = await this.readRecords('queued');
@@ -1269,19 +1683,33 @@ export class CodexFeedbackBridge {
           }
           if (thread.status?.type === 'active' || activeTurn(thread)) continue;
           try {
-            const imageAttachments = recordImageAttachments(record, this.storageRoot);
+            const currentRecord = await this.queuedRecord(record.id);
+            const dispatchingRecord = {
+              ...currentRecord,
+              status: 'dispatching',
+              updatedAt: new Date().toISOString(),
+            };
+            await atomicWriteJson(
+              resolve(this.storageRoot, `${currentRecord.id}.json`),
+              dispatchingRecord,
+            );
+            const imageAttachments = recordImageAttachments(dispatchingRecord, this.storageRoot);
             const turnResult = await client.request('turn/start', {
               threadId: thread.id,
               input: [
                 {
                   type: 'text',
                   text: `${
-                    record.context
-                      ? `${record.prompt}\n\nCaptured from: ${record.context}${
-                          record.workMode === 'team' ? `\n\n${teamDelegationInstruction}` : ''
+                    dispatchingRecord.context
+                      ? `${dispatchingRecord.prompt}\n\nCaptured from: ${dispatchingRecord.context}${
+                          dispatchingRecord.workMode === 'team'
+                            ? `\n\n${teamDelegationInstruction}`
+                            : ''
                         }`
-                      : `${record.prompt}${
-                          record.workMode === 'team' ? `\n\n${teamDelegationInstruction}` : ''
+                      : `${dispatchingRecord.prompt}${
+                          dispatchingRecord.workMode === 'team'
+                            ? `\n\n${teamDelegationInstruction}`
+                            : ''
                         }`
                   }\n\n${progressUpdateInstruction}`,
                 },
@@ -1292,12 +1720,12 @@ export class CodexFeedbackBridge {
               ],
               cwd: this.cwd,
               ...railwayContainerTurnSettings(this.runtimeWorkspaceRoots),
-              model: record.model,
-              effort: record.effort,
-              serviceTier: record.serviceTier || 'default',
+              model: dispatchingRecord.model,
+              effort: dispatchingRecord.effort,
+              serviceTier: dispatchingRecord.serviceTier || 'default',
             });
             await atomicWriteJson(resolve(this.storageRoot, `${record.id}.json`), {
-              ...record,
+              ...dispatchingRecord,
               status: 'running',
               threadId: String(thread.id),
               turnId: typeof turnResult?.turn?.id === 'string' ? turnResult.turn.id : undefined,

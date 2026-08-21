@@ -1,5 +1,6 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import {
+  Activity,
   ArrowDown,
   BellRing,
   Bot,
@@ -12,35 +13,54 @@ import {
   CircleCheck,
   CircleDot,
   CircleX,
+  CornerDownRight,
   ImageUp,
+  FilePenLine,
+  ListChecks,
   LoaderCircle,
   Maximize2,
   MessageSquareText,
   MonitorUp,
+  Pause,
   Pencil,
+  Play,
   Plus,
   RotateCcw,
   Save,
   Send,
+  Search,
   SlidersHorizontal,
   Square,
+  SquareTerminal,
+  Trash2,
   UsersRound,
+  Volume2,
+  Wrench,
   X,
 } from 'lucide-react';
 import { captureVisiblePage, warmMobileScreenCapture } from '../lib/mobile-screen-capture';
+import {
+  codexCloudSpeechChunks,
+  codexSpeechChunks,
+  codexSpeechLanguage,
+  estimatedCodexSpeechSeconds,
+  formatCodexSpeechTime,
+  preferredEnglishSpeechVoice,
+} from '../lib/codex-speech';
 import { studioRuntimeFetch } from '../lib/studio-runtime';
 import { isSupabaseConfigured, usesLocalStorage } from '../lib/supabase';
 import {
   useCallback,
   useEffect,
   Fragment,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type ChangeEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import { Button, ButtonGroup, IconButton, StatusBadge } from './ui';
+import { Button, ButtonGroup, ConfirmationDialog, IconButton, StatusBadge } from './ui';
 import { MarkdownContent } from './MarkdownContent';
 
 type CodexEffort = {
@@ -74,10 +94,20 @@ type CodexThread = {
   discardable?: boolean;
 };
 
+type CodexUsageWindow = {
+  usedPercent: number;
+  windowDurationMins?: number;
+  resetsAt?: number;
+};
+
 type CodexStatus = {
   status: 'ready' | 'unavailable';
   detail: string;
   account?: { type: string; planType: string };
+  subscriptionUsage?: {
+    primary?: CodexUsageWindow;
+    secondary?: CodexUsageWindow;
+  };
   thread?: CodexThread;
   threads: CodexThread[];
   messages: Array<{
@@ -89,7 +119,9 @@ type CodexStatus = {
     attachmentId?: string;
     attachmentIds?: string[];
     feedbackId?: string;
+    position?: number;
   }>;
+  activities?: CodexActivity[];
   agents: CodexAgent[];
   models: CodexModel[];
   queuedCount: number;
@@ -107,6 +139,22 @@ type CodexStatus = {
     attachmentIds?: string[];
     workMode?: 'direct' | 'team';
   }>;
+};
+
+type CodexActivityKind =
+  'command' | 'file' | 'tool' | 'search' | 'image' | 'plan' | 'agent' | 'context';
+
+type CodexActivity = {
+  id: string;
+  kind: CodexActivityKind;
+  label: string;
+  detail?: string;
+  outcome?: string;
+  status: 'running' | 'completed' | 'failed';
+  durationMs?: number;
+  createdAt?: number;
+  turnId?: string;
+  position?: number;
 };
 
 type CodexAgentStatus =
@@ -138,6 +186,22 @@ type TeamResumeState = {
 
 type PanelPhase =
   'closed' | 'compose' | 'sending-chat' | 'capturing' | 'capturing-tab' | 'selecting';
+type SpeechPlaybackState = 'idle' | 'loading' | 'playing' | 'paused';
+type SpeechProgress = { elapsedSeconds: number; totalSeconds: number };
+type CloudSpeechVoice = { id: string; gender: 'Female' | 'Male' };
+type CloudSpeechConfiguration = {
+  available: boolean;
+  defaultVoice: string;
+  language: string;
+  provider: string;
+  voices: CloudSpeechVoice[];
+};
+type CloudSpeechSegment = { audio: HTMLAudioElement; duration: number; url: string };
+type ConversationTransition = {
+  id: number;
+  kind: 'create' | 'switch';
+  label: string;
+};
 type Point = { x: number; y: number };
 type Selection = { start: Point; end: Point };
 type DraftAttachment = { id: string; name: string; source: string };
@@ -146,9 +210,11 @@ const statusEndpoint = '/__made-solid/codex-status';
 const feedbackEndpoint = '/__made-solid/codex-feedback';
 const localPageCaptureEndpoint = '/__made-solid/page-screenshot';
 const codexAttachmentPrefix = '/__made-solid/codex-attachment/';
+const codexSpeechEndpoint = '/__made-solid/codex-speech';
 const browserCaptureSource = 'made-solid-browser-capture';
 const codexPreferencesKey = 'made-solid-codex-preferences-v1';
 const codexDraftKey = 'made-solid-codex-draft-v1';
+const codexChatSessionKey = 'made-solid-codex-chat-session-v1';
 const maximumPhotoBytes = 15 * 1024 * 1024;
 const maximumDraftAttachments = 5;
 const supportedPhotoTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -207,11 +273,60 @@ type CodexPreferences = {
   effortByModel: Record<string, string>;
   workMode: 'direct' | 'team';
   fastMode: boolean;
+  speechVoice: string;
 };
+
+type CodexTranscriptPosition = {
+  anchorId?: string;
+  anchorKind?: 'activity' | 'message';
+  anchorOffset?: number;
+  followingLatest: boolean;
+  scrollTop: number;
+  updatedAt: number;
+};
+
+type CodexChatSession = {
+  isOpen: boolean;
+  positions: Record<string, CodexTranscriptPosition>;
+  selectedThreadId: string;
+};
+
+function readCodexChatSession(): CodexChatSession {
+  const fallback = { isOpen: false, positions: {}, selectedThreadId: '' };
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const stored = JSON.parse(
+      window.localStorage.getItem(codexChatSessionKey) || '{}',
+    ) as Partial<CodexChatSession>;
+    const positions =
+      stored.positions && typeof stored.positions === 'object' ? stored.positions : {};
+    return {
+      isOpen: stored.isOpen === true,
+      positions,
+      selectedThreadId: typeof stored.selectedThreadId === 'string' ? stored.selectedThreadId : '',
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function writeCodexChatSession(session: CodexChatSession) {
+  try {
+    window.localStorage.setItem(codexChatSessionKey, JSON.stringify(session));
+  } catch {
+    // Chat remains usable when browser storage is unavailable or full.
+  }
+}
 
 function readCodexPreferences(): CodexPreferences {
   if (typeof window === 'undefined')
-    return { modelId: '', effortByModel: {}, workMode: 'team', fastMode: false };
+    return {
+      modelId: '',
+      effortByModel: {},
+      workMode: 'team',
+      fastMode: false,
+      speechVoice: 'Aoede',
+    };
   try {
     const stored = JSON.parse(
       window.localStorage.getItem(codexPreferencesKey) || '{}',
@@ -224,9 +339,19 @@ function readCodexPreferences(): CodexPreferences {
           : {},
       workMode: stored.workMode === 'direct' ? 'direct' : 'team',
       fastMode: stored.fastMode === true,
+      speechVoice:
+        typeof stored.speechVoice === 'string' && stored.speechVoice.trim()
+          ? stored.speechVoice
+          : 'Aoede',
     };
   } catch {
-    return { modelId: '', effortByModel: {}, workMode: 'team', fastMode: false };
+    return {
+      modelId: '',
+      effortByModel: {},
+      workMode: 'team',
+      fastMode: false,
+      speechVoice: 'Aoede',
+    };
   }
 }
 
@@ -384,6 +509,188 @@ function AgentTeamPanel({
         })}
       </div>
     </section>
+  );
+}
+
+function activityPresentation(kind: CodexActivityKind) {
+  if (kind === 'command') return { icon: SquareTerminal, label: 'Command' };
+  if (kind === 'file') return { icon: FilePenLine, label: 'Files' };
+  if (kind === 'search') return { icon: Search, label: 'Research' };
+  if (kind === 'plan') return { icon: ListChecks, label: 'Plan' };
+  if (kind === 'agent') return { icon: UsersRound, label: 'Team' };
+  if (kind === 'image') return { icon: Camera, label: 'Visual' };
+  if (kind === 'context') return { icon: Activity, label: 'Context' };
+  return { icon: Wrench, label: 'Tool' };
+}
+
+function activityDuration(durationMs: number | undefined) {
+  if (durationMs === undefined) return undefined;
+  if (durationMs < 1_000) return `${Math.max(1, Math.round(durationMs))} ms`;
+  if (durationMs < 60_000) return `${(durationMs / 1_000).toFixed(durationMs < 10_000 ? 1 : 0)} s`;
+  return `${Math.floor(durationMs / 60_000)}m ${Math.round((durationMs % 60_000) / 1_000)}s`;
+}
+
+function usageWindowLabel(windowDurationMins: number | undefined, index: number) {
+  if (!windowDurationMins) return index === 0 ? 'Current quota window' : 'Additional quota window';
+  if (windowDurationMins % (24 * 60) === 0) {
+    const days = windowDurationMins / (24 * 60);
+    return `${days}-day usage`;
+  }
+  if (windowDurationMins % 60 === 0) {
+    const hours = windowDurationMins / 60;
+    return `${hours}-hour usage`;
+  }
+  return `${windowDurationMins}-minute usage`;
+}
+
+function usageResetLabel(resetsAt: number | undefined) {
+  if (!resetsAt) return undefined;
+  return new Intl.DateTimeFormat('en-AU', {
+    day: 'numeric',
+    month: 'short',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'UTC',
+    timeZoneName: 'short',
+  }).format(new Date(resetsAt * 1_000));
+}
+
+function CodexSubscriptionUsage({ usage }: { usage: CodexStatus['subscriptionUsage'] }) {
+  const windows = [usage?.primary, usage?.secondary].filter((window): window is CodexUsageWindow =>
+    Boolean(window),
+  );
+  return (
+    <section aria-labelledby="codex-subscription-usage-title" className="codex-subscription-usage">
+      <header>
+        <span>
+          <strong id="codex-subscription-usage-title">Codex subscription usage</strong>
+          <small>Live usage from your signed-in ChatGPT plan</small>
+        </span>
+        {windows.length === 1 ? (
+          <strong className="codex-subscription-usage__total">
+            {windows[0].usedPercent}% used
+          </strong>
+        ) : null}
+      </header>
+      {windows.length ? (
+        <div className="codex-subscription-usage__windows">
+          {windows.map((window, index) => {
+            const label = usageWindowLabel(window.windowDurationMins, index);
+            const resetLabel = usageResetLabel(window.resetsAt);
+            return (
+              <div className="codex-subscription-usage__window" key={`${label}-${index}`}>
+                <span className="codex-subscription-usage__labels">
+                  <small>{label}</small>
+                  {windows.length > 1 ? <strong>{window.usedPercent}% used</strong> : null}
+                </span>
+                <span
+                  aria-label={`${label}: ${window.usedPercent}% used`}
+                  aria-valuemax={100}
+                  aria-valuemin={0}
+                  aria-valuenow={window.usedPercent}
+                  className="codex-subscription-usage__meter"
+                  role="progressbar"
+                >
+                  <span style={{ width: `${window.usedPercent}%` }} />
+                </span>
+                <small>{resetLabel ? `Resets ${resetLabel}` : 'Reset time unavailable'}</small>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p>Usage is temporarily unavailable. Your Codex chat remains connected.</p>
+      )}
+    </section>
+  );
+}
+
+function CodexChatActivity({ activity, entering }: { activity: CodexActivity; entering: boolean }) {
+  const presentation = activityPresentation(activity.kind);
+  const Icon = presentation.icon;
+  const duration = activityDuration(activity.durationMs);
+  const stateLabel =
+    activity.status === 'running'
+      ? 'Running'
+      : activity.status === 'failed'
+        ? 'Needs attention'
+        : 'Complete';
+  return (
+    <article
+      aria-current={activity.status === 'running' ? 'step' : undefined}
+      className={`codex-chat-activity codex-chat-activity--${activity.status}${entering ? ' is-entering' : ''}`}
+      data-activity-id={activity.id}
+      data-activity-status={activity.status}
+    >
+      <span aria-hidden="true" className="codex-chat-activity__marker">
+        {activity.status === 'completed' ? (
+          <Check size={14} />
+        ) : activity.status === 'failed' ? (
+          <CircleAlert size={14} />
+        ) : (
+          <Icon size={14} />
+        )}
+      </span>
+      <span className="codex-chat-activity__copy">
+        <span className="codex-chat-activity__meta">
+          <small>Workspace activity · {presentation.label}</small>
+          <span className="codex-chat-activity__state">
+            {stateLabel}
+            {duration ? <small> · {duration}</small> : null}
+          </span>
+        </span>
+        <strong>{activity.label}</strong>
+        {activity.detail ? <small>{activity.detail}</small> : null}
+        {activity.outcome ? (
+          <span className="codex-chat-activity__outcome">
+            <CornerDownRight aria-hidden="true" size={13} />
+            <span>
+              <small>{activity.status === 'running' ? 'Live status' : 'Observed result'}</small>
+              <span>{activity.outcome}</span>
+            </span>
+          </span>
+        ) : null}
+      </span>
+    </article>
+  );
+}
+
+function CodexConversationLoading({ transition }: { transition: ConversationTransition }) {
+  const creating = transition.kind === 'create';
+  return (
+    <div className="codex-conversation-loading" role="status">
+      <div className="codex-conversation-loading__status">
+        <span aria-hidden="true" className="codex-conversation-loading__icon">
+          <Bot size={19} />
+        </span>
+        <span className="codex-conversation-loading__copy">
+          <strong>{creating ? 'Starting a new chat' : 'Opening conversation'}</strong>
+          <small>
+            {creating ? 'Preparing a fresh Codex workspace…' : `Loading ${transition.label}…`}
+          </small>
+        </span>
+        <span aria-hidden="true" className="codex-conversation-loading__dots">
+          <span />
+          <span />
+          <span />
+        </span>
+      </div>
+      <div aria-hidden="true" className="codex-conversation-loading__skeletons">
+        <span className="codex-conversation-loading__skeleton is-assistant">
+          <i />
+          <i />
+          <i />
+        </span>
+        <span className="codex-conversation-loading__skeleton is-user">
+          <i />
+          <i />
+        </span>
+        <span className="codex-conversation-loading__skeleton is-assistant is-short">
+          <i />
+          <i />
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -613,25 +920,89 @@ async function waitForHiddenCaptureUi() {
   await new Promise<void>((resolvePaint) => requestAnimationFrame(() => resolvePaint()));
 }
 
+function loadCloudSpeechSegment(blob: Blob, signal: AbortSignal): Promise<CloudSpeechSegment> {
+  return new Promise((resolveSegment, reject) => {
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audio.preload = 'metadata';
+    let settled = false;
+    const abort = () => finish(new DOMException('Speech loading was stopped.', 'AbortError'));
+    const failed = () => finish(new Error('The generated speech audio could not be loaded.'));
+    const loaded = () => {
+      if (!Number.isFinite(audio.duration) || audio.duration <= 0) {
+        failed();
+        return;
+      }
+      finish();
+    };
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      signal.removeEventListener('abort', abort);
+      audio.removeEventListener('loadedmetadata', loaded);
+      audio.removeEventListener('error', failed);
+      if (error) {
+        URL.revokeObjectURL(url);
+        reject(error);
+        return;
+      }
+      resolveSegment({ audio, duration: audio.duration, url });
+    };
+    const timeout = window.setTimeout(
+      () => finish(new Error('The generated speech audio took too long to load.')),
+      15_000,
+    );
+    signal.addEventListener('abort', abort, { once: true });
+    audio.addEventListener('loadedmetadata', loaded, { once: true });
+    audio.addEventListener('error', failed, { once: true });
+    audio.load();
+  });
+}
+
 export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const conversationTriggerRef = useRef<HTMLButtonElement>(null);
   const conversationPickerRef = useRef<HTMLDivElement>(null);
+  const conversationTransitionIdRef = useRef(0);
+  const initialChatSessionRef = useRef(readCodexChatSession());
   const previousWorkingRef = useRef(false);
-  const chatLogRef = useRef<HTMLDivElement>(null);
-  const knownMessageIdsRef = useRef(new Set<string>());
-  const knownMessageThreadRef = useRef('');
-  const messageAnimationTimerRef = useRef<number>();
+  const knownTimelineIdsRef = useRef(new Set<string>());
+  const knownTimelineThreadRef = useRef('');
+  const timelineAnimationTimerRef = useRef<number>();
   const previousChatScrollTopRef = useRef(0);
+  const restoredChatThreadRef = useRef('');
+  const chatSessionRef = useRef(initialChatSessionRef.current);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const chatFollowingLatestRef = useRef(true);
   const selectionImageRef = useRef<HTMLImageElement>(null);
   const selectionPointerRef = useRef<{ pointerId: number; start: Point }>();
+  const speechRunRef = useRef(0);
+  const speechChunksRef = useRef<string[]>([]);
+  const speechChunkIndexRef = useRef(0);
+  const speechMessageIdRef = useRef('');
+  const speechUtteranceRef = useRef<SpeechSynthesisUtterance>();
+  const speechNextChunkTimerRef = useRef<number>();
+  const speechWatchdogTimerRef = useRef<number>();
+  const speechProgressTimerRef = useRef<number>();
+  const speechElapsedBeforePlayRef = useRef(0);
+  const speechStartedAtRef = useRef(0);
+  const speechEstimatedTotalRef = useRef(0);
+  const speechSourceRef = useRef<'device' | 'google'>('device');
+  const cloudSpeechSegmentsRef = useRef<CloudSpeechSegment[]>([]);
+  const cloudSpeechSegmentIndexRef = useRef(0);
+  const cloudSpeechAbortRef = useRef<AbortController>();
+  const voicePreviewAudioRef = useRef<HTMLAudioElement>();
+  const voicePreviewUrlRef = useRef('');
+  const voicePreviewAbortRef = useRef<AbortController>();
   const [isSupported, setIsSupported] = useState<boolean>();
-  const [phase, setPhase] = useState<PanelPhase>('closed');
+  const [mountedChatLog, setMountedChatLog] = useState<HTMLDivElement | null>(null);
+  const [phase, setPhase] = useState<PanelPhase>(() =>
+    initialChatSessionRef.current.isOpen ? 'compose' : 'closed',
+  );
   const [status, setStatus] = useState<CodexStatus>();
-  const [enteringMessageIds, setEnteringMessageIds] = useState<Set<string>>(() => new Set());
+  const [enteringTimelineIds, setEnteringTimelineIds] = useState<Set<string>>(() => new Set());
   const [selectedModelId, setSelectedModelId] = useState(() => readCodexPreferences().modelId);
   const [selectedEffort, setSelectedEffort] = useState(() => {
     const preferences = readCodexPreferences();
@@ -644,9 +1015,11 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
     () => readCodexPreferences().workMode,
   );
   const [fastMode, setFastMode] = useState(() => readCodexPreferences().fastMode);
-  const [selectedThreadId, setSelectedThreadId] = useState('');
+  const [selectedThreadId, setSelectedThreadId] = useState(
+    initialChatSessionRef.current.selectedThreadId,
+  );
   const [conversationPickerOpen, setConversationPickerOpen] = useState(false);
-  const selectedThreadIdRef = useRef('');
+  const selectedThreadIdRef = useRef(initialChatSessionRef.current.selectedThreadId);
   const [sourceScreenshot, setSourceScreenshot] = useState('');
   const [selection, setSelection] = useState<Selection>();
   const [draftAttachments, setDraftAttachments] = useState<DraftAttachment[]>([]);
@@ -658,17 +1031,21 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   const [pendingChatMessage, setPendingChatMessage] = useState<{
     id: string;
     text: string;
+    threadId: string;
   }>();
   const [pendingVisualMessage, setPendingVisualMessage] = useState<{
     id: string;
     text: string;
     images: string[];
+    threadId: string;
   }>();
   const [expandedQueueId, setExpandedQueueId] = useState('');
   const [queuedEdits, setQueuedEdits] = useState<Record<string, string>>({});
   const [queueActionId, setQueueActionId] = useState('');
   const [queueActionError, setQueueActionError] = useState('');
+  const [deleteQueueId, setDeleteQueueId] = useState('');
   const [isCreatingThread, setIsCreatingThread] = useState(false);
+  const [conversationTransition, setConversationTransition] = useState<ConversationTransition>();
   const [isResumingThread, setIsResumingThread] = useState(false);
   const [teamResumeState, setTeamResumeState] = useState<TeamResumeState>();
   const [workspaceCaptureContext, setWorkspaceCaptureContext] = useState<WorkspaceCaptureContext>();
@@ -678,21 +1055,562 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   const [composerSettingsOpen, setComposerSettingsOpen] = useState(false);
   const [isPreparingPhoto, setIsPreparingPhoto] = useState(false);
   const [expandedAgentId, setExpandedAgentId] = useState('');
+  const [speechMessageId, setSpeechMessageId] = useState('');
+  const [speechPlaybackState, setSpeechPlaybackState] = useState<SpeechPlaybackState>('idle');
+  const [speechStatus, setSpeechStatus] = useState('');
+  const [speechProgress, setSpeechProgress] = useState<SpeechProgress>();
+  const [cloudSpeechConfiguration, setCloudSpeechConfiguration] =
+    useState<CloudSpeechConfiguration>();
+  const [selectedSpeechVoice, setSelectedSpeechVoice] = useState(
+    () => readCodexPreferences().speechVoice,
+  );
+  const [voicePreviewState, setVoicePreviewState] = useState<'idle' | 'loading' | 'playing'>(
+    'idle',
+  );
+
+  const deviceSpeechSupported =
+    typeof window !== 'undefined' &&
+    'speechSynthesis' in window &&
+    'SpeechSynthesisUtterance' in window;
+  const speechSupported = deviceSpeechSupported || cloudSpeechConfiguration?.available === true;
+
+  const stopVoicePreview = useCallback(() => {
+    voicePreviewAbortRef.current?.abort();
+    voicePreviewAbortRef.current = undefined;
+    const audio = voicePreviewAudioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.onended = null;
+      audio.onerror = null;
+    }
+    voicePreviewAudioRef.current = undefined;
+    if (voicePreviewUrlRef.current) URL.revokeObjectURL(voicePreviewUrlRef.current);
+    voicePreviewUrlRef.current = '';
+    setVoicePreviewState('idle');
+  }, []);
+
+  const clearCloudSpeech = useCallback(() => {
+    cloudSpeechAbortRef.current?.abort();
+    cloudSpeechAbortRef.current = undefined;
+    for (const segment of cloudSpeechSegmentsRef.current) {
+      segment.audio.pause();
+      segment.audio.onended = null;
+      segment.audio.ontimeupdate = null;
+      segment.audio.onerror = null;
+      URL.revokeObjectURL(segment.url);
+    }
+    cloudSpeechSegmentsRef.current = [];
+    cloudSpeechSegmentIndexRef.current = 0;
+  }, []);
+
+  const clearSpeechTimers = useCallback(() => {
+    if (speechNextChunkTimerRef.current !== undefined) {
+      window.clearTimeout(speechNextChunkTimerRef.current);
+      speechNextChunkTimerRef.current = undefined;
+    }
+    if (speechWatchdogTimerRef.current !== undefined) {
+      window.clearTimeout(speechWatchdogTimerRef.current);
+      speechWatchdogTimerRef.current = undefined;
+    }
+    if (speechProgressTimerRef.current !== undefined) {
+      window.clearInterval(speechProgressTimerRef.current);
+      speechProgressTimerRef.current = undefined;
+    }
+  }, []);
+
+  const currentSpeechElapsedSeconds = useCallback(() => {
+    const activeElapsed = speechStartedAtRef.current
+      ? Math.max(0, Date.now() - speechStartedAtRef.current)
+      : 0;
+    return Math.floor((speechElapsedBeforePlayRef.current + activeElapsed) / 1000);
+  }, []);
+
+  const updateSpeechProgress = useCallback(() => {
+    const elapsedSeconds = currentSpeechElapsedSeconds();
+    const totalSeconds = Math.max(speechEstimatedTotalRef.current, elapsedSeconds + 1);
+    setSpeechProgress({ elapsedSeconds, totalSeconds });
+  }, [currentSpeechElapsedSeconds]);
+
+  const stopCodexSpeech = useCallback(
+    (announce = true) => {
+      const wasActive = Boolean(speechMessageIdRef.current);
+      speechRunRef.current += 1;
+      clearSpeechTimers();
+      clearCloudSpeech();
+      stopVoicePreview();
+      speechUtteranceRef.current = undefined;
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+      speechChunksRef.current = [];
+      speechChunkIndexRef.current = 0;
+      speechMessageIdRef.current = '';
+      speechElapsedBeforePlayRef.current = 0;
+      speechStartedAtRef.current = 0;
+      speechEstimatedTotalRef.current = 0;
+      speechSourceRef.current = 'device';
+      setSpeechMessageId('');
+      setSpeechPlaybackState('idle');
+      setSpeechProgress(undefined);
+      if (announce && wasActive) setSpeechStatus('Reading stopped.');
+    },
+    [clearCloudSpeech, clearSpeechTimers, stopVoicePreview],
+  );
+
+  const playStoredCodexSpeech = useCallback(
+    (messageId: string) => {
+      if (
+        typeof window === 'undefined' ||
+        !('speechSynthesis' in window) ||
+        !('SpeechSynthesisUtterance' in window)
+      )
+        return;
+      const synthesis = window.speechSynthesis;
+      const runId = speechRunRef.current + 1;
+      speechRunRef.current = runId;
+      speechMessageIdRef.current = messageId;
+      setSpeechMessageId(messageId);
+      setSpeechPlaybackState('playing');
+      setSpeechStatus('Reading Codex reply in English using your device voice.');
+      speechStartedAtRef.current = Date.now();
+      if (speechProgressTimerRef.current !== undefined) {
+        window.clearInterval(speechProgressTimerRef.current);
+      }
+      updateSpeechProgress();
+      speechProgressTimerRef.current = window.setInterval(updateSpeechProgress, 500);
+
+      const finishReading = () => {
+        if (speechRunRef.current !== runId) return;
+        clearSpeechTimers();
+        speechUtteranceRef.current = undefined;
+        speechMessageIdRef.current = '';
+        speechElapsedBeforePlayRef.current = 0;
+        speechStartedAtRef.current = 0;
+        speechEstimatedTotalRef.current = 0;
+        setSpeechMessageId('');
+        setSpeechPlaybackState('idle');
+        setSpeechProgress(undefined);
+        setSpeechStatus('Finished reading Codex reply.');
+      };
+
+      const failReading = () => {
+        if (speechRunRef.current !== runId) return;
+        clearSpeechTimers();
+        speechUtteranceRef.current = undefined;
+        speechMessageIdRef.current = '';
+        speechElapsedBeforePlayRef.current = 0;
+        speechStartedAtRef.current = 0;
+        speechEstimatedTotalRef.current = 0;
+        setSpeechMessageId('');
+        setSpeechPlaybackState('idle');
+        setSpeechProgress(undefined);
+        setSpeechStatus('Your device voice could not read this reply. Try Read again.');
+      };
+
+      const speakNextChunk = () => {
+        if (speechRunRef.current !== runId || speechMessageIdRef.current !== messageId) return;
+        const chunkIndex = speechChunkIndexRef.current;
+        const chunk = speechChunksRef.current[chunkIndex];
+        if (!chunk) {
+          finishReading();
+          return;
+        }
+
+        const utterance = new window.SpeechSynthesisUtterance(chunk);
+        const voice = preferredEnglishSpeechVoice(synthesis.getVoices());
+        utterance.lang = voice?.lang || codexSpeechLanguage;
+        if (voice) utterance.voice = voice;
+        utterance.rate = 1;
+        speechUtteranceRef.current = utterance;
+        let settled = false;
+        let started = false;
+        const queuedAt = Date.now();
+
+        const advance = () => {
+          if (
+            settled ||
+            speechRunRef.current !== runId ||
+            speechMessageIdRef.current !== messageId ||
+            speechChunkIndexRef.current !== chunkIndex ||
+            speechUtteranceRef.current !== utterance
+          )
+            return;
+          settled = true;
+          if (speechWatchdogTimerRef.current !== undefined) {
+            window.clearTimeout(speechWatchdogTimerRef.current);
+            speechWatchdogTimerRef.current = undefined;
+          }
+          speechUtteranceRef.current = undefined;
+          speechChunkIndexRef.current += 1;
+          speechNextChunkTimerRef.current = window.setTimeout(() => {
+            speechNextChunkTimerRef.current = undefined;
+            speakNextChunk();
+          }, 40);
+        };
+
+        const watchForSilentCompletion = () => {
+          if (settled || speechRunRef.current !== runId || speechUtteranceRef.current !== utterance)
+            return;
+          const waitedForStart = Date.now() - queuedAt >= 5000;
+          if (!synthesis.speaking && !synthesis.pending && (started || waitedForStart)) {
+            advance();
+            return;
+          }
+          speechWatchdogTimerRef.current = window.setTimeout(watchForSilentCompletion, 750);
+        };
+
+        utterance.onstart = () => {
+          started = true;
+        };
+        utterance.onend = advance;
+        utterance.onerror = (event) => {
+          if (
+            speechRunRef.current !== runId ||
+            event.error === 'canceled' ||
+            event.error === 'interrupted'
+          )
+            return;
+          failReading();
+        };
+        synthesis.speak(utterance);
+        speechWatchdogTimerRef.current = window.setTimeout(watchForSilentCompletion, 1500);
+      };
+
+      speakNextChunk();
+    },
+    [clearSpeechTimers, updateSpeechProgress],
+  );
+
+  const readDeviceCodexReply = useCallback(
+    (messageId: string, markdown: string) => {
+      stopCodexSpeech(false);
+      const chunks = codexSpeechChunks(markdown, 140);
+      if (!chunks.length) {
+        setSpeechStatus('This Codex reply has no readable text.');
+        return;
+      }
+      speechChunksRef.current = chunks;
+      speechChunkIndexRef.current = 0;
+      speechElapsedBeforePlayRef.current = 0;
+      speechStartedAtRef.current = 0;
+      speechEstimatedTotalRef.current = estimatedCodexSpeechSeconds(chunks);
+      setSpeechProgress({
+        elapsedSeconds: 0,
+        totalSeconds: speechEstimatedTotalRef.current,
+      });
+      playStoredCodexSpeech(messageId);
+    },
+    [playStoredCodexSpeech, stopCodexSpeech],
+  );
+
+  const playCloudSpeechSegments = useCallback(
+    (messageId: string, runId: number, shouldPlay = true) => {
+      const segments = cloudSpeechSegmentsRef.current;
+      if (!segments.length || speechRunRef.current !== runId) return;
+      speechSourceRef.current = 'google';
+      speechMessageIdRef.current = messageId;
+      setSpeechMessageId(messageId);
+      setSpeechPlaybackState(shouldPlay ? 'playing' : 'paused');
+      setSpeechStatus(
+        shouldPlay ? `Reading Codex reply with Google ${selectedSpeechVoice}.` : 'Reading paused.',
+      );
+
+      const totalSeconds = segments.reduce((total, segment) => total + segment.duration, 0);
+      const playSegment = (index: number, autoplay = true) => {
+        if (speechRunRef.current !== runId || speechMessageIdRef.current !== messageId) return;
+        const segment = segments[index];
+        if (!segment) {
+          stopCodexSpeech(false);
+          setSpeechStatus('Finished reading Codex reply.');
+          return;
+        }
+        cloudSpeechSegmentIndexRef.current = index;
+        const elapsedBefore = segments
+          .slice(0, index)
+          .reduce((total, previous) => total + previous.duration, 0);
+        const updateProgress = () => {
+          if (speechRunRef.current !== runId) return;
+          setSpeechProgress({
+            elapsedSeconds: Math.floor(elapsedBefore + segment.audio.currentTime),
+            totalSeconds: Math.ceil(totalSeconds),
+          });
+        };
+        segment.audio.ontimeupdate = updateProgress;
+        segment.audio.onended = () => playSegment(index + 1);
+        segment.audio.onerror = () => {
+          stopCodexSpeech(false);
+          setSpeechStatus('Google speech stopped unexpectedly. Try Read again.');
+        };
+        updateProgress();
+        if (!autoplay) return;
+        void segment.audio.play().catch(() => {
+          if (speechRunRef.current !== runId) return;
+          setSpeechPlaybackState('paused');
+          setSpeechStatus('Google speech is ready. Press Resume to start playback.');
+        });
+      };
+
+      playSegment(cloudSpeechSegmentIndexRef.current, shouldPlay);
+    },
+    [selectedSpeechVoice, stopCodexSpeech],
+  );
+
+  const readCloudCodexReply = useCallback(
+    async (messageId: string, markdown: string) => {
+      stopCodexSpeech(false);
+      const chunks = codexCloudSpeechChunks(markdown);
+      if (!chunks.length) {
+        setSpeechStatus('This Codex reply has no readable text.');
+        return;
+      }
+      const runId = speechRunRef.current + 1;
+      speechRunRef.current = runId;
+      speechSourceRef.current = 'google';
+      speechMessageIdRef.current = messageId;
+      setSpeechMessageId(messageId);
+      setSpeechPlaybackState('loading');
+      setSpeechStatus(`Preparing Google ${selectedSpeechVoice}…`);
+      setSpeechProgress({ elapsedSeconds: 0, totalSeconds: estimatedCodexSpeechSeconds(chunks) });
+      const controller = new AbortController();
+      cloudSpeechAbortRef.current = controller;
+      const loadedSegments: CloudSpeechSegment[] = [];
+      try {
+        for (const text of chunks) {
+          const response = await studioRuntimeFetch(codexSpeechEndpoint, {
+            body: JSON.stringify({ text, voice: selectedSpeechVoice }),
+            headers: { Accept: 'audio/mpeg', 'Content-Type': 'application/json' },
+            method: 'POST',
+            signal: controller.signal,
+          });
+          if (!response.ok) throw new Error('Google speech is unavailable.');
+          loadedSegments.push(
+            await loadCloudSpeechSegment(await response.blob(), controller.signal),
+          );
+        }
+        if (speechRunRef.current !== runId || controller.signal.aborted) {
+          for (const segment of loadedSegments) URL.revokeObjectURL(segment.url);
+          return;
+        }
+        cloudSpeechAbortRef.current = undefined;
+        cloudSpeechSegmentsRef.current = loadedSegments;
+        cloudSpeechSegmentIndexRef.current = 0;
+        const totalSeconds = Math.ceil(
+          loadedSegments.reduce((total, segment) => total + segment.duration, 0),
+        );
+        setSpeechProgress({ elapsedSeconds: 0, totalSeconds });
+        playCloudSpeechSegments(messageId, runId);
+      } catch (error) {
+        for (const segment of loadedSegments) {
+          segment.audio.pause();
+          URL.revokeObjectURL(segment.url);
+        }
+        if (controller.signal.aborted || speechRunRef.current !== runId) return;
+        if (deviceSpeechSupported) {
+          readDeviceCodexReply(messageId, markdown);
+          setSpeechStatus(
+            'Google speech is unavailable. Reading in English with your device voice.',
+          );
+          return;
+        }
+        stopCodexSpeech(false);
+        setSpeechStatus(
+          error instanceof Error
+            ? `${error.message} Try Read again.`
+            : 'Speech is unavailable. Try Read again.',
+        );
+      }
+    },
+    [
+      deviceSpeechSupported,
+      playCloudSpeechSegments,
+      readDeviceCodexReply,
+      selectedSpeechVoice,
+      stopCodexSpeech,
+    ],
+  );
+
+  const readCodexReply = useCallback(
+    (messageId: string, markdown: string) => {
+      if (cloudSpeechConfiguration?.available) {
+        void readCloudCodexReply(messageId, markdown);
+      } else {
+        readDeviceCodexReply(messageId, markdown);
+      }
+    },
+    [cloudSpeechConfiguration?.available, readCloudCodexReply, readDeviceCodexReply],
+  );
+
+  const pauseCodexSpeech = useCallback(() => {
+    if (!speechMessageIdRef.current) return;
+    if (speechSourceRef.current === 'google') {
+      const segment = cloudSpeechSegmentsRef.current[cloudSpeechSegmentIndexRef.current];
+      segment?.audio.pause();
+      setSpeechPlaybackState('paused');
+      setSpeechStatus('Reading paused.');
+      return;
+    }
+    if (speechStartedAtRef.current) {
+      speechElapsedBeforePlayRef.current += Math.max(0, Date.now() - speechStartedAtRef.current);
+      speechStartedAtRef.current = 0;
+    }
+    speechRunRef.current += 1;
+    clearSpeechTimers();
+    speechUtteranceRef.current = undefined;
+    window.speechSynthesis.cancel();
+    updateSpeechProgress();
+    setSpeechPlaybackState('paused');
+    setSpeechStatus('Reading paused. Resume restarts the current sentence.');
+  }, [clearSpeechTimers, updateSpeechProgress]);
+
+  const resumeCodexSpeech = useCallback(() => {
+    const messageId = speechMessageIdRef.current;
+    if (!messageId) return;
+    if (speechSourceRef.current === 'google') {
+      const segment = cloudSpeechSegmentsRef.current[cloudSpeechSegmentIndexRef.current];
+      if (!segment) return;
+      setSpeechPlaybackState('playing');
+      setSpeechStatus(`Reading Codex reply with Google ${selectedSpeechVoice}.`);
+      void segment.audio.play().catch(() => {
+        setSpeechPlaybackState('paused');
+        setSpeechStatus('Playback is blocked. Press Resume to try again.');
+      });
+      return;
+    }
+    if (!speechChunksRef.current.length) return;
+    playStoredCodexSpeech(messageId);
+  }, [playStoredCodexSpeech, selectedSpeechVoice]);
+
+  const seekCodexSpeech = useCallback(
+    (requestedSeconds: number) => {
+      if (speechSourceRef.current !== 'google' || !speechMessageIdRef.current) return;
+      const segments = cloudSpeechSegmentsRef.current;
+      const total = segments.reduce((sum, segment) => sum + segment.duration, 0);
+      const seconds = Math.max(0, Math.min(requestedSeconds, total));
+      let elapsed = 0;
+      let targetIndex = Math.max(0, segments.length - 1);
+      for (let index = 0; index < segments.length; index += 1) {
+        if (seconds <= elapsed + segments[index].duration) {
+          targetIndex = index;
+          break;
+        }
+        elapsed += segments[index].duration;
+      }
+      const wasPlaying = speechPlaybackState === 'playing';
+      segments[cloudSpeechSegmentIndexRef.current]?.audio.pause();
+      cloudSpeechSegmentIndexRef.current = targetIndex;
+      segments[targetIndex].audio.currentTime = Math.max(
+        0,
+        Math.min(seconds - elapsed, segments[targetIndex].duration),
+      );
+      setSpeechProgress({ elapsedSeconds: Math.floor(seconds), totalSeconds: Math.ceil(total) });
+      playCloudSpeechSegments(speechMessageIdRef.current, speechRunRef.current, wasPlaying);
+    },
+    [playCloudSpeechSegments, speechPlaybackState],
+  );
+
+  const previewSpeechVoice = useCallback(async () => {
+    if (!cloudSpeechConfiguration?.available) return;
+    stopCodexSpeech(false);
+    const controller = new AbortController();
+    voicePreviewAbortRef.current = controller;
+    setVoicePreviewState('loading');
+    setSpeechStatus(`Preparing a preview of Google ${selectedSpeechVoice}…`);
+    try {
+      const response = await studioRuntimeFetch(codexSpeechEndpoint, {
+        body: JSON.stringify({
+          text: 'Hi, this is your Studio Codex Chat voice. I can read complete replies aloud.',
+          voice: selectedSpeechVoice,
+        }),
+        headers: { Accept: 'audio/mpeg', 'Content-Type': 'application/json' },
+        method: 'POST',
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error('This voice preview is unavailable.');
+      const segment = await loadCloudSpeechSegment(await response.blob(), controller.signal);
+      if (controller.signal.aborted) {
+        URL.revokeObjectURL(segment.url);
+        return;
+      }
+      voicePreviewAbortRef.current = undefined;
+      voicePreviewAudioRef.current = segment.audio;
+      voicePreviewUrlRef.current = segment.url;
+      segment.audio.onended = () => {
+        stopVoicePreview();
+        setSpeechStatus(`Finished previewing Google ${selectedSpeechVoice}.`);
+      };
+      segment.audio.onerror = () => {
+        stopVoicePreview();
+        setSpeechStatus('This voice preview could not be played. Try again.');
+      };
+      setVoicePreviewState('playing');
+      setSpeechStatus(`Previewing Google ${selectedSpeechVoice}.`);
+      await segment.audio.play();
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      stopVoicePreview();
+      setSpeechStatus(
+        error instanceof Error ? error.message : 'This voice preview could not be played.',
+      );
+    }
+  }, [cloudSpeechConfiguration?.available, selectedSpeechVoice, stopCodexSpeech, stopVoicePreview]);
 
   const updateChatFollowingLatest = useCallback((following: boolean) => {
     chatFollowingLatestRef.current = following;
     setIsChatFollowingLatest(following);
   }, []);
 
+  const mountChatLog = useCallback((log: HTMLDivElement | null) => {
+    setMountedChatLog(log);
+  }, []);
+
+  const updateChatSession = useCallback((update: Partial<CodexChatSession>) => {
+    const nextSession = { ...chatSessionRef.current, ...update };
+    chatSessionRef.current = nextSession;
+    writeCodexChatSession(nextSession);
+  }, []);
+
+  const saveChatPosition = useCallback(
+    (threadIdOverride?: string) => {
+      const log = mountedChatLog;
+      const threadId = threadIdOverride ?? selectedThreadIdRef.current;
+      if (!log || !threadId) return;
+      if (restoredChatThreadRef.current !== threadId) return;
+      const logTop = log.getBoundingClientRect().top;
+      const anchor = [
+        ...log.querySelectorAll<HTMLElement>('[data-message-id], [data-activity-id]'),
+      ].find((element) => element.getBoundingClientRect().bottom > logTop);
+      const anchorId = anchor?.dataset.messageId ?? anchor?.dataset.activityId;
+      const anchorKind = anchor?.dataset.messageId ? 'message' : anchor ? 'activity' : undefined;
+      const positions = {
+        ...chatSessionRef.current.positions,
+        [threadId]: {
+          anchorId,
+          anchorKind,
+          anchorOffset: anchor ? anchor.getBoundingClientRect().top - logTop : undefined,
+          followingLatest: chatFollowingLatestRef.current,
+          scrollTop: log.scrollTop,
+          updatedAt: Date.now(),
+        } satisfies CodexTranscriptPosition,
+      };
+      const boundedPositions = Object.fromEntries(
+        Object.entries(positions)
+          .sort(([, first], [, second]) => second.updatedAt - first.updatedAt)
+          .slice(0, 25),
+      );
+      updateChatSession({ positions: boundedPositions });
+    },
+    [mountedChatLog, updateChatSession],
+  );
+
   const scrollChatToLatest = useCallback(() => {
-    const log = chatLogRef.current;
+    const log = mountedChatLog;
     if (!log) return;
     updateChatFollowingLatest(true);
     log.scrollTo({ top: log.scrollHeight, behavior: 'auto' });
-  }, [updateChatFollowingLatest]);
+  }, [mountedChatLog, updateChatFollowingLatest]);
 
   const handleChatLogScroll = useCallback(() => {
-    const log = chatLogRef.current;
+    const log = mountedChatLog;
     if (!log) return;
     const distanceFromLatest = log.scrollHeight - log.clientHeight - log.scrollTop;
     const followingLatest = distanceFromLatest <= 12;
@@ -703,18 +1621,22 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
       setIsComposerExpanded(false);
       composerTextareaRef.current?.blur();
     }
-  }, [updateChatFollowingLatest]);
+    saveChatPosition();
+  }, [mountedChatLog, saveChatPosition, updateChatFollowingLatest]);
 
   const selectConversation = useCallback(
     (threadId: string) => {
+      saveChatPosition();
+      stopCodexSpeech(false);
       selectedThreadIdRef.current = threadId;
       setSelectedThreadId(threadId);
+      restoredChatThreadRef.current = '';
+      updateChatSession({ selectedThreadId: threadId });
       setConversationPickerOpen(false);
       setExpandedAgentId('');
       setTeamResumeState(undefined);
-      updateChatFollowingLatest(true);
     },
-    [updateChatFollowingLatest],
+    [saveChatPosition, stopCodexSpeech, updateChatSession],
   );
 
   const refreshStatus = useCallback(
@@ -730,12 +1652,12 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
           !response.headers.get('content-type')?.includes('application/json')
         ) {
           setIsSupported(false);
-          return;
+          return false;
         }
-        if (!response.ok) return;
+        if (!response.ok) return false;
         const nextStatus = (await response.json()) as CodexStatus;
         setIsSupported(true);
-        if (requestedThreadId !== selectedThreadIdRef.current) return;
+        if (requestedThreadId !== selectedThreadIdRef.current) return false;
         setStatus(nextStatus);
         if (
           nextStatus.thread &&
@@ -757,8 +1679,10 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
             setEffortPreferences((current) => ({ ...current, [nextModel.id]: nextEffort }));
           }
         }
+        return true;
       } catch {
         setIsSupported((current) => (current === undefined ? false : current));
+        return false;
       }
     },
     [effortPreferences, selectConversation, selectedEffort, selectedModelId],
@@ -806,51 +1730,126 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   }, [embedded]);
 
   useEffect(() => {
-    const log = chatLogRef.current;
+    const log = mountedChatLog;
     if (!log || !chatFollowingLatestRef.current) return;
     const frame = window.requestAnimationFrame(() => {
       if (chatFollowingLatestRef.current) log.scrollTop = log.scrollHeight;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [pendingChatMessage, pendingVisualMessage, status?.messages, status?.queuedMessages]);
+  }, [
+    pendingChatMessage,
+    pendingVisualMessage,
+    mountedChatLog,
+    status?.activities,
+    status?.messages,
+    status?.queuedMessages,
+  ]);
 
   useEffect(() => {
     const threadId = status?.thread?.id ?? '';
     if (!threadId) return;
-    const currentIds = new Set(status?.messages.map((message) => message.id) ?? []);
-    if (knownMessageThreadRef.current !== threadId || !knownMessageIdsRef.current.size) {
-      knownMessageThreadRef.current = threadId;
-      knownMessageIdsRef.current = currentIds;
-      setEnteringMessageIds(new Set());
+    const currentIds = new Set([
+      ...(status?.messages.map((message) => `message:${message.id}`) ?? []),
+      ...(status?.activities?.map((activity) => `activity:${activity.id}`) ?? []),
+    ]);
+    if (knownTimelineThreadRef.current !== threadId || !knownTimelineIdsRef.current.size) {
+      knownTimelineThreadRef.current = threadId;
+      knownTimelineIdsRef.current = currentIds;
+      setEnteringTimelineIds(new Set());
       return;
     }
-    const incomingIds = [...currentIds].filter((id) => !knownMessageIdsRef.current.has(id));
-    knownMessageIdsRef.current = currentIds;
+    const incomingIds = [...currentIds].filter((id) => !knownTimelineIdsRef.current.has(id));
+    knownTimelineIdsRef.current = currentIds;
     if (!incomingIds.length) return;
-    setEnteringMessageIds(new Set(incomingIds));
-    window.clearTimeout(messageAnimationTimerRef.current);
-    messageAnimationTimerRef.current = window.setTimeout(
-      () => setEnteringMessageIds(new Set()),
+    setEnteringTimelineIds(new Set(incomingIds));
+    window.clearTimeout(timelineAnimationTimerRef.current);
+    timelineAnimationTimerRef.current = window.setTimeout(
+      () => setEnteringTimelineIds(new Set()),
       600,
     );
-  }, [status?.messages, status?.thread?.id]);
+  }, [status?.activities, status?.messages, status?.thread?.id]);
 
-  useEffect(() => () => window.clearTimeout(messageAnimationTimerRef.current), []);
+  useEffect(() => () => window.clearTimeout(timelineAnimationTimerRef.current), []);
 
   useEffect(() => {
-    if (phase !== 'compose') return;
-    updateChatFollowingLatest(true);
-    const frame = window.requestAnimationFrame(scrollChatToLatest);
-    return () => window.cancelAnimationFrame(frame);
-  }, [phase, scrollChatToLatest, selectedThreadId, updateChatFollowingLatest]);
+    const stopForNavigation = () => stopCodexSpeech(false);
+    window.addEventListener('hashchange', stopForNavigation);
+    window.addEventListener('pagehide', stopForNavigation);
+    return () => {
+      window.removeEventListener('hashchange', stopForNavigation);
+      window.removeEventListener('pagehide', stopForNavigation);
+      stopCodexSpeech(false);
+    };
+  }, [stopCodexSpeech]);
+
+  useLayoutEffect(() => {
+    if (phase !== 'compose' && phase !== 'sending-chat') return;
+    const threadId = selectedThreadId || status?.thread?.id || '';
+    const log = mountedChatLog;
+    if (!threadId || status?.thread?.id !== threadId || !log || conversationTransition) return;
+    if (restoredChatThreadRef.current === threadId) return;
+    const savedPosition = chatSessionRef.current.positions[threadId];
+    restoredChatThreadRef.current = threadId;
+    if (!savedPosition) {
+      updateChatFollowingLatest(true);
+      log.scrollTop = log.scrollHeight;
+      previousChatScrollTopRef.current = log.scrollTop;
+      return;
+    }
+    updateChatFollowingLatest(savedPosition.followingLatest);
+    if (savedPosition.followingLatest) {
+      log.scrollTop = log.scrollHeight;
+    } else {
+      const restoreSavedPosition = () => {
+        log.scrollTop = savedPosition.scrollTop;
+        const anchor = [
+          ...log.querySelectorAll<HTMLElement>('[data-message-id], [data-activity-id]'),
+        ].find((element) =>
+          savedPosition.anchorKind === 'message'
+            ? element.dataset.messageId === savedPosition.anchorId
+            : element.dataset.activityId === savedPosition.anchorId,
+        );
+        if (anchor && savedPosition.anchorOffset !== undefined) {
+          log.scrollTop +=
+            anchor.getBoundingClientRect().top -
+            log.getBoundingClientRect().top -
+            savedPosition.anchorOffset;
+        }
+        previousChatScrollTopRef.current = log.scrollTop;
+      };
+      restoreSavedPosition();
+      let settledFrame = 0;
+      const layoutFrame = window.requestAnimationFrame(() => {
+        restoreSavedPosition();
+        settledFrame = window.requestAnimationFrame(restoreSavedPosition);
+      });
+      return () => {
+        window.cancelAnimationFrame(layoutFrame);
+        window.cancelAnimationFrame(settledFrame);
+      };
+    }
+    previousChatScrollTopRef.current = log.scrollTop;
+  }, [
+    conversationTransition,
+    mountedChatLog,
+    phase,
+    selectedThreadId,
+    status?.activities,
+    status?.messages,
+    status?.queuedMessages,
+    status?.thread?.id,
+    updateChatFollowingLatest,
+  ]);
 
   useEffect(() => {
     if (prompt) window.localStorage.setItem(codexDraftKey, prompt);
     else window.localStorage.removeItem(codexDraftKey);
   }, [prompt]);
 
+  const displayedThreadId = selectedThreadId || status?.thread?.id || '';
   const pendingChatAccepted = Boolean(
     pendingChatMessage &&
+    status?.thread?.id === pendingChatMessage.threadId &&
     (status?.messages.some(
       (message) =>
         message.feedbackId === pendingChatMessage.id ||
@@ -860,6 +1859,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   );
   const pendingVisualAccepted = Boolean(
     pendingVisualMessage &&
+    status?.thread?.id === pendingVisualMessage.threadId &&
     (status?.messages.some(
       (message) =>
         message.feedbackId === pendingVisualMessage.id ||
@@ -876,7 +1876,72 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
     if (pendingVisualAccepted) setPendingVisualMessage(undefined);
   }, [pendingVisualAccepted]);
 
+  const showPendingChatMessage =
+    pendingChatMessage?.threadId === displayedThreadId && !pendingChatAccepted;
+  const showPendingVisualMessage =
+    pendingVisualMessage?.threadId === displayedThreadId && !pendingVisualAccepted;
+
   const activeAgents = status?.agents?.filter((agent) => agent.working) ?? [];
+  const transcriptEntries = useMemo(() => {
+    const messages = (status?.messages ?? []).map((message, index) => ({
+      kind: 'message' as const,
+      id: message.id,
+      position: message.position,
+      fallbackPosition: index,
+      message,
+    }));
+    const activities = (status?.activities ?? []).map((activity, index) => ({
+      kind: 'activity' as const,
+      id: activity.id,
+      position: activity.position,
+      fallbackPosition: messages.length + index,
+      activity,
+    }));
+    const entries = [...messages, ...activities];
+    const hasCanonicalOrder = entries.every((entry) => typeof entry.position === 'number');
+    return entries.sort((first, second) => {
+      const firstPosition = hasCanonicalOrder ? first.position! : first.fallbackPosition;
+      const secondPosition = hasCanonicalOrder ? second.position! : second.fallbackPosition;
+      if (firstPosition !== secondPosition) return firstPosition - secondPosition;
+      if (first.kind !== second.kind) return first.kind === 'message' ? -1 : 1;
+      return first.id.localeCompare(second.id);
+    });
+  }, [status?.activities, status?.messages]);
+  const firstTranscriptActivityId = transcriptEntries.find(
+    (entry) => entry.kind === 'activity',
+  )?.id;
+  const activityContextByMessageId = useMemo(() => {
+    const contexts = new Map<string, { count: number; activityIds: string[] }>();
+    let pendingActivityIds: string[] = [];
+    let pendingTurnId = '';
+    for (const entry of transcriptEntries) {
+      if (entry.kind === 'activity') {
+        const activityTurnId = entry.activity.turnId || '';
+        if (pendingActivityIds.length && activityTurnId !== pendingTurnId) {
+          pendingActivityIds = [];
+        }
+        pendingTurnId = activityTurnId;
+        pendingActivityIds.push(entry.id);
+        continue;
+      }
+      const message = entry.message;
+      if (message.role === 'user') {
+        pendingActivityIds = [];
+        pendingTurnId = message.turnId || '';
+        continue;
+      }
+      const sameTurn = !pendingTurnId || !message.turnId || pendingTurnId === message.turnId;
+      if (pendingActivityIds.length && sameTurn) {
+        contexts.set(message.id, {
+          count: pendingActivityIds.length,
+          activityIds: pendingActivityIds,
+        });
+      }
+      pendingActivityIds = [];
+      pendingTurnId = message.turnId || '';
+    }
+    return contexts;
+  }, [transcriptEntries]);
   const interruptedAgents = status?.agents?.filter((agent) => agent.status === 'interrupted') ?? [];
   const selectedTeamResumeState =
     teamResumeState?.threadId === (selectedThreadId || status?.thread?.id)
@@ -1057,9 +2122,32 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
         effortByModel: { ...effortPreferences, [selectedModelId]: selectedEffort },
         workMode,
         fastMode,
+        speechVoice: selectedSpeechVoice,
       } satisfies CodexPreferences),
     );
-  }, [effortPreferences, fastMode, selectedEffort, selectedModelId, workMode]);
+  }, [effortPreferences, fastMode, selectedEffort, selectedModelId, selectedSpeechVoice, workMode]);
+
+  useEffect(() => {
+    if (phase === 'closed' || cloudSpeechConfiguration) return;
+    const controller = new AbortController();
+    void studioRuntimeFetch(codexSpeechEndpoint, {
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Speech configuration is unavailable.');
+        return (await response.json()) as CloudSpeechConfiguration;
+      })
+      .then((configuration) => {
+        if (!Array.isArray(configuration.voices) || !configuration.voices.length) return;
+        setCloudSpeechConfiguration(configuration);
+        if (!configuration.voices.some(({ id }) => id === selectedSpeechVoice)) {
+          setSelectedSpeechVoice(configuration.defaultVoice);
+        }
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [cloudSpeechConfiguration, phase, selectedSpeechVoice]);
 
   const discardEmptyConversation = async (threadId: string) => {
     const candidate = status?.threads.find((thread) => thread.id === threadId);
@@ -1087,7 +2175,10 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   };
 
   const createConversation = async () => {
-    if (!selectedModel || !selectedEffort || isCreatingThread) return;
+    if (!selectedModel || !selectedEffort || isCreatingThread || conversationTransition) return;
+    const transitionId = conversationTransitionIdRef.current + 1;
+    conversationTransitionIdRef.current = transitionId;
+    setConversationTransition({ id: transitionId, kind: 'create', label: 'New chat' });
     setIsCreatingThread(true);
     setError(undefined);
     try {
@@ -1135,7 +2226,33 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
       );
     } finally {
       setIsCreatingThread(false);
+      setConversationTransition((current) => (current?.id === transitionId ? undefined : current));
     }
+  };
+
+  const switchConversation = async (thread: CodexThread) => {
+    if (
+      conversationTransition ||
+      thread.id === (selectedThreadId || status?.thread?.id) ||
+      !thread.id
+    )
+      return;
+    const previousThreadId = selectedThreadId || status?.thread?.id || '';
+    const transitionId = conversationTransitionIdRef.current + 1;
+    conversationTransitionIdRef.current = transitionId;
+    setConversationTransition({
+      id: transitionId,
+      kind: 'switch',
+      label: threadTitle(thread),
+    });
+    setError(undefined);
+    selectConversation(thread.id);
+    const loaded = await refreshStatus(thread.id);
+    if (!loaded && selectedThreadIdRef.current === thread.id) {
+      selectConversation(previousThreadId);
+      setError('That conversation could not be loaded. Your previous chat is still available.');
+    }
+    setConversationTransition((current) => (current?.id === transitionId ? undefined : current));
   };
 
   const continueInterruptedConversation = async () => {
@@ -1475,7 +2592,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   };
 
   const runQueueAction = async (
-    action: 'update-queued' | 'interrupt-queued',
+    action: 'update-queued' | 'interrupt-queued' | 'delete-queued',
     id: string,
     queuedPrompt?: string,
   ) => {
@@ -1491,6 +2608,15 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
       if (!response.ok)
         throw new Error(result.detail || 'The queued message could not be changed.');
       if (action === 'update-queued') setExpandedQueueId('');
+      if (action === 'delete-queued') {
+        setDeleteQueueId('');
+        if (expandedQueueId === id) setExpandedQueueId('');
+        setQueuedEdits((current) => {
+          const next = { ...current };
+          delete next[id];
+          return next;
+        });
+      }
       await refreshStatus();
     } catch (cause) {
       setExpandedQueueId(id);
@@ -1511,8 +2637,8 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   };
 
   const sendFeedback = async () => {
-    if (!prompt.trim()) {
-      setError('Describe what Codex should change or investigate.');
+    if (!prompt.trim() && draftAttachments.length === 0) {
+      setError('Describe what Codex should change or investigate, or attach an image.');
       return;
     }
     if (!selectedModel || !selectedEffort) {
@@ -1521,17 +2647,20 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
     }
     const submittedPrompt = prompt.trim();
     const submittedAttachments = [...draftAttachments];
+    const submittedThreadId = selectedThreadId || status?.thread?.id || '';
     const optimisticMessageId = crypto.randomUUID();
     if (!submittedAttachments.length) {
       setPendingChatMessage({
         id: optimisticMessageId,
         text: submittedPrompt,
+        threadId: submittedThreadId,
       });
     } else {
       setPendingVisualMessage({
         id: optimisticMessageId,
         text: submittedPrompt,
         images: submittedAttachments.map((attachment) => attachment.source),
+        threadId: submittedThreadId,
       });
     }
     setPrompt('');
@@ -1552,7 +2681,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
           serviceTier: selectedServiceTier,
           workMode,
           context: `${document.title} · ${window.location.href}`,
-          threadId: selectedThreadId || status?.thread?.id,
+          threadId: submittedThreadId,
         }),
       });
       const result = (await response.json()) as { id?: string; detail?: string };
@@ -1582,6 +2711,10 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   };
 
   const closePanel = () => {
+    saveChatPosition();
+    updateChatSession({ isOpen: false });
+    restoredChatThreadRef.current = '';
+    stopCodexSpeech(false);
     void discardEmptyConversation(selectedThreadId || status?.thread?.id || '');
     setPhase('closed');
     setError(undefined);
@@ -1602,7 +2735,8 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
         }
         onClick={() => {
           setHasUnseenCompletion(false);
-          updateChatFollowingLatest(true);
+          restoredChatThreadRef.current = '';
+          updateChatSession({ isOpen: true });
           setPhase('compose');
           setError(undefined);
           void refreshStatus();
@@ -1641,6 +2775,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
               }
               if (composerSettingsOpen) {
                 event.preventDefault();
+                stopVoicePreview();
                 setComposerSettingsOpen(false);
               }
             }}
@@ -1691,6 +2826,9 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
               Chat with the subscription-only Codex Workspace Agent and optionally attach a photo or
               screenshot.
             </Dialog.Description>
+            <p aria-live="polite" className="sr-only" role="status">
+              {speechStatus}
+            </p>
 
             <div className="codex-thread-field">
               <div className="codex-thread-field__header">
@@ -1705,27 +2843,40 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                   aria-haspopup="menu"
                   aria-label="Conversation"
                   className="codex-conversation-picker__trigger"
-                  disabled={!status?.threads.length}
+                  disabled={!status?.threads.length || Boolean(conversationTransition)}
                   id="codex-conversation"
                   onClick={() => setConversationPickerOpen((open) => !open)}
                   ref={conversationTriggerRef}
                   variant="quiet"
                 >
                   <span className="codex-conversation-picker__summary">
-                    <strong>{threadTitle(selectedThread)}</strong>
+                    <strong>
+                      {conversationTransition?.kind === 'create'
+                        ? 'Starting a new chat'
+                        : threadTitle(selectedThread)}
+                    </strong>
                     <small>
-                      {selectedThread?.working
-                        ? 'Working'
-                        : selectedThread?.interrupted
-                          ? 'Interrupted'
-                          : 'Last used'}{' '}
-                      ·{' '}
-                      {selectedThread?.working
-                        ? elapsedTime(selectedThread.workingStartedAt, clock)
-                        : lastUsedTime(threadLastUsedAt(selectedThread), clock)}
+                      {conversationTransition
+                        ? conversationTransition.kind === 'create'
+                          ? 'Preparing conversation'
+                          : 'Loading conversation'
+                        : selectedThread?.working
+                          ? 'Working'
+                          : selectedThread?.interrupted
+                            ? 'Interrupted'
+                            : 'Last used'}
+                      {!conversationTransition ? (
+                        <>
+                          {' '}
+                          ·{' '}
+                          {selectedThread?.working
+                            ? elapsedTime(selectedThread.workingStartedAt, clock)
+                            : lastUsedTime(threadLastUsedAt(selectedThread), clock)}
+                        </>
+                      ) : null}
                     </small>
                   </span>
-                  {selectedThread?.working ? (
+                  {conversationTransition || selectedThread?.working ? (
                     <LoaderCircle aria-hidden="true" className="is-spinning" size={17} />
                   ) : (
                     <ChevronDown aria-hidden="true" size={17} />
@@ -1733,7 +2884,12 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                 </Button>
                 <IconButton
                   className="codex-conversation-picker__new"
-                  disabled={!status?.thread || !selectedModel || isCreatingThread}
+                  disabled={
+                    !status?.thread ||
+                    !selectedModel ||
+                    isCreatingThread ||
+                    Boolean(conversationTransition)
+                  }
                   label="New chat"
                   onClick={() => void createConversation()}
                   variant="quiet"
@@ -1759,14 +2915,13 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                         <Button
                           aria-checked={selected}
                           className="codex-conversation-picker__option"
+                          disabled={Boolean(conversationTransition)}
                           key={thread.id}
                           onClick={() => {
                             void discardEmptyConversation(
                               selectedThreadId || status?.thread?.id || '',
                             );
-                            selectConversation(thread.id);
-                            setConversationPickerOpen(false);
-                            void refreshStatus(thread.id);
+                            void switchConversation(thread);
                           }}
                           role="menuitemradio"
                           variant="quiet"
@@ -1808,288 +2963,526 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
 
             <div className="codex-chat-transcript">
               <div
+                aria-busy={Boolean(conversationTransition)}
                 aria-label="Codex chat log"
                 aria-live="polite"
                 className="codex-chat-log"
                 onScroll={handleChatLogScroll}
-                ref={chatLogRef}
+                ref={mountChatLog}
                 role="log"
                 tabIndex={0}
               >
-                {status?.messages.length
-                  ? status.messages.map((message) => (
-                      <Fragment key={message.id}>
-                        <article
-                          className={`codex-chat-message codex-chat-message--${message.role}${
-                            message.role === 'assistant' && message.phase === 'commentary'
-                              ? ' codex-chat-message--progress'
-                              : ''
-                          }${enteringMessageIds.has(message.id) ? ' codex-chat-message--entering' : ''}`}
-                          data-phase={message.phase}
-                        >
-                          <strong>
-                            {message.role === 'user' ? (
-                              'You'
-                            ) : message.phase === 'commentary' ? (
-                              <>
-                                <span aria-hidden="true" className="codex-chat-message__pulse" />
-                                Progress update
-                              </>
-                            ) : (
-                              'Codex'
-                            )}
-                          </strong>
-                          <MarkdownContent>{message.text}</MarkdownContent>
+                {conversationTransition ? (
+                  <CodexConversationLoading transition={conversationTransition} />
+                ) : (
+                  <>
+                    {transcriptEntries.length
+                      ? transcriptEntries.map((entry) => {
+                          if (entry.kind === 'activity') {
+                            return (
+                              <Fragment key={`activity:${entry.id}`}>
+                                {entry.id === firstTranscriptActivityId ? (
+                                  <div className="codex-chat-activity-boundary" role="note">
+                                    <Activity aria-hidden="true" size={15} />
+                                    <span>
+                                      <strong>Workspace activity timeline</strong>
+                                      <small>
+                                        Verified actions are logged in conversation order. Private
+                                        reasoning is not shown.
+                                      </small>
+                                    </span>
+                                  </div>
+                                ) : null}
+                                <CodexChatActivity
+                                  activity={entry.activity}
+                                  entering={enteringTimelineIds.has(`activity:${entry.id}`)}
+                                />
+                              </Fragment>
+                            );
+                          }
+                          const message = entry.message;
+                          const isCompletedCodexReply =
+                            message.role === 'assistant' &&
+                            message.phase !== 'commentary' &&
+                            !(
+                              status?.thread?.working &&
+                              message.turnId &&
+                              message.turnId === status.thread.activeTurnId
+                            );
+                          const isReadingThisReply = speechMessageId === message.id;
+                          const activityContext = activityContextByMessageId.get(message.id);
+                          const readingProgress = isReadingThisReply ? speechProgress : undefined;
+                          const hasExactSpeechProgress =
+                            isReadingThisReply &&
+                            speechSourceRef.current === 'google' &&
+                            cloudSpeechSegmentsRef.current.length > 0;
+                          const readingProgressPercent = readingProgress
+                            ? Math.min(
+                                100,
+                                (readingProgress.elapsedSeconds / readingProgress.totalSeconds) *
+                                  100,
+                              )
+                            : 0;
+                          return (
+                            <Fragment key={`message:${message.id}`}>
+                              <article
+                                className={`codex-chat-message codex-chat-message--${message.role}${
+                                  message.role === 'assistant' && message.phase === 'commentary'
+                                    ? ' codex-chat-message--progress'
+                                    : ''
+                                }${
+                                  activityContext ? ' codex-chat-message--activity-explanation' : ''
+                                }${enteringTimelineIds.has(`message:${message.id}`) ? ' codex-chat-message--entering' : ''}`}
+                                data-explains-activity-ids={activityContext?.activityIds.join(' ')}
+                                data-phase={message.phase}
+                                data-message-id={message.id}
+                              >
+                                <strong>
+                                  {message.role === 'user' ? (
+                                    'You'
+                                  ) : message.phase === 'commentary' ? (
+                                    <>
+                                      <span
+                                        aria-hidden="true"
+                                        className="codex-chat-message__pulse"
+                                      />
+                                      Progress update
+                                    </>
+                                  ) : (
+                                    'Codex'
+                                  )}
+                                </strong>
+                                {activityContext ? (
+                                  <span
+                                    className="codex-chat-message__activity-context"
+                                    data-explains-activity-count={activityContext.count}
+                                  >
+                                    <CornerDownRight aria-hidden="true" size={13} />
+                                    <span>
+                                      {message.phase === 'commentary'
+                                        ? 'Codex update'
+                                        : 'Codex conclusion'}{' '}
+                                      · after {activityContext.count} recorded{' '}
+                                      {activityContext.count === 1 ? 'action' : 'actions'}
+                                    </span>
+                                  </span>
+                                ) : null}
+                                <MarkdownContent>{message.text}</MarkdownContent>
+                                <RuntimeAttachmentGallery
+                                  attachmentIds={
+                                    message.attachmentIds ??
+                                    (message.attachmentId ? [message.attachmentId] : [])
+                                  }
+                                  altPrefix="Image attached to your message"
+                                />
+                                {speechSupported && isCompletedCodexReply ? (
+                                  <div
+                                    className="codex-chat-message__speech"
+                                    data-speech-state={
+                                      isReadingThisReply ? speechPlaybackState : 'idle'
+                                    }
+                                  >
+                                    <Button
+                                      aria-label={
+                                        isReadingThisReply && speechPlaybackState === 'loading'
+                                          ? 'Preparing reading'
+                                          : isReadingThisReply && speechPlaybackState === 'playing'
+                                            ? 'Pause reading'
+                                            : isReadingThisReply && speechPlaybackState === 'paused'
+                                              ? 'Resume reading'
+                                              : 'Read Codex reply'
+                                      }
+                                      onClick={() => {
+                                        if (
+                                          isReadingThisReply &&
+                                          speechPlaybackState === 'playing'
+                                        ) {
+                                          pauseCodexSpeech();
+                                        } else if (
+                                          isReadingThisReply &&
+                                          speechPlaybackState === 'paused'
+                                        ) {
+                                          resumeCodexSpeech();
+                                        } else {
+                                          readCodexReply(message.id, message.text);
+                                        }
+                                      }}
+                                      disabled={
+                                        isReadingThisReply && speechPlaybackState === 'loading'
+                                      }
+                                      size="small"
+                                      variant="quiet"
+                                    >
+                                      {isReadingThisReply && speechPlaybackState === 'loading' ? (
+                                        <LoaderCircle
+                                          aria-hidden="true"
+                                          className="is-spinning"
+                                          size={15}
+                                        />
+                                      ) : isReadingThisReply &&
+                                        speechPlaybackState === 'playing' ? (
+                                        <Pause aria-hidden="true" size={15} />
+                                      ) : isReadingThisReply && speechPlaybackState === 'paused' ? (
+                                        <Play aria-hidden="true" size={15} />
+                                      ) : (
+                                        <Volume2 aria-hidden="true" size={15} />
+                                      )}
+                                      {isReadingThisReply && speechPlaybackState === 'loading'
+                                        ? 'Preparing'
+                                        : isReadingThisReply && speechPlaybackState === 'playing'
+                                          ? 'Pause'
+                                          : isReadingThisReply && speechPlaybackState === 'paused'
+                                            ? 'Resume'
+                                            : 'Read'}
+                                    </Button>
+                                    {isReadingThisReply ? (
+                                      <IconButton
+                                        label="Stop reading"
+                                        onClick={() => stopCodexSpeech()}
+                                        variant="quiet"
+                                      >
+                                        <Square aria-hidden="true" size={14} />
+                                      </IconButton>
+                                    ) : null}
+                                    {readingProgress && hasExactSpeechProgress ? (
+                                      <label className="codex-chat-message__speech-progress codex-chat-message__speech-progress--seekable">
+                                        <span className="sr-only">Speech playback position</span>
+                                        <input
+                                          aria-label="Speech playback position"
+                                          aria-valuetext={`${formatCodexSpeechTime(
+                                            readingProgress.elapsedSeconds,
+                                          )} of ${formatCodexSpeechTime(
+                                            readingProgress.totalSeconds,
+                                          )}`}
+                                          max={readingProgress.totalSeconds}
+                                          min={0}
+                                          onChange={(event) =>
+                                            seekCodexSpeech(Number(event.target.value))
+                                          }
+                                          step={1}
+                                          type="range"
+                                          value={Math.min(
+                                            readingProgress.elapsedSeconds,
+                                            readingProgress.totalSeconds,
+                                          )}
+                                        />
+                                        <span className="codex-chat-message__speech-progress-time">
+                                          {formatCodexSpeechTime(readingProgress.elapsedSeconds)} /{' '}
+                                          {formatCodexSpeechTime(readingProgress.totalSeconds)}
+                                        </span>
+                                      </label>
+                                    ) : readingProgress ? (
+                                      <div
+                                        aria-label="Estimated reading progress"
+                                        aria-valuemax={readingProgress.totalSeconds}
+                                        aria-valuemin={0}
+                                        aria-valuenow={Math.min(
+                                          readingProgress.elapsedSeconds,
+                                          readingProgress.totalSeconds,
+                                        )}
+                                        aria-valuetext={`${formatCodexSpeechTime(
+                                          readingProgress.elapsedSeconds,
+                                        )} of about ${formatCodexSpeechTime(
+                                          readingProgress.totalSeconds,
+                                        )}`}
+                                        className="codex-chat-message__speech-progress"
+                                        role="progressbar"
+                                      >
+                                        <span
+                                          aria-hidden="true"
+                                          className="codex-chat-message__speech-progress-track"
+                                        >
+                                          <span
+                                            className="codex-chat-message__speech-progress-value"
+                                            style={{ inlineSize: `${readingProgressPercent}%` }}
+                                          />
+                                        </span>
+                                        <span className="codex-chat-message__speech-progress-time">
+                                          {formatCodexSpeechTime(readingProgress.elapsedSeconds)} /{' '}
+                                          about{' '}
+                                          {formatCodexSpeechTime(readingProgress.totalSeconds)}
+                                        </span>
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                ) : null}
+                              </article>
+                              {(agentTeamsAfterMessage.get(message.id) ?? []).map((team) => (
+                                <AgentTeamPanel
+                                  agents={team.agents}
+                                  clock={clock}
+                                  expandedAgentId={expandedAgentId}
+                                  key={team.key}
+                                  onExpandedAgentChange={setExpandedAgentId}
+                                  resumeState={selectedTeamResumeState}
+                                  resumingAgentIds={resumingAgentIds}
+                                  teamKey={team.key}
+                                  teamLabel={team.label}
+                                />
+                              ))}
+                            </Fragment>
+                          );
+                        })
+                      : null}
+                    {!transcriptEntries.length &&
+                    !status?.queuedMessages?.length &&
+                    !showPendingChatMessage &&
+                    !showPendingVisualMessage ? (
+                      <p className="codex-chat-log__empty">
+                        No messages are saved in this conversation.
+                      </p>
+                    ) : null}
+                    {(status?.queuedMessages ?? []).map((message) => {
+                      const expanded = expandedQueueId === message.id;
+                      const editValue = queuedEdits[message.id] ?? message.prompt;
+                      const actionPending = queueActionId === message.id;
+                      return (
+                        <article className="codex-queued-message" key={message.id}>
+                          <header>
+                            <span>
+                              {message.deliveryMode === 'interrupt'
+                                ? 'Interrupting'
+                                : `Waiting for current reply to finish · ${message.position}${message.workMode === 'team' ? ' · Agent team' : ''}`}
+                            </span>
+                            <ButtonGroup>
+                              <Button
+                                aria-expanded={expanded}
+                                disabled={actionPending}
+                                onClick={() => {
+                                  setExpandedQueueId(expanded ? '' : message.id);
+                                  setQueuedEdits((current) => ({
+                                    ...current,
+                                    [message.id]: current[message.id] ?? message.prompt,
+                                  }));
+                                  setQueueActionError('');
+                                }}
+                                size="small"
+                                variant="quiet"
+                              >
+                                {expanded ? (
+                                  <ChevronUp aria-hidden="true" size={14} />
+                                ) : (
+                                  <Pencil aria-hidden="true" size={14} />
+                                )}
+                                {expanded ? 'Collapse' : 'Edit'}
+                              </Button>
+                              <Button
+                                disabled={actionPending || message.deliveryMode === 'interrupt'}
+                                onClick={() => void runQueueAction('interrupt-queued', message.id)}
+                                size="small"
+                                variant="quiet"
+                              >
+                                {actionPending ? (
+                                  <LoaderCircle
+                                    aria-hidden="true"
+                                    className="is-spinning"
+                                    size={14}
+                                  />
+                                ) : (
+                                  <Square aria-hidden="true" size={12} />
+                                )}
+                                Interrupt
+                              </Button>
+                              <Button
+                                disabled={actionPending}
+                                onClick={() => {
+                                  setDeleteQueueId(message.id);
+                                  setQueueActionError('');
+                                }}
+                                size="small"
+                                variant="quiet"
+                              >
+                                <Trash2 aria-hidden="true" size={14} />
+                                Delete
+                              </Button>
+                            </ButtonGroup>
+                          </header>
+                          {expanded ? (
+                            <div className="codex-queued-message__editor">
+                              <label>
+                                <span>Edit queued message</span>
+                                <textarea
+                                  maxLength={4_000}
+                                  onChange={(event) =>
+                                    setQueuedEdits((current) => ({
+                                      ...current,
+                                      [message.id]: event.target.value,
+                                    }))
+                                  }
+                                  rows={3}
+                                  value={editValue}
+                                />
+                              </label>
+                              <Button
+                                disabled={actionPending || !editValue.trim()}
+                                onClick={() =>
+                                  void runQueueAction('update-queued', message.id, editValue.trim())
+                                }
+                                size="small"
+                                variant="secondary"
+                              >
+                                <Save aria-hidden="true" size={14} />
+                                Save changes
+                              </Button>
+                            </div>
+                          ) : (
+                            <MarkdownContent>{message.prompt}</MarkdownContent>
+                          )}
                           <RuntimeAttachmentGallery
                             attachmentIds={
                               message.attachmentIds ??
                               (message.attachmentId ? [message.attachmentId] : [])
                             }
-                            altPrefix="Image attached to your message"
+                            altPrefix="Image attached to your queued message"
                           />
+                          {queueActionError && expandedQueueId === message.id ? (
+                            <p className="codex-queued-message__error" role="alert">
+                              {queueActionError}
+                            </p>
+                          ) : null}
                         </article>
-                        {(agentTeamsAfterMessage.get(message.id) ?? []).map((team) => (
-                          <AgentTeamPanel
-                            agents={team.agents}
-                            clock={clock}
-                            expandedAgentId={expandedAgentId}
-                            key={team.key}
-                            onExpandedAgentChange={setExpandedAgentId}
-                            resumeState={selectedTeamResumeState}
-                            resumingAgentIds={resumingAgentIds}
-                            teamKey={team.key}
-                            teamLabel={team.label}
-                          />
-                        ))}
-                      </Fragment>
-                    ))
-                  : null}
-                {!status?.messages.length &&
-                !status?.queuedMessages?.length &&
-                !pendingChatMessage &&
-                !pendingVisualMessage ? (
-                  <p className="codex-chat-log__empty">
-                    No messages are saved in this conversation.
-                  </p>
-                ) : null}
-                {(status?.queuedMessages ?? []).map((message) => {
-                  const expanded = expandedQueueId === message.id;
-                  const editValue = queuedEdits[message.id] ?? message.prompt;
-                  const actionPending = queueActionId === message.id;
-                  return (
-                    <article className="codex-queued-message" key={message.id}>
-                      <header>
-                        <span>
-                          {message.deliveryMode === 'interrupt'
-                            ? 'Interrupting'
-                            : `Waiting for current reply to finish · ${message.position}${message.workMode === 'team' ? ' · Agent team' : ''}`}
-                        </span>
-                        <ButtonGroup>
-                          <Button
-                            aria-expanded={expanded}
-                            disabled={actionPending}
-                            onClick={() => {
-                              setExpandedQueueId(expanded ? '' : message.id);
-                              setQueuedEdits((current) => ({
-                                ...current,
-                                [message.id]: current[message.id] ?? message.prompt,
-                              }));
-                              setQueueActionError('');
-                            }}
-                            size="small"
-                            variant="quiet"
-                          >
-                            {expanded ? (
-                              <ChevronUp aria-hidden="true" size={14} />
-                            ) : (
-                              <Pencil aria-hidden="true" size={14} />
-                            )}
-                            {expanded ? 'Collapse' : 'Edit'}
-                          </Button>
-                          <Button
-                            disabled={actionPending || message.deliveryMode === 'interrupt'}
-                            onClick={() => void runQueueAction('interrupt-queued', message.id)}
-                            size="small"
-                            variant="quiet"
-                          >
-                            {actionPending ? (
-                              <LoaderCircle aria-hidden="true" className="is-spinning" size={14} />
-                            ) : (
-                              <Square aria-hidden="true" size={12} />
-                            )}
-                            Interrupt
-                          </Button>
-                        </ButtonGroup>
-                      </header>
-                      {expanded ? (
-                        <div className="codex-queued-message__editor">
-                          <label>
-                            <span>Edit queued message</span>
-                            <textarea
-                              maxLength={4_000}
-                              onChange={(event) =>
-                                setQueuedEdits((current) => ({
-                                  ...current,
-                                  [message.id]: event.target.value,
-                                }))
-                              }
-                              rows={3}
-                              value={editValue}
+                      );
+                    })}
+                    <ConfirmationDialog
+                      confirmLabel="Delete message"
+                      detail="This removes the queued message before Codex receives it. This cannot be undone."
+                      error={deleteQueueId ? queueActionError : ''}
+                      isConfirming={Boolean(deleteQueueId && queueActionId === deleteQueueId)}
+                      onConfirm={() => void runQueueAction('delete-queued', deleteQueueId)}
+                      onOpenChange={(open) => {
+                        if (!open && !queueActionId) setDeleteQueueId('');
+                      }}
+                      open={Boolean(deleteQueueId)}
+                      title="Delete queued message?"
+                    />
+                    {pendingChatMessage && showPendingChatMessage ? (
+                      <article className="codex-chat-message codex-chat-message--user codex-chat-message--pending codex-chat-message--entering">
+                        <strong>
+                          You <span>Sending</span>
+                        </strong>
+                        <MarkdownContent>{pendingChatMessage.text}</MarkdownContent>
+                      </article>
+                    ) : null}
+                    {pendingVisualMessage && showPendingVisualMessage ? (
+                      <article className="codex-chat-message codex-chat-message--user codex-chat-message--pending codex-chat-message--entering">
+                        <strong>
+                          You <span>Sending</span>
+                        </strong>
+                        <MarkdownContent>{pendingVisualMessage.text}</MarkdownContent>
+                        <div className="codex-chat-message__attachments">
+                          {pendingVisualMessage.images.map((image, index) => (
+                            <img
+                              alt={`Image attached to your message ${index + 1} of ${pendingVisualMessage.images.length}`}
+                              className="codex-chat-message__attachment"
+                              key={`${pendingVisualMessage.id}-${index}`}
+                              src={image}
                             />
-                          </label>
-                          <Button
-                            disabled={actionPending || !editValue.trim()}
-                            onClick={() =>
-                              void runQueueAction('update-queued', message.id, editValue.trim())
-                            }
-                            size="small"
-                            variant="secondary"
-                          >
-                            <Save aria-hidden="true" size={14} />
-                            Save changes
-                          </Button>
+                          ))}
                         </div>
-                      ) : (
-                        <MarkdownContent>{message.prompt}</MarkdownContent>
-                      )}
-                      <RuntimeAttachmentGallery
-                        attachmentIds={
-                          message.attachmentIds ??
-                          (message.attachmentId ? [message.attachmentId] : [])
-                        }
-                        altPrefix="Image attached to your queued message"
+                      </article>
+                    ) : null}
+                    {legacyAgents.length && !agentTeamsAfterMessage.size ? (
+                      <AgentTeamPanel
+                        agents={legacyAgents}
+                        clock={clock}
+                        expandedAgentId={expandedAgentId}
+                        onExpandedAgentChange={setExpandedAgentId}
+                        resumeState={selectedTeamResumeState}
+                        resumingAgentIds={resumingAgentIds}
+                        teamKey="legacy-agent-team"
+                        teamLabel="Agent team"
                       />
-                      {queueActionError && expandedQueueId === message.id ? (
-                        <p className="codex-queued-message__error" role="alert">
-                          {queueActionError}
-                        </p>
-                      ) : null}
-                    </article>
-                  );
-                })}
-                {pendingChatMessage && !pendingChatAccepted ? (
-                  <article className="codex-chat-message codex-chat-message--user codex-chat-message--pending codex-chat-message--entering">
-                    <strong>
-                      You <span>Sending</span>
-                    </strong>
-                    <MarkdownContent>{pendingChatMessage.text}</MarkdownContent>
-                  </article>
-                ) : null}
-                {pendingVisualMessage && !pendingVisualAccepted ? (
-                  <article className="codex-chat-message codex-chat-message--user codex-chat-message--pending codex-chat-message--entering">
-                    <strong>
-                      You <span>Sending</span>
-                    </strong>
-                    <MarkdownContent>{pendingVisualMessage.text}</MarkdownContent>
-                    <div className="codex-chat-message__attachments">
-                      {pendingVisualMessage.images.map((image, index) => (
-                        <img
-                          alt={`Image attached to your message ${index + 1} of ${pendingVisualMessage.images.length}`}
-                          className="codex-chat-message__attachment"
-                          key={`${pendingVisualMessage.id}-${index}`}
-                          src={image}
-                        />
-                      ))}
-                    </div>
-                  </article>
-                ) : null}
-                {legacyAgents.length && !agentTeamsAfterMessage.size ? (
-                  <AgentTeamPanel
-                    agents={legacyAgents}
-                    clock={clock}
-                    expandedAgentId={expandedAgentId}
-                    onExpandedAgentChange={setExpandedAgentId}
-                    resumeState={selectedTeamResumeState}
-                    resumingAgentIds={resumingAgentIds}
-                    teamKey="legacy-agent-team"
-                    teamLabel="Agent team"
-                  />
-                ) : null}
-                {isInterrupted && !isCodexWorking && !isTeamResumePending ? (
-                  <div className="codex-interrupted-status" role="status">
-                    <span aria-hidden="true" className="codex-working-status__icon">
-                      {isTeamResumePending ? (
-                        <LoaderCircle className="is-spinning" size={17} />
-                      ) : (
-                        <CircleAlert size={17} />
-                      )}
-                    </span>
-                    <span className="codex-working-status__copy">
-                      <strong>
-                        {isTeamResumePending ? 'Work is resuming' : 'Work was interrupted'}
-                      </strong>
-                      <small>
-                        {isTeamResumePending
-                          ? `The supervisor is restarting ${selectedTeamResumeState?.agentIds.length} interrupted attached ${selectedTeamResumeState?.agentIds.length === 1 ? 'agent' : 'agents'} from ${selectedTeamResumeState?.agentIds.length === 1 ? 'its' : 'their'} saved sub-chats.`
-                          : `The Codespace paused before Codex finished. The saved transcript and edits are still available.${
-                              interruptedAgents.length
-                                ? ` ${interruptedAgents.length} interrupted attached ${interruptedAgents.length === 1 ? 'agent will' : 'agents will'} resume from ${interruptedAgents.length === 1 ? 'its' : 'their'} saved sub-chats too.`
-                                : ''
-                            }`}
-                      </small>
-                    </span>
-                    <Button
-                      disabled={
-                        isResumingThread || isTeamResumePending || !selectedModel || !selectedEffort
-                      }
-                      onClick={() => void continueInterruptedConversation()}
-                      size="small"
-                      variant="secondary"
-                    >
-                      {isResumingThread || isTeamResumePending ? (
-                        <LoaderCircle aria-hidden="true" className="is-spinning" size={15} />
-                      ) : (
-                        <RotateCcw aria-hidden="true" size={15} />
-                      )}
-                      {isResumingThread || isTeamResumePending
-                        ? 'Work resuming…'
-                        : 'Resume working'}
-                    </Button>
-                  </div>
-                ) : null}
-                {(isCodexWorking && !hasActiveTeam) || queuedCount ? (
-                  <div
-                    className={`codex-working-status${isCodexWorking ? ' codex-generating-message' : ''}`}
-                  >
-                    <span className="sr-only" role="status">
-                      {isCodexWorking
-                        ? 'Codex is working on the selected conversation.'
-                        : `Codex has ${queuedCount} queued ${queuedCount === 1 ? 'request' : 'requests'}.`}
-                    </span>
-                    <span aria-hidden="true" className="codex-working-status__icon">
-                      {isCodexWorking ? <Bot size={17} /> : <Clock3 size={17} />}
-                    </span>
-                    <span className="codex-working-status__copy">
-                      <strong>
-                        {isCodexWorking ? workingTitle : 'Waiting for Codex'}
-                        {isCodexWorking ? (
-                          <span aria-hidden="true" className="codex-generating-message__dots">
-                            <span />
-                            <span />
-                            <span />
-                          </span>
-                        ) : null}
-                      </strong>
-                      <small>
-                        {isCodexWorking
-                          ? workingDetail
-                          : `${queuedCount} ${queuedCount === 1 ? 'request' : 'requests'} queued`}
-                      </small>
-                      {isCodexWorking && queuedCount ? (
-                        <small className="codex-working-status__queue">
-                          {queuedCount} {queuedCount === 1 ? 'request' : 'requests'} queued next
-                        </small>
-                      ) : null}
-                    </span>
-                    <time aria-hidden="true">
-                      {isCodexWorking
-                        ? elapsedTime(status?.thread?.workingStartedAt, clock)
-                        : 'Queued'}
-                    </time>
-                  </div>
-                ) : null}
+                    ) : null}
+                    {isInterrupted && !isCodexWorking && !isTeamResumePending ? (
+                      <div className="codex-interrupted-status" role="status">
+                        <span aria-hidden="true" className="codex-working-status__icon">
+                          {isTeamResumePending ? (
+                            <LoaderCircle className="is-spinning" size={17} />
+                          ) : (
+                            <CircleAlert size={17} />
+                          )}
+                        </span>
+                        <span className="codex-working-status__copy">
+                          <strong>
+                            {isTeamResumePending ? 'Work is resuming' : 'Work was interrupted'}
+                          </strong>
+                          <small>
+                            {isTeamResumePending
+                              ? `The supervisor is restarting ${selectedTeamResumeState?.agentIds.length} interrupted attached ${selectedTeamResumeState?.agentIds.length === 1 ? 'agent' : 'agents'} from ${selectedTeamResumeState?.agentIds.length === 1 ? 'its' : 'their'} saved sub-chats.`
+                              : `The Codespace paused before Codex finished. The saved transcript and edits are still available.${
+                                  interruptedAgents.length
+                                    ? ` ${interruptedAgents.length} interrupted attached ${interruptedAgents.length === 1 ? 'agent will' : 'agents will'} resume from ${interruptedAgents.length === 1 ? 'its' : 'their'} saved sub-chats too.`
+                                    : ''
+                                }`}
+                          </small>
+                        </span>
+                        <Button
+                          disabled={
+                            isResumingThread ||
+                            isTeamResumePending ||
+                            !selectedModel ||
+                            !selectedEffort
+                          }
+                          onClick={() => void continueInterruptedConversation()}
+                          size="small"
+                          variant="secondary"
+                        >
+                          {isResumingThread || isTeamResumePending ? (
+                            <LoaderCircle aria-hidden="true" className="is-spinning" size={15} />
+                          ) : (
+                            <RotateCcw aria-hidden="true" size={15} />
+                          )}
+                          {isResumingThread || isTeamResumePending
+                            ? 'Work resuming…'
+                            : 'Resume working'}
+                        </Button>
+                      </div>
+                    ) : null}
+                    {(isCodexWorking && !hasActiveTeam) || queuedCount ? (
+                      <div
+                        className={`codex-working-status${isCodexWorking ? ' codex-generating-message' : ''}`}
+                      >
+                        <span className="sr-only" role="status">
+                          {isCodexWorking
+                            ? 'Codex is working on the selected conversation.'
+                            : `Codex has ${queuedCount} queued ${queuedCount === 1 ? 'request' : 'requests'}.`}
+                        </span>
+                        <span aria-hidden="true" className="codex-working-status__icon">
+                          {isCodexWorking ? <Bot size={17} /> : <Clock3 size={17} />}
+                        </span>
+                        <span className="codex-working-status__copy">
+                          <strong>
+                            {isCodexWorking ? workingTitle : 'Waiting for Codex'}
+                            {isCodexWorking ? (
+                              <span aria-hidden="true" className="codex-generating-message__dots">
+                                <span />
+                                <span />
+                                <span />
+                              </span>
+                            ) : null}
+                          </strong>
+                          <small>
+                            {isCodexWorking
+                              ? workingDetail
+                              : `${queuedCount} ${queuedCount === 1 ? 'request' : 'requests'} queued`}
+                          </small>
+                          {isCodexWorking && queuedCount ? (
+                            <small className="codex-working-status__queue">
+                              {queuedCount} {queuedCount === 1 ? 'request' : 'requests'} queued next
+                            </small>
+                          ) : null}
+                        </span>
+                        <time aria-hidden="true">
+                          {isCodexWorking
+                            ? elapsedTime(status?.thread?.workingStartedAt, clock)
+                            : 'Queued'}
+                        </time>
+                      </div>
+                    ) : null}
+                  </>
+                )}
               </div>
-              {!isChatFollowingLatest ? (
+              {!conversationTransition && !isChatFollowingLatest ? (
                 <Button
                   className="codex-chat-transcript__latest"
                   onClick={scrollChatToLatest}
@@ -2102,8 +3495,9 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
             </div>
 
             <section
+              aria-busy={Boolean(conversationTransition)}
               aria-label="Message composer"
-              className={`codex-composer-surface ${isComposerExpanded ? 'is-expanded' : 'is-collapsed'}${phase === 'sending-chat' ? ' is-sending' : ''}`}
+              className={`codex-composer-surface ${isComposerExpanded ? 'is-expanded' : 'is-collapsed'}${phase === 'sending-chat' ? ' is-sending' : ''}${conversationTransition ? ' is-loading-conversation' : ''}`}
             >
               {draftAttachments.length ? (
                 <div aria-label="Selected images" className="codex-composer-draft-attachments">
@@ -2112,7 +3506,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                       <img alt={`Selected image: ${attachment.name}`} src={attachment.source} />
                       <figcaption title={attachment.name}>{attachment.name}</figcaption>
                       <IconButton
-                        disabled={phase === 'sending-chat'}
+                        disabled={phase === 'sending-chat' || Boolean(conversationTransition)}
                         label={`Remove ${attachment.name}`}
                         onClick={() => {
                           setDraftAttachments((current) =>
@@ -2139,7 +3533,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
               <label className="codex-feedback-prompt codex-feedback-prompt--compose">
                 <span>Message to Codex</span>
                 <textarea
-                  disabled={phase === 'sending-chat'}
+                  disabled={phase === 'sending-chat' || Boolean(conversationTransition)}
                   maxLength={4_000}
                   onChange={(event) => setPrompt(event.target.value)}
                   onBlur={() => {
@@ -2174,7 +3568,10 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                 />
                 <IconButton
                   disabled={
-                    phase === 'sending-chat' || isPreparingPhoto || !selectedModel?.supportsImages
+                    phase === 'sending-chat' ||
+                    Boolean(conversationTransition) ||
+                    isPreparingPhoto ||
+                    !selectedModel?.supportsImages
                   }
                   label="Upload photo from camera roll"
                   onClick={() => photoInputRef.current?.click()}
@@ -2188,7 +3585,10 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                 </IconButton>
                 <IconButton
                   disabled={
-                    phase === 'sending-chat' || isPreparingPhoto || !selectedModel?.supportsImages
+                    phase === 'sending-chat' ||
+                    Boolean(conversationTransition) ||
+                    isPreparingPhoto ||
+                    !selectedModel?.supportsImages
                   }
                   label="Capture this tab"
                   onClick={() => void beginPrimaryCapture()}
@@ -2199,6 +3599,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                 <IconButton
                   disabled={
                     phase === 'sending-chat' ||
+                    Boolean(conversationTransition) ||
                     !status?.thread ||
                     !selectedModel ||
                     !selectedModel.supportsImages
@@ -2227,8 +3628,14 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                   aria-controls="codex-composer-settings"
                   aria-expanded={composerSettingsOpen}
                   className={composerSettingsOpen ? 'is-active' : ''}
+                  disabled={Boolean(conversationTransition)}
                   label="Chat settings"
-                  onClick={() => setComposerSettingsOpen((open) => !open)}
+                  onClick={() =>
+                    setComposerSettingsOpen((open) => {
+                      if (open) stopVoicePreview();
+                      return !open;
+                    })
+                  }
                   variant="quiet"
                 >
                   <SlidersHorizontal aria-hidden="true" size={18} />
@@ -2243,10 +3650,11 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                   }
                   disabled={
                     phase === 'sending-chat' ||
+                    Boolean(conversationTransition) ||
                     isPreparingPhoto ||
                     !status?.thread ||
                     !selectedModel ||
-                    !prompt.trim()
+                    (!prompt.trim() && draftAttachments.length === 0)
                   }
                   onClick={() => void sendFeedback()}
                   variant="primary"
@@ -2273,10 +3681,11 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                   id="codex-composer-settings"
                   role="group"
                 >
+                  <CodexSubscriptionUsage usage={status?.subscriptionUsage} />
                   <Button
                     aria-pressed={workMode === 'team'}
                     className={`codex-agent-mode${workMode === 'team' ? ' is-active' : ''}`}
-                    disabled={phase === 'sending-chat'}
+                    disabled={phase === 'sending-chat' || Boolean(conversationTransition)}
                     onClick={() =>
                       setWorkMode((current) => (current === 'team' ? 'direct' : 'team'))
                     }
@@ -2298,7 +3707,11 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                   <Button
                     aria-pressed={selectedServiceTier === 'priority'}
                     className={`codex-agent-mode${selectedServiceTier === 'priority' ? ' is-active' : ''}`}
-                    disabled={phase === 'sending-chat' || !fastModeAvailable}
+                    disabled={
+                      phase === 'sending-chat' ||
+                      Boolean(conversationTransition) ||
+                      !fastModeAvailable
+                    }
                     onClick={() => setFastMode((current) => !current)}
                     variant="quiet"
                   >
@@ -2315,12 +3728,83 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                       {selectedServiceTier === 'priority' ? 'On' : 'Off'}
                     </span>
                   </Button>
+                  <section
+                    aria-labelledby="codex-speech-settings-title"
+                    className="codex-speech-settings"
+                  >
+                    <header>
+                      <span>
+                        <strong id="codex-speech-settings-title">Read aloud voice</strong>
+                        <small>
+                          {cloudSpeechConfiguration?.available
+                            ? 'Google Chirp 3 HD · Australian English'
+                            : cloudSpeechConfiguration
+                              ? 'Google voice setup is not active · using your English device voice'
+                              : 'Checking Google voice availability…'}
+                        </small>
+                      </span>
+                    </header>
+                    <div className="codex-speech-settings__controls">
+                      <label>
+                        <span>Voice</span>
+                        <select
+                          disabled={!cloudSpeechConfiguration?.available}
+                          onChange={(event) => {
+                            stopCodexSpeech(false);
+                            setSelectedSpeechVoice(event.target.value);
+                            setSpeechStatus(`Google ${event.target.value} selected.`);
+                          }}
+                          value={selectedSpeechVoice}
+                        >
+                          {!cloudSpeechConfiguration?.voices.length ? (
+                            <option value={selectedSpeechVoice}>{selectedSpeechVoice}</option>
+                          ) : null}
+                          {(cloudSpeechConfiguration?.voices ?? []).map((voice) => (
+                            <option key={voice.id} value={voice.id}>
+                              {voice.id} · {voice.gender}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <Button
+                        aria-label={
+                          voicePreviewState === 'playing'
+                            ? 'Stop voice preview'
+                            : voicePreviewState === 'loading'
+                              ? 'Preparing voice preview'
+                              : `Preview ${selectedSpeechVoice} voice`
+                        }
+                        disabled={
+                          !cloudSpeechConfiguration?.available || voicePreviewState === 'loading'
+                        }
+                        onClick={() => {
+                          if (voicePreviewState === 'playing') stopVoicePreview();
+                          else void previewSpeechVoice();
+                        }}
+                        size="small"
+                        variant="quiet"
+                      >
+                        {voicePreviewState === 'loading' ? (
+                          <LoaderCircle aria-hidden="true" className="is-spinning" size={15} />
+                        ) : voicePreviewState === 'playing' ? (
+                          <Square aria-hidden="true" size={14} />
+                        ) : (
+                          <Play aria-hidden="true" size={15} />
+                        )}
+                        {voicePreviewState === 'loading'
+                          ? 'Preparing'
+                          : voicePreviewState === 'playing'
+                            ? 'Stop preview'
+                            : 'Preview voice'}
+                      </Button>
+                    </div>
+                  </section>
                   <footer className="codex-composer-footer">
                     <div className="codex-chat-configuration">
                       <label className="codex-model-field">
                         <span>Model</span>
                         <select
-                          disabled={!status?.thread}
+                          disabled={!status?.thread || Boolean(conversationTransition)}
                           onChange={(event) => {
                             const model = availableModels.find(
                               (candidate) => candidate.id === event.target.value,
@@ -2342,6 +3826,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                         <label className="codex-effort-field">
                           <span>Reasoning</span>
                           <select
+                            disabled={Boolean(conversationTransition)}
                             onChange={(event) => chooseEffort(selectedModel.id, event.target.value)}
                             value={modelEffort(selectedModel, selectedEffort)}
                           >

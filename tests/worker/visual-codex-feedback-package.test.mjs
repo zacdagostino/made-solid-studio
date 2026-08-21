@@ -114,6 +114,54 @@ const authenticatedStudioControlsMigrationUrl = new URL(
   '../../supabase/migrations/20260820213000_authenticated_studio_controls_test_package.sql',
   import.meta.url,
 );
+const observableCodexActivityMigrationUrl = new URL(
+  '../../supabase/migrations/20260821100000_observable_codex_activity_test_package.sql',
+  import.meta.url,
+);
+const deviceVoiceReadAloudMigrationUrl = new URL(
+  '../../supabase/migrations/20260821110000_device_voice_read_aloud_test_package.sql',
+  import.meta.url,
+);
+const codexConversationLoadingMigrationUrl = new URL(
+  '../../supabase/migrations/20260821120000_codex_conversation_loading_test_package.sql',
+  import.meta.url,
+);
+const codexSubscriptionUsageMigrationUrl = new URL(
+  '../../supabase/migrations/20260821130000_codex_subscription_usage_test_package.sql',
+  import.meta.url,
+);
+const evidenceLinkedCodexActivityMigrationUrl = new URL(
+  '../../supabase/migrations/20260821140000_evidence_linked_codex_activity_test_package.sql',
+  import.meta.url,
+);
+const reliableFullReplyReadingMigrationUrl = new URL(
+  '../../supabase/migrations/20260821150000_reliable_full_reply_reading_test_package.sql',
+  import.meta.url,
+);
+const seamlessStudioHydrationMigrationUrl = new URL(
+  '../../supabase/migrations/20260821160000_seamless_studio_hydration_test_package.sql',
+  import.meta.url,
+);
+const deletableQueuedCodexMessagesMigrationUrl = new URL(
+  '../../supabase/migrations/20260821170000_deletable_queued_codex_messages_test_package.sql',
+  import.meta.url,
+);
+const selectableGoogleCodexVoicesMigrationUrl = new URL(
+  '../../supabase/migrations/20260821180000_selectable_google_codex_voices_test_package.sql',
+  import.meta.url,
+);
+const durableCodexChatSessionMigrationUrl = new URL(
+  '../../supabase/migrations/20260821190000_durable_codex_chat_session_test_package.sql',
+  import.meta.url,
+);
+const imageOnlyCodexMessageMigrationUrl = new URL(
+  '../../supabase/migrations/20260821200000_image_only_codex_message_test_package.sql',
+  import.meta.url,
+);
+const liveEditableStudioRuntimeMigrationUrl = new URL(
+  '../../supabase/migrations/20260821210000_live_editable_studio_runtime_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -136,6 +184,8 @@ const componentUrl = new URL('../../src/components/CodexFeedbackPanel.tsx', impo
 const mobileCaptureUrl = new URL('../../src/lib/mobile-screen-capture.ts', import.meta.url);
 const mainUrl = new URL('../../src/main.tsx', import.meta.url);
 const localServiceUrl = new URL('../../scripts/local-workspace-vite-plugin.mjs', import.meta.url);
+const appShellUrl = new URL('../../src/components/AppShell.tsx', import.meta.url);
+const studioHotUpdateUrl = new URL('../../src/lib/studio-hot-update.ts', import.meta.url);
 const launcherUrl = new URL('../../scripts/codespace-work', import.meta.url);
 const appServerLauncherUrl = new URL('../../scripts/start-codex-app-server', import.meta.url);
 const websiteLauncherUrl = new URL('../../scripts/start-made-solid-website', import.meta.url);
@@ -188,14 +238,422 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 43);
-  assert.match(app, /signed-out Studio and workspace entry routes no longer mount/);
-  assert.match(app, /stable private workspace domain/);
-  assert.match(app, /authenticated Studio session/);
-  assert.match(app, /consistent browser-renderable development environment/);
-  assert.match(app, /sent messages move immediately from the composer/);
-  assert.match(app, /current assignment and child-owned results/);
-  assert.match(app, /without inherited supervisor history/);
+  assert.equal(Number(revision[1]), 57);
+  assert.match(app, /permanent Studio address now serves the persistent editable source/);
+  assert.match(app, /after Railway restarts/);
+});
+
+test('registers the live editable Studio runtime as the newest immutable package', async () => {
+  const [migration, repository, launcher, viteConfiguration] = await Promise.all([
+    readFile(liveEditableStudioRuntimeMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(new URL('../../scripts/start-railway-runtime', import.meta.url), 'utf8'),
+    readFile(new URL('../../vite.config.ts', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Live editable Studio runtime test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v18\.5/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v18\.4'/,
+  );
+  assert.match(repository, /version: 18\.5,/);
+  assert.match(repository, /basePackageId: localImageOnlyCodexMessagePackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localLiveEditableStudioRuntimePackage,') <
+      packageLedger.indexOf('localImageOnlyCodexMessagePackage,'),
+  );
+  assert.match(launcher, /exec env NODE_ENV=development node/);
+  assert.match(launcher, /studio_workspace_directory/);
+  assert.match(viteConfiguration, /\.\.\.railwayAllowedHosts/);
+});
+
+test('registers image-only Codex messages as the newest immutable package', async () => {
+  const [migration, repository, component] = await Promise.all([
+    readFile(imageOnlyCodexMessageMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(componentUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Image-only Codex message test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v18\.4/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v18\.3'/,
+  );
+  assert.match(repository, /version: 18\.4,/);
+  assert.match(repository, /basePackageId: localDurableCodexChatSessionPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localImageOnlyCodexMessagePackage,') <
+      packageLedger.indexOf('localDurableCodexChatSessionPackage,'),
+  );
+  assert.match(component, /!prompt\.trim\(\) && draftAttachments\.length === 0/);
+});
+
+test('retains durable Codex chat session restoration as an immutable package', async () => {
+  const [migration, repository, component] = await Promise.all([
+    readFile(durableCodexChatSessionMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(componentUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Durable Codex chat session test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v18\.3/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v18\.2'/,
+  );
+  assert.match(repository, /version: 18\.3,/);
+  assert.match(repository, /basePackageId: localSelectableGoogleCodexVoicesPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localDurableCodexChatSessionPackage,') <
+      packageLedger.indexOf('localSelectableGoogleCodexVoicesPackage,'),
+  );
+  assert.match(component, /made-solid-codex-chat-session-v1/);
+  assert.match(component, /anchorOffset/);
+  assert.match(component, /restoredChatThreadRef/);
+  assert.match(component, /saveChatPosition\(\)/);
+});
+
+test('registers selectable Google Codex voices as the newest immutable package', async () => {
+  const [migration, repository, component, service] = await Promise.all([
+    readFile(selectableGoogleCodexVoicesMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(componentUrl, 'utf8'),
+    readFile(localServiceUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Selectable Google Codex voices test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v18\.2/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v18\.1'/,
+  );
+  assert.match(repository, /version: 18\.2,/);
+  assert.match(repository, /basePackageId: localDeletableQueuedCodexMessagesPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localSelectableGoogleCodexVoicesPackage,') <
+      packageLedger.indexOf('localDeletableQueuedCodexMessagesPackage,'),
+  );
+  assert.match(component, /Read aloud voice/);
+  assert.match(component, /Preview voice/);
+  assert.match(component, /Speech playback position/);
+  assert.match(service, /__made-solid\/codex-speech/);
+  assert.match(service, /Cache-Control': 'private, no-store/);
+});
+
+test('registers deletable queued Codex messages as the newest immutable package', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(deletableQueuedCodexMessagesMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Deletable queued Codex messages test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v18\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v18\.0'/,
+  );
+  assert.match(repository, /version: 18\.1,/);
+  assert.match(repository, /basePackageId: localSeamlessStudioHydrationPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localDeletableQueuedCodexMessagesPackage,') <
+      packageLedger.indexOf('localSeamlessStudioHydrationPackage,'),
+  );
+});
+
+test('retains seamless Studio hydration as an immutable package', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(seamlessStudioHydrationMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Seamless Studio hydration test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v18\.0/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v17\.9'/,
+  );
+  assert.match(
+    migration,
+    /existing\.builder_contract_version = 'made-solid-studio-builder-agent-v18\.0'/,
+  );
+  assert.match(migration, /Codex bridge reloads independently/);
+  assert.match(migration, /active route and rendered workspace remain mounted/);
+  assert.match(repository, /version: 18\.0,/);
+  assert.match(repository, /basePackageId: localReliableFullReplyReadingPackage\.id/);
+  const freshLedger = repository.slice(
+    repository.indexOf('if (!localPackageRecord)'),
+    repository.indexOf('} else {', repository.indexOf('if (!localPackageRecord)')),
+  );
+  const upgradeLedger = repository.slice(
+    repository.indexOf('const missingPackages = ['),
+    repository.indexOf('].filter(', repository.indexOf('const missingPackages = [')),
+  );
+  const recoveryLedger = repository.slice(repository.indexOf('} catch {'));
+  for (const ledger of [freshLedger, upgradeLedger, recoveryLedger]) {
+    assert.ok(
+      ledger.indexOf('localSeamlessStudioHydrationPackage,') <
+        ledger.indexOf('localReliableFullReplyReadingPackage,'),
+    );
+  }
+});
+
+test('retains reliable full-reply reading as an immutable package', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(reliableFullReplyReadingMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Reliable full-reply reading test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v17\.9/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v17\.8'/,
+  );
+  assert.match(
+    migration,
+    /existing\.builder_contract_version = 'made-solid-studio-builder-agent-v17\.9'/,
+  );
+  assert.match(migration, /English read-aloud for the full reply/);
+  assert.match(migration, /estimated elapsed-and-total timeline/);
+  assert.match(migration, /ignore stale completion events/);
+  assert.match(repository, /version: 17\.9,/);
+  assert.match(repository, /basePackageId: localEvidenceLinkedCodexActivityPackage\.id/);
+  const freshLedger = repository.slice(
+    repository.indexOf('if (!localPackageRecord)'),
+    repository.indexOf('} else {', repository.indexOf('if (!localPackageRecord)')),
+  );
+  const upgradeLedger = repository.slice(
+    repository.indexOf('const missingPackages = ['),
+    repository.indexOf('].filter(', repository.indexOf('const missingPackages = [')),
+  );
+  const recoveryLedger = repository.slice(repository.indexOf('} catch {'));
+  for (const ledger of [freshLedger, upgradeLedger, recoveryLedger]) {
+    assert.ok(
+      ledger.indexOf('localReliableFullReplyReadingPackage,') <
+        ledger.indexOf('localEvidenceLinkedCodexActivityPackage,'),
+    );
+  }
+});
+
+test('retains evidence-linked Codex activity as an immutable package', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(evidenceLinkedCodexActivityMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Evidence-linked Codex activity test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v17\.8/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v17\.7'/,
+  );
+  assert.match(
+    migration,
+    /existing\.builder_contract_version = 'made-solid-studio-builder-agent-v17\.8'/,
+  );
+  assert.match(migration, /structural observable outcomes and explicit assistant commentary/);
+  assert.match(migration, /chronologically within the turn where they occurred/);
+  assert.match(migration, /inferred conclusions, raw command output, diffs, tool results/);
+  assert.match(migration, /hidden chain-of-thought, or private reasoning/);
+  assert.match(repository, /version: 17\.8,/);
+  assert.match(repository, /basePackageId: localCodexSubscriptionUsagePackage\.id/);
+  const freshLedger = repository.slice(
+    repository.indexOf('if (!localPackageRecord)'),
+    repository.indexOf('} else {', repository.indexOf('if (!localPackageRecord)')),
+  );
+  const upgradeLedger = repository.slice(
+    repository.indexOf('const missingPackages = ['),
+    repository.indexOf('].filter(', repository.indexOf('const missingPackages = [')),
+  );
+  const recoveryLedger = repository.slice(repository.indexOf('} catch {'));
+  for (const ledger of [freshLedger, upgradeLedger, recoveryLedger]) {
+    assert.ok(
+      ledger.indexOf('localEvidenceLinkedCodexActivityPackage,') <
+        ledger.indexOf('localCodexSubscriptionUsagePackage,'),
+    );
+  }
+});
+
+test('registers Codex subscription usage as the newest immutable package', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(codexSubscriptionUsageMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Codex subscription usage test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v17\.7/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v17\.6'/,
+  );
+  assert.match(
+    migration,
+    /existing\.builder_contract_version = 'made-solid-studio-builder-agent-v17\.7'/,
+  );
+  assert.match(migration, /account\/rateLimits\/read/);
+  assert.match(migration, /unavailable usage never interrupts chat/);
+  assert.match(migration, /Never derive subscription quota from conversation tokens/);
+  assert.match(repository, /version: 17\.7,/);
+  assert.match(repository, /basePackageId: localCodexConversationLoadingPackage\.id/);
+  const freshLedger = repository.slice(
+    repository.indexOf('if (!localPackageRecord)'),
+    repository.indexOf('} else {', repository.indexOf('if (!localPackageRecord)')),
+  );
+  const upgradeLedger = repository.slice(
+    repository.indexOf('const missingPackages = ['),
+    repository.indexOf('].filter(', repository.indexOf('const missingPackages = [')),
+  );
+  const recoveryLedger = repository.slice(repository.indexOf('} catch {'));
+  for (const ledger of [freshLedger, upgradeLedger, recoveryLedger]) {
+    assert.ok(
+      ledger.indexOf('localCodexSubscriptionUsagePackage,') <
+        ledger.indexOf('localCodexConversationLoadingPackage,'),
+    );
+  }
+});
+
+test('registers Codex conversation loading above its prior immutable package', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(codexConversationLoadingMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Codex conversation loading test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v17\.6/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v17\.5'/,
+  );
+  assert.match(
+    migration,
+    /existing\.builder_contract_version = 'made-solid-studio-builder-agent-v17\.6'/,
+  );
+  assert.match(migration, /replaces the previous transcript/);
+  assert.match(migration, /static prefers-reduced-motion presentation/);
+  assert.match(repository, /version: 17\.6,/);
+  assert.match(repository, /basePackageId: localDeviceVoiceReadAloudPackage\.id/);
+  const freshLedger = repository.slice(
+    repository.indexOf('if (!localPackageRecord)'),
+    repository.indexOf('} else {', repository.indexOf('if (!localPackageRecord)')),
+  );
+  const upgradeLedger = repository.slice(
+    repository.indexOf('const missingPackages = ['),
+    repository.indexOf('].filter(', repository.indexOf('const missingPackages = [')),
+  );
+  const recoveryLedger = repository.slice(repository.indexOf('} catch {'));
+  for (const ledger of [freshLedger, upgradeLedger, recoveryLedger]) {
+    assert.ok(
+      ledger.indexOf('localCodexConversationLoadingPackage,') <
+        ledger.indexOf('localDeviceVoiceReadAloudPackage,'),
+    );
+  }
+});
+
+test('registers device voice read aloud above its prior immutable package', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(deviceVoiceReadAloudMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Device voice read aloud test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v17\.5/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v17\.4'/,
+  );
+  assert.match(
+    migration,
+    /existing\.builder_contract_version = 'made-solid-studio-builder-agent-v17\.5'/,
+  );
+  assert.match(migration, /browser speech-synthesis service/);
+  assert.match(migration, /Start speech only from the reviewer''s action/);
+  assert.match(migration, /mobile browsers that cancel rather than pause/);
+  assert.match(migration, /Never claim these device voices are ChatGPT voices/);
+  assert.match(repository, /version: 17\.5,/);
+  assert.match(repository, /basePackageId: localObservableCodexActivityPackage\.id/);
+  const freshLedger = repository.slice(
+    repository.indexOf('if (!localPackageRecord)'),
+    repository.indexOf('} else {', repository.indexOf('if (!localPackageRecord)')),
+  );
+  const upgradeLedger = repository.slice(
+    repository.indexOf('const missingPackages = ['),
+    repository.indexOf('].filter(', repository.indexOf('const missingPackages = [')),
+  );
+  const recoveryLedger = repository.slice(repository.indexOf('} catch {'));
+  for (const ledger of [freshLedger, upgradeLedger, recoveryLedger]) {
+    assert.ok(
+      ledger.indexOf('localDeviceVoiceReadAloudPackage,') <
+        ledger.indexOf('localObservableCodexActivityPackage,'),
+    );
+  }
+});
+
+test('registers observable Codex activity as the newest immutable package', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(observableCodexActivityMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Observable Codex activity test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v17\.4/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(migration, /inline between conversation messages/);
+  assert.match(migration, /Do not collect the entries into a persistent bottom workbench/);
+  assert.match(migration, /never present hidden chain-of-thought/);
+  assert.match(repository, /version: 17\.4,/);
+  assert.match(repository, /basePackageId: localAuthenticatedStudioControlsPackage\.id/);
+  const freshLedger = repository.slice(
+    repository.indexOf('if (!localPackageRecord)'),
+    repository.indexOf('} else {', repository.indexOf('if (!localPackageRecord)')),
+  );
+  const upgradeLedger = repository.slice(
+    repository.indexOf('const missingPackages = ['),
+    repository.indexOf('].filter(', repository.indexOf('const missingPackages = [')),
+  );
+  const recoveryLedger = repository.slice(repository.indexOf('} catch {'));
+  for (const ledger of [freshLedger, upgradeLedger, recoveryLedger]) {
+    assert.ok(
+      ledger.indexOf('localObservableCodexActivityPackage,') <
+        ledger.indexOf('localAuthenticatedStudioControlsPackage,'),
+    );
+  }
 });
 
 test('registers authenticated Studio controls as the newest immutable package', async () => {
@@ -620,8 +1078,11 @@ test('registers uninterrupted Codex recovery as the newest immutable local and c
   assert.match(bridge, /turn\/steer/);
   assert.match(bridge, /followup_task collaboration tool/);
   assert.doesNotMatch(bridge, /Number\(record\.recoveryCount \|\| 0\) >= 1/);
-  assert.match(localService, /void codexFeedbackBridge\.maintain\(\)/);
-  assert.match(localService, /await codexFeedbackBridge\.maintain\(\)/);
+  assert.match(
+    localService,
+    /const maintainCodexFeedbackBridge = \(\) =>[\s\S]*bridge\.maintain\(\)[\s\S]*\.catch\(\(\) => undefined\)/,
+  );
+  assert.match(localService, /await bridge\.maintain\(\)/);
 });
 
 test('registers turn-scoped Agent teams as the newest immutable local and cloud package', async () => {
@@ -938,14 +1399,18 @@ test('registers the compact deduplicated composer above Markdown chat', async ()
 });
 
 test('uses shared controls, a compact model selector, and live model discovery for Codex chat', async () => {
-  const [app, component, mobileCapture, main, service] = await Promise.all([
+  const [app, appShell, component, hotUpdate, mobileCapture, main, service] = await Promise.all([
     readFile(appUrl, 'utf8'),
+    readFile(appShellUrl, 'utf8'),
     readFile(componentUrl, 'utf8'),
+    readFile(studioHotUpdateUrl, 'utf8'),
     readFile(mobileCaptureUrl, 'utf8'),
     readFile(mainUrl, 'utf8'),
     readFile(localServiceUrl, 'utf8'),
   ]);
-  assert.match(component, /Button, ButtonGroup, IconButton/);
+  assert.match(component, /Button, ButtonGroup, ConfirmationDialog, IconButton/);
+  assert.match(component, /delete-queued/);
+  assert.match(component, /Delete queued message\?/);
   assert.doesNotMatch(component, /<button[\s>]/);
   assert.match(component, /getDisplayMedia/);
   assert.match(component, /<select/);
@@ -987,6 +1452,15 @@ test('uses shared controls, a compact model selector, and live model discovery f
     /iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk\+M\/w/,
   );
   assert.match(service, /CodexFeedbackBridge/);
+  assert.doesNotMatch(service, /import \{ CodexFeedbackBridge \} from/);
+  assert.match(service, /pathToFileURL\([\s\S]*codex-feedback-bridge\.mjs/);
+  assert.match(service, /\?updated=\$\{modifiedAt\}/);
+  assert.match(service, /nextBridge\.startedThreads = activeCodexFeedbackBridge\.startedThreads/);
+  assert.match(hotUpdate, /vite:beforeUpdate/);
+  assert.match(hotUpdate, /vite:afterUpdate/);
+  assert.match(appShell, /subscribeToStudioUpdates/);
+  assert.match(appShell, /isHydrating \|\| isStudioUpdating/);
+  assert.match(appShell, /Updating Studio/);
   assert.match(service, /__made-solid\/page-screenshot/);
   assert.match(service, /localCaptureTarget/);
   assert.match(service, /chromium\.launch/);

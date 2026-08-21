@@ -15,6 +15,7 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type PropsWithChildren } from 'react';
+import { subscribeToStudioUpdates } from '../lib/studio-hot-update';
 import { Button, IconButton } from './ui';
 
 export type AppPage =
@@ -187,6 +188,7 @@ export function AppShell({
   isLoading?: boolean;
 }>) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [isStudioUpdating, setIsStudioUpdating] = useState(false);
   const [theme, setTheme] = useState<Theme>(preferredTheme);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const mainRef = useRef<HTMLElement>(null);
@@ -203,6 +205,8 @@ export function AppShell({
   useLayoutEffect(() => {
     mainRef.current?.scrollTo({ top: 0 });
   }, [contentKey]);
+
+  useEffect(() => subscribeToStudioUpdates(setIsStudioUpdating), []);
 
   return (
     <div className="app-shell">
@@ -271,15 +275,15 @@ export function AppShell({
         <Brand hidden={isLoading} />
       </header>
 
-      {isHydrating ? (
+      {isHydrating || isStudioUpdating ? (
         <div
-          aria-label="Refreshing workspace data"
+          aria-label="Updating Studio"
           aria-live="polite"
           className="workspace-sync-status"
           role="status"
         >
           <LoaderCircle aria-hidden="true" size={16} />
-          <span>Syncing workspace</span>
+          <span>Updating Studio</span>
         </div>
       ) : null}
 

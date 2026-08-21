@@ -84,9 +84,10 @@ test('returns expired workspace documents through the stable authenticated Studi
 });
 
 test('registers a single-volume Singapore Railway runtime with a health check', async () => {
-  const [configurationSource, viteConfiguration] = await Promise.all([
+  const [configurationSource, viteConfiguration, launcher] = await Promise.all([
     readFile('railway.json', 'utf8'),
     readFile('vite.config.ts', 'utf8'),
+    readFile('scripts/start-railway-runtime', 'utf8'),
   ]);
   const configuration = JSON.parse(configurationSource);
   assert.equal(configuration.build.builder, 'DOCKERFILE');
@@ -95,10 +96,16 @@ test('registers a single-volume Singapore Railway runtime with a health check', 
   assert.equal(configuration.deploy.restartPolicyType, 'ALWAYS');
   assert.match(viteConfiguration, /healthcheck\.railway\.app/);
   assert.match(viteConfiguration, /SITEFORGE_PUBLIC_ORIGIN/);
+  assert.match(viteConfiguration, /server:[\s\S]*\.\.\.railwayAllowedHosts/);
   assert.match(
     viteConfiguration,
     /frame-ancestors 'self' https:\/\/madesolid\.com\.au https:\/\/www\.madesolid\.com\.au/,
   );
+  assert.match(launcher, /studio_workspace_directory="\$workspace_root\/siteforge-os"/);
+  assert.match(launcher, /ln -s "\$application_directory\/node_modules"/);
+  assert.match(launcher, /exec env NODE_ENV=development node/);
+  assert.match(launcher, /--config "\$studio_workspace_directory\/vite\.config\.ts"/);
+  assert.doesNotMatch(launcher, /vite\/bin\/vite\.js" preview/);
 });
 
 test('preserves verified persistent repositories when GitHub is temporarily unavailable', async () => {

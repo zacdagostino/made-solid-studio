@@ -351,6 +351,25 @@ const localRenderableWorkspacePreviewPackageId =
   'agent-package-local-v17-2-renderable-workspace-preview';
 const localAuthenticatedStudioControlsPackageId =
   'agent-package-local-v17-3-authenticated-studio-controls';
+const localObservableCodexActivityPackageId = 'agent-package-local-v17-4-observable-codex-activity';
+const localDeviceVoiceReadAloudPackageId = 'agent-package-local-v17-5-device-voice-read-aloud';
+const localCodexConversationLoadingPackageId =
+  'agent-package-local-v17-6-codex-conversation-loading';
+const localCodexSubscriptionUsagePackageId = 'agent-package-local-v17-7-codex-subscription-usage';
+const localEvidenceLinkedCodexActivityPackageId =
+  'agent-package-local-v17-8-evidence-linked-codex-activity';
+const localReliableFullReplyReadingPackageId =
+  'agent-package-local-v17-9-reliable-full-reply-reading';
+const localSeamlessStudioHydrationPackageId = 'agent-package-local-v18-0-seamless-studio-hydration';
+const localDeletableQueuedCodexMessagesPackageId =
+  'agent-package-local-v18-1-deletable-queued-codex-messages';
+const localSelectableGoogleCodexVoicesPackageId =
+  'agent-package-local-v18-2-selectable-google-codex-voices';
+const localDurableCodexChatSessionPackageId =
+  'agent-package-local-v18-3-durable-codex-chat-session';
+const localImageOnlyCodexMessagePackageId = 'agent-package-local-v18-4-image-only-codex-message';
+const localLiveEditableStudioRuntimePackageId =
+  'agent-package-local-v18-5-live-editable-studio-runtime';
 
 type StoreName =
   | 'activities'
@@ -2577,10 +2596,226 @@ export class SiteforgeRepository {
         'Prevents anonymous visitors from mounting private Studio tools while retaining server-side authorization on every runtime endpoint.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localObservableCodexActivityPackage: AgentPackage = {
+      ...localAuthenticatedStudioControlsPackage,
+      id: localObservableCodexActivityPackageId,
+      version: 17.4,
+      basePackageId: localAuthenticatedStudioControlsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v17.4',
+      contractAddendum:
+        'The Studio Codex chat logs chronological observable activity entries inline between conversation messages, so verified workspace actions, lifecycle states, and results remain attached to the point in the exchange where they occurred. Activity is derived only from observable runtime events and never exposes or invents private model reasoning.',
+      instructionsAddendum:
+        'Interleave observable activity entries with user, assistant-progress, and final messages using their real turn and item order. Present concise verified action labels, details, status, and duration with distinctive accessible styling and restrained motion plus a static prefers-reduced-motion variant. Do not collect the entries into a persistent bottom workbench, and never present hidden chain-of-thought or inferred internal reasoning.',
+      summary:
+        'Observable Codex activity test package: logs verified chronological workspace activity inline with the chat without exposing private reasoning.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps a clear, animated history of observable Codex work in its conversational context while preserving the boundary around private reasoning.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localDeviceVoiceReadAloudPackage: AgentPackage = {
+      ...localObservableCodexActivityPackage,
+      id: localDeviceVoiceReadAloudPackageId,
+      version: 17.5,
+      basePackageId: localObservableCodexActivityPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v17.5',
+      contractAddendum:
+        "Completed assistant replies in the Studio Codex chat offer an explicit read-aloud action backed by the browser speech-synthesis service and voices available on the reviewer's device, without an API key or separately billed speech service. Only one reply plays at a time, and playback remains scoped to the active chat.",
+      instructionsAddendum:
+        "Add accessible read-aloud controls to completed assistant replies. Start speech only from the reviewer's action; support play, pause or resume, and stop, cancel speech when the active chat changes or the control unmounts, and announce meaningful playback or unsupported-state changes. Use available device voices with a language-appropriate fallback, split long replies into bounded readable segments, and account for mobile browsers that cancel rather than pause an utterance. Never claim these device voices are ChatGPT voices or send speech text to a Made Solid or OpenAI API.",
+      summary:
+        'Device voice read aloud test package: reads completed Codex replies with free browser speech synthesis and accessible, chat-scoped playback controls.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Adds useful hands-free review without API credentials or per-character speech charges while keeping browser and device voice limitations explicit.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localCodexConversationLoadingPackage: AgentPackage = {
+      ...localDeviceVoiceReadAloudPackage,
+      id: localCodexConversationLoadingPackageId,
+      version: 17.6,
+      basePackageId: localDeviceVoiceReadAloudPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v17.6',
+      contractAddendum:
+        'When a reviewer switches Codex conversations or creates a new chat, the Studio immediately replaces the previous transcript with a stable, accessible loading surface and renders only the requested conversation after its data is ready.',
+      instructionsAddendum:
+        'Use one request-scoped transition state for conversation switching and creation. Remove stale messages from the active transcript immediately, preserve transcript geometry with Codex-native skeletons, announce the verified loading state, prevent duplicate or misrouted chat actions, and provide a static prefers-reduced-motion presentation. Restore the previous chat with a clear error if switching fails.',
+      summary:
+        'Codex conversation loading test package: adds a polished, stale-safe loading experience for chat switching and creation.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps chat navigation clear and trustworthy while a selected or newly created Codex conversation is loading.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localCodexSubscriptionUsagePackage: AgentPackage = {
+      ...localCodexConversationLoadingPackage,
+      id: localCodexSubscriptionUsagePackageId,
+      version: 17.7,
+      basePackageId: localCodexConversationLoadingPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v17.7',
+      contractAddendum:
+        "The Studio Codex chat settings show the reviewer's current subscription quota usage directly from the signed-in Codex App Server account. Each available quota window remains separate and includes its verified usage percentage, duration, and reset time; unavailable usage never interrupts chat or produces an estimated value.",
+      instructionsAddendum:
+        'Read subscription quota from account/rateLimits/read and select the overall codex bucket rather than an arbitrary model-specific bucket. Validate and bound only the public usedPercent, windowDurationMins, and resetsAt fields. Render each primary or secondary window with an accessible progress meter and explicit reset detail in Chat settings. If the rate-limit read is unsupported or fails, keep chat operational and show a truthful unavailable state. Never derive subscription quota from conversation tokens or credit balances.',
+      summary:
+        'Codex subscription usage test package: shows live quota percentages and reset windows in chat settings without estimating usage.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Gives reviewers a trustworthy view of their current Codex allowance at the point where they choose models, reasoning, Fast mode, and Agent teams.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localEvidenceLinkedCodexActivityPackage: AgentPackage = {
+      ...localCodexSubscriptionUsagePackage,
+      id: localEvidenceLinkedCodexActivityPackageId,
+      version: 17.8,
+      basePackageId: localCodexSubscriptionUsagePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v17.8',
+      contractAddendum:
+        'The Studio Codex transcript can associate structural observable outcomes and explicit assistant commentary chronologically within the turn where they occurred. Each outcome remains evidence-linked to its observable runtime event and exposes only bounded public metadata; it never presents inferred conclusions, raw command output, diffs, tool results, or private reasoning.',
+      instructionsAddendum:
+        'Build chronological chat activity only from explicit assistant commentary and allowlisted structural outcomes emitted by the Codex App Server, preserving their real turn and item order and stable evidence association. Structural outcomes may identify bounded facts such as a lifecycle change, affected-file count, completed check, browser verification, or delegated task state. Do not infer conclusions from those events, and never render raw command output, file diffs, tool-call inputs or results, hidden chain-of-thought, or private reasoning.',
+      summary:
+        'Evidence-linked Codex activity test package: associates structural work outcomes with explicit commentary in chronological chat order while keeping private execution data hidden.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes observable Codex work more useful and auditable by linking concise structural outcomes to the commentary that explains them without exposing private execution detail.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localReliableFullReplyReadingPackage: AgentPackage = {
+      ...localEvidenceLinkedCodexActivityPackage,
+      id: localReliableFullReplyReadingPackageId,
+      version: 17.9,
+      basePackageId: localEvidenceLinkedCodexActivityPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v17.9',
+      contractAddendum:
+        "Completed Codex replies provide reliable, user-initiated English read-aloud for the full reply using the reviewer's available device voices. Playback advances through every bounded chunk in order and exposes an explicitly estimated elapsed-and-total timeline; it remains scoped to the active reply and chat.",
+      instructionsAddendum:
+        'Extend the existing browser speech-synthesis read-aloud behaviour without adding a separately billed speech service. Select only reported English voices, preferring a local Australian English voice, and mark each utterance as English. Read every speech-friendly chunk of the completed reply exactly once and ignore stale completion events so long replies cannot skip, repeat, or stop early. Show an accessible estimated elapsed-and-total timeline while playing, freeze it while paused, and clear it when playback stops, completes, errors, the reply changes, or the active chat changes.',
+      summary:
+        'Reliable full-reply reading test package: reads completed Codex replies fully in English with resilient device-voice playback and an estimated timeline.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes free device-voice playback dependable for long English replies and gives reviewers an honest sense of listening progress without claiming an exact audio duration.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localSeamlessStudioHydrationPackage: AgentPackage = {
+      ...localReliableFullReplyReadingPackage,
+      id: localSeamlessStudioHydrationPackageId,
+      version: 18.0,
+      basePackageId: localReliableFullReplyReadingPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v18.0',
+      contractAddendum:
+        'Studio source edits apply without restarting the reviewer workspace. The Codex bridge reloads independently from the Vite configuration lifecycle, and ordinary hot updates announce a brief accessible top status while the active route and rendered workspace remain mounted.',
+      instructionsAddendum:
+        'Keep the frequently edited Codex feedback bridge outside the Vite config dependency graph and reload its runtime module by source modification time without interrupting active maintenance or delivery. Preserve transient started-thread state when replacing the bridge instance. Announce ordinary Vite hot updates through the existing Studio top synchronization status, keep the current route and content mounted, and provide a static prefers-reduced-motion presentation.',
+      summary:
+        'Seamless Studio hydration test package: applies Studio source edits in place behind an accessible top loading notice without restarting the reviewer workspace.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps Codex-driven Studio refinement usable during live source edits by separating bridge updates from the application server and making brief UI hydration visible without a disruptive reload.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localDeletableQueuedCodexMessagesPackage: AgentPackage = {
+      ...localSeamlessStudioHydrationPackage,
+      id: localDeletableQueuedCodexMessagesPackageId,
+      version: 18.1,
+      basePackageId: localSeamlessStudioHydrationPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v18.1',
+      contractAddendum:
+        'Each waiting Studio Codex chat message can be deleted by its exact queue identifier before dispatch, with explicit confirmation and without changing sibling queued messages.',
+      instructionsAddendum:
+        'Expose a labelled Delete action on every queued message, confirm the irreversible removal in an accessible dialog, and disable duplicate actions while it is pending. Claim a queued record before dispatch so deletion and delivery cannot race; a cancelled record must never be sent, interrupted, or presented as current queued work.',
+      summary:
+        'Deletable queued Codex messages test package: removes an exact waiting message safely before Codex receives it.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Lets reviewers remove mistaken or obsolete queued directions without interrupting the active reply or affecting other waiting messages.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localSelectableGoogleCodexVoicesPackage: AgentPackage = {
+      ...localDeletableQueuedCodexMessagesPackage,
+      id: localSelectableGoogleCodexVoicesPackageId,
+      version: 18.2,
+      basePackageId: localDeletableQueuedCodexMessagesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v18.2',
+      contractAddendum:
+        'Completed Studio Codex replies can use owner-authenticated Google Chirp 3 HD Australian English audio. Reviewers choose and preview an allow-listed voice in chat settings, retain that choice locally, hear every bounded reply chunk, and use exact generated-audio playback time and seeking. Google credentials remain server-only, generated audio remains private and ephemeral, and the corrected English device voice remains the automatic fallback.',
+      instructionsAddendum:
+        'Expose only the documented en-AU Chirp 3 HD voice set through the authenticated private Studio runtime. Exchange a server-only least-privilege service-account assertion for a short-lived Google access token, validate voice and UTF-8 text bounds, redact upstream errors, and return private no-store MP3 audio without persisting it. In chat settings, provide a labelled voice selector and explicit preview/stop control, save the selected voice locally, and revoke every audio object URL. For completed replies, show loading, pause, resume, stop, exact elapsed and total audio time, and keyboard-accessible seeking. Abort and clean up on reply replacement, conversation change, panel close, navigation, or failure; fall back to English device speech when Google is unavailable.',
+      summary:
+        'Selectable Google Codex voices test package: adds private Australian Chirp voice previews and exact seekable full-reply playback with free device fallback.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Gives the owner consistent natural Australian read-aloud voices with test-before-select settings while preserving private authentication, bounded cost, and a no-service fallback.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localDurableCodexChatSessionPackage: AgentPackage = {
+      ...localSelectableGoogleCodexVoicesPackage,
+      id: localDurableCodexChatSessionPackageId,
+      version: 18.3,
+      basePackageId: localSelectableGoogleCodexVoicesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v18.3',
+      contractAddendum:
+        'A Studio refresh restores an open Codex chat to the same selected conversation and saved reading position. Each recent conversation retains its own bounded viewport anchor, offset, and follow-latest state without changing the active prospect route.',
+      instructionsAddendum:
+        'Persist only bounded local Codex chat session UI state: whether the panel was open, the exact selected thread ID, and up to 25 recent per-thread transcript positions. Save a stable visible message or activity anchor with its viewport offset and a scrollTop fallback. Restore only after the requested thread transcript is rendered; retain bottom-following only when it was active before refresh. A deliberate close remains closed after refresh, and invalid or unavailable storage must leave chat usable.',
+      summary:
+        'Durable Codex chat session test package: restores the open conversation and exact transcript reading position after refresh.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Lets reviewers refresh or recover the Studio without losing the Codex conversation and place they were actively reading.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localImageOnlyCodexMessagePackage: AgentPackage = {
+      ...localDurableCodexChatSessionPackage,
+      id: localImageOnlyCodexMessagePackageId,
+      version: 18.4,
+      basePackageId: localDurableCodexChatSessionPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v18.4',
+      contractAddendum:
+        'A ready image attachment is sufficient content for a Studio Codex message. The composer enables Send and submits the image in selection order even when the text field is empty. Pending attachment previews remain scoped to their originating conversation while delivery is reconciled.',
+      instructionsAddendum:
+        'Treat trimmed message text or at least one ready image attachment as valid composer content. Keep Send disabled only when both are absent, and preserve the existing model capability, preparation, conversation-transition, and delivery guards. Submit an empty prompt with the ready screenshots when no text was entered. Record the originating thread on every optimistic message and render or reconcile it only against that exact thread.',
+      summary:
+        'Image-only Codex message test package: sends uploaded visual context without typed text and keeps its preview in the originating conversation.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Lets reviewers use a screenshot or photo as the complete Codex request when the visual itself contains the needed context.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localLiveEditableStudioRuntimePackage: AgentPackage = {
+      ...localImageOnlyCodexMessagePackage,
+      id: localLiveEditableStudioRuntimePackageId,
+      version: 18.5,
+      basePackageId: localImageOnlyCodexMessagePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v18.5',
+      contractAddendum:
+        'The permanent Railway Studio domain serves the editable persistent Studio checkout rather than an older image snapshot. Reviewed source edits appear through Vite hot updates, survive runtime replacement on the mounted volume, and remain separate from the private prospect workspace-preview domain.',
+      instructionsAddendum:
+        'After preparing the verified persistent repositories, launch the Studio Vite development server from the exact SITEFORGE_STUDIO_WORKSPACE_DIR checkout with NODE_ENV=development on the configured Studio port. Reuse the image-owned locked dependency installation only when the checkout has no node_modules and never overwrite a workspace-managed dependency directory. Allow the configured Railway Studio hostname in the development server, retain the existing CSP and owner-authenticated private runtime routes, and keep the preview host, prospect workspace proxy, workers, and Codex App Server on their existing separate ports.',
+      summary:
+        'Live editable Studio runtime test package: keeps persistent Studio source edits visible immediately after Railway restarts instead of reverting to the image snapshot.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the permanent Studio address the durable live refinement surface while preserving the separate private prospect preview and existing authentication boundaries.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localLiveEditableStudioRuntimePackage,
+          localImageOnlyCodexMessagePackage,
+          localDurableCodexChatSessionPackage,
+          localSelectableGoogleCodexVoicesPackage,
+          localDeletableQueuedCodexMessagesPackage,
+          localSeamlessStudioHydrationPackage,
+          localReliableFullReplyReadingPackage,
+          localEvidenceLinkedCodexActivityPackage,
+          localCodexSubscriptionUsagePackage,
+          localCodexConversationLoadingPackage,
+          localDeviceVoiceReadAloudPackage,
+          localObservableCodexActivityPackage,
           localAuthenticatedStudioControlsPackage,
           localRenderableWorkspacePreviewPackage,
           localRestartableWorkspacePreviewPackage,
@@ -2702,6 +2937,18 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localLiveEditableStudioRuntimePackage,
+          localImageOnlyCodexMessagePackage,
+          localDurableCodexChatSessionPackage,
+          localSelectableGoogleCodexVoicesPackage,
+          localDeletableQueuedCodexMessagesPackage,
+          localSeamlessStudioHydrationPackage,
+          localReliableFullReplyReadingPackage,
+          localEvidenceLinkedCodexActivityPackage,
+          localCodexSubscriptionUsagePackage,
+          localCodexConversationLoadingPackage,
+          localDeviceVoiceReadAloudPackage,
+          localObservableCodexActivityPackage,
           localAuthenticatedStudioControlsPackage,
           localRenderableWorkspacePreviewPackage,
           localRestartableWorkspacePreviewPackage,
@@ -2826,6 +3073,18 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localLiveEditableStudioRuntimePackage,
+            localImageOnlyCodexMessagePackage,
+            localDurableCodexChatSessionPackage,
+            localSelectableGoogleCodexVoicesPackage,
+            localDeletableQueuedCodexMessagesPackage,
+            localSeamlessStudioHydrationPackage,
+            localReliableFullReplyReadingPackage,
+            localEvidenceLinkedCodexActivityPackage,
+            localCodexSubscriptionUsagePackage,
+            localCodexConversationLoadingPackage,
+            localDeviceVoiceReadAloudPackage,
+            localObservableCodexActivityPackage,
             localAuthenticatedStudioControlsPackage,
             localRenderableWorkspacePreviewPackage,
             localRestartableWorkspacePreviewPackage,

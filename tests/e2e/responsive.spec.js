@@ -790,7 +790,7 @@ async function mountResponsiveSidebar(page, { reducedMotion = true } = {}) {
 }
 
 async function waitForWorkspaceSync(page) {
-  const syncStatus = page.getByLabel('Refreshing workspace data');
+  const syncStatus = page.getByLabel('Updating Studio');
   await syncStatus.waitFor({ state: 'visible', timeout: 1000 }).catch(() => undefined);
   await syncStatus.waitFor({ state: 'hidden', timeout: 10000 });
 }
@@ -2723,7 +2723,7 @@ test('refreshes workspace data without interrupting the current view or flashing
 
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
 
-  const syncStatus = page.getByLabel('Refreshing workspace data');
+  const syncStatus = page.getByLabel('Updating Studio');
   await page.waitForTimeout(450);
   await expect(syncStatus).toBeHidden();
   await expect(launchLoader).toBeHidden();
@@ -2794,6 +2794,55 @@ test('restores the last workspace immediately while its saved data refreshes', a
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
+});
+
+test('keeps the current report mounted while a Studio source update is announced', async ({
+  page,
+}, testInfo) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/#/prospects/business-demo-local-services/report-preview');
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+  await expectWorkspaceSectionSelected(page, 'Client report preview');
+
+  const main = page.locator('main');
+  await main.evaluate((element) => element.scrollTo({ top: 120 }));
+  const scrollTop = await main.evaluate((element) => element.scrollTop);
+  await page.evaluate(() => document.dispatchEvent(new Event('made-solid:studio-update-started')));
+
+  const updateStatus = page.getByLabel('Updating Studio');
+  await expect(updateStatus).toBeVisible();
+  await expect(updateStatus).toContainText('Updating Studio');
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+  await expectWorkspaceSectionSelected(page, 'Client report preview');
+  await expect(page).toHaveURL(/#\/prospects\/business-demo-local-services\/report-preview$/);
+  expect(await main.evaluate((element) => element.scrollTop)).toBe(scrollTop);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+
+  const accessibility = await new AxeBuilder({ page }).include('.workspace-sync-status').analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect(page).toHaveScreenshot('studio-source-update-hydration.png', {
+    animations: 'disabled',
+  });
+
+  await page.evaluate(() => document.dispatchEvent(new Event('made-solid:studio-update-finished')));
+  await expect(updateStatus).toBeHidden();
+
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await page.evaluate(() =>
+      document.dispatchEvent(new Event('made-solid:studio-update-started')),
+    );
+    await expect(updateStatus).toBeVisible();
+    await expect(updateStatus).toContainText('Updating Studio');
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    await expect(page).toHaveScreenshot('studio-source-update-hydration-compact-mobile.png', {
+      animations: 'disabled',
+    });
+  }
 });
 
 test('leaves scroll-boundary gestures entirely native', async ({ page }) => {
@@ -3692,9 +3741,19 @@ test('displays the newest test package above retained package versions', async (
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const packagePicker = page.getByLabel('Test agent package');
-  await expect(packagePicker).toHaveValue(
-    'agent-package-local-v17-3-authenticated-studio-controls',
-  );
+  await expect(packagePicker).toHaveValue('agent-package-local-v18-5-live-editable-studio-runtime');
+  await expect(packagePicker).toContainText('v18.5 · Approved test');
+  await expect(packagePicker).toContainText('v18.4 · Approved test');
+  await expect(packagePicker).toContainText('v18.3 · Approved test');
+  await expect(packagePicker).toContainText('v18.2 · Approved test');
+  await expect(packagePicker).toContainText('v18.1 · Approved test');
+  await expect(packagePicker).toContainText('v18.0 · Approved test');
+  await expect(packagePicker).toContainText('v17.9 · Approved test');
+  await expect(packagePicker).toContainText('v17.8 · Approved test');
+  await expect(packagePicker).toContainText('v17.7 · Approved test');
+  await expect(packagePicker).toContainText('v17.6 · Approved test');
+  await expect(packagePicker).toContainText('v17.5 · Approved test');
+  await expect(packagePicker).toContainText('v17.4 · Approved test');
   await expect(packagePicker).toContainText('v17.3 · Approved test');
   await expect(packagePicker).toContainText('v17.2 · Approved test');
   await expect(packagePicker).toContainText('v17.1 · Approved test');
@@ -3814,6 +3873,18 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v18.5', 'Live editable Studio runtime'],
+    ['v18.4', 'Image-only Codex message'],
+    ['v18.3', 'Durable Codex chat session'],
+    ['v18.2', 'Selectable Google Codex voices'],
+    ['v18.1', 'Deletable queued Codex messages'],
+    ['v18.0', 'Seamless Studio hydration'],
+    ['v17.9', 'Reliable full-reply reading'],
+    ['v17.8', 'Evidence-linked Codex activity'],
+    ['v17.7', 'Codex subscription usage'],
+    ['v17.6', 'Codex conversation loading'],
+    ['v17.5', 'Device voice read aloud'],
+    ['v17.4', 'Observable Codex activity'],
     ['v17.3', 'Authenticated Studio controls'],
     ['v17.2', 'Renderable workspace preview'],
     ['v17.1', 'Restartable workspace preview'],
@@ -4350,8 +4421,8 @@ test('separates test refinement from the published builder agent package', async
   );
   await expect(page.getByRole('heading', { name: 'Every saved build package' })).toBeVisible();
   const versionCards = page.locator('.agent-package-version-ledger__list article');
-  await expect(versionCards).toHaveCount(115);
-  await expect(versionCards.first().getByRole('heading')).toHaveText('v17.3');
+  await expect(versionCards).toHaveCount(127);
+  await expect(versionCards.first().getByRole('heading')).toHaveText('v18.5');
   const stagedV7Card = versionCards.filter({
     hasText: 'Five tested behaviours staged for the next production package.',
   });
