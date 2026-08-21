@@ -96,6 +96,7 @@ test('exposes same-origin one-click workspace setup through the local Studio ser
   assert.match(source, /'tmux'/);
   assert.match(source, /'new-session'/);
   assert.match(source, /remain-on-exit/);
+  assert.match(source, /'NODE_ENV=development'/);
   assert.match(source, /'npm',\s+'run',\s+'dev'/);
   assert.match(source, /waitForWebsite/);
   assert.match(source, /\.app\.github\.dev/);

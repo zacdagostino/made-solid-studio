@@ -644,6 +644,7 @@ async function launchWebsite({
     '-c',
     destination,
     'env',
+    'NODE_ENV=development',
     `MADE_SOLID_STUDIO_ORIGIN=${studioOrigin(request)}`,
     'npm',
     'run',

@@ -347,6 +347,8 @@ const localAgentTeamClarityPackageId = 'agent-package-local-v16-9-agent-team-cla
 const localStableWorkspacePreviewPackageId = 'agent-package-local-v17-stable-workspace-preview';
 const localRestartableWorkspacePreviewPackageId =
   'agent-package-local-v17-1-restartable-workspace-preview';
+const localRenderableWorkspacePreviewPackageId =
+  'agent-package-local-v17-2-renderable-workspace-preview';
 
 type StoreName =
   | 'activities'
@@ -2539,10 +2541,28 @@ export class SiteforgeRepository {
         'Keeps the stable non-production workspace URL usable across deployments without trusting arbitrary paths or weakening private access.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localRenderableWorkspacePreviewPackage: AgentPackage = {
+      ...localRestartableWorkspacePreviewPackage,
+      id: localRenderableWorkspacePreviewPackageId,
+      version: 17.2,
+      basePackageId: localRestartableWorkspacePreviewPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v17.2',
+      contractAddendum:
+        'A recovered editable workspace runs its development command with an explicit development environment so Vite and React Fast Refresh install matching browser transforms and the private preview renders instead of returning a blank document.',
+      instructionsAddendum:
+        'Launch every recovered workspace with NODE_ENV=development even when the permanent Railway parent process runs in production. Keep framework-specific host arguments, wait for the upstream HTTP response, then verify the rendered page in real mobile, tablet, and desktop browsers for console errors, failed resources, and non-empty pixels before reporting the preview ready.',
+      summary:
+        'Renderable workspace preview test package: prevents the recovered Vite source from loading as a blank page under Railway production settings.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes successful HTTP recovery match actual browser readiness instead of treating an empty React root as a working preview.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localRenderableWorkspacePreviewPackage,
           localRestartableWorkspacePreviewPackage,
           localStableWorkspacePreviewPackage,
           localAgentTeamClarityPackage,
@@ -2662,6 +2682,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localRenderableWorkspacePreviewPackage,
           localRestartableWorkspacePreviewPackage,
           localStableWorkspacePreviewPackage,
           localAgentTeamClarityPackage,
@@ -2784,6 +2805,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localRenderableWorkspacePreviewPackage,
             localRestartableWorkspacePreviewPackage,
             localStableWorkspacePreviewPackage,
             localAgentTeamClarityPackage,
