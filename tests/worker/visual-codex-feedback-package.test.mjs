@@ -102,6 +102,10 @@ const stableWorkspacePreviewMigrationUrl = new URL(
   '../../supabase/migrations/20260820210000_stable_workspace_preview_test_package.sql',
   import.meta.url,
 );
+const restartableWorkspacePreviewMigrationUrl = new URL(
+  '../../supabase/migrations/20260820211000_restartable_workspace_preview_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -176,12 +180,44 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 40);
+  assert.equal(Number(revision[1]), 41);
   assert.match(app, /stable private workspace domain/);
   assert.match(app, /signed-in Studio owner session/);
   assert.match(app, /sent messages move immediately from the composer/);
   assert.match(app, /current assignment and child-owned results/);
   assert.match(app, /without inherited supervisor history/);
+});
+
+test('registers restartable workspace previews as the newest immutable package', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(restartableWorkspacePreviewMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Restartable workspace preview test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v17\.1/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 17\.1,/);
+  assert.match(repository, /basePackageId: localStableWorkspacePreviewPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localRestartableWorkspacePreviewPackage,') <
+      packageLedger.indexOf('localStableWorkspacePreviewPackage,'),
+  );
+  const freshLedger = repository.slice(
+    repository.indexOf('if (!localPackageRecord)'),
+    repository.indexOf('} else {', repository.indexOf('if (!localPackageRecord)')),
+  );
+  const upgradeLedger = repository.slice(
+    repository.indexOf('const missingPackages = ['),
+    repository.indexOf('].filter(', repository.indexOf('const missingPackages = [')),
+  );
+  const recoveryLedger = repository.slice(repository.indexOf('} catch {'));
+  for (const ledger of [freshLedger, upgradeLedger, recoveryLedger]) {
+    assert.match(ledger, /localRestartableWorkspacePreviewPackage,/);
+  }
 });
 
 test('registers stable workspace previews as the newest immutable package', async () => {
@@ -485,7 +521,7 @@ test('registers the subscription-safe Codex runtime as the newest immutable pack
     packageLedger.indexOf('localSubscriptionSafeCodexRuntimePackage,') <
       packageLedger.indexOf('localUninterruptedCodexRecoveryPackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.40`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.41`/);
   assert.match(launcher, /forced_login_method="chatgpt"/);
   assert.match(launcher, /unset OPENAI_API_KEY SITEFORGE_CODEX_API_KEY CODEX_API_KEY/);
 });

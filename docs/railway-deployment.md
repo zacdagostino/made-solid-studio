@@ -20,8 +20,9 @@ Server on its loopback-only port `4500`; never add a Railway domain for it.
 The editable workspace uses `https://workspace.madesolid.com.au/` as its stable browser URL. Its
 short-lived capability and secure cookie still expire, but a top-level visit automatically returns
 through the signed-in Studio owner session, issues fresh access for the active workspace, and comes
-back to the same path. Requests for assets do not redirect, and signed-out or non-owner requests
-remain unavailable.
+back to the same path. If Railway replaced the container, that owner-authenticated access also
+restarts the saved development server from its approved persistent repository before returning.
+Requests for assets do not redirect, and signed-out or non-owner requests remain unavailable.
 
 ## Create the service
 
@@ -121,7 +122,8 @@ OpenAI request.
   billing mode.
 - Open a generated preview and editable workspace preview. Expire the workspace cookie, revisit the
   clean workspace URL, and confirm the signed-in owner returns automatically to the same path with no
-  capability in the address bar. Confirm a signed-out or non-owner request remains unavailable.
+  capability in the address bar. Redeploy with an active workspace, revisit the clean URL, and confirm
+  its development server restarts. Confirm a signed-out or non-owner request remains unavailable.
 - Check mobile `375 x 812`, tablet `768 x 1024`, and desktop `1440 x 900`.
 - Add Railway usage alerts and a hard spending limit in the project settings.
 

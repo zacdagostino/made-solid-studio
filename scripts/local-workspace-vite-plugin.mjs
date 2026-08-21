@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { chromium } from 'playwright';
 import { CodexFeedbackBridge } from './codex-feedback-bridge.mjs';
 import { authorizeStudioRuntimeRequest } from './studio-runtime-auth.mjs';
@@ -40,10 +40,38 @@ async function activeWorkspacePreview() {
   const activePreviewPath = process.env.SITEFORGE_ACTIVE_PREVIEW_PATH?.trim();
   if (!activePreviewPath) throw new Error('The active workspace preview is not configured.');
   const value = JSON.parse(await readFile(activePreviewPath, 'utf8'));
-  if (!directoryPattern.test(value.directory) || !Number.isInteger(value.port)) {
+  if (
+    !directoryPattern.test(value.directory) ||
+    !Number.isInteger(value.port) ||
+    value.port < 1 ||
+    value.port > 65_535
+  ) {
     throw new Error('The active workspace preview record is invalid.');
   }
   return value;
+}
+
+export function workspacePreviewWorkspace(
+  directory,
+  environment = process.env,
+  pathExists = existsSync,
+) {
+  if (!directoryPattern.test(directory)) return undefined;
+  const candidates = [];
+  for (const configuredPath of [
+    environment.SITEFORGE_STUDIO_WORKSPACE_DIR,
+    environment.MADE_SOLID_WEBSITE_DIRECTORY,
+  ]) {
+    const workspace = configuredPath?.trim();
+    if (workspace && basename(resolve(workspace)) === directory)
+      candidates.push(resolve(workspace));
+  }
+  const prospectRoot = environment.SITEFORGE_PROSPECT_WORKSPACES_DIR?.trim();
+  if (prospectRoot) candidates.push(resolve(prospectRoot, directory));
+  return candidates.find(
+    (candidate) =>
+      pathExists(resolve(candidate, '.git')) && pathExists(resolve(candidate, 'package.json')),
+  );
 }
 
 async function fetchPublicCaptureAsset(value) {
@@ -581,6 +609,11 @@ export function studioOrigin(request) {
   return 'http://127.0.0.1:5173';
 }
 
+export function developmentServerHostFlag(packageDocument) {
+  const developmentScript = String(packageDocument?.scripts?.dev || '');
+  return /(?:^|\s)vite(?:\s|$)/.test(developmentScript) ? '--host' : '--hostname';
+}
+
 async function launchWebsite({
   destination,
   directory,
@@ -598,6 +631,8 @@ async function launchWebsite({
   const port = await nextWebsitePort();
   const sessionName =
     providedSessionName ?? `made-solid-${directory.replace(/[^A-Za-z0-9_-]/g, '-')}`.slice(0, 80);
+  const packageDocument = JSON.parse(await readFile(resolve(destination, 'package.json'), 'utf8'));
+  const hostFlag = developmentServerHostFlag(packageDocument);
   const nextEnvironmentPath = resolve(destination, 'next-env.d.ts');
   const nextEnvironmentSource = await readFile(nextEnvironmentPath, 'utf8').catch(() => undefined);
   await run('tmux', ['kill-session', '-t', sessionName]).catch(() => undefined);
@@ -614,7 +649,7 @@ async function launchWebsite({
     'run',
     'dev',
     '--',
-    '--hostname',
+    hostFlag,
     '0.0.0.0',
     '--port',
     String(port),
@@ -699,9 +734,38 @@ export function localWorkspacePlugin() {
       : resolve('.made-solid', 'codex-feedback'),
   });
   let captureBrowserPromise;
+  let workspacePreviewRecoveryPromise;
   const captureBrowser = () => {
     captureBrowserPromise ??= chromium.launch({ headless: true });
     return captureBrowserPromise;
+  };
+  const readyWorkspacePreview = async (request) => {
+    const active = await activeWorkspacePreview();
+    if (await websiteIsReady(active.port)) return active;
+    if (workspacePreviewRecoveryPromise) return workspacePreviewRecoveryPromise;
+    const recovery = (async () => {
+      const destination = workspacePreviewWorkspace(active.directory);
+      if (!destination) {
+        throw new Error(
+          'The saved workspace no longer exists in an approved persistent workspace root.',
+        );
+      }
+      await launchWebsite({
+        destination,
+        directory: active.directory,
+        request,
+        writeEvent: () => undefined,
+        finish: () => undefined,
+        readyDetail: 'The private workspace preview has restarted.',
+      });
+      return activeWorkspacePreview();
+    })();
+    workspacePreviewRecoveryPromise = recovery;
+    try {
+      return await recovery;
+    } finally {
+      if (workspacePreviewRecoveryPromise === recovery) workspacePreviewRecoveryPromise = undefined;
+    }
   };
   const configureWorkspaceServer = (server) => {
     void codexFeedbackBridge.maintain();
@@ -734,7 +798,7 @@ export function localWorkspacePlugin() {
           return;
         }
         try {
-          const active = await activeWorkspacePreview();
+          const active = await readyWorkspacePreview(request);
           const origin = process.env.SITEFORGE_WORKSPACE_PREVIEW_ORIGIN?.trim();
           const secret = process.env.SITEFORGE_WORKSPACE_PREVIEW_SECRET?.trim();
           if (!origin || !secret) throw new Error('The workspace preview is not configured.');

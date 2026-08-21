@@ -4,12 +4,14 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
+  developmentServerHostFlag,
   localCaptureTarget,
   previewUrl,
   readFinalEditState,
   readLearningBundle,
   readRefinementLedger,
   studioOrigin,
+  workspacePreviewWorkspace,
 } from '../../scripts/local-workspace-vite-plugin.mjs';
 
 const scriptUrl = new URL('../../scripts/open-prospect-workspace.mjs', import.meta.url);
@@ -76,6 +78,9 @@ test('exposes same-origin one-click workspace setup through the local Studio ser
   assert.match(source, /\/__made-solid\/local-workspace/);
   assert.match(source, /\/__made-solid\/workspace-preview-access/);
   assert.match(source, /activeWorkspacePreview\(\)/);
+  assert.match(source, /readyWorkspacePreview\(request\)/);
+  assert.match(source, /workspacePreviewRecoveryPromise/);
+  assert.match(source, /websiteIsReady\(active\.port\)/);
   assert.match(source, /workspacePreviewUrl\(origin, active\.directory, secret\)/);
   assert.match(source, /\/__made-solid\/refinement-ledger/);
   assert.match(source, /request\.method !== 'POST'/);
@@ -103,6 +108,40 @@ test('exposes same-origin one-click workspace setup through the local Studio ser
   assert.match(source, /phase: 'launching'/);
   assert.match(source, /phase: 'ready'/);
   assert.match(source, /previewUrl:/);
+});
+
+test('recovers workspace previews only from configured persistent repository roots', () => {
+  const existing = new Set([
+    '/data/workspaces/siteforge-os/.git',
+    '/data/workspaces/siteforge-os/package.json',
+    '/data/prospect-workspaces/customer-site/.git',
+    '/data/prospect-workspaces/customer-site/package.json',
+  ]);
+  const environment = {
+    SITEFORGE_STUDIO_WORKSPACE_DIR: '/data/workspaces/siteforge-os',
+    MADE_SOLID_WEBSITE_DIRECTORY: '/data/workspaces/made-solid-website',
+    SITEFORGE_PROSPECT_WORKSPACES_DIR: '/data/prospect-workspaces',
+  };
+  const pathExists = (path) => existing.has(path);
+
+  assert.equal(
+    workspacePreviewWorkspace('siteforge-os', environment, pathExists),
+    '/data/workspaces/siteforge-os',
+  );
+  assert.equal(
+    workspacePreviewWorkspace('customer-site', environment, pathExists),
+    '/data/prospect-workspaces/customer-site',
+  );
+  assert.equal(workspacePreviewWorkspace('../siteforge-os', environment, pathExists), undefined);
+  assert.equal(workspacePreviewWorkspace('missing-site', environment, pathExists), undefined);
+});
+
+test('uses the development server host flag supported by the saved workspace', () => {
+  assert.equal(
+    developmentServerHostFlag({ scripts: { dev: 'vite --config vite.config.ts' } }),
+    '--host',
+  );
+  assert.equal(developmentServerHostFlag({ scripts: { dev: 'next dev' } }), '--hostname');
 });
 
 test('reads only a validated prospect refinement ledger for the live launcher feed', async () => {

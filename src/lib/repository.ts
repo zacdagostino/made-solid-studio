@@ -345,6 +345,8 @@ const localPrivateWorkspacePreviewAccessPackageId =
 const localMessageMotionCodexChatPackageId = 'agent-package-local-v16-8-message-motion-codex-chat';
 const localAgentTeamClarityPackageId = 'agent-package-local-v16-9-agent-team-clarity';
 const localStableWorkspacePreviewPackageId = 'agent-package-local-v17-stable-workspace-preview';
+const localRestartableWorkspacePreviewPackageId =
+  'agent-package-local-v17-1-restartable-workspace-preview';
 
 type StoreName =
   | 'activities'
@@ -2520,10 +2522,28 @@ export class SiteforgeRepository {
         'Keeps the non-production workspace preview reachable at its normal domain without turning it into a public or permanent bearer link.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localRestartableWorkspacePreviewPackage: AgentPackage = {
+      ...localStableWorkspacePreviewPackage,
+      id: localRestartableWorkspacePreviewPackageId,
+      version: 17.1,
+      basePackageId: localStableWorkspacePreviewPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v17.1',
+      contractAddendum:
+        'An authenticated workspace-preview access request verifies the recorded upstream and, after a Railway restart, relaunches the saved active repository from an approved persistent workspace root before issuing fresh private access.',
+      instructionsAddendum:
+        'Treat an unreachable active-preview port as recoverable only after owner authorization. Resolve the saved directory against the configured Studio, Made Solid website, or prospect workspace roots, require its Git repository and package manifest, share concurrent recovery attempts, launch through the existing persistent terminal contract, wait for a real HTTP response, and reject unknown or missing directories.',
+      summary:
+        'Restartable workspace preview test package: restores the saved private development server after Railway replaces the application container.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps the stable non-production workspace URL usable across deployments without trusting arbitrary paths or weakening private access.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localRestartableWorkspacePreviewPackage,
           localStableWorkspacePreviewPackage,
           localAgentTeamClarityPackage,
           localMessageMotionCodexChatPackage,
@@ -2642,6 +2662,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localRestartableWorkspacePreviewPackage,
           localStableWorkspacePreviewPackage,
           localAgentTeamClarityPackage,
           localMessageMotionCodexChatPackage,
@@ -2763,6 +2784,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localRestartableWorkspacePreviewPackage,
             localStableWorkspacePreviewPackage,
             localAgentTeamClarityPackage,
             localMessageMotionCodexChatPackage,
