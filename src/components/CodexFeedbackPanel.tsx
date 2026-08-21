@@ -12,7 +12,6 @@ import {
   CircleCheck,
   CircleDot,
   CircleX,
-  GitBranch,
   ImageUp,
   LoaderCircle,
   Maximize2,
@@ -254,7 +253,6 @@ function AgentTeamPanel({
   onExpandedAgentChange,
   resumingAgentIds,
   resumeState,
-  supervisorWorking,
   teamKey,
   teamLabel,
 }: {
@@ -264,7 +262,6 @@ function AgentTeamPanel({
   onExpandedAgentChange: (agentId: string) => void;
   resumingAgentIds: Set<string>;
   resumeState?: TeamResumeState;
-  supervisorWorking: boolean;
   teamKey: string;
   teamLabel: string;
 }) {
@@ -289,40 +286,22 @@ function AgentTeamPanel({
           <small aria-live="polite">
             {teamResumeState?.agentIds.length
               ? `${teamResumeState.agentIds.length} interrupted ${teamResumeState.agentIds.length === 1 ? 'agent is' : 'agents are'} resuming`
-              : activeAgents.length
-                ? `${activeAgents.length} working in parallel`
-                : supervisorWorking
-                  ? 'Supervisor synthesizing results'
-                  : `${completedAgents} of ${agents.length} complete`}
+              : `${agents.length} assigned · ${activeAgents.length} working · ${completedAgents} complete`}
           </small>
         </span>
         <span className="codex-agent-team__count">
           {completedAgents}/{agents.length}
         </span>
       </header>
-      {teamResumeState ? (
-        <div
-          className={`codex-agent-team__resume${teamResumeState.failedAgentIds.length ? ' has-failure' : ''}`}
-          role={teamResumeState.failedAgentIds.length ? 'alert' : 'status'}
-        >
-          {teamResumeState.agentIds.length ? (
-            <LoaderCircle aria-hidden="true" className="is-spinning" size={16} />
-          ) : (
-            <CircleAlert aria-hidden="true" size={16} />
-          )}
+      {teamResumeState?.failedAgentIds.length ? (
+        <div className="codex-agent-team__resume has-failure" role="alert">
+          <CircleAlert aria-hidden="true" size={16} />
           <span>
-            <strong>
-              {teamResumeState.agentIds.length
-                ? 'Resuming interrupted agents'
-                : 'Some agents need attention'}
-            </strong>
+            <strong>Some agents need attention</strong>
             <small>
-              {teamResumeState.agentIds.length
-                ? `${teamResumeState.agentIds.length} ${teamResumeState.agentIds.length === 1 ? 'assignment is' : 'assignments are'} continuing from saved sub-chats.`
-                : ''}
-              {teamResumeState.failedAgentIds.length
-                ? ` ${teamResumeState.failedAgentIds.length} ${teamResumeState.failedAgentIds.length === 1 ? 'agent could' : 'agents could'} not be restarted.`
-                : ''}
+              {teamResumeState.failedAgentIds.length}{' '}
+              {teamResumeState.failedAgentIds.length === 1 ? 'agent could' : 'agents could'} not be
+              restarted.
             </small>
           </span>
         </div>
@@ -361,7 +340,6 @@ function AgentTeamPanel({
                 <span className="codex-agent-card__copy">
                   <span>
                     <strong>{agentName(agent, index)}</strong>
-                    {agent.nickname && agent.role ? <small>{agent.nickname}</small> : null}
                   </span>
                   <small>{agent.task || 'Preparing an assigned task…'}</small>
                 </span>
@@ -370,7 +348,7 @@ function AgentTeamPanel({
                   <small>
                     {agent.working
                       ? elapsedTime(agent.workingStartedAt ?? agent.createdAt, clock)
-                      : 'View chat'}
+                      : 'Details'}
                   </small>
                 </span>
                 <ChevronDown
@@ -381,16 +359,9 @@ function AgentTeamPanel({
               </Button>
               {expanded ? (
                 <div className="codex-agent-card__detail" id={agentPanelId}>
-                  <div className="codex-agent-card__assignment">
-                    <GitBranch aria-hidden="true" size={14} />
-                    <span>
-                      <strong>Assignment</strong>
-                      <small>{agent.task || 'Waiting for the supervisor.'}</small>
-                    </span>
-                  </div>
                   {agent.messages.length ? (
                     <div
-                      aria-label={`${agentName(agent, index)} sub-chat`}
+                      aria-label={`${agentName(agent, index)} results`}
                       className="codex-agent-card__messages"
                     >
                       {agent.messages.map((message) => (
@@ -398,15 +369,13 @@ function AgentTeamPanel({
                           className={`codex-agent-card__message codex-agent-card__message--${message.role}`}
                           key={message.id}
                         >
-                          <strong>
-                            {message.role === 'user' ? 'Supervisor' : agentName(agent, index)}
-                          </strong>
+                          <strong>Agent result</strong>
                           <MarkdownContent>{message.text}</MarkdownContent>
                         </div>
                       ))}
                     </div>
                   ) : (
-                    <p className="codex-agent-card__empty">The sub-chat is starting.</p>
+                    <p className="codex-agent-card__empty">No result has been reported yet.</p>
                   )}
                 </div>
               ) : null}
@@ -909,8 +878,6 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
 
   const activeAgents = status?.agents?.filter((agent) => agent.working) ?? [];
   const interruptedAgents = status?.agents?.filter((agent) => agent.status === 'interrupted') ?? [];
-  const completedAgents =
-    status?.agents?.filter((agent) => agent.status === 'completed').length ?? 0;
   const selectedTeamResumeState =
     teamResumeState?.threadId === (selectedThreadId || status?.thread?.id)
       ? teamResumeState
@@ -919,12 +886,13 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   const isTeamResumePending = Boolean(selectedTeamResumeState?.agentIds.length);
   const agentTeamsAfterMessage = useMemo(() => {
     const messages = status?.messages ?? [];
-    const lastMessageByTurn = new Map<string, string>();
+    const anchorMessageByTurn = new Map<string, string>();
     for (const message of messages) {
-      if (message.turnId) lastMessageByTurn.set(message.turnId, message.id);
+      if (message.turnId && !anchorMessageByTurn.has(message.turnId)) {
+        anchorMessageByTurn.set(message.turnId, message.id);
+      }
     }
-    const fallbackMessageId =
-      messages.find((message) => message.role === 'assistant')?.id ?? messages[0]?.id;
+    const fallbackMessageId = messages.at(-1)?.id;
     const teamsByTurn = new Map<string, CodexAgent[]>();
     for (const agent of status?.agents ?? []) {
       const teamKey = agent.supervisorTurnId || '__legacy-agent-team__';
@@ -934,23 +902,47 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
       string,
       Array<{ key: string; label: string; agents: CodexAgent[] }>
     >();
-    let teamNumber = 0;
-    for (const [key, agents] of teamsByTurn) {
-      const messageId = lastMessageByTurn.get(key) || fallbackMessageId;
+    const selectedTeamKeys: string[] = [];
+    if (status?.thread?.activeTurnId) {
+      if (teamsByTurn.has(status.thread.activeTurnId)) {
+        selectedTeamKeys.push(status.thread.activeTurnId);
+      }
+    } else {
+      const latestVisibleTeamKey = [...messages]
+        .reverse()
+        .map((message) => message.turnId)
+        .find((turnId) => Boolean(turnId && teamsByTurn.has(turnId)));
+      if (latestVisibleTeamKey) selectedTeamKeys.push(latestVisibleTeamKey);
+      else if (teamsByTurn.has('__legacy-agent-team__')) {
+        selectedTeamKeys.push('__legacy-agent-team__');
+      }
+    }
+    for (const key of selectedTeamKeys) {
+      const agents = teamsByTurn.get(key) ?? [];
+      const messageId =
+        key === '__legacy-agent-team__' ? fallbackMessageId : anchorMessageByTurn.get(key);
       if (!messageId) continue;
-      teamNumber += 1;
       teamsByMessage.set(messageId, [
         ...(teamsByMessage.get(messageId) ?? []),
         {
           key,
-          label: teamsByTurn.size > 1 ? `Agent team ${teamNumber}` : 'Agent team',
+          label: 'Agent team',
           agents,
         },
       ]);
     }
     return teamsByMessage;
-  }, [status?.agents, status?.messages]);
+  }, [status?.agents, status?.messages, status?.thread?.activeTurnId]);
+  const legacyAgents = status?.agents?.filter((agent) => !agent.supervisorTurnId) ?? [];
   const isCodexWorking = status?.thread?.working === true || activeAgents.length > 0;
+  const hasActiveTeam =
+    status?.agents?.some(
+      (agent) =>
+        agent.working &&
+        (status.thread?.activeTurnId
+          ? agent.supervisorTurnId === status.thread.activeTurnId
+          : agentTeamsAfterMessage.size > 0),
+    ) === true;
   const anyConversationWorking = status?.threads.some((thread) => thread.working) === true;
   const queuedCount = status?.queuedCount ?? 0;
   const interruptingCount = status?.interruptingCount ?? 0;
@@ -1529,8 +1521,25 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
     }
     const submittedPrompt = prompt.trim();
     const submittedAttachments = [...draftAttachments];
+    const optimisticMessageId = crypto.randomUUID();
+    if (!submittedAttachments.length) {
+      setPendingChatMessage({
+        id: optimisticMessageId,
+        text: submittedPrompt,
+      });
+    } else {
+      setPendingVisualMessage({
+        id: optimisticMessageId,
+        text: submittedPrompt,
+        images: submittedAttachments.map((attachment) => attachment.source),
+      });
+    }
+    setPrompt('');
+    setDraftAttachments([]);
+    setIsComposerExpanded(false);
     setPhase('sending-chat');
     setError(undefined);
+    window.requestAnimationFrame(scrollChatToLatest);
     try {
       const response = await studioRuntimeFetch(feedbackEndpoint, {
         method: 'POST',
@@ -1548,26 +1557,27 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
       });
       const result = (await response.json()) as { id?: string; detail?: string };
       if (!response.ok) throw new Error(result.detail || 'Codex could not accept this feedback.');
+      const resultId = result.id;
       if (!submittedAttachments.length) {
-        setPendingChatMessage({
-          id: result.id || crypto.randomUUID(),
-          text: submittedPrompt,
-        });
+        if (resultId) {
+          setPendingChatMessage((current) => (current ? { ...current, id: resultId } : current));
+        }
       } else {
-        setPendingVisualMessage({
-          id: result.id || crypto.randomUUID(),
-          text: submittedPrompt,
-          images: submittedAttachments.map((attachment) => attachment.source),
-        });
+        if (resultId) {
+          setPendingVisualMessage((current) => (current ? { ...current, id: resultId } : current));
+        }
       }
-      setPrompt('');
-      setDraftAttachments([]);
-      setIsComposerExpanded(false);
       setPhase('compose');
       await refreshStatus();
     } catch (cause) {
+      setPendingChatMessage(undefined);
+      setPendingVisualMessage(undefined);
+      setPrompt(submittedPrompt);
+      setDraftAttachments(submittedAttachments);
+      setIsComposerExpanded(true);
       setPhase('compose');
       setError(cause instanceof Error ? cause.message : 'Codex could not accept this feedback.');
+      window.requestAnimationFrame(() => composerTextareaRef.current?.focus());
     }
   };
 
@@ -1847,7 +1857,6 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                             onExpandedAgentChange={setExpandedAgentId}
                             resumeState={selectedTeamResumeState}
                             resumingAgentIds={resumingAgentIds}
-                            supervisorWorking={status.thread?.activeTurnId === team.key}
                             teamKey={team.key}
                             teamLabel={team.label}
                           />
@@ -1873,7 +1882,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                         <span>
                           {message.deliveryMode === 'interrupt'
                             ? 'Interrupting'
-                            : `${message.workMode === 'team' ? 'Agent team · ' : ''}Queued · ${message.position}`}
+                            : `Waiting for current reply to finish · ${message.position}${message.workMode === 'team' ? ' · Agent team' : ''}`}
                         </span>
                         <ButtonGroup>
                           <Button
@@ -1984,155 +1993,19 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                     </div>
                   </article>
                 ) : null}
-                {status?.agents?.length && !agentTeamsAfterMessage.size ? (
-                  <section aria-labelledby="codex-agent-team-title" className="codex-agent-team">
-                    <header className="codex-agent-team__header">
-                      <span aria-hidden="true" className="codex-agent-team__icon">
-                        <UsersRound size={17} />
-                      </span>
-                      <span className="codex-agent-team__summary">
-                        <strong id="codex-agent-team-title">Agent team</strong>
-                        <small aria-live="polite">
-                          {selectedTeamResumeState?.agentIds.length
-                            ? `${selectedTeamResumeState.agentIds.length} interrupted ${selectedTeamResumeState.agentIds.length === 1 ? 'agent is' : 'agents are'} resuming`
-                            : activeAgents.length
-                              ? `${activeAgents.length} working in parallel`
-                              : status.thread?.working
-                                ? 'Supervisor synthesizing results'
-                                : `${completedAgents} of ${status.agents.length} complete`}
-                        </small>
-                      </span>
-                      <span className="codex-agent-team__count">
-                        {completedAgents}/{status.agents.length}
-                      </span>
-                    </header>
-                    {selectedTeamResumeState ? (
-                      <div
-                        className={`codex-agent-team__resume${selectedTeamResumeState.failedAgentIds.length ? ' has-failure' : ''}`}
-                        role={selectedTeamResumeState.failedAgentIds.length ? 'alert' : 'status'}
-                      >
-                        {selectedTeamResumeState.agentIds.length ? (
-                          <LoaderCircle aria-hidden="true" className="is-spinning" size={16} />
-                        ) : (
-                          <CircleAlert aria-hidden="true" size={16} />
-                        )}
-                        <span>
-                          <strong>
-                            {selectedTeamResumeState.agentIds.length
-                              ? 'Resuming interrupted agents'
-                              : 'Some agents need attention'}
-                          </strong>
-                          <small>
-                            {selectedTeamResumeState.agentIds.length
-                              ? `${selectedTeamResumeState.agentIds.length} ${selectedTeamResumeState.agentIds.length === 1 ? 'assignment is' : 'assignments are'} continuing from saved sub-chats.`
-                              : ''}
-                            {selectedTeamResumeState.failedAgentIds.length
-                              ? ` ${selectedTeamResumeState.failedAgentIds.length} ${selectedTeamResumeState.failedAgentIds.length === 1 ? 'agent could' : 'agents could'} not be restarted.`
-                              : ''}
-                          </small>
-                        </span>
-                      </div>
-                    ) : null}
-                    <div className="codex-agent-team__list">
-                      {status.agents.map((agent, index) => {
-                        const expanded = expandedAgentId === agent.id;
-                        const agentIsResuming = resumingAgentIds.has(agent.id);
-                        const presentation = agentIsResuming
-                          ? ({ label: 'Resuming', tone: 'working' } as const)
-                          : agentStatusPresentation(agent.status);
-                        const agentPanelId = `codex-agent-${agent.id}`;
-                        return (
-                          <article
-                            className="codex-agent-card"
-                            data-depth={agent.depth}
-                            key={agent.id}
-                          >
-                            <Button
-                              aria-controls={agentPanelId}
-                              aria-expanded={expanded}
-                              className="codex-agent-card__trigger"
-                              onClick={() => setExpandedAgentId(expanded ? '' : agent.id)}
-                              variant="quiet"
-                            >
-                              <span
-                                aria-hidden="true"
-                                className={`codex-agent-card__state codex-agent-card__state--${presentation.tone}`}
-                              >
-                                {agent.status === 'running' || agentIsResuming ? (
-                                  <LoaderCircle className="is-spinning" size={15} />
-                                ) : agent.status === 'completed' ? (
-                                  <CircleCheck size={15} />
-                                ) : agent.status === 'pendingInit' ? (
-                                  <CircleDot size={15} />
-                                ) : (
-                                  <CircleX size={15} />
-                                )}
-                              </span>
-                              <span className="codex-agent-card__copy">
-                                <span>
-                                  <strong>{agentName(agent, index)}</strong>
-                                  {agent.nickname && agent.role ? (
-                                    <small>{agent.nickname}</small>
-                                  ) : null}
-                                </span>
-                                <small>{agent.task || 'Preparing an assigned task…'}</small>
-                              </span>
-                              <span className="codex-agent-card__meta">
-                                <strong>{presentation.label}</strong>
-                                <small>
-                                  {agent.working
-                                    ? elapsedTime(agent.workingStartedAt ?? agent.createdAt, clock)
-                                    : 'View chat'}
-                                </small>
-                              </span>
-                              <ChevronDown
-                                aria-hidden="true"
-                                className={expanded ? 'is-expanded' : undefined}
-                                size={15}
-                              />
-                            </Button>
-                            {expanded ? (
-                              <div className="codex-agent-card__detail" id={agentPanelId}>
-                                <div className="codex-agent-card__assignment">
-                                  <GitBranch aria-hidden="true" size={14} />
-                                  <span>
-                                    <strong>Assignment</strong>
-                                    <small>{agent.task || 'Waiting for the supervisor.'}</small>
-                                  </span>
-                                </div>
-                                {agent.messages.length ? (
-                                  <div
-                                    aria-label={`${agentName(agent, index)} sub-chat`}
-                                    className="codex-agent-card__messages"
-                                  >
-                                    {agent.messages.map((message) => (
-                                      <div
-                                        className={`codex-agent-card__message codex-agent-card__message--${message.role}`}
-                                        key={message.id}
-                                      >
-                                        <strong>
-                                          {message.role === 'user'
-                                            ? 'Supervisor'
-                                            : agentName(agent, index)}
-                                        </strong>
-                                        <MarkdownContent>{message.text}</MarkdownContent>
-                                      </div>
-                                    ))}
-                                  </div>
-                                ) : (
-                                  <p className="codex-agent-card__empty">
-                                    The sub-chat is starting.
-                                  </p>
-                                )}
-                              </div>
-                            ) : null}
-                          </article>
-                        );
-                      })}
-                    </div>
-                  </section>
+                {legacyAgents.length && !agentTeamsAfterMessage.size ? (
+                  <AgentTeamPanel
+                    agents={legacyAgents}
+                    clock={clock}
+                    expandedAgentId={expandedAgentId}
+                    onExpandedAgentChange={setExpandedAgentId}
+                    resumeState={selectedTeamResumeState}
+                    resumingAgentIds={resumingAgentIds}
+                    teamKey="legacy-agent-team"
+                    teamLabel="Agent team"
+                  />
                 ) : null}
-                {isInterrupted && !isCodexWorking ? (
+                {isInterrupted && !isCodexWorking && !isTeamResumePending ? (
                   <div className="codex-interrupted-status" role="status">
                     <span aria-hidden="true" className="codex-working-status__icon">
                       {isTeamResumePending ? (
@@ -2174,22 +2047,29 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                     </Button>
                   </div>
                 ) : null}
-                {(isCodexWorking && !status?.agents?.length) || queuedCount ? (
-                  <div className="codex-working-status">
+                {(isCodexWorking && !hasActiveTeam) || queuedCount ? (
+                  <div
+                    className={`codex-working-status${isCodexWorking ? ' codex-generating-message' : ''}`}
+                  >
                     <span className="sr-only" role="status">
                       {isCodexWorking
                         ? 'Codex is working on the selected conversation.'
                         : `Codex has ${queuedCount} queued ${queuedCount === 1 ? 'request' : 'requests'}.`}
                     </span>
                     <span aria-hidden="true" className="codex-working-status__icon">
-                      {isCodexWorking ? (
-                        <LoaderCircle className="is-spinning" size={17} />
-                      ) : (
-                        <Clock3 size={17} />
-                      )}
+                      {isCodexWorking ? <Bot size={17} /> : <Clock3 size={17} />}
                     </span>
                     <span className="codex-working-status__copy">
-                      <strong>{isCodexWorking ? workingTitle : 'Waiting for Codex'}</strong>
+                      <strong>
+                        {isCodexWorking ? workingTitle : 'Waiting for Codex'}
+                        {isCodexWorking ? (
+                          <span aria-hidden="true" className="codex-generating-message__dots">
+                            <span />
+                            <span />
+                            <span />
+                          </span>
+                        ) : null}
+                      </strong>
                       <small>
                         {isCodexWorking
                           ? workingDetail
@@ -2223,7 +2103,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
 
             <section
               aria-label="Message composer"
-              className={`codex-composer-surface ${isComposerExpanded ? 'is-expanded' : 'is-collapsed'}`}
+              className={`codex-composer-surface ${isComposerExpanded ? 'is-expanded' : 'is-collapsed'}${phase === 'sending-chat' ? ' is-sending' : ''}`}
             >
               {draftAttachments.length ? (
                 <div aria-label="Selected images" className="codex-composer-draft-attachments">

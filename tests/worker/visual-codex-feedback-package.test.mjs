@@ -90,6 +90,18 @@ const privateWorkspacePreviewAccessMigrationUrl = new URL(
   '../../supabase/migrations/20260820182000_private_workspace_preview_access_test_package.sql',
   import.meta.url,
 );
+const messageMotionCodexChatMigrationUrl = new URL(
+  '../../supabase/migrations/20260820183000_message_motion_codex_chat_test_package.sql',
+  import.meta.url,
+);
+const agentTeamClarityMigrationUrl = new URL(
+  '../../supabase/migrations/20260820184000_agent_team_clarity_test_package.sql',
+  import.meta.url,
+);
+const stableWorkspacePreviewMigrationUrl = new URL(
+  '../../supabase/migrations/20260820210000_stable_workspace_preview_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -164,12 +176,84 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 37);
-  assert.match(app, /container-level full access/);
-  assert.match(app, /both configured Made Solid workspace roots/);
-  assert.match(app, /private expiring workspace links/);
-  assert.match(app, /see edits immediately/);
-  assert.match(app, /before production publication/);
+  assert.equal(Number(revision[1]), 40);
+  assert.match(app, /stable private workspace domain/);
+  assert.match(app, /signed-in Studio owner session/);
+  assert.match(app, /sent messages move immediately from the composer/);
+  assert.match(app, /current assignment and child-owned results/);
+  assert.match(app, /without inherited supervisor history/);
+});
+
+test('registers stable workspace previews as the newest immutable package', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(stableWorkspacePreviewMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Stable workspace preview test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v17\.0/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 17,/);
+  assert.match(repository, /basePackageId: localAgentTeamClarityPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localStableWorkspacePreviewPackage,') <
+      packageLedger.indexOf('localAgentTeamClarityPackage,'),
+  );
+  const freshLedger = repository.slice(
+    repository.indexOf('if (!localPackageRecord)'),
+    repository.indexOf('} else {', repository.indexOf('if (!localPackageRecord)')),
+  );
+  const upgradeLedger = repository.slice(
+    repository.indexOf('const missingPackages = ['),
+    repository.indexOf('].filter(', repository.indexOf('const missingPackages = [')),
+  );
+  const recoveryLedger = repository.slice(repository.indexOf('} catch {'));
+  for (const ledger of [freshLedger, upgradeLedger, recoveryLedger]) {
+    assert.match(ledger, /localStableWorkspacePreviewPackage,/);
+  }
+});
+
+test('retains agent-team clarity below the newest immutable package', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(agentTeamClarityMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Agent-team clarity test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v16\.9/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 16\.9,/);
+  assert.match(repository, /basePackageId: localMessageMotionCodexChatPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localAgentTeamClarityPackage,') <
+      packageLedger.indexOf('localMessageMotionCodexChatPackage,'),
+  );
+});
+
+test('registers message motion as the newest immutable package', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(messageMotionCodexChatMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Message-motion Codex chat test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v16\.8/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 16\.8,/);
+  assert.match(repository, /basePackageId: localPrivateWorkspacePreviewAccessPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localMessageMotionCodexChatPackage,') <
+      packageLedger.indexOf('localPrivateWorkspacePreviewAccessPackage,'),
+  );
 });
 
 test('registers private workspace preview access as the newest immutable package', async () => {
@@ -401,7 +485,7 @@ test('registers the subscription-safe Codex runtime as the newest immutable pack
     packageLedger.indexOf('localSubscriptionSafeCodexRuntimePackage,') <
       packageLedger.indexOf('localUninterruptedCodexRecoveryPackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.37`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.40`/);
   assert.match(launcher, /forced_login_method="chatgpt"/);
   assert.match(launcher, /unset OPENAI_API_KEY SITEFORGE_CODEX_API_KEY CODEX_API_KEY/);
 });
@@ -501,7 +585,7 @@ test('registers resumable Agent team above its prior immutable package', async (
   );
   assert.match(bridge, /resumedAgents/);
   assert.match(bridge, /agentResumeFailures/);
-  assert.match(component, /Resuming interrupted agents/);
+  assert.match(component, /agent is.*resuming/s);
   assert.match(component, /Resume working/);
 });
 

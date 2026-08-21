@@ -11,6 +11,7 @@ import { workspacePreviewUrl } from './workspace-preview-access.mjs';
 import { assertPublicUrl } from '../worker/security.mjs';
 
 const localWorkspaceEndpoint = '/__made-solid/local-workspace';
+const workspacePreviewAccessEndpoint = '/__made-solid/workspace-preview-access';
 const refinementLedgerEndpoint = '/__made-solid/refinement-ledger';
 const learningBundleEndpoint = '/__made-solid/learning-bundle';
 const finalEditEndpoint = '/__made-solid/final-edit';
@@ -33,6 +34,16 @@ function sendJson(response, statusCode, value) {
     'X-Content-Type-Options': 'nosniff',
   });
   response.end(JSON.stringify(value));
+}
+
+async function activeWorkspacePreview() {
+  const activePreviewPath = process.env.SITEFORGE_ACTIVE_PREVIEW_PATH?.trim();
+  if (!activePreviewPath) throw new Error('The active workspace preview is not configured.');
+  const value = JSON.parse(await readFile(activePreviewPath, 'utf8'));
+  if (!directoryPattern.test(value.directory) || !Number.isInteger(value.port)) {
+    throw new Error('The active workspace preview record is invalid.');
+  }
+  return value;
 }
 
 async function fetchPublicCaptureAsset(value) {
@@ -715,6 +726,30 @@ export function localWorkspacePlugin() {
           });
           return;
         }
+      }
+      if (requestUrl.pathname === workspacePreviewAccessEndpoint) {
+        if (request.method !== 'GET') {
+          response.statusCode = 405;
+          response.end('Method not allowed');
+          return;
+        }
+        try {
+          const active = await activeWorkspacePreview();
+          const origin = process.env.SITEFORGE_WORKSPACE_PREVIEW_ORIGIN?.trim();
+          const secret = process.env.SITEFORGE_WORKSPACE_PREVIEW_SECRET?.trim();
+          if (!origin || !secret) throw new Error('The workspace preview is not configured.');
+          sendJson(response, 200, {
+            previewUrl: workspacePreviewUrl(origin, active.directory, secret),
+            status: 'ready',
+          });
+        } catch (error) {
+          sendJson(response, 503, {
+            status: 'unavailable',
+            detail:
+              error instanceof Error ? error.message : 'The workspace preview could not be opened.',
+          });
+        }
+        return;
       }
       if (requestUrl.pathname === captureAssetEndpoint) {
         const fetchSite = request.headers['sec-fetch-site'];

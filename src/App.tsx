@@ -8841,10 +8841,10 @@ function BuilderRunPanel({
             id: 'visual-codex-feedback',
             title: 'Codex Workspace Agent and visual feedback',
             detail:
-              'The subscription-only Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy. Reviewers can choose direct work or Agent team delegation, then inspect each real attached sub-chat, assignment, state, timing, and transcript. Saved builds, tests, committed edits, and validated development servers open inside the Studio preview shell so the panel remains above the website. Observable activity and queue state appears without invented progress.',
-            revision: `v${selectedAgentPackage.version}.37`,
+              'The subscription-only Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy. Reviewers can choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. The stable workspace.madesolid.com.au address returns expired or missing browser access through the reviewer’s existing authenticated Studio session, then restores the active private development server without exposing its capability in the clean URL. Observable activity and queue state appears without invented progress.',
+            revision: `v${selectedAgentPackage.version}.40`,
             change:
-              'Latest edits: owner-authorized Railway chats use container-level full access with both configured Made Solid workspace roots, and private expiring workspace links open the active Studio or website source so reviewers can see edits immediately before production publication.',
+              'Latest edits: the stable private workspace domain now recovers expired browser access through the signed-in Studio owner session and returns to the same workspace path; sent messages move immediately from the composer with failure recovery; and Agent teams show the current assignment and child-owned results without inherited supervisor history or unrelated historical teams.',
           },
           {
             id: 'inbound-client-email-review',

@@ -342,6 +342,9 @@ const localInlineMultiImageCodexChatPackageId =
 const localContextualCodexChatPackageId = 'agent-package-local-v16-6-contextual-codex-chat';
 const localPrivateWorkspacePreviewAccessPackageId =
   'agent-package-local-v16-7-private-workspace-preview-access';
+const localMessageMotionCodexChatPackageId = 'agent-package-local-v16-8-message-motion-codex-chat';
+const localAgentTeamClarityPackageId = 'agent-package-local-v16-9-agent-team-clarity';
+const localStableWorkspacePreviewPackageId = 'agent-package-local-v17-stable-workspace-preview';
 
 type StoreName =
   | 'activities'
@@ -2466,10 +2469,64 @@ export class SiteforgeRepository {
         'Makes the existing private Railway preview lane usable for immediate source review while preserving its signed, expiring access boundary.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localMessageMotionCodexChatPackage: AgentPackage = {
+      ...localPrivateWorkspacePreviewAccessPackage,
+      id: localMessageMotionCodexChatPackageId,
+      version: 16.8,
+      basePackageId: localPrivateWorkspacePreviewAccessPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v16.8',
+      contractAddendum:
+        'The Studio Codex chat moves an outgoing message from the active composer into the transcript immediately, restores the exact draft after delivery failure, and presents active Codex generation as a restrained animated assistant-side message.',
+      instructionsAddendum:
+        'Render an optimistic outgoing message synchronously when Send is activated, clear and collapse the submitted composer, reconcile the optimistic record with the accepted turn, and restore its text and images on failure. Keep the generating treatment on the assistant side, announce working state once through status semantics, and disable all decorative message motion for prefers-reduced-motion.',
+      summary:
+        'Message-motion Codex chat test package: adds immediate composer-to-thread delivery motion and a compact animated assistant response state.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes sending and waiting feel spatially connected to the conversation while retaining failure recovery and reduced-motion access.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localAgentTeamClarityPackage: AgentPackage = {
+      ...localMessageMotionCodexChatPackage,
+      id: localAgentTeamClarityPackageId,
+      version: 16.9,
+      basePackageId: localMessageMotionCodexChatPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v16.9',
+      contractAddendum:
+        'The Studio Codex chat presents only the Agent team that belongs to the current or latest visible supervisor turn, labels each assignment from its actual agent path, and shows only child-owned result updates rather than inherited supervisor history.',
+      instructionsAddendum:
+        'Map current App Server subAgentActivity records to their exact supervisor turn while retaining legacy compatibility. Exclude inherited parent turns from child status and transcript data, keep historical teams out of unrelated transcript windows, anchor the visible team to its initiating request, and summarize assigned, working, and complete counts once. A completed turn remains completed when a follow-up is queued.',
+      summary:
+        'Agent-team clarity test package: removes inherited and historical chat noise, fixes exact turn placement, and reports one truthful team status.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes Agent team delegation understandable and trustworthy without exposing copied supervisor prompts or misleading lifecycle state.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localStableWorkspacePreviewPackage: AgentPackage = {
+      ...localAgentTeamClarityPackage,
+      id: localStableWorkspacePreviewPackageId,
+      version: 17,
+      basePackageId: localAgentTeamClarityPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v17.0',
+      contractAddendum:
+        'The stable private workspace domain redirects an expired or missing browser capability through the authenticated owner-only Studio runtime, issues fresh access for the active development directory, and returns to the same workspace path with a clean browser URL.',
+      instructionsAddendum:
+        'When workspace preview access is missing, expired, or belongs to an earlier active directory, redirect only top-level document navigation to the configured HTTPS Studio origin. Require the existing Supabase owner authorization before issuing a fresh capability, preserve the requested same-origin workspace path, exchange the capability for the secure cookie, and keep assets, non-document requests, indexing, and unauthorized accounts blocked.',
+      summary:
+        'Stable workspace preview test package: makes the normal private workspace domain recover expired access through the signed-in Studio owner session.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps the non-production workspace preview reachable at its normal domain without turning it into a public or permanent bearer link.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localStableWorkspacePreviewPackage,
+          localAgentTeamClarityPackage,
+          localMessageMotionCodexChatPackage,
           localPrivateWorkspacePreviewAccessPackage,
           localContextualCodexChatPackage,
           localInlineMultiImageCodexChatPackage,
@@ -2585,6 +2642,9 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localStableWorkspacePreviewPackage,
+          localAgentTeamClarityPackage,
+          localMessageMotionCodexChatPackage,
           localPrivateWorkspacePreviewAccessPackage,
           localContextualCodexChatPackage,
           localInlineMultiImageCodexChatPackage,
@@ -2703,6 +2763,9 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localStableWorkspacePreviewPackage,
+            localAgentTeamClarityPackage,
+            localMessageMotionCodexChatPackage,
             localPrivateWorkspacePreviewAccessPackage,
             localContextualCodexChatPackage,
             localInlineMultiImageCodexChatPackage,

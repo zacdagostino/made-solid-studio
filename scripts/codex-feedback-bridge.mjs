@@ -176,12 +176,28 @@ function publicThread(thread, { discardable = false } = {}) {
   };
 }
 
-function agentTask(thread) {
-  const task = String(thread?.preview || '')
-    .split(/\n\s*(?:Captured from:|Agent team is enabled)/i, 1)[0]
-    .replace(/\s+/g, ' ')
-    .trim();
-  return task.slice(0, maximumPromptLength);
+function humanizeAgentPath(value) {
+  const segment = String(value || '')
+    .split('/')
+    .filter(Boolean)
+    .at(-1);
+  if (!segment) return '';
+  const label = segment.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return label ? `${label.charAt(0).toUpperCase()}${label.slice(1)}` : '';
+}
+
+function threadAgentPath(thread) {
+  return (
+    thread?.subAgent?.thread_spawn?.agent_path ||
+    thread?.source?.subAgent?.thread_spawn?.agent_path ||
+    thread?.source?.subagent?.thread_spawn?.agent_path ||
+    thread?.agentPath ||
+    thread?.agent_path
+  );
+}
+
+function agentTask(thread, activity) {
+  return humanizeAgentPath(activity?.agentPath || threadAgentPath(thread));
 }
 
 function collabAgentStates(threads) {
@@ -199,11 +215,39 @@ function collabAgentStates(threads) {
   return states;
 }
 
+function collabAgentActivities(threads) {
+  const activities = new Map();
+  for (const thread of threads) {
+    for (const turn of Array.isArray(thread?.turns) ? thread.turns : []) {
+      if (typeof turn?.id !== 'string') continue;
+      for (const item of Array.isArray(turn.items) ? turn.items : []) {
+        if (item?.type !== 'subAgentActivity' || typeof item.agentThreadId !== 'string') continue;
+        const threadId = String(item.agentThreadId);
+        const next = {
+          turnId: turn.id,
+          agentPath: typeof item.agentPath === 'string' ? item.agentPath : undefined,
+          kind: typeof item.kind === 'string' ? item.kind : undefined,
+        };
+        const current = activities.get(threadId);
+        if (!current || (next.kind === 'started' && current.kind !== 'started')) {
+          activities.set(threadId, next);
+        }
+      }
+    }
+  }
+  return activities;
+}
+
 function collabAgentTurnIds(thread) {
   const turnIds = new Map();
   for (const turn of Array.isArray(thread?.turns) ? thread.turns : []) {
     if (typeof turn?.id !== 'string') continue;
     for (const item of Array.isArray(turn.items) ? turn.items : []) {
+      if (item?.type === 'subAgentActivity' && typeof item.agentThreadId === 'string') {
+        const threadId = String(item.agentThreadId);
+        if (!turnIds.has(threadId) || item.kind === 'started') turnIds.set(threadId, turn.id);
+        continue;
+      }
       if (item?.type !== 'collabAgentToolCall' || !item.agentsStates) continue;
       for (const threadId of Object.keys(item.agentsStates)) {
         if (!turnIds.has(String(threadId))) turnIds.set(String(threadId), turn.id);
@@ -213,42 +257,53 @@ function collabAgentTurnIds(thread) {
   return turnIds;
 }
 
-function publicAgent(thread, detail, state, depth, supervisorTurnId) {
+function agentOwnedTurns(thread, inheritedTurnIds) {
+  const turns = Array.isArray(thread?.turns) ? thread.turns : [];
+  const createdAt = typeof thread?.createdAt === 'number' ? thread.createdAt : undefined;
+  return turns.filter((turn) => {
+    if (typeof turn?.id === 'string' && inheritedTurnIds?.has(turn.id)) return false;
+    if (createdAt === undefined || typeof turn?.startedAt !== 'number') return true;
+    return turn.startedAt >= createdAt;
+  });
+}
+
+function publicAgent(thread, detail, state, depth, supervisorTurnId, activity, inheritedTurnIds) {
   const source = detail?.thread ? { ...thread, ...detail.thread } : thread;
-  const turn = activeTurn(source);
-  const lastTurn = [...(Array.isArray(source?.turns) ? source.turns : [])]
+  const ownedSource = { ...source, turns: agentOwnedTurns(source, inheritedTurnIds) };
+  const turn = activeTurn(ownedSource);
+  const lastTurn = [...ownedSource.turns]
     .reverse()
     .find((candidate) => typeof candidate?.id === 'string');
-  const inferredStatus =
-    source?.status?.type === 'active'
-      ? 'running'
-      : source?.status?.type === 'systemError'
-        ? 'errored'
-        : lastTurn?.status === 'interrupted'
-          ? 'interrupted'
-          : lastTurn?.status === 'completed'
-            ? 'completed'
-            : source?.status?.type === 'idle'
-              ? lastTurn
-                ? 'completed'
-                : 'pendingInit'
-              : 'pendingInit';
-  const messages = publicMessages(source).slice(-10);
-  const latestAssistantMessage = [...messages]
-    .reverse()
-    .find((message) => message.role === 'assistant')?.text;
-  const status =
-    source?.status?.type === 'active' || turn
-      ? 'running'
+  const inferredStatus = turn
+    ? 'running'
+    : source?.status?.type === 'systemError'
+      ? 'errored'
       : lastTurn?.status === 'interrupted'
         ? 'interrupted'
         : lastTurn?.status === 'completed'
           ? 'completed'
-          : source?.status?.type === 'systemError'
-            ? 'errored'
-            : typeof state?.status === 'string'
-              ? state.status
-              : inferredStatus;
+          : source?.status?.type === 'idle'
+            ? lastTurn
+              ? 'completed'
+              : 'pendingInit'
+            : 'pendingInit';
+  const messages = publicMessages(ownedSource)
+    .filter((message) => message.role === 'assistant')
+    .slice(-6);
+  const latestAssistantMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === 'assistant')?.text;
+  const status = turn
+    ? 'running'
+    : lastTurn?.status === 'interrupted'
+      ? 'interrupted'
+      : lastTurn?.status === 'completed'
+        ? 'completed'
+        : source?.status?.type === 'systemError'
+          ? 'errored'
+          : typeof state?.status === 'string'
+            ? state.status
+            : inferredStatus;
   return {
     id: String(source.id),
     parentThreadId: typeof source.parentThreadId === 'string' ? source.parentThreadId : undefined,
@@ -256,7 +311,7 @@ function publicAgent(thread, detail, state, depth, supervisorTurnId) {
     nickname: typeof source.agentNickname === 'string' ? source.agentNickname : undefined,
     role: typeof source.agentRole === 'string' ? source.agentRole : undefined,
     name: typeof source.name === 'string' ? source.name : undefined,
-    task: agentTask(source),
+    task: agentTask(source, activity),
     status,
     statusMessage:
       typeof state?.message === 'string'
@@ -571,6 +626,10 @@ export class CodexFeedbackBridge {
         detailedThread,
         ...agentDetails.map((detail) => detail?.thread),
       ]);
+      const agentActivities = collabAgentActivities([
+        detailedThread,
+        ...agentDetails.map((detail) => detail?.thread),
+      ]);
       const agentParents = new Map(
         agentThreads.map((agentThread) => [String(agentThread.id), agentThread.parentThreadId]),
       );
@@ -586,6 +645,11 @@ export class CodexFeedbackBridge {
         return Math.min(depth, 4);
       };
       const directAgentTurnIds = collabAgentTurnIds(detailedThread);
+      const inheritedTurnIds = new Set(
+        (Array.isArray(detailedThread?.turns) ? detailedThread.turns : [])
+          .map((turn) => (typeof turn?.id === 'string' ? turn.id : undefined))
+          .filter(Boolean),
+      );
       const rootAgentId = (agentThread) => {
         let currentId = String(agentThread.id);
         let parentId = agentThread.parentThreadId;
@@ -658,6 +722,8 @@ export class CodexFeedbackBridge {
             agentStates.get(String(agentThread.id)),
             agentDepth(agentThread),
             supervisorTurnId(agentThread),
+            agentActivities.get(String(agentThread.id)),
+            inheritedTurnIds,
           ),
         ),
         models,
@@ -1386,7 +1452,13 @@ export class CodexFeedbackBridge {
           const hasQueuedFollowUp = queued.some(
             (candidate) => String(candidate.threadId || '') === String(record.threadId || ''),
           );
-          if (hasQueuedFollowUp && trackedTurn.status !== 'inProgress') {
+          if (trackedTurn.status === 'completed') {
+            await this.updateRecordStatus(record, 'completed', {
+              completedAt: new Date().toISOString(),
+            });
+            continue;
+          }
+          if (hasQueuedFollowUp && trackedTurn.status === 'interrupted') {
             await this.updateRecordStatus(record, 'interrupted', {
               interruptedAt: new Date().toISOString(),
             });
@@ -1421,12 +1493,6 @@ export class CodexFeedbackBridge {
                 agentRecoveryRequestedAt: new Date().toISOString(),
               });
             }
-            continue;
-          }
-          if (trackedTurn.status === 'completed') {
-            await this.updateRecordStatus(record, 'completed', {
-              completedAt: new Date().toISOString(),
-            });
             continue;
           }
           if (trackedTurn.status !== 'interrupted') {

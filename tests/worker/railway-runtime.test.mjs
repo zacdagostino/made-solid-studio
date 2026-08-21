@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -10,6 +11,10 @@ import {
   verifyWorkspacePreviewToken,
   workspacePreviewUrl,
 } from '../../scripts/workspace-preview-access.mjs';
+import {
+  startWorkspacePreviewProxy,
+  workspacePreviewReentryUrl,
+} from '../../scripts/workspace-preview-proxy.mjs';
 
 const secret = 'a-private-preview-secret-that-is-longer-than-thirty-two-characters';
 const execFile = promisify(execFileCallback);
@@ -38,6 +43,44 @@ test('creates expiring private workspace preview capabilities', () => {
   );
   assert.equal(url.origin, 'https://workspace.example.com');
   assert.ok(url.searchParams.get('access'));
+});
+
+test('returns expired workspace documents through the stable authenticated Studio route', async () => {
+  assert.equal(
+    workspacePreviewReentryUrl('https://studio.madesolid.com.au', '/services?viewport=mobile'),
+    'https://studio.madesolid.com.au/#/workspace-preview-access?path=%2Fservices%3Fviewport%3Dmobile',
+  );
+
+  const server = startWorkspacePreviewProxy({
+    activePreviewPath: '/tmp/not-read-without-valid-access.json',
+    port: 0,
+    secret,
+    studioOrigin: 'https://studio.madesolid.com.au',
+  });
+  if (!server.listening) await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  try {
+    const origin = `http://127.0.0.1:${address.port}`;
+    const documentResponse = await fetch(`${origin}/services?viewport=mobile`, {
+      headers: { Accept: 'text/html', 'Sec-Fetch-Mode': 'navigate' },
+      redirect: 'manual',
+    });
+    assert.equal(documentResponse.status, 303);
+    assert.equal(
+      documentResponse.headers.get('location'),
+      'https://studio.madesolid.com.au/#/workspace-preview-access?path=%2Fservices%3Fviewport%3Dmobile',
+    );
+
+    const assetResponse = await fetch(`${origin}/assets/site.css`, {
+      headers: { Accept: 'text/css' },
+      redirect: 'manual',
+    });
+    assert.equal(assetResponse.status, 404);
+    assert.equal(await assetResponse.text(), 'Private workspace preview unavailable.');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test('registers a single-volume Singapore Railway runtime with a health check', async () => {

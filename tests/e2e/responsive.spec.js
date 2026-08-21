@@ -3692,9 +3692,10 @@ test('displays the newest test package above retained package versions', async (
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const packagePicker = page.getByLabel('Test agent package');
-  await expect(packagePicker).toHaveValue(
-    'agent-package-local-v16-7-private-workspace-preview-access',
-  );
+  await expect(packagePicker).toHaveValue('agent-package-local-v17-stable-workspace-preview');
+  await expect(packagePicker).toContainText('v17.0 · Approved test');
+  await expect(packagePicker).toContainText('v16.9 · Approved test');
+  await expect(packagePicker).toContainText('v16.8 · Approved test');
   await expect(packagePicker).toContainText('v16.7 · Approved test');
   await expect(packagePicker).toContainText('v16.6 · Approved test');
   await expect(packagePicker).toContainText('v16.5 · Approved test');
@@ -3808,6 +3809,9 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v17.0', 'Stable workspace preview'],
+    ['v16.9', 'Agent-team clarity'],
+    ['v16.8', 'Message-motion Codex chat'],
     ['v16.7', 'Private workspace preview access'],
     ['v16.6', 'Contextual Codex chat'],
     ['v16.5', 'Inline multi-image Codex chat'],
@@ -4064,7 +4068,7 @@ test('keeps a failed test available without blocking another test', async ({ pag
   const chooser = page.locator('.builder-run__tests');
   await expect(chooser).toBeVisible();
   await expect(page.getByLabel('Test agent package')).toHaveValue(
-    'agent-package-local-v16-7-private-workspace-preview-access',
+    'agent-package-local-v16-8-message-motion-codex-chat',
   );
   await expect(chooser.getByLabel('Create page from scratch')).toBeChecked();
   await expect(chooser.getByLabel('Previous built page')).toHaveCount(0);
@@ -4338,8 +4342,8 @@ test('separates test refinement from the published builder agent package', async
   );
   await expect(page.getByRole('heading', { name: 'Every saved build package' })).toBeVisible();
   const versionCards = page.locator('.agent-package-version-ledger__list article');
-  await expect(versionCards).toHaveCount(109);
-  await expect(versionCards.first().getByRole('heading')).toHaveText('v16.7');
+  await expect(versionCards).toHaveCount(112);
+  await expect(versionCards.first().getByRole('heading')).toHaveText('v17.0');
   const stagedV7Card = versionCards.filter({
     hasText: 'Five tested behaviours staged for the next production package.',
   });

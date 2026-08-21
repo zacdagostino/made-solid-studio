@@ -74,6 +74,9 @@ test('exposes same-origin one-click workspace setup through the local Studio ser
   assert.match(localDev, /viteConfigPath/);
   assert.match(localDev, /'--config'/);
   assert.match(source, /\/__made-solid\/local-workspace/);
+  assert.match(source, /\/__made-solid\/workspace-preview-access/);
+  assert.match(source, /activeWorkspacePreview\(\)/);
+  assert.match(source, /workspacePreviewUrl\(origin, active\.directory, secret\)/);
   assert.match(source, /\/__made-solid\/refinement-ledger/);
   assert.match(source, /request\.method !== 'POST'/);
   assert.match(source, /sec-fetch-site/);

@@ -12,11 +12,26 @@ function requiredEnvironment(name, environment = process.env) {
 }
 
 export function workspacePreviewProxyConfiguration(environment = process.env) {
+  const studioOrigin = new URL(requiredEnvironment('SITEFORGE_PUBLIC_ORIGIN', environment));
+  if (studioOrigin.protocol !== 'https:') {
+    throw new Error('SITEFORGE_PUBLIC_ORIGIN must use HTTPS for workspace preview re-entry.');
+  }
   return {
     activePreviewPath: requiredEnvironment('SITEFORGE_ACTIVE_PREVIEW_PATH', environment),
     port: Number(environment.SITEFORGE_WORKSPACE_PROXY_PORT) || 3000,
     secret: requiredEnvironment('SITEFORGE_WORKSPACE_PREVIEW_SECRET', environment),
+    studioOrigin: studioOrigin.origin,
   };
+}
+
+export function workspacePreviewReentryUrl(studioOrigin, requestUrl = '/') {
+  const requested = new URL(requestUrl, 'https://workspace.madesolid.invalid');
+  const returnPath = `${requested.pathname}${requested.search}`;
+  const destination = new URL(studioOrigin);
+  destination.pathname = '/';
+  destination.search = '';
+  destination.hash = `/workspace-preview-access?path=${encodeURIComponent(returnPath)}`;
+  return destination.href;
 }
 
 function requestCookies(request) {
@@ -73,6 +88,30 @@ function unavailable(response, status = 404) {
     'X-Robots-Tag': 'noindex, nofollow, noarchive',
   });
   response.end('Private workspace preview unavailable.');
+}
+
+function requestsDocument(request) {
+  const fetchMode = String(request.headers['sec-fetch-mode'] || '').toLowerCase();
+  const accept = String(request.headers.accept || '').toLowerCase();
+  return (
+    (request.method === 'GET' || request.method === 'HEAD') &&
+    (fetchMode === 'navigate' || accept.includes('text/html'))
+  );
+}
+
+function requestStudioReentry(request, response, configuration) {
+  if (!requestsDocument(request)) {
+    unavailable(response);
+    return;
+  }
+  response.writeHead(303, {
+    'Cache-Control': 'no-store',
+    Location: workspacePreviewReentryUrl(configuration.studioOrigin, request.url),
+    'Referrer-Policy': 'no-referrer',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Robots-Tag': 'noindex, nofollow, noarchive',
+  });
+  response.end();
 }
 
 function upstreamHeaders(request, active) {
@@ -143,7 +182,7 @@ export function startWorkspacePreviewProxy(configuration = workspacePreviewProxy
     }
     const { access, queryToken, requestUrl, token } = accessForRequest(request, configuration);
     if (!access) {
-      unavailable(response);
+      requestStudioReentry(request, response, configuration);
       return;
     }
     if (queryToken) {
@@ -153,7 +192,7 @@ export function startWorkspacePreviewProxy(configuration = workspacePreviewProxy
     try {
       const active = await activePreview(configuration);
       if (active.directory !== access.directory) {
-        unavailable(response);
+        requestStudioReentry(request, response, configuration);
         return;
       }
       proxyHttp(request, response, active);

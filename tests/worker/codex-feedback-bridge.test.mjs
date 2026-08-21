@@ -252,14 +252,10 @@ test('returns the live hierarchy and bounded sub-chat transcript for attached ag
     collabItems: [
       {
         id: 'spawn-agent-1',
-        type: 'collabAgentToolCall',
-        tool: 'spawnAgent',
-        status: 'completed',
-        senderThreadId: 'thread-1',
-        receiverThreadIds: ['agent-1'],
-        agentsStates: {
-          'agent-1': { status: 'running', message: 'Checking the responsive layout.' },
-        },
+        type: 'subAgentActivity',
+        kind: 'started',
+        agentThreadId: 'agent-1',
+        agentPath: '/root/responsive_layout_audit',
       },
     ],
     agentThreads: [
@@ -268,11 +264,28 @@ test('returns the live hierarchy and bounded sub-chat transcript for attached ag
         parentThreadId: 'thread-1',
         agentNickname: 'Lime',
         agentRole: 'responsive reviewer',
-        preview: 'Verify the chat at mobile, tablet, and desktop widths.',
+        preview: 'Inherited original parent prompt that must never be shown.',
         createdAt: now - 30,
         updatedAt: now,
         status: { type: 'active', activeFlags: ['turn'] },
         turns: [
+          {
+            id: 'turn-active',
+            status: 'inProgress',
+            startedAt: now - 60,
+            items: [
+              {
+                id: 'inherited-parent-user',
+                type: 'userMessage',
+                content: [{ type: 'text', text: 'This is copied supervisor history.' }],
+              },
+              {
+                id: 'inherited-parent-assistant',
+                type: 'agentMessage',
+                text: 'This parent update must not appear in the child card.',
+              },
+            ],
+          },
           {
             id: 'agent-turn-1',
             status: 'inProgress',
@@ -288,6 +301,13 @@ test('returns the live hierarchy and bounded sub-chat transcript for attached ag
                 type: 'agentMessage',
                 text: 'Mobile and tablet checks are in progress.',
               },
+              {
+                id: 'spawn-agent-2',
+                type: 'subAgentActivity',
+                kind: 'started',
+                agentThreadId: 'agent-2',
+                agentPath: '/root/keyboard_focus_audit',
+              },
             ],
           },
         ],
@@ -296,14 +316,27 @@ test('returns the live hierarchy and bounded sub-chat transcript for attached ag
         id: 'agent-2',
         parentThreadId: 'agent-1',
         agentNickname: 'Oak',
-        preview: 'Inspect keyboard and focus behaviour.',
+        preview: 'Inherited original parent prompt that must never be shown.',
         createdAt: now - 20,
         updatedAt: now - 2,
-        status: { type: 'idle' },
+        status: { type: 'active', activeFlags: ['turn'] },
         turns: [
+          {
+            id: 'turn-active',
+            status: 'inProgress',
+            startedAt: now - 60,
+            items: [
+              {
+                id: 'nested-inherited-parent',
+                type: 'agentMessage',
+                text: 'Copied parent output.',
+              },
+            ],
+          },
           {
             id: 'agent-turn-2',
             status: 'completed',
+            startedAt: now - 18,
             items: [
               {
                 id: 'agent-message-2',
@@ -326,13 +359,22 @@ test('returns the live hierarchy and bounded sub-chat transcript for attached ag
 
   assert.equal(status.agents.length, 2);
   assert.equal(status.agents[0].role, 'responsive reviewer');
+  assert.equal(status.agents[0].task, 'Responsive layout audit');
   assert.equal(status.agents[0].status, 'running');
   assert.equal(status.agents[0].working, true);
   assert.equal(status.agents[0].supervisorTurnId, 'turn-active');
-  assert.equal(status.agents[0].messages.at(-1).text, 'Mobile and tablet checks are in progress.');
+  assert.deepEqual(
+    status.agents[0].messages.map((message) => message.text),
+    ['Mobile and tablet checks are in progress.'],
+  );
   assert.equal(status.agents[1].depth, 1);
   assert.equal(status.agents[1].supervisorTurnId, 'turn-active');
+  assert.equal(status.agents[1].task, 'Keyboard focus audit');
   assert.equal(status.agents[1].status, 'completed');
+  assert.deepEqual(
+    status.agents[1].messages.map((message) => message.text),
+    ['Keyboard checks passed.'],
+  );
 });
 
 test('identifies and safely continues a turn interrupted by a Codespace pause', async () => {
@@ -569,6 +611,43 @@ test('durably resumes every newly interrupted app-owned continuation', async () 
   assert.ok(completed.completedAt);
 });
 
+test('keeps a completed turn completed when a follow-up is already queued', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-completed-queue-'));
+  const state = { busy: false, turns: [], turnStatuses: {} };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+  const finished = await bridge.enqueue({
+    prompt: 'Finish the current interface change.',
+    model: 'gpt-text-only',
+    effort: 'medium',
+    threadId: 'thread-1',
+  });
+  state.turnStatuses['turn-1'] = 'completed';
+  state.busy = true;
+  const followUp = await bridge.enqueue({
+    prompt: 'Review the finished interface next.',
+    model: 'gpt-text-only',
+    effort: 'medium',
+    threadId: 'thread-1',
+  });
+
+  assert.equal(followUp.status, 'queued');
+  await bridge.maintain();
+
+  const completed = await bridge.readRecords('completed');
+  assert.equal(
+    completed.some((record) => record.id === finished.id),
+    true,
+  );
+  assert.equal(
+    (await bridge.readRecords('interrupted')).some((record) => record.id === finished.id),
+    false,
+  );
+});
+
 test('uses an app-server reactivated turn instead of starting a duplicate continuation', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-reactivated-turn-'));
   const state = {
@@ -579,6 +658,7 @@ test('uses an app-server reactivated turn instead of starting a duplicate contin
   };
   const bridge = new CodexFeedbackBridge({
     cwd: '/workspaces/siteforge-os',
+    runtimeWorkspaceRoots: ['/workspaces/siteforge-os', '/workspaces/made-solid-website'],
     storageRoot: directory,
     connect: fakeConnection(state),
   });
@@ -943,6 +1023,7 @@ test('uses container-level full access while preserving both Railway workspace r
   const state = { busy: false, turns: [] };
   const bridge = new CodexFeedbackBridge({
     cwd: '/workspaces/siteforge-os',
+    runtimeWorkspaceRoots: ['/workspaces/siteforge-os', '/workspaces/made-solid-website'],
     storageRoot: directory,
     connect: fakeConnection(state),
   });

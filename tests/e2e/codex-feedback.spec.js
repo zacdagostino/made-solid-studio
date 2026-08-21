@@ -91,6 +91,7 @@ test.beforeEach(async ({ page }) => {
     const working = pageUrl.searchParams.has('codexWorking') || noWorkingStart;
     const interrupted = pageUrl.searchParams.has('codexInterrupted');
     const teamHistory = pageUrl.searchParams.has('codexTeamHistory');
+    const directWorkingTurn = pageUrl.searchParams.has('codexDirectWorking');
     const incomingProgress = pageUrl.searchParams.has('codexIncoming');
     const workingSince = Math.floor(Date.now() / 1_000) - 65;
     const threadUpdatedAt = noWorkingStart
@@ -117,6 +118,13 @@ test.beforeEach(async ({ page }) => {
                 preview: 'Open the Studio chat.\n\nCaptured from: Made Solid Studio',
                 status: working ? 'active' : 'idle',
                 working,
+                activeTurnId: working
+                  ? directWorkingTurn
+                    ? 'turn-direct-active'
+                    : teamHistory
+                      ? 'turn-team-3'
+                      : 'turn-team-1'
+                  : undefined,
                 interrupted,
                 lastTurnStatus: interrupted ? 'interrupted' : 'completed',
                 activeFlags: working ? ['turn'] : [],
@@ -213,11 +221,6 @@ test.beforeEach(async ({ page }) => {
                 workingStartedAt: workingSince,
                 messages: [
                   {
-                    id: 'agent-responsive-task',
-                    role: 'user',
-                    text: 'Check layout, overflow, and touch targets at every required viewport.',
-                  },
-                  {
                     id: 'agent-responsive-update',
                     role: 'assistant',
                     text: 'Mobile checks are complete. I am reviewing tablet and desktop now.',
@@ -237,11 +240,6 @@ test.beforeEach(async ({ page }) => {
                 createdAt: workingSince - 24,
                 updatedAt: workingSince - 2,
                 messages: [
-                  {
-                    id: 'agent-accessibility-task',
-                    role: 'user',
-                    text: 'Audit keyboard and screen-reader behaviour.',
-                  },
                   {
                     id: 'agent-accessibility-result',
                     role: 'assistant',
@@ -353,8 +351,13 @@ test.beforeEach(async ({ page }) => {
 
 test('sends a text-only chat message to the selected Codex model', async ({ page }) => {
   let delivered;
+  let releaseDelivery;
+  const deliveryGate = new Promise((resolve) => {
+    releaseDelivery = resolve;
+  });
   await page.route('**/__made-solid/codex-feedback', async (route) => {
     delivered = route.request().postDataJSON();
+    await deliveryGate;
     await route.fulfill({
       status: 202,
       contentType: 'application/json',
@@ -391,8 +394,9 @@ test('sends a text-only chat message to the selected Codex model', async ({ page
   await expect(composer.getByRole('log', { name: 'Codex chat log' })).toContainText('Sending');
   await expect(composer.locator('.codex-chat-message--pending')).toHaveCSS(
     'animation-name',
-    'codex-user-message-enter',
+    'codex-message-from-composer',
   );
+  releaseDelivery();
   await expect(page.getByRole('dialog', { name: 'Message queued' })).toHaveCount(0);
   expect(delivered.model).toBe('gpt-5.3-codex-spark');
   expect(delivered.effort).toBe('high');
@@ -400,6 +404,38 @@ test('sends a text-only chat message to the selected Codex model', async ({ page
   expect(delivered.workMode).toBe('team');
   expect(delivered.prompt).toContain('Review the current implementation');
   expect(delivered).not.toHaveProperty('screenshot');
+});
+
+test('restores a message to the composer when optimistic delivery fails', async ({ page }) => {
+  let releaseDelivery;
+  const deliveryGate = new Promise((resolve) => {
+    releaseDelivery = resolve;
+  });
+  await page.route('**/__made-solid/codex-feedback', async (route) => {
+    await deliveryGate;
+    await route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'Codex is temporarily unavailable.' }),
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  const textarea = composer.getByLabel('Message to Codex');
+  await textarea.fill('Keep this draft if delivery fails.');
+  await composer.getByRole('button', { name: 'Send message' }).click();
+
+  await expect(composer.locator('.codex-chat-message--pending')).toContainText(
+    'Keep this draft if delivery fails.',
+  );
+  await expect(textarea).toHaveValue('');
+  releaseDelivery();
+  await expect(composer.locator('.codex-chat-message--pending')).toHaveCount(0);
+  await expect(textarea).toHaveValue('Keep this draft if delivery fails.');
+  await expect(textarea).toBeFocused();
+  await expect(composer.getByRole('alert')).toContainText('Codex is temporarily unavailable.');
 });
 
 test('sends Fast as the selected Codex priority service tier', async ({ page }) => {
@@ -429,21 +465,23 @@ test('sends Fast as the selected Codex priority service tier', async ({ page }) 
   expect(delivered.effort).toBe('medium');
 });
 
-test('shows the live attached agent hierarchy and opens each sub-chat', async ({ page }) => {
+test('shows the current attached agent team and opens its reported results', async ({ page }) => {
   await page.goto('/?codexAgents=1');
   await page.getByRole('button', { name: 'Codex is working' }).click();
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
   const team = composer.getByRole('region', { name: 'Agent team' });
 
-  await expect(team).toContainText('1 working in parallel');
+  await expect(team).toContainText('2 assigned · 1 working · 1 complete');
   await expect(team).toContainText('Responsive reviewer');
   await expect(team).toContainText('Accessibility reviewer');
   const responsiveAgent = team.getByRole('button', { name: /Responsive reviewer/ });
   await responsiveAgent.click();
   await expect(responsiveAgent).toHaveAttribute('aria-expanded', 'true');
-  await expect(team.getByLabel('Responsive reviewer sub-chat')).toContainText(
+  await expect(team.getByLabel('Responsive reviewer results')).toContainText(
     'Mobile checks are complete',
   );
+  await expect(team).not.toContainText('Supervisor');
+  await expect(team).not.toContainText('Assignment');
   await expect(composer).toHaveScreenshot('codex-agent-team.png', {
     mask: [team.locator('.codex-agent-card__meta small').first()],
   });
@@ -452,31 +490,32 @@ test('shows the live attached agent hierarchy and opens each sub-chat', async ({
   expect(accessibility.violations).toEqual([]);
 });
 
-test('keeps each agent team with the output that created it', async ({ page }) => {
+test('keeps only the latest relevant agent team beside the request that created it', async ({
+  page,
+}) => {
   await page.goto('/?codexAgents=1&codexTeamHistory=1');
   await page.getByRole('button', { name: /Chat with Codex|Codex is working/ }).click();
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
   const log = composer.getByRole('log', { name: 'Codex chat log' });
   const teams = log.getByRole('region', { name: 'Agent team' });
 
-  await expect(teams).toHaveCount(2);
-  await expect(teams.nth(0)).toContainText('Responsive reviewer');
-  await expect(teams.nth(1)).toContainText('Accessibility reviewer');
+  await expect(teams).toHaveCount(1);
+  await expect(teams).not.toContainText('Responsive reviewer');
+  await expect(teams).toContainText('Accessibility reviewer');
   const transcriptOrder = await log
     .locator(':scope > *')
     .evaluateAll((elements) =>
       elements.map((element) => element.textContent?.replace(/\s+/g, ' ').trim() || ''),
     );
   const indexOfText = (text) => transcriptOrder.findIndex((item) => item.includes(text));
-  expect(indexOfText('Studio chat is connected.')).toBeLessThan(indexOfText('Responsive reviewer'));
-  expect(indexOfText('Responsive reviewer')).toBeLessThan(
-    indexOfText('Now make one direct copy change.'),
-  );
   expect(indexOfText('The direct copy change is complete.')).toBeLessThan(
     indexOfText('Run a new agent team review.'),
   );
-  expect(indexOfText('The new team review is underway.')).toBeLessThan(
+  expect(indexOfText('Run a new agent team review.')).toBeLessThan(
     indexOfText('Accessibility reviewer'),
+  );
+  expect(indexOfText('Accessibility reviewer')).toBeLessThan(
+    indexOfText('The new team review is underway.'),
   );
   await log.evaluate((element) => {
     element.scrollTop = 0;
@@ -485,6 +524,15 @@ test('keeps each agent team with the output that created it', async ({ page }) =
 
   const accessibility = await new AxeBuilder({ page }).include('.codex-chat-dialog').analyze();
   expect(accessibility.violations).toEqual([]);
+});
+
+test('shows current Codex generation even when only historical agents exist', async ({ page }) => {
+  await page.goto('/?codexAgents=1&codexWorking=1&codexDirectWorking=1');
+  await page.getByRole('button', { name: 'Codex is working' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+
+  await expect(composer.locator('.codex-working-status')).toContainText('Codex is working');
+  await expect(composer.getByRole('region', { name: 'Agent team' })).toHaveCount(0);
 });
 
 test('keeps the live agent team usable at the compact 320px viewport', async ({
@@ -647,9 +695,10 @@ test('explains and continues a conversation interrupted by a Codespace pause', a
   await expect(composer).toHaveScreenshot('codex-interrupted-conversation-mobile.png');
   await composer.getByRole('button', { name: 'Resume working' }).click();
   await expect.poll(() => continuation?.action).toBe('continue-interrupted-thread');
-  await expect(
-    composer.getByRole('region', { name: 'Agent team' }).getByRole('status'),
-  ).toContainText('Resuming interrupted agents');
+  await expect(composer.getByRole('region', { name: 'Agent team' })).toContainText(
+    '1 interrupted agent is resuming',
+  );
+  await expect(composer.getByText('Work is resuming')).toHaveCount(0);
   await expect(composer.getByRole('button', { name: /Responsive reviewer/ })).toContainText(
     'Resuming',
   );
@@ -1036,12 +1085,17 @@ test('shows real Codex working state, queued work, and a live elapsed timer', as
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
   const workingState = composer.locator('.codex-working-status');
 
+  await expect(workingState).toHaveClass(/codex-generating-message/);
   await expect(workingState).toContainText('Working through the next step');
   await expect(workingState).toContainText('The latest progress is above');
   await expect(workingState).toContainText('2 requests queued next');
   const progressUpdate = composer.locator('.codex-chat-message--progress');
   await expect(progressUpdate).toContainText('Progress update');
   await expect(workingState.locator('time')).toHaveText(/1m (?:0[5-9]|1\d)s/);
+  await expect(workingState.locator('.codex-generating-message__dots > span').first()).toHaveCSS(
+    'animation-name',
+    'codex-generating-dot',
+  );
   const conversationPicker = composer.getByRole('button', { name: 'Conversation' });
   await conversationPicker.click();
   const activeConversation = composer.getByRole('menuitemradio', {
@@ -1076,6 +1130,17 @@ test('keeps chat progress and message states static when reduced motion is prefe
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.route('**/__made-solid/codex-feedback', async (route) => {
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'queued',
+        id: 'reduced-motion-message',
+        detail: 'Your message is queued for the active Codex conversation.',
+      }),
+    });
+  });
   await page.goto('/?codexWorking=1');
   await page.getByRole('button', { name: 'Codex is working' }).click();
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
@@ -1086,6 +1151,17 @@ test('keeps chat progress and message states static when reduced motion is prefe
   );
   await expect(composer.locator('.codex-chat-message__pulse')).toHaveCSS('animation-name', 'none');
   await expect(composer.locator('.codex-working-status')).toHaveCSS('animation-name', 'none');
+  await expect(composer.locator('.codex-generating-message__dots > span').first()).toHaveCSS(
+    'animation-name',
+    'none',
+  );
+
+  await composer.getByLabel('Message to Codex').fill('Keep this message transition static.');
+  await composer.getByRole('button', { name: 'Queue message' }).click();
+  await expect(composer.locator('.codex-chat-message--pending')).toHaveCSS(
+    'animation-name',
+    'none',
+  );
 });
 
 test('never presents a stale thread timestamp as active working time', async ({ page }) => {
