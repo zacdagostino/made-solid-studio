@@ -27,13 +27,59 @@ async function enableGoogleSpeech(page, onSpeechRequest = () => {}) {
         contentType: 'application/json',
         body: JSON.stringify({
           available: true,
-          defaultVoice: 'Aoede',
-          language: 'en-AU',
-          provider: 'Google Chirp 3 HD',
+          defaultVoice: 'en-AU-Chirp3-HD-Aoede',
+          provider: 'Google Cloud Text-to-Speech',
           voices: [
-            { id: 'Aoede', gender: 'Female' },
-            { id: 'Leda', gender: 'Female' },
-            { id: 'Charon', gender: 'Male' },
+            {
+              id: 'en-AU-Chirp3-HD-Aoede',
+              gender: 'Female',
+              languageCode: 'en-AU',
+              model: 'chirp3-hd',
+              modelLabel: 'Chirp 3 HD',
+              name: 'Aoede',
+              qualityLabel: 'Recommended · most natural',
+              qualityRank: 1,
+            },
+            {
+              id: 'en-AU-Chirp3-HD-Leda',
+              gender: 'Female',
+              languageCode: 'en-AU',
+              model: 'chirp3-hd',
+              modelLabel: 'Chirp 3 HD',
+              name: 'Leda',
+              qualityLabel: 'Recommended · most natural',
+              qualityRank: 1,
+            },
+            {
+              id: 'en-US-Chirp3-HD-Charon',
+              gender: 'Male',
+              languageCode: 'en-US',
+              model: 'chirp3-hd',
+              modelLabel: 'Chirp 3 HD',
+              name: 'Charon',
+              qualityLabel: 'Recommended · most natural',
+              qualityRank: 1,
+            },
+            {
+              id: 'en-US-Standard-A',
+              gender: 'Female',
+              languageCode: 'en-US',
+              model: 'standard',
+              modelLabel: 'Standard',
+              name: 'A',
+              qualityLabel: 'Basic · lowest cost',
+              qualityRank: 6,
+            },
+            {
+              id: 'fr-FR-Neural2-A',
+              gender: 'Female',
+              languageCode: 'fr-FR',
+              model: 'neural2',
+              modelLabel: 'Neural2',
+              name: 'A',
+              qualityLabel: 'Good quality · lower cost',
+              qualityRank: 3,
+            },
           ],
         }),
       });
@@ -255,10 +301,9 @@ test.beforeEach(async ({ page }) => {
         contentType: 'application/json',
         body: JSON.stringify({
           available: false,
-          defaultVoice: 'Aoede',
-          language: 'en-AU',
-          provider: 'Google Chirp 3 HD',
-          voices: [{ id: 'Aoede', gender: 'Female' }],
+          defaultVoice: 'en-AU-Chirp3-HD-Aoede',
+          provider: 'Google Cloud Text-to-Speech',
+          voices: [],
         }),
       });
       return;
@@ -1128,7 +1173,7 @@ const result = "this-code-line-scrolls-horizontally-on-small-screens";
   expect(accessibility.violations).toEqual([]);
 });
 
-test('selects, previews, and remembers an Australian Google voice in chat settings', async ({
+test('filters, previews, and remembers a voice from the global Google catalogue', async ({
   page,
 }) => {
   const speechRequests = [];
@@ -1139,15 +1184,32 @@ test('selects, previews, and remembers an Australian Google voice in chat settin
   await openChatSettings(composer);
 
   const voiceSettings = composer.getByRole('region', { name: 'Read aloud voice' });
-  await expect(voiceSettings).toContainText('Google Chirp 3 HD · Australian English');
-  await expect(voiceSettings.getByRole('combobox', { name: 'Voice', exact: true })).toHaveValue(
-    'Aoede',
+  await expect(voiceSettings).toContainText('5 Google voices');
+  await expect(voiceSettings).toContainText('Recommended · most natural');
+  await expect(voiceSettings.getByRole('combobox', { name: 'Language' })).toContainText(
+    /American English|English \(United States\)/,
   );
-  await voiceSettings.getByRole('combobox', { name: 'Voice', exact: true }).selectOption('Leda');
+  await voiceSettings.getByRole('combobox', { name: 'Language' }).selectOption({ value: 'en-US' });
+  await expect(voiceSettings.getByRole('combobox', { name: 'Model quality' })).toContainText(
+    'Standard — Basic · lowest cost',
+  );
+  await voiceSettings
+    .getByRole('combobox', { name: 'Model quality' })
+    .selectOption({ value: 'standard' });
+  await expect(voiceSettings.getByRole('combobox', { name: 'Voice', exact: true })).toHaveValue(
+    'en-US-Standard-A',
+  );
+  await voiceSettings.getByRole('combobox', { name: 'Language' }).selectOption({ value: 'en-AU' });
+  await expect(voiceSettings.getByRole('combobox', { name: 'Voice', exact: true })).toHaveValue(
+    'en-AU-Chirp3-HD-Aoede',
+  );
+  await voiceSettings
+    .getByRole('combobox', { name: 'Voice', exact: true })
+    .selectOption('en-AU-Chirp3-HD-Leda');
   await voiceSettings.getByRole('button', { name: 'Preview Leda voice' }).click();
   await expect(voiceSettings.getByRole('button', { name: 'Stop voice preview' })).toBeVisible();
   await expect.poll(() => speechRequests.length).toBe(1);
-  expect(speechRequests[0]).toMatchObject({ voice: 'Leda' });
+  expect(speechRequests[0]).toMatchObject({ voice: 'en-AU-Chirp3-HD-Leda' });
   expect(speechRequests[0].text).toContain('Studio Codex Chat voice');
   await expect
     .poll(() =>
@@ -1166,7 +1228,9 @@ test('selects, previews, and remembers an Australian Google voice in chat settin
   await page.getByRole('button', { name: 'Chat with Codex' }).click();
   composer = page.getByRole('dialog', { name: 'Codex', exact: true });
   await openChatSettings(composer);
-  await expect(composer.getByRole('combobox', { name: 'Voice', exact: true })).toHaveValue('Leda');
+  await expect(composer.getByRole('combobox', { name: 'Voice', exact: true })).toHaveValue(
+    'en-AU-Chirp3-HD-Leda',
+  );
 });
 
 test('keeps Google voice settings usable at the compact 320px viewport', async ({
@@ -1180,6 +1244,8 @@ test('keeps Google voice settings usable at the compact 320px viewport', async (
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
   await openChatSettings(composer);
   const voiceSettings = composer.getByRole('region', { name: 'Read aloud voice' });
+  await expect(voiceSettings.getByRole('combobox', { name: 'Language' })).toBeVisible();
+  await expect(voiceSettings.getByRole('combobox', { name: 'Model quality' })).toBeVisible();
   await expect(voiceSettings.getByRole('combobox', { name: 'Voice', exact: true })).toBeVisible();
   await expect(voiceSettings.getByRole('button', { name: /Preview Aoede voice/ })).toBeVisible();
   await expect
@@ -1202,7 +1268,9 @@ test('plays Google speech with exact seekable seconds and no device utterance', 
   });
   await reply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
   await expect(reply.getByRole('button', { name: 'Pause reading', exact: true })).toBeVisible();
-  expect(speechRequests).toEqual([{ text: 'Studio chat is connected.', voice: 'Aoede' }]);
+  expect(speechRequests).toEqual([
+    { text: 'Studio chat is connected.', voice: 'en-AU-Chirp3-HD-Aoede' },
+  ]);
   expect(
     await page.evaluate(
       () => window.__speechHarness.events.filter((event) => event.type === 'speak').length,
@@ -1234,10 +1302,20 @@ test('falls back to the English device voice when Google synthesis fails', async
         contentType: 'application/json',
         body: JSON.stringify({
           available: true,
-          defaultVoice: 'Aoede',
-          language: 'en-AU',
-          provider: 'Google Chirp 3 HD',
-          voices: [{ id: 'Aoede', gender: 'Female' }],
+          defaultVoice: 'en-AU-Chirp3-HD-Aoede',
+          provider: 'Google Cloud Text-to-Speech',
+          voices: [
+            {
+              id: 'en-AU-Chirp3-HD-Aoede',
+              gender: 'Female',
+              languageCode: 'en-AU',
+              model: 'chirp3-hd',
+              modelLabel: 'Chirp 3 HD',
+              name: 'Aoede',
+              qualityLabel: 'Recommended · most natural',
+              qualityRank: 1,
+            },
+          ],
         }),
       });
       return;
@@ -2597,7 +2675,7 @@ test('captures a selected region and queues its prompt for the chosen Codex mode
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
   await expect(composer).toBeVisible();
   await openChatSettings(composer);
-  await expect(composer.getByLabel('Model')).toBeVisible();
+  await expect(composer.getByLabel('Model', { exact: true })).toBeVisible();
   await expect(composer).toHaveScreenshot('codex-feedback-compose.png');
   await composer.getByLabel('Model').selectOption('gpt-5.6-terra');
   await composer.getByLabel('Reasoning').selectOption('high');

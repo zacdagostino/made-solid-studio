@@ -162,6 +162,10 @@ const liveEditableStudioRuntimeMigrationUrl = new URL(
   '../../supabase/migrations/20260821210000_live_editable_studio_runtime_test_package.sql',
   import.meta.url,
 );
+const globalGoogleVoiceCatalogueMigrationUrl = new URL(
+  '../../supabase/migrations/20260821220000_global_google_voice_catalogue_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -238,9 +242,38 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 57);
-  assert.match(app, /permanent Studio address now serves the persistent editable source/);
-  assert.match(app, /after Railway restarts/);
+  assert.equal(Number(revision[1]), 58);
+  assert.match(app, /Google’s full voice catalogue/);
+  assert.match(app, /language and model filters/);
+});
+
+test('registers the global Google voice catalogue as the newest immutable package', async () => {
+  const [migration, repository, component, speech] = await Promise.all([
+    readFile(globalGoogleVoiceCatalogueMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(componentUrl, 'utf8'),
+    readFile(new URL('../../scripts/google-cloud-tts.mjs', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Global Google voice catalogue test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v18\.6/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v18\.5'/,
+  );
+  assert.match(repository, /version: 18\.6,/);
+  assert.match(repository, /basePackageId: localLiveEditableStudioRuntimePackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localGlobalGoogleVoiceCataloguePackage,') <
+      packageLedger.indexOf('localLiveEditableStudioRuntimePackage,'),
+  );
+  assert.match(component, /Model quality/);
+  assert.match(component, /selectedCloudSpeechVoice\.qualityLabel/);
+  assert.match(speech, /texttospeech\.googleapis\.com\/v1\/voices/);
+  assert.match(speech, /Choose an available Google voice/);
 });
 
 test('registers the live editable Studio runtime as the newest immutable package', async () => {

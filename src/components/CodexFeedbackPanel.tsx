@@ -188,11 +188,19 @@ type PanelPhase =
   'closed' | 'compose' | 'sending-chat' | 'capturing' | 'capturing-tab' | 'selecting';
 type SpeechPlaybackState = 'idle' | 'loading' | 'playing' | 'paused';
 type SpeechProgress = { elapsedSeconds: number; totalSeconds: number };
-type CloudSpeechVoice = { id: string; gender: 'Female' | 'Male' };
+type CloudSpeechVoice = {
+  id: string;
+  gender: 'Female' | 'Male' | 'Neutral' | 'Unspecified';
+  languageCode: string;
+  model: string;
+  modelLabel: string;
+  name: string;
+  qualityLabel: string;
+  qualityRank: number;
+};
 type CloudSpeechConfiguration = {
   available: boolean;
   defaultVoice: string;
-  language: string;
   provider: string;
   voices: CloudSpeechVoice[];
 };
@@ -1064,6 +1072,8 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   const [selectedSpeechVoice, setSelectedSpeechVoice] = useState(
     () => readCodexPreferences().speechVoice,
   );
+  const [selectedSpeechLanguage, setSelectedSpeechLanguage] = useState('en-AU');
+  const [selectedSpeechModel, setSelectedSpeechModel] = useState('chirp3-hd');
   const [voicePreviewState, setVoicePreviewState] = useState<'idle' | 'loading' | 'playing'>(
     'idle',
   );
@@ -1073,6 +1083,45 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
     'speechSynthesis' in window &&
     'SpeechSynthesisUtterance' in window;
   const speechSupported = deviceSpeechSupported || cloudSpeechConfiguration?.available === true;
+  const selectedCloudSpeechVoice = cloudSpeechConfiguration?.voices.find(
+    ({ id }) => id === selectedSpeechVoice,
+  );
+  const speechLanguages = useMemo(
+    () =>
+      [...new Set((cloudSpeechConfiguration?.voices ?? []).map(({ languageCode }) => languageCode))]
+        .map((code) => {
+          try {
+            return {
+              code,
+              label:
+                new Intl.DisplayNames([navigator.language || 'en'], { type: 'language' }).of(
+                  code,
+                ) ?? code,
+            };
+          } catch {
+            return { code, label: code };
+          }
+        })
+        .sort((left, right) => left.label.localeCompare(right.label)),
+    [cloudSpeechConfiguration?.voices],
+  );
+  const speechModels = useMemo(() => {
+    const unique = new Map<string, CloudSpeechVoice>();
+    for (const voice of cloudSpeechConfiguration?.voices ?? []) {
+      if (voice.languageCode === selectedSpeechLanguage && !unique.has(voice.model)) {
+        unique.set(voice.model, voice);
+      }
+    }
+    return [...unique.values()].sort((left, right) => left.qualityRank - right.qualityRank);
+  }, [cloudSpeechConfiguration?.voices, selectedSpeechLanguage]);
+  const filteredSpeechVoices = useMemo(
+    () =>
+      (cloudSpeechConfiguration?.voices ?? []).filter(
+        ({ languageCode, model }) =>
+          languageCode === selectedSpeechLanguage && model === selectedSpeechModel,
+      ),
+    [cloudSpeechConfiguration?.voices, selectedSpeechLanguage, selectedSpeechModel],
+  );
 
   const stopVoicePreview = useCallback(() => {
     voicePreviewAbortRef.current?.abort();
@@ -2141,9 +2190,13 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
       .then((configuration) => {
         if (!Array.isArray(configuration.voices) || !configuration.voices.length) return;
         setCloudSpeechConfiguration(configuration);
-        if (!configuration.voices.some(({ id }) => id === selectedSpeechVoice)) {
-          setSelectedSpeechVoice(configuration.defaultVoice);
-        }
+        const chosen =
+          configuration.voices.find(({ id }) => id === selectedSpeechVoice) ??
+          configuration.voices.find(({ id }) => id === configuration.defaultVoice) ??
+          configuration.voices[0];
+        setSelectedSpeechVoice(chosen.id);
+        setSelectedSpeechLanguage(chosen.languageCode);
+        setSelectedSpeechModel(chosen.model);
       })
       .catch(() => undefined);
     return () => controller.abort();
@@ -3737,7 +3790,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                         <strong id="codex-speech-settings-title">Read aloud voice</strong>
                         <small>
                           {cloudSpeechConfiguration?.available
-                            ? 'Google Chirp 3 HD · Australian English'
+                            ? `${cloudSpeechConfiguration.voices.length} Google voices · choose any available language and model`
                             : cloudSpeechConfiguration
                               ? 'Google voice setup is not active · using your English device voice'
                               : 'Checking Google voice availability…'}
@@ -3746,33 +3799,96 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                     </header>
                     <div className="codex-speech-settings__controls">
                       <label>
+                        <span>Language</span>
+                        <select
+                          disabled={!cloudSpeechConfiguration?.available}
+                          onChange={(event) => {
+                            stopCodexSpeech(false);
+                            stopVoicePreview();
+                            const language = event.target.value;
+                            const voice = cloudSpeechConfiguration?.voices
+                              .filter(({ languageCode }) => languageCode === language)
+                              .sort((left, right) => left.qualityRank - right.qualityRank)[0];
+                            if (!voice) return;
+                            setSelectedSpeechLanguage(language);
+                            setSelectedSpeechModel(voice.model);
+                            setSelectedSpeechVoice(voice.id);
+                          }}
+                          value={selectedSpeechLanguage}
+                        >
+                          {speechLanguages.map(({ code, label }) => (
+                            <option key={code} value={code}>
+                              {label} · {code}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span>Model quality</span>
+                        <select
+                          disabled={!cloudSpeechConfiguration?.available}
+                          onChange={(event) => {
+                            stopCodexSpeech(false);
+                            stopVoicePreview();
+                            const model = event.target.value;
+                            const voice = cloudSpeechConfiguration?.voices.find(
+                              (candidate) =>
+                                candidate.languageCode === selectedSpeechLanguage &&
+                                candidate.model === model,
+                            );
+                            if (!voice) return;
+                            setSelectedSpeechModel(model);
+                            setSelectedSpeechVoice(voice.id);
+                          }}
+                          value={selectedSpeechModel}
+                        >
+                          {speechModels.map((voice) => (
+                            <option key={voice.model} value={voice.model}>
+                              {voice.modelLabel} — {voice.qualityLabel}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
                         <span>Voice</span>
                         <select
                           disabled={!cloudSpeechConfiguration?.available}
                           onChange={(event) => {
                             stopCodexSpeech(false);
+                            stopVoicePreview();
                             setSelectedSpeechVoice(event.target.value);
-                            setSpeechStatus(`Google ${event.target.value} selected.`);
+                            const voice = cloudSpeechConfiguration?.voices.find(
+                              ({ id }) => id === event.target.value,
+                            );
+                            setSpeechStatus(
+                              `Google ${voice?.name ?? event.target.value} selected.`,
+                            );
                           }}
                           value={selectedSpeechVoice}
                         >
                           {!cloudSpeechConfiguration?.voices.length ? (
                             <option value={selectedSpeechVoice}>{selectedSpeechVoice}</option>
                           ) : null}
-                          {(cloudSpeechConfiguration?.voices ?? []).map((voice) => (
+                          {filteredSpeechVoices.map((voice) => (
                             <option key={voice.id} value={voice.id}>
-                              {voice.id} · {voice.gender}
+                              {voice.name} · {voice.gender}
                             </option>
                           ))}
                         </select>
                       </label>
+                      {selectedCloudSpeechVoice ? (
+                        <p className="codex-speech-settings__selection">
+                          <strong>{selectedCloudSpeechVoice.modelLabel}</strong>
+                          <span>{selectedCloudSpeechVoice.qualityLabel}</span>
+                        </p>
+                      ) : null}
                       <Button
                         aria-label={
                           voicePreviewState === 'playing'
                             ? 'Stop voice preview'
                             : voicePreviewState === 'loading'
                               ? 'Preparing voice preview'
-                              : `Preview ${selectedSpeechVoice} voice`
+                              : `Preview ${selectedCloudSpeechVoice?.name ?? selectedSpeechVoice} voice`
                         }
                         disabled={
                           !cloudSpeechConfiguration?.available || voicePreviewState === 'loading'

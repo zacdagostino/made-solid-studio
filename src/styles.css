@@ -2133,7 +2133,7 @@ html[data-codex-panel='embedded'] body #root {
   bottom: calc(100% + var(--space-2));
   display: grid;
   width: min(360px, 100%);
-  max-height: min(70vh, 620px);
+  max-height: min(55vh, 480px);
   gap: var(--space-2);
   padding: var(--space-2);
   border: 1px solid #555;
@@ -2170,8 +2170,8 @@ html[data-codex-panel='embedded'] body #root {
   line-height: 1.4;
 }
 .codex-speech-settings__controls {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
   gap: var(--space-2);
 }
 .codex-speech-settings__controls select {
@@ -2185,7 +2185,22 @@ html[data-codex-panel='embedded'] body #root {
   font-size: 0.76rem;
 }
 .codex-speech-settings__controls .button {
+  justify-self: start;
   white-space: nowrap;
+}
+.codex-speech-settings__selection {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px var(--space-1);
+  margin: 0;
+  color: #cbd0b8;
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+.codex-speech-settings__selection strong {
+  color: #f1f3e5;
 }
 @media (max-width: 374px) {
   .codex-speech-settings__controls {

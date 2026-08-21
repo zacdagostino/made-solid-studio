@@ -7,7 +7,11 @@ import { basename, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 import { authorizeStudioRuntimeRequest } from './studio-runtime-auth.mjs';
-import { googleSpeechConfiguration, synthesizeGoogleSpeech } from './google-cloud-tts.mjs';
+import {
+  googleSpeechConfiguration,
+  loadGoogleSpeechConfiguration,
+  synthesizeGoogleSpeech,
+} from './google-cloud-tts.mjs';
 import { workspacePreviewUrl } from './workspace-preview-access.mjs';
 import { assertPublicUrl } from '../worker/security.mjs';
 
@@ -922,7 +926,7 @@ export function localWorkspacePlugin() {
           return;
         }
         if (request.method === 'GET') {
-          sendJson(response, 200, googleSpeechConfiguration());
+          sendJson(response, 200, await loadGoogleSpeechConfiguration());
           return;
         }
         if (request.method !== 'POST') {
@@ -950,9 +954,7 @@ export function localWorkspacePlugin() {
           response.end(speech.audio);
         } catch (error) {
           const detail = error instanceof Error ? error.message : '';
-          const invalidInput = /required|4,500 bytes|available Australian English voice/i.test(
-            detail,
-          );
+          const invalidInput = /required|4,500 bytes|available Google voice/i.test(detail);
           sendJson(response, invalidInput ? 400 : 502, {
             status: 'failed',
             detail: invalidInput

@@ -3741,7 +3741,10 @@ test('displays the newest test package above retained package versions', async (
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const packagePicker = page.getByLabel('Test agent package');
-  await expect(packagePicker).toHaveValue('agent-package-local-v18-5-live-editable-studio-runtime');
+  await expect(packagePicker).toHaveValue(
+    'agent-package-local-v18-6-global-google-voice-catalogue',
+  );
+  await expect(packagePicker).toContainText('v18.6 · Approved test');
   await expect(packagePicker).toContainText('v18.5 · Approved test');
   await expect(packagePicker).toContainText('v18.4 · Approved test');
   await expect(packagePicker).toContainText('v18.3 · Approved test');
@@ -3873,6 +3876,7 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v18.6', 'Global Google voice catalogue'],
     ['v18.5', 'Live editable Studio runtime'],
     ['v18.4', 'Image-only Codex message'],
     ['v18.3', 'Durable Codex chat session'],
@@ -4421,8 +4425,8 @@ test('separates test refinement from the published builder agent package', async
   );
   await expect(page.getByRole('heading', { name: 'Every saved build package' })).toBeVisible();
   const versionCards = page.locator('.agent-package-version-ledger__list article');
-  await expect(versionCards).toHaveCount(127);
-  await expect(versionCards.first().getByRole('heading')).toHaveText('v18.5');
+  await expect(versionCards).toHaveCount(128);
+  await expect(versionCards.first().getByRole('heading')).toHaveText('v18.6');
   const stagedV7Card = versionCards.filter({
     hasText: 'Five tested behaviours staged for the next production package.',
   });

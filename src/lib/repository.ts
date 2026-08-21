@@ -370,6 +370,8 @@ const localDurableCodexChatSessionPackageId =
 const localImageOnlyCodexMessagePackageId = 'agent-package-local-v18-4-image-only-codex-message';
 const localLiveEditableStudioRuntimePackageId =
   'agent-package-local-v18-5-live-editable-studio-runtime';
+const localGlobalGoogleVoiceCataloguePackageId =
+  'agent-package-local-v18-6-global-google-voice-catalogue';
 
 type StoreName =
   | 'activities'
@@ -2800,10 +2802,28 @@ export class SiteforgeRepository {
         'Makes the permanent Studio address the durable live refinement surface while preserving the separate private prospect preview and existing authentication boundaries.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localGlobalGoogleVoiceCataloguePackage: AgentPackage = {
+      ...localLiveEditableStudioRuntimePackage,
+      id: localGlobalGoogleVoiceCataloguePackageId,
+      version: 18.6,
+      basePackageId: localLiveEditableStudioRuntimePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v18.6',
+      contractAddendum:
+        'Codex read-aloud settings expose the complete current Google Cloud Text-to-Speech voice catalogue rather than one locale. Reviewers filter by language and model, see plain quality and cost-position labels, preview a voice, and retain the exact selected voice for later replies.',
+      instructionsAddendum:
+        'Fetch the authenticated Google voices:list catalogue server-side, cache it briefly, and return only sanitized voice metadata. Derive synthesis language from the selected allow-listed catalogue entry; never trust a client-supplied model or language. Present language, model quality, and voice as progressive filters, recommend Chirp 3 HD for natural chat reading, label specialist, legacy, preview, and lower-cost tiers without implying that price alone guarantees quality, and keep voice preview and device fallback behavior accessible.',
+      summary:
+        'Global Google voice catalogue test package: adds every available language and voice with previewable, clearly labelled model-quality tiers.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Lets the reviewer compare Google voices worldwide and understand which models favor natural quality, narration, or lower cost before saving a choice.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localGlobalGoogleVoiceCataloguePackage,
           localLiveEditableStudioRuntimePackage,
           localImageOnlyCodexMessagePackage,
           localDurableCodexChatSessionPackage,
@@ -2937,6 +2957,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localGlobalGoogleVoiceCataloguePackage,
           localLiveEditableStudioRuntimePackage,
           localImageOnlyCodexMessagePackage,
           localDurableCodexChatSessionPackage,
@@ -3073,6 +3094,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localGlobalGoogleVoiceCataloguePackage,
             localLiveEditableStudioRuntimePackage,
             localImageOnlyCodexMessagePackage,
             localDurableCodexChatSessionPackage,
