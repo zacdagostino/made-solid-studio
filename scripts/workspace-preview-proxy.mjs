@@ -34,14 +34,17 @@ export function workspacePreviewReentryUrl(studioOrigin, requestUrl = '/') {
   return destination.href;
 }
 
-function requestCookies(request) {
-  return Object.fromEntries(
-    String(request.headers.cookie || '')
-      .split(';')
-      .map((value) => value.trim().split('='))
-      .filter(([name, value]) => name && value)
-      .map(([name, ...value]) => [name, decodeURIComponent(value.join('='))]),
-  );
+function requestCookie(request, requestedName) {
+  for (const source of String(request.headers.cookie || '').split(';')) {
+    const [name, ...value] = source.trim().split('=');
+    if (name !== requestedName || !value.length) continue;
+    try {
+      return decodeURIComponent(value.join('='));
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 async function activePreview(configuration) {
@@ -61,7 +64,7 @@ async function activePreview(configuration) {
 function accessForRequest(request, configuration) {
   const requestUrl = new URL(request.url || '/', 'http://made-solid-preview.local');
   const queryToken = requestUrl.searchParams.get('access');
-  const cookieToken = requestCookies(request)[cookieName];
+  const cookieToken = requestCookie(request, cookieName);
   const token = queryToken || cookieToken;
   const access = verifyWorkspacePreviewToken(token, configuration.secret);
   return { access, queryToken, requestUrl, token };
@@ -123,7 +126,7 @@ function upstreamHeaders(request, active) {
   return headers;
 }
 
-function proxyHttp(request, response, active) {
+function proxyHttp(request, response, active, configuration) {
   const upstream = createProxyRequest(
     {
       headers: upstreamHeaders(request, active),
@@ -143,7 +146,14 @@ function proxyHttp(request, response, active) {
       upstreamResponse.pipe(response);
     },
   );
-  upstream.on('error', () => unavailable(response, 502));
+  upstream.setTimeout(configuration.upstreamTimeoutMs ?? 8_000, () => {
+    upstream.destroy(new Error('The private workspace preview timed out.'));
+  });
+  upstream.on('error', () => {
+    if (response.headersSent || response.destroyed) return;
+    if (requestsDocument(request)) requestStudioReentry(request, response, configuration);
+    else unavailable(response, 502);
+  });
   request.pipe(upstream);
 }
 
@@ -175,38 +185,38 @@ function proxyUpgrade(request, socket, head, active) {
 
 export function startWorkspacePreviewProxy(configuration = workspacePreviewProxyConfiguration()) {
   const server = createServer(async (request, response) => {
-    if (request.url === '/health') {
-      response.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-      response.end('ok');
-      return;
-    }
-    const { access, queryToken, requestUrl, token } = accessForRequest(request, configuration);
-    if (!access) {
-      requestStudioReentry(request, response, configuration);
-      return;
-    }
-    if (queryToken) {
-      cleanAccessRedirect(response, requestUrl, token);
-      return;
-    }
     try {
+      if (request.url === '/health') {
+        response.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+        response.end('ok');
+        return;
+      }
+      const { access, queryToken, requestUrl, token } = accessForRequest(request, configuration);
+      if (!access) {
+        requestStudioReentry(request, response, configuration);
+        return;
+      }
+      if (queryToken) {
+        cleanAccessRedirect(response, requestUrl, token);
+        return;
+      }
       const active = await activePreview(configuration);
       if (active.directory !== access.directory) {
         requestStudioReentry(request, response, configuration);
         return;
       }
-      proxyHttp(request, response, active);
+      proxyHttp(request, response, active, configuration);
     } catch {
       unavailable(response, 503);
     }
   });
   server.on('upgrade', async (request, socket, head) => {
-    const { access } = accessForRequest(request, configuration);
-    if (!access) {
-      socket.destroy();
-      return;
-    }
     try {
+      const { access } = accessForRequest(request, configuration);
+      if (!access) {
+        socket.destroy();
+        return;
+      }
       const active = await activePreview(configuration);
       if (active.directory !== access.directory) {
         socket.destroy();

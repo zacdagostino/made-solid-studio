@@ -374,6 +374,8 @@ const localGlobalGoogleVoiceCataloguePackageId =
   'agent-package-local-v18-6-global-google-voice-catalogue';
 const localAuthenticatedGoogleVoiceCataloguePackageId =
   'agent-package-local-v18-7-authenticated-google-voice-catalogue';
+const localResilientStudioSessionRecoveryPackageId =
+  'agent-package-local-v18-8-resilient-studio-session-recovery';
 
 type StoreName =
   | 'activities'
@@ -2838,10 +2840,28 @@ export class SiteforgeRepository {
         'Restores the intended worldwide voice selection and Google audio while retaining the safe Australian fallback for genuine upstream outages.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localResilientStudioSessionRecoveryPackage: AgentPackage = {
+      ...localAuthenticatedGoogleVoiceCataloguePackage,
+      id: localResilientStudioSessionRecoveryPackageId,
+      version: 18.8,
+      basePackageId: localAuthenticatedGoogleVoiceCataloguePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v18.8',
+      contractAddendum:
+        'Studio runtime requests recover once from a stale signed-in session, malformed workspace cookies cannot stop the private preview proxy, and unavailable preview documents return through authenticated Studio re-entry.',
+      instructionsAddendum:
+        'Refresh and replay a Studio runtime request once after an authenticated 401, then clear only the invalid local session and request sign-in. Treat malformed preview capabilities as absent, bound preview upstream waits, and redirect unavailable top-level preview documents through the authenticated Studio recovery route without exposing access tokens.',
+      summary:
+        'Resilient Studio session recovery test package: recovers stale sessions and private previews without deleting browser cookies.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps returning mobile reviewers in a recoverable signed-in flow while preventing malformed or stale preview cookies from taking down the shared Railway runtime.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localResilientStudioSessionRecoveryPackage,
           localAuthenticatedGoogleVoiceCataloguePackage,
           localGlobalGoogleVoiceCataloguePackage,
           localLiveEditableStudioRuntimePackage,
@@ -2977,6 +2997,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localResilientStudioSessionRecoveryPackage,
           localAuthenticatedGoogleVoiceCataloguePackage,
           localGlobalGoogleVoiceCataloguePackage,
           localLiveEditableStudioRuntimePackage,
@@ -3115,6 +3136,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localResilientStudioSessionRecoveryPackage,
             localAuthenticatedGoogleVoiceCataloguePackage,
             localGlobalGoogleVoiceCataloguePackage,
             localLiveEditableStudioRuntimePackage,
