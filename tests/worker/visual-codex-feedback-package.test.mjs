@@ -174,6 +174,10 @@ const resilientStudioSessionRecoveryMigrationUrl = new URL(
   '../../supabase/migrations/20260821222000_resilient_studio_session_recovery_test_package.sql',
   import.meta.url,
 );
+const renderableRailwayStudioMigrationUrl = new URL(
+  '../../supabase/migrations/20260822113000_renderable_railway_studio_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -250,9 +254,33 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 60);
-  assert.match(app, /stale Studio sessions and unavailable private previews now recover/);
-  assert.match(app, /malformed preview cookies cannot stop the shared runtime/);
+  assert.equal(Number(revision[1]), 61);
+  assert.match(app, /matching React development runtime/);
+  assert.match(app, /preventing the blank screen/);
+});
+
+test('registers the renderable Railway Studio as the newest immutable package', async () => {
+  const [migration, repository, launcher] = await Promise.all([
+    readFile(renderableRailwayStudioMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(new URL('../../scripts/start-railway-runtime', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /Renderable Railway Studio test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v18\.9/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v18\.8'/,
+  );
+  assert.match(repository, /version: 18\.9,/);
+  assert.match(repository, /basePackageId: localResilientStudioSessionRecoveryPackage\.id/);
+  const ledger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    ledger.indexOf('localRenderableRailwayStudioPackage,') <
+      ledger.indexOf('localResilientStudioSessionRecoveryPackage,'),
+  );
+  assert.match(launcher, /exec env -u NODE_ENV node/);
+  assert.match(launcher, /--mode development/);
+  assert.match(launcher, /--force/);
 });
 
 test('registers resilient Studio session recovery as the newest immutable package', async () => {
@@ -356,7 +384,9 @@ test('registers the live editable Studio runtime as the newest immutable package
     packageLedger.indexOf('localLiveEditableStudioRuntimePackage,') <
       packageLedger.indexOf('localImageOnlyCodexMessagePackage,'),
   );
-  assert.match(launcher, /exec env NODE_ENV=development node/);
+  assert.match(launcher, /exec env -u NODE_ENV node/);
+  assert.match(launcher, /--mode development/);
+  assert.match(launcher, /--force/);
   assert.match(launcher, /studio_workspace_directory/);
   assert.match(viteConfiguration, /\.\.\.railwayAllowedHosts/);
 });

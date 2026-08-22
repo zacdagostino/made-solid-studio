@@ -161,8 +161,10 @@ test('registers a single-volume Singapore Railway runtime with a health check', 
   );
   assert.match(launcher, /studio_workspace_directory="\$workspace_root\/siteforge-os"/);
   assert.match(launcher, /ln -s "\$application_directory\/node_modules"/);
-  assert.match(launcher, /exec env NODE_ENV=development node/);
+  assert.match(launcher, /exec env -u NODE_ENV node/);
   assert.match(launcher, /--config "\$studio_workspace_directory\/vite\.config\.ts"/);
+  assert.match(launcher, /--mode development/);
+  assert.match(launcher, /--force/);
   assert.doesNotMatch(launcher, /vite\/bin\/vite\.js" preview/);
 });
 

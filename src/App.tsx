@@ -8842,9 +8842,9 @@ function BuilderRunPanel({
             title: 'Codex Workspace Agent and visual feedback',
             detail:
               'The subscription-only Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy. Reviewers can send text, images, or both, choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. Studio source edits apply in place without restarting the workspace, and a compact top status announces the brief update while the current route and content remain mounted. A refresh restores the open selected conversation and its exact transcript reading position without changing the active prospect route. The stable workspace.madesolid.com.au address returns expired or missing browser access through the reviewer’s existing authenticated Studio session, then restores the active private development server without exposing its capability in the clean URL. Observable activity and queue state appears without invented progress.',
-            revision: `v${selectedAgentPackage.version}.60`,
+            revision: `v${selectedAgentPackage.version}.61`,
             change:
-              'Latest edit: stale Studio sessions and unavailable private previews now recover without deleting browser cookies, while malformed preview cookies cannot stop the shared runtime.',
+              'Latest edit: the live editable Railway Studio now rebuilds Vite dependencies with the matching React development runtime, preventing the blank screen while preserving authenticated workspace preview re-entry.',
           },
           {
             id: 'inbound-client-email-review',

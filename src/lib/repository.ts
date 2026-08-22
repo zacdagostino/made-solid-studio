@@ -376,6 +376,7 @@ const localAuthenticatedGoogleVoiceCataloguePackageId =
   'agent-package-local-v18-7-authenticated-google-voice-catalogue';
 const localResilientStudioSessionRecoveryPackageId =
   'agent-package-local-v18-8-resilient-studio-session-recovery';
+const localRenderableRailwayStudioPackageId = 'agent-package-local-v18-9-renderable-railway-studio';
 
 type StoreName =
   | 'activities'
@@ -2857,10 +2858,28 @@ export class SiteforgeRepository {
         'Keeps returning mobile reviewers in a recoverable signed-in flow while preventing malformed or stale preview cookies from taking down the shared Railway runtime.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localRenderableRailwayStudioPackage: AgentPackage = {
+      ...localResilientStudioSessionRecoveryPackage,
+      id: localRenderableRailwayStudioPackageId,
+      version: 18.9,
+      basePackageId: localResilientStudioSessionRecoveryPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v18.9',
+      contractAddendum:
+        'The live editable Railway Studio always starts Vite with a clean development dependency graph, so React development transforms receive the matching jsxDEV runtime instead of rendering a blank page from a stale production optimizer cache.',
+      instructionsAddendum:
+        'Launch the Railway Vite server with NODE_ENV unset, explicit development mode, and forced dependency optimization. Keep the editable persistent Studio checkout as the source root, retain the authenticated runtime plugin, and verify the public Studio renders without page errors at mobile, tablet, and desktop widths. Preserve workspace.madesolid.com.au re-entry through the authenticated Studio route.',
+      summary:
+        'Renderable Railway Studio test package: prevents the blank live Studio screen by rebuilding Vite dependencies with the matching React development runtime.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the permanent editable Studio reliably render after live source changes and Railway restarts without replacing either persistent repository.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localRenderableRailwayStudioPackage,
           localResilientStudioSessionRecoveryPackage,
           localAuthenticatedGoogleVoiceCataloguePackage,
           localGlobalGoogleVoiceCataloguePackage,
@@ -2997,6 +3016,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localRenderableRailwayStudioPackage,
           localResilientStudioSessionRecoveryPackage,
           localAuthenticatedGoogleVoiceCataloguePackage,
           localGlobalGoogleVoiceCataloguePackage,
@@ -3136,6 +3156,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localRenderableRailwayStudioPackage,
             localResilientStudioSessionRecoveryPackage,
             localAuthenticatedGoogleVoiceCataloguePackage,
             localGlobalGoogleVoiceCataloguePackage,
