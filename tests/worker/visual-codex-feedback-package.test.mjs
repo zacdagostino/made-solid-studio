@@ -202,6 +202,10 @@ const reliableWorkspaceDevelopmentSurfacesMigrationUrl = new URL(
   '../../supabase/migrations/20260823060000_reliable_workspace_development_surfaces_test_package.sql',
   import.meta.url,
 );
+const opaqueWorkspaceFrameCapabilityMigrationUrl = new URL(
+  '../../supabase/migrations/20260823070000_opaque_workspace_frame_capability_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -270,9 +274,39 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 67);
+  assert.equal(Number(revision[1]), 68);
   assert.match(app, /shows chats for that client plus clearly labelled universal Studio chats/);
-  assert.match(app, /instant live Preview and scoped Codex surfaces/);
+  assert.match(app, /short-lived signed Preview path/);
+});
+
+test('registers the opaque Workspace frame capability above immutable v19.5', async () => {
+  const [migration, repository, proxy, previewHost] = await Promise.all([
+    readFile(opaqueWorkspaceFrameCapabilityMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(new URL('../../scripts/workspace-preview-proxy.mjs', import.meta.url), 'utf8'),
+    readFile(new URL('../../preview-host/server.mjs', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Opaque Workspace frame capability test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v19\.6/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v19\.5'/,
+  );
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 19\.6,/);
+  assert.match(repository, /basePackageId: localReliableWorkspaceDevelopmentSurfacesPackage\.id/);
+  const ledger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    ledger.indexOf('localOpaqueWorkspaceFrameCapabilityPackage,') <
+      ledger.indexOf('localReliableWorkspaceDevelopmentSurfacesPackage,'),
+  );
+  assert.doesNotMatch(proxy, /client-preview[^\n]+allow-same-origin/);
+  assert.match(proxy, /workspaceFrameRoutePrefix/);
+  assert.match(previewHost, /private, no-store/);
+  assert.match(previewHost, /frame-ancestors/);
+  assert.match(previewHost, /handleWorkspaceFrameUpgrade/);
 });
 
 test('registers reliable Workspace development surfaces above the retained package ledger', async () => {
@@ -296,10 +330,8 @@ test('registers reliable Workspace development surfaces above the retained packa
     ledger.indexOf('localReliableWorkspaceDevelopmentSurfacesPackage,') <
       ledger.indexOf('localLockedWorkspaceDevDependenciesPackage,'),
   );
-  assert.match(proxy, /SameSite=None; Partitioned/);
   assert.match(proxy, /Codex scoped to this website/);
   assert.match(proxy, />Exit to Studio<\/a>/);
-  assert.match(proxy, /frame-ancestors 'self'/);
   assert.match(vitePlugin, /renderWorkspaceCodexDocument/);
   assert.match(vitePlugin, /transformIndexHtml/);
 });
@@ -459,11 +491,12 @@ test('retains the renderable Railway Studio as the immutable v18.9 base package'
 });
 
 test('registers resilient Studio session recovery as the newest immutable package', async () => {
-  const [migration, repository, runtime, proxy] = await Promise.all([
+  const [migration, repository, runtime, proxy, previewHost] = await Promise.all([
     readFile(resilientStudioSessionRecoveryMigrationUrl, 'utf8'),
     readFile(repositoryUrl, 'utf8'),
     readFile(new URL('../../src/lib/studio-runtime.ts', import.meta.url), 'utf8'),
     readFile(new URL('../../scripts/workspace-preview-proxy.mjs', import.meta.url), 'utf8'),
+    readFile(new URL('../../preview-host/server.mjs', import.meta.url), 'utf8'),
   ]);
   assert.match(migration, /Resilient Studio session recovery test package:/);
   assert.match(migration, /made-solid-studio-builder-agent-v18\.8/);
@@ -480,7 +513,7 @@ test('registers resilient Studio session recovery as the newest immutable packag
   );
   assert.match(runtime, /response\.status !== 401/);
   assert.match(runtime, /refreshRuntimeAccessToken/);
-  assert.match(proxy, /upstreamTimeoutMs/);
+  assert.match(previewHost, /upstreamTimeoutMs/);
   assert.match(proxy, /requestStudioReentry/);
 });
 

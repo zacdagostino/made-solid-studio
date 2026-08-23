@@ -11,23 +11,27 @@ Vite development server from the persistent editable checkout, so reviewed sourc
 the signed-in Studio immediately and survive container replacement without falling back to the
 older image build:
 
-| Domain purpose                        | Suggested hostname           |     Target port |
-| ------------------------------------- | ---------------------------- | --------------: |
-| Authenticated Studio                  | `studio.madesolid.com.au`    | `8080` (`PORT`) |
-| Expiring completed-build previews     | `preview.madesolid.com.au`   |          `8787` |
-| Owner-authenticated workspace preview | `workspace.madesolid.com.au` |          `3000` |
+| Domain purpose                           | Suggested hostname           |     Target port |
+| ---------------------------------------- | ---------------------------- | --------------: |
+| Authenticated Studio                     | `studio.madesolid.com.au`    | `8080` (`PORT`) |
+| Private completed and live client frames | `preview.madesolid.com.au`   |          `8787` |
+| Owner-authenticated workspace preview    | `workspace.madesolid.com.au` |          `3000` |
 
 Railway supports multiple domains with different target ports on one service. Keep the Codex App
 Server on its loopback-only port `4500`; never add a Railway domain for it.
 
 The editable workspace uses `https://workspace.madesolid.com.au/` as its stable browser URL. Its
-short-lived capability and secure cookie still expire, but a top-level visit automatically returns
+short-lived top-level capability and secure cookie still expire, but a top-level visit automatically returns
 through the signed-in Studio owner session, issues fresh access for the active workspace, and comes
 back to the same path. If Railway replaced the container, that owner-authenticated access also
 restarts the saved development server from its approved persistent repository before returning.
 Recovered source servers run with `NODE_ENV=development` even though the permanent Railway parent
-runs in production, keeping Vite and React browser transforms consistent. Requests for assets do not
-redirect, and signed-out or non-owner requests remain unavailable.
+runs in production, keeping Vite and React browser transforms consistent. The live client document
+stays in an opaque sandbox and loads from `preview.madesolid.com.au` through a short-lived signed
+path. That same exact-client path authenticates rewritten HTML, CSS, JavaScript, images, navigation,
+API requests, and HMR without relying on third-party frame cookies or sharing browser storage between
+clients. The Preview host removes the capability before proxying to the local development server;
+signed-out, expired, stale-client, and cross-client requests remain unavailable.
 
 ## Create the service
 

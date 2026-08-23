@@ -1,5 +1,5 @@
-import { createServer, request as createProxyRequest } from 'node:http';
-import { createHash, randomBytes } from 'node:crypto';
+import { createServer } from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { verifyWorkspacePreviewToken } from './workspace-preview-access.mjs';
@@ -8,8 +8,7 @@ const cookieName = '__Host-made-solid-workspace';
 const lastWorkspaceCookieName = '__Host-made-solid-workspace-last';
 const workspaceQueryName = '__made_solid_workspace';
 const returnQueryName = '__made_solid_return';
-const frameQueryName = '__made_solid_frame';
-const frameCookiePrefix = '__Host-made-solid-workspace-frame-';
+const workspaceFrameRoutePrefix = '/__made-solid/workspace-frame/';
 const directoryPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 
 function requiredEnvironment(name, environment = process.env) {
@@ -19,12 +18,26 @@ function requiredEnvironment(name, environment = process.env) {
 }
 
 export function workspacePreviewProxyConfiguration(environment = process.env) {
-  const studioOrigin = new URL(requiredEnvironment('SITEFORGE_PUBLIC_ORIGIN', environment));
-  if (studioOrigin.protocol !== 'https:') {
-    throw new Error('SITEFORGE_PUBLIC_ORIGIN must use HTTPS for workspace preview re-entry.');
+  const httpsOrigin = (name) => {
+    const source = requiredEnvironment(name, environment);
+    const value = new URL(source);
+    if (value.protocol !== 'https:' || value.href !== `${value.origin}/`) {
+      throw new Error(`${name} must be an HTTPS origin without a path, query, or fragment.`);
+    }
+    return value;
+  };
+  const studioOrigin = httpsOrigin('SITEFORGE_PUBLIC_ORIGIN');
+  const clientFrameOrigin = httpsOrigin('PREVIEW_PUBLIC_ORIGIN');
+  const workspaceOrigin = httpsOrigin('SITEFORGE_WORKSPACE_PREVIEW_ORIGIN');
+  if (
+    clientFrameOrigin.origin === studioOrigin.origin ||
+    clientFrameOrigin.origin === workspaceOrigin?.origin
+  ) {
+    throw new Error('PREVIEW_PUBLIC_ORIGIN must be distinct from Studio and Workspace.');
   }
   return {
     activePreviewPath: requiredEnvironment('SITEFORGE_ACTIVE_PREVIEW_PATH', environment),
+    clientFrameOrigin: clientFrameOrigin.origin,
     port: Number(environment.SITEFORGE_WORKSPACE_PROXY_PORT) || 3000,
     secret: requiredEnvironment('SITEFORGE_WORKSPACE_PREVIEW_SECRET', environment),
     studioOrigin: studioOrigin.origin,
@@ -87,37 +100,6 @@ function requestCookie(request, requestedName) {
   return undefined;
 }
 
-function requestCookies(request) {
-  const cookies = new Map();
-  for (const source of String(request.headers.cookie || '').split(';')) {
-    const [name, ...value] = source.trim().split('=');
-    if (!name || !value.length) continue;
-    try {
-      cookies.set(name, decodeURIComponent(value.join('=')));
-    } catch {
-      // Ignore a malformed cookie without affecting other workspace tabs.
-    }
-  }
-  return cookies;
-}
-
-function workspaceFrameId(token) {
-  return createHash('sha256').update(token).digest('hex').slice(0, 24);
-}
-
-function requestFrameId(request) {
-  const requested = new URL(request.url || '/', 'https://workspace.madesolid.invalid');
-  const direct = requested.searchParams.get(frameQueryName) || '';
-  if (/^[a-f0-9]{24}$/.test(direct)) return direct;
-  try {
-    const referrer = new URL(String(request.headers.referer || ''));
-    const inherited = referrer.searchParams.get(frameQueryName) || '';
-    return /^[a-f0-9]{24}$/.test(inherited) ? inherited : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 async function activePreview(configuration) {
   const source = await readFile(configuration.activePreviewPath, 'utf8');
   const value = JSON.parse(source);
@@ -132,30 +114,10 @@ async function activePreview(configuration) {
   return value;
 }
 
-function accessForRequest(request, configuration, topLevel = false) {
+function accessForRequest(request, configuration) {
   const requestUrl = new URL(request.url || '/', 'http://made-solid-preview.local');
   const queryToken = requestUrl.searchParams.get('access');
-  let cookieToken;
-  if (topLevel) {
-    cookieToken = requestCookie(request, cookieName);
-  } else {
-    const cookies = requestCookies(request);
-    const frameId = requestFrameId(request);
-    if (frameId) {
-      cookieToken = cookies.get(`${frameCookiePrefix}${frameId}`);
-    } else {
-      const validFrameTokens = [...cookies.entries()]
-        .filter(([name]) => name.startsWith(frameCookiePrefix))
-        .map(([, value]) => value)
-        .filter((value) => verifyWorkspacePreviewToken(value, configuration.secret));
-      const directories = new Set(
-        validFrameTokens.map(
-          (value) => verifyWorkspacePreviewToken(value, configuration.secret)?.directory,
-        ),
-      );
-      if (validFrameTokens.length && directories.size === 1) cookieToken = validFrameTokens[0];
-    }
-  }
+  const cookieToken = requestCookie(request, cookieName);
   const token = queryToken || cookieToken;
   const access = verifyWorkspacePreviewToken(token, configuration.secret);
   return { access, queryToken, requestUrl, token };
@@ -201,13 +163,25 @@ function requestsTopLevelDocument(request) {
   return requestsDocument(request) && request.headers['sec-fetch-dest'] === 'document';
 }
 
-export function workspaceShellDocument(studioOrigin, requestUrl, directory, token, nonce) {
+export function workspaceShellDocument(
+  studioOrigin,
+  requestUrl,
+  directory,
+  token,
+  nonce,
+  clientFrameOrigin = 'https://preview.madesolid.com.au',
+) {
   const requested = new URL(requestUrl, 'https://workspace.madesolid.invalid');
   const requestDetails = workspaceRequestDetails(requestUrl);
   requested.searchParams.delete(workspaceQueryName);
   requested.searchParams.delete(returnQueryName);
   requested.searchParams.delete('access');
-  requested.searchParams.set(frameQueryName, workspaceFrameId(token));
+  requested.searchParams.delete('__made_solid_frame');
+  const clientFrame = new URL(
+    `${workspaceFrameRoutePrefix}${directory}/${encodeURIComponent(token)}${requested.pathname}`,
+    clientFrameOrigin,
+  );
+  clientFrame.search = requested.search;
   const studio = new URL(studioOrigin);
   studio.pathname = '/';
   studio.search = '';
@@ -216,9 +190,7 @@ export function workspaceShellDocument(studioOrigin, requestUrl, directory, toke
   codex.searchParams.set('access', token);
   codex.searchParams.set('workspace', directory);
   codex.hash = `/codex-panel?workspace=${encodeURIComponent(directory)}`;
-  const source = JSON.stringify(
-    `${requested.pathname}${requested.search}${requested.hash}`,
-  ).replaceAll('<', '\\u003c');
+  const source = JSON.stringify(clientFrame.href).replaceAll('<', '\\u003c');
   const studioSource = JSON.stringify(studio.href).replaceAll('<', '\\u003c');
   const codexSource = JSON.stringify(codex.href).replaceAll('<', '\\u003c');
   const studioOriginSource = JSON.stringify(studioOrigin).replaceAll('<', '\\u003c');
@@ -360,18 +332,16 @@ function serveWorkspaceShell(request, response, configuration, directory, token)
     directory,
     token,
     nonce,
+    configuration.clientFrameOrigin || 'https://preview.madesolid.com.au',
   );
   response.writeHead(200, {
     'Cache-Control': 'no-store',
-    'Content-Security-Policy': `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; frame-src 'self' ${configuration.studioOrigin}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+    'Content-Security-Policy': `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; frame-src ${configuration.clientFrameOrigin || 'https://preview.madesolid.com.au'} ${configuration.studioOrigin}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
     'Content-Type': 'text/html; charset=utf-8',
     'Referrer-Policy': 'no-referrer',
     'X-Content-Type-Options': 'nosniff',
     'X-Robots-Tag': 'noindex, nofollow, noarchive',
-    'Set-Cookie': [
-      `${frameCookiePrefix}${workspaceFrameId(token)}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=None; Partitioned`,
-      `${lastWorkspaceCookieName}=${encodeURIComponent(directory)}; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=Strict`,
-    ],
+    'Set-Cookie': `${lastWorkspaceCookieName}=${encodeURIComponent(directory)}; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=Strict`,
   });
   if (request.method === 'HEAD') response.end();
   else response.end(document);
@@ -398,97 +368,6 @@ function requestStudioReentry(request, response, configuration, workspaceDirecto
   response.end();
 }
 
-function upstreamHeaders(request, active) {
-  const headers = { ...request.headers };
-  delete headers.cookie;
-  headers.host = `127.0.0.1:${active.port}`;
-  headers['x-forwarded-host'] = request.headers.host || '';
-  headers['x-forwarded-proto'] = 'https';
-  return headers;
-}
-
-function upstreamPath(requestUrl = '/') {
-  const requested = new URL(requestUrl, 'https://workspace.madesolid.invalid');
-  requested.searchParams.delete('access');
-  requested.searchParams.delete(workspaceQueryName);
-  requested.searchParams.delete(returnQueryName);
-  requested.searchParams.delete(frameQueryName);
-  return `${requested.pathname}${requested.search}${requested.hash}`;
-}
-
-function proxyHttp(request, response, active, configuration) {
-  const upstream = createProxyRequest(
-    {
-      headers: upstreamHeaders(request, active),
-      hostname: '127.0.0.1',
-      method: request.method,
-      path: upstreamPath(request.url),
-      port: active.port,
-    },
-    (upstreamResponse) => {
-      const headers = {
-        ...upstreamResponse.headers,
-        'content-security-policy': clientPreviewContentSecurityPolicy(
-          upstreamResponse.headers['content-security-policy'],
-        ),
-        'referrer-policy': 'same-origin',
-        'x-content-type-options': 'nosniff',
-        'x-robots-tag': 'noindex, nofollow, noarchive',
-      };
-      response.writeHead(upstreamResponse.statusCode || 502, headers);
-      upstreamResponse.pipe(response);
-    },
-  );
-  upstream.setTimeout(configuration.upstreamTimeoutMs ?? 8_000, () => {
-    upstream.destroy(new Error('The private workspace preview timed out.'));
-  });
-  upstream.on('error', () => {
-    if (response.headersSent || response.destroyed) return;
-    if (requestsDocument(request)) requestStudioReentry(request, response, configuration);
-    else unavailable(response, 502);
-  });
-  request.pipe(upstream);
-}
-
-function clientPreviewContentSecurityPolicy(existing) {
-  const sources = Array.isArray(existing) ? existing : [existing || ''];
-  const policies = sources.map((source) => {
-    const directives = String(source)
-      .split(';')
-      .map((value) => value.trim())
-      .filter((value) => value && !value.toLowerCase().startsWith('frame-ancestors'));
-    directives.push("frame-ancestors 'self'");
-    return directives.join('; ');
-  });
-  return Array.isArray(existing) ? policies : policies[0];
-}
-
-function proxyUpgrade(request, socket, head, active) {
-  const upstream = createProxyRequest({
-    headers: upstreamHeaders(request, active),
-    hostname: '127.0.0.1',
-    method: request.method,
-    path: upstreamPath(request.url),
-    port: active.port,
-  });
-  upstream.on('upgrade', (upstreamResponse, upstreamSocket, upstreamHead) => {
-    const statusLine = `HTTP/${upstreamResponse.httpVersion} ${upstreamResponse.statusCode} ${upstreamResponse.statusMessage}\r\n`;
-    const headers = Object.entries(upstreamResponse.headers)
-      .flatMap(([name, value]) =>
-        Array.isArray(value)
-          ? value.map((item) => `${name}: ${item}\r\n`)
-          : [`${name}: ${value}\r\n`],
-      )
-      .join('');
-    socket.write(`${statusLine}${headers}\r\n`);
-    if (upstreamHead.length) socket.write(upstreamHead);
-    if (head.length) upstreamSocket.write(head);
-    upstreamSocket.pipe(socket).pipe(upstreamSocket);
-  });
-  upstream.on('error', () => socket.destroy());
-  upstream.end();
-}
-
 export function startWorkspacePreviewProxy(configuration = workspacePreviewProxyConfiguration()) {
   const server = createServer(async (request, response) => {
     try {
@@ -498,11 +377,11 @@ export function startWorkspacePreviewProxy(configuration = workspacePreviewProxy
         return;
       }
       const topLevel = requestsTopLevelDocument(request);
-      const { access, queryToken, requestUrl, token } = accessForRequest(
-        request,
-        configuration,
-        topLevel,
-      );
+      if (!topLevel) {
+        unavailable(response);
+        return;
+      }
+      const { access, queryToken, requestUrl, token } = accessForRequest(request, configuration);
       if (!access) {
         requestStudioReentry(request, response, configuration);
         return;
@@ -516,41 +395,21 @@ export function startWorkspacePreviewProxy(configuration = workspacePreviewProxy
         requestStudioReentry(request, response, configuration, access.directory);
         return;
       }
-      if (topLevel) {
-        const requestedDirectory = workspaceRequestDetails(request.url).directory;
-        if (requestedDirectory && requestedDirectory !== access.directory) {
-          requestStudioReentry(request, response, configuration, requestedDirectory);
-          return;
-        }
-        if (!requestedDirectory) {
-          cleanAccessRedirect(response, requestUrl, token, access.directory);
-          return;
-        }
-        serveWorkspaceShell(request, response, configuration, access.directory, token);
+      const requestedDirectory = workspaceRequestDetails(request.url).directory;
+      if (requestedDirectory && requestedDirectory !== access.directory) {
+        requestStudioReentry(request, response, configuration, requestedDirectory);
         return;
       }
-      proxyHttp(request, response, active, configuration);
+      if (!requestedDirectory) {
+        cleanAccessRedirect(response, requestUrl, token, access.directory);
+        return;
+      }
+      serveWorkspaceShell(request, response, configuration, access.directory, token);
     } catch {
       unavailable(response, 503);
     }
   });
-  server.on('upgrade', async (request, socket, head) => {
-    try {
-      const { access } = accessForRequest(request, configuration);
-      if (!access) {
-        socket.destroy();
-        return;
-      }
-      const active = await activePreview(configuration);
-      if (active.directory !== access.directory) {
-        socket.destroy();
-        return;
-      }
-      proxyUpgrade(request, socket, head, active);
-    } catch {
-      socket.destroy();
-    }
-  });
+  server.on('upgrade', (_request, socket) => socket.destroy());
   return server.listen(configuration.port, '0.0.0.0', () => {
     console.log(`[workspace-preview] private proxy listening on ${configuration.port}`);
   });

@@ -1,13 +1,11 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
-import { createHash } from 'node:crypto';
 import { workspaceShellDocument } from '../../scripts/workspace-preview-proxy.mjs';
 
 const workspaceOrigin = 'https://workspace.madesolid.com.au';
 const capability = 'workspace-capability-for-browser-test';
 const directory = 'lece-client';
 const studioReturn = '/prospects/client-id/editing';
-const frameCookieName = `__Host-made-solid-workspace-frame-${createHash('sha256').update(capability).digest('hex').slice(0, 24)}`;
 
 test('keeps Workspace top-level, isolated, clean, and bound to the requested client', async ({
   context,
@@ -36,51 +34,10 @@ test('keeps Workspace top-level, isolated, clean, and bound to the requested cli
   await context.route(/^https:\/\/workspace\.madesolid\.com\.au(?:\/|$)/, async (route) => {
     const url = new URL(route.request().url());
     if (route.request().frame() !== page.mainFrame()) {
-      const cookie = route.request().headers().cookie || '';
       if (foreignPage && route.request().frame().page() === foreignPage) {
         foreignWorkspaceRequests += 1;
       }
-      if (!cookie.includes(`${frameCookieName}=${capability}`)) {
-        await route.fulfill({ status: 403, body: 'Frame capability missing.' });
-        return;
-      }
-      if (url.pathname === '/_next/static/app.css') {
-        loadedClientResources.add('css');
-        await route.fulfill({
-          body: '#client-runtime { color: rgb(12, 34, 56); }',
-          contentType: 'text/css',
-        });
-        return;
-      }
-      if (url.pathname === '/_next/static/app.js') {
-        loadedClientResources.add('js');
-        await route.fulfill({
-          body: "document.querySelector('#client-runtime').dataset.javascript = 'loaded';",
-          contentType: 'text/javascript',
-        });
-        return;
-      }
-      if (url.pathname === '/_next/image') {
-        loadedClientResources.add('image');
-        await route.fulfill({
-          body: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><rect width="24" height="24" fill="#dfff00"/></svg>',
-          contentType: 'image/svg+xml',
-        });
-        return;
-      }
-      await route.fulfill({
-        body: `<!doctype html><html lang="en"><head>
-          <meta name="referrer" content="no-referrer" />
-          <link rel="stylesheet" href="/_next/static/app.css" />
-          <script defer src="/_next/static/app.js"></script>
-        </head><body><main><h1>LECE live website</h1><p id="isolation"></p><p id="client-runtime">Client runtime</p><img alt="Client runtime asset" src="/_next/image?url=%2Fhero.jpg&w=640&q=75" /></main><script>
-          let isolated = false;
-          try { void window.parent.document.body; } catch { isolated = true; }
-          document.querySelector('#isolation').textContent = isolated ? 'Client frame is isolated' : 'Client frame escaped';
-        </script></body></html>`,
-        contentType: 'text/html',
-        headers: { 'content-security-policy': "frame-ancestors 'self'" },
-      });
+      await route.fulfill({ status: 403, body: 'Workspace cannot be framed.' });
       return;
     }
     if (url.searchParams.get('access') === capability) {
@@ -92,12 +49,12 @@ test('keeps Workspace top-level, isolated, clean, and bound to the requested cli
           directory,
           capability,
           'browser-test-nonce',
+          'https://preview.madesolid.com.au',
         ),
         contentType: 'text/html',
         headers: {
           'content-security-policy':
-            "default-src 'none'; script-src 'nonce-browser-test-nonce'; style-src 'unsafe-inline'; frame-src 'self' https://studio.madesolid.com.au; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-          'set-cookie': `${frameCookieName}=${capability}; Path=/; HttpOnly; Secure; SameSite=None; Partitioned`,
+            "default-src 'none'; script-src 'nonce-browser-test-nonce'; style-src 'unsafe-inline'; frame-src https://preview.madesolid.com.au https://studio.madesolid.com.au; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
         },
       });
       return;
@@ -121,11 +78,62 @@ test('keeps Workspace top-level, isolated, clean, and bound to the requested cli
         directory,
         capability,
         'browser-test-nonce',
+        'https://preview.madesolid.com.au',
       ),
       contentType: 'text/html',
       headers: {
         'content-security-policy':
-          "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src 'self' https://studio.madesolid.com.au; frame-ancestors 'none'",
+          "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src https://preview.madesolid.com.au https://studio.madesolid.com.au; frame-ancestors 'none'",
+      },
+    });
+  });
+  await context.route(/^https:\/\/preview\.madesolid\.com\.au(?:\/|$)/, async (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.includes(`/${directory}/${capability}/`)) {
+      await route.fulfill({ status: 403, body: 'Frame capability missing.' });
+      return;
+    }
+    const frameRoot =
+      url.pathname.slice(0, url.pathname.indexOf(`/${directory}/${capability}/`)) +
+      `/${directory}/${capability}/`;
+    const upstreamPath = url.pathname.slice(frameRoot.length - 1);
+    if (upstreamPath === '/_next/static/app.css') {
+      loadedClientResources.add('css');
+      await route.fulfill({
+        body: '#client-runtime { color: rgb(12, 34, 56); }',
+        contentType: 'text/css',
+      });
+      return;
+    }
+    if (upstreamPath === '/_next/static/app.js') {
+      loadedClientResources.add('js');
+      await route.fulfill({
+        body: "document.querySelector('#client-runtime').dataset.javascript = 'loaded';",
+        contentType: 'text/javascript',
+      });
+      return;
+    }
+    if (upstreamPath === '/_next/image') {
+      loadedClientResources.add('image');
+      await route.fulfill({
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><rect width="24" height="24" fill="#dfff00"/></svg>',
+        contentType: 'image/svg+xml',
+      });
+      return;
+    }
+    await route.fulfill({
+      body: `<!doctype html><html lang="en"><head><base href="${frameRoot}">
+        <meta name="referrer" content="no-referrer" />
+        <link rel="stylesheet" href="_next/static/app.css" />
+        <script defer src="_next/static/app.js"></script>
+      </head><body><main><h1>LECE live website</h1><p id="isolation"></p><p id="client-runtime">Client runtime</p><img alt="Client runtime asset" src="_next/image?url=%2Fhero.jpg&w=640&q=75" /></main><script>
+        let isolated = false;
+        try { void window.parent.document.body; } catch { isolated = true; }
+        document.querySelector('#isolation').textContent = isolated ? 'Client frame is isolated' : 'Client frame escaped';
+      </script></body></html>`,
+      contentType: 'text/html',
+      headers: {
+        'content-security-policy': `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self'; img-src 'self'; frame-ancestors ${workspaceOrigin}`,
       },
     });
   });

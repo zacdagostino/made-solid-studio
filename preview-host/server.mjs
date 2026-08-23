@@ -1,10 +1,15 @@
 import { createHash } from 'node:crypto';
-import { createServer } from 'node:http';
+import { createServer, request as createProxyRequest } from 'node:http';
+import { readFile } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
+import { verifyWorkspacePreviewToken } from '../scripts/workspace-preview-access.mjs';
 
 const defaultPort = 8787;
 const previewRoutePrefix = '/site/';
+const workspaceFrameRoutePrefix = '/__made-solid/workspace-frame/';
+const directoryPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+const workspaceTokenPattern = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
 function requiredEnvironment(name, environment = process.env) {
   const value = environment[name]?.trim();
@@ -26,10 +31,39 @@ export function previewHostConfiguration(environment = process.env) {
     throw new Error('PREVIEW_PUBLIC_ORIGIN must use HTTPS outside local development.');
   }
   return {
+    activeWorkspacePreviewPath: environment.SITEFORGE_ACTIVE_PREVIEW_PATH?.trim(),
     port: Number(environment.SITEFORGE_PREVIEW_PORT) || defaultPort,
     publicOrigin: configuredOrigin,
     serviceRoleKey,
     supabaseUrl,
+    workspaceOrigin: environment.SITEFORGE_WORKSPACE_PREVIEW_ORIGIN?.trim().replace(/\/+$/, ''),
+    workspacePreviewSecret: environment.SITEFORGE_WORKSPACE_PREVIEW_SECRET?.trim(),
+  };
+}
+
+export function parseWorkspaceFramePath(pathname) {
+  if (!pathname.startsWith(workspaceFrameRoutePrefix)) return undefined;
+  const match = /^([A-Za-z0-9][A-Za-z0-9._-]{0,99})\/([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)(\/.*)?$/.exec(
+    pathname.slice(workspaceFrameRoutePrefix.length),
+  );
+  if (!match) return undefined;
+  const upstreamSegments = match[3]?.split('/').filter(Boolean) || [];
+  if (
+    upstreamSegments.some((segment) => {
+      try {
+        const decoded = decodeURIComponent(segment);
+        return decoded === '.' || decoded === '..' || decoded.includes('\\');
+      } catch {
+        return true;
+      }
+    })
+  ) {
+    return undefined;
+  }
+  return {
+    directory: match[1],
+    token: match[2],
+    upstreamPath: match[3] || '/',
   };
 }
 
@@ -102,6 +136,28 @@ export function rewritePreviewRuntimeReferences(source, base) {
     .replace(/(["'])\/assets\//g, (_match, quote) => `${quote}${base}assets/`);
 }
 
+export function rewriteWorkspaceFrameRuntimeReferences(source, base) {
+  const pathBase = new URL(base, 'https://preview.madesolid.invalid').pathname;
+  return rewritePreviewRuntimeReferences(source, base)
+    .replace(/(["'`])\/_next\//g, (_match, quote) => `${quote}${base}_next/`)
+    .replace(
+      /(["'`])\/(?!\/)(?=(?:@vite|@react-refresh|src|node_modules)\/)/g,
+      (_match, quote) => `${quote}${base}`,
+    )
+    .replace(
+      /(const base(?:\$1)?\s*=\s*)["']\/["'](\s*\|\|\s*["']\/["'];)/g,
+      (_match, assignment, fallback) => `${assignment}${JSON.stringify(pathBase)}${fallback}`,
+    )
+    .replace(
+      /(const socketHost\s*=\s*`[^`\n]*\$\{)["']\/["'](\}`;)/g,
+      (_match, assignment, suffix) => `${assignment}${JSON.stringify(pathBase)}${suffix}`,
+    )
+    .replace(
+      /(["'`])\/(?!\/|__made-solid\/workspace-frame\/)/g,
+      (_match, quote) => `${quote}${base}`,
+    );
+}
+
 const previewNavigationScript = `
   (() => {
     if (window.__siteforgePrivatePreview) return;
@@ -133,6 +189,26 @@ export function preparePreviewHtml(source, base) {
     return withBase.replace(/<\/body>/i, `${navigation}</body>`);
   }
   return `${baseElement}${withBase}${navigation}`;
+}
+
+export function prepareWorkspaceFrameHtml(source, base) {
+  const rootedSource = rewriteWorkspaceFrameRuntimeReferences(source, base);
+  const baseElement = `<base href="${base}">`;
+  const withBase = rootedSource.replace(/<head(\s[^>]*)?>/i, (match) => `${match}${baseElement}`);
+  return (/<head(\s[^>]*)?>/i.test(rootedSource) ? withBase : `${baseElement}${withBase}`)
+    .replace(/"assetPrefix":""/g, `"assetPrefix":"${base.replace(/\/$/, '')}"`)
+    .replace(/(\bsrcset=["'])([^"']+)/gi, (_match, prefix, candidates) => {
+      const rewritten = candidates
+        .split(',')
+        .map((candidate) =>
+          candidate.replace(
+            /^(\s*)\/(?!\/|__made-solid\/workspace-frame\/)/,
+            (_value, spacing) => `${spacing}${base}`,
+          ),
+        )
+        .join(',');
+      return `${prefix}${rewritten}`;
+    });
 }
 
 function isLockedStarterDocument(html) {
@@ -295,8 +371,300 @@ export async function handlePreviewRequest(request, configuration = previewHostC
   }
 }
 
-export function startPreviewHost(configuration = previewHostConfiguration()) {
-  const server = createServer(async (incoming, outgoing) => {
+function workspaceFrameConfiguration(configuration) {
+  const activeWorkspacePreviewPath = configuration.activeWorkspacePreviewPath?.trim();
+  const workspacePreviewSecret = configuration.workspacePreviewSecret?.trim();
+  const workspaceOrigin = configuration.workspaceOrigin?.trim().replace(/\/+$/, '');
+  const publicOrigin = configuration.publicOrigin?.trim().replace(/\/+$/, '');
+  if (!activeWorkspacePreviewPath || !workspacePreviewSecret || !workspaceOrigin || !publicOrigin) {
+    return undefined;
+  }
+  let parsedWorkspaceOrigin;
+  let parsedPublicOrigin;
+  try {
+    parsedWorkspaceOrigin = new URL(workspaceOrigin);
+    parsedPublicOrigin = new URL(publicOrigin);
+  } catch {
+    return undefined;
+  }
+  if (
+    parsedWorkspaceOrigin.protocol !== 'https:' ||
+    parsedPublicOrigin.protocol !== 'https:' ||
+    parsedWorkspaceOrigin.href !== `${parsedWorkspaceOrigin.origin}/` ||
+    parsedPublicOrigin.href !== `${parsedPublicOrigin.origin}/` ||
+    parsedWorkspaceOrigin.origin === parsedPublicOrigin.origin
+  ) {
+    return undefined;
+  }
+  return { activeWorkspacePreviewPath, publicOrigin, workspaceOrigin, workspacePreviewSecret };
+}
+
+async function activeWorkspacePreview(configuration) {
+  const source = await readFile(configuration.activeWorkspacePreviewPath, 'utf8');
+  const value = JSON.parse(source);
+  if (
+    !Number.isInteger(value.port) ||
+    value.port < 1 ||
+    value.port > 65_535 ||
+    !directoryPattern.test(value.directory || '')
+  ) {
+    throw new Error('The active workspace preview record is invalid.');
+  }
+  return value;
+}
+
+function workspaceFrameRootPath(parsed) {
+  return `${workspaceFrameRoutePrefix}${parsed.directory}/${parsed.token}/`;
+}
+
+function workspaceFrameAccess(parsed, configuration) {
+  if (!workspaceTokenPattern.test(parsed.token)) return undefined;
+  const access = verifyWorkspacePreviewToken(parsed.token, configuration.workspacePreviewSecret);
+  return access?.directory === parsed.directory ? access : undefined;
+}
+
+function workspaceFrameUnavailable(response, status = 404) {
+  response.writeHead(status, {
+    'Access-Control-Allow-Origin': 'null',
+    'Cache-Control': 'private, no-store',
+    'Content-Type': 'text/plain; charset=utf-8',
+    'Referrer-Policy': 'no-referrer',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Robots-Tag': 'noindex, nofollow, noarchive',
+  });
+  response.end('Private workspace frame unavailable.');
+}
+
+function workspaceFrameUpstreamHeaders(request, active, configuration) {
+  const headers = { ...request.headers };
+  delete headers.cookie;
+  delete headers['accept-encoding'];
+  delete headers.referer;
+  headers.host = `127.0.0.1:${active.port}`;
+  headers['x-forwarded-host'] = request.headers.host || '';
+  headers['x-forwarded-proto'] = 'https';
+  if (headers.origin === 'null') headers.origin = configuration.publicOrigin;
+  return headers;
+}
+
+function workspaceFrameUpstreamPath(requestUrl, parsed) {
+  return `${parsed.upstreamPath}${requestUrl.search}`;
+}
+
+function workspaceFrameContentSecurityPolicy(existing, workspaceOrigin, publicOrigin) {
+  const sources = Array.isArray(existing) ? existing : [existing || ''];
+  const replacedPolicies = sources
+    .map((source) =>
+      String(source)
+        .split(';')
+        .map((value) => value.trim())
+        .filter(
+          (value) =>
+            value &&
+            !['frame-ancestors', 'report-to', 'report-uri'].includes(
+              value.split(/\s+/, 1)[0].toLowerCase(),
+            ),
+        )
+        .join('; '),
+    )
+    .filter(Boolean);
+  const lockedPolicy = [
+    "default-src 'self' data: blob:",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    `connect-src 'self' ${publicOrigin} ${publicOrigin.replace(/^https:/, 'wss:')}`,
+    "worker-src 'self' blob:",
+    "media-src 'self' data: blob:",
+    "frame-src 'none'",
+    "child-src 'none'",
+    "object-src 'none'",
+    "form-action 'none'",
+    "base-uri 'self'",
+    `frame-ancestors ${workspaceOrigin}`,
+  ].join('; ');
+  return [...replacedPolicies, lockedPolicy].join(', ');
+}
+
+function workspaceFrameLocation(location, parsed) {
+  if (!location || !String(location).startsWith('/')) return location;
+  return `${workspaceFrameRootPath(parsed)}${String(location).replace(/^\/+/, '')}`;
+}
+
+function proxyWorkspaceFrameHttp(request, response, requestUrl, parsed, active, configuration) {
+  const upstream = createProxyRequest(
+    {
+      headers: workspaceFrameUpstreamHeaders(request, active, configuration),
+      hostname: '127.0.0.1',
+      method: request.method,
+      path: workspaceFrameUpstreamPath(requestUrl, parsed),
+      port: active.port,
+    },
+    (upstreamResponse) => {
+      const headers = {
+        ...upstreamResponse.headers,
+        'access-control-allow-origin': 'null',
+        'cache-control': 'private, no-store',
+        'content-security-policy': workspaceFrameContentSecurityPolicy(
+          upstreamResponse.headers['content-security-policy'],
+          configuration.workspaceOrigin,
+          configuration.publicOrigin,
+        ),
+        'cross-origin-resource-policy': 'cross-origin',
+        'referrer-policy': 'no-referrer',
+        'x-content-type-options': 'nosniff',
+        'x-robots-tag': 'noindex, nofollow, noarchive',
+      };
+      if (headers.location) headers.location = workspaceFrameLocation(headers.location, parsed);
+      delete headers['content-length'];
+      delete headers['content-encoding'];
+      delete headers['clear-site-data'];
+      delete headers['content-location'];
+      delete headers.link;
+      delete headers.nel;
+      delete headers['report-to'];
+      delete headers['reporting-endpoints'];
+      delete headers['service-worker-allowed'];
+      delete headers.sourcemap;
+      delete headers['set-cookie'];
+      delete headers['x-sourcemap'];
+      delete headers['x-frame-options'];
+      const contentType = String(upstreamResponse.headers['content-type'] || '').toLowerCase();
+      const frameBase = workspaceFrameRootPath(parsed);
+      const rewritesBody =
+        contentType.includes('text/html') ||
+        contentType.includes('javascript') ||
+        contentType.includes('text/css') ||
+        contentType.includes('application/json');
+      if (!rewritesBody) {
+        response.writeHead(upstreamResponse.statusCode || 502, headers);
+        upstreamResponse.pipe(response);
+        return;
+      }
+      delete headers['transfer-encoding'];
+      const chunks = [];
+      upstreamResponse.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+      upstreamResponse.on('end', () => {
+        const source = Buffer.concat(chunks).toString('utf8');
+        const document = contentType.includes('text/html')
+          ? prepareWorkspaceFrameHtml(source, frameBase)
+          : contentType.includes('javascript') ||
+              contentType.includes('text/css') ||
+              contentType.includes('application/json')
+            ? rewriteWorkspaceFrameRuntimeReferences(source, frameBase)
+            : rewritePreviewRootReferences(source, frameBase);
+        headers['content-length'] = String(Buffer.byteLength(document));
+        response.writeHead(upstreamResponse.statusCode || 502, headers);
+        if (request.method === 'HEAD') response.end();
+        else response.end(document);
+      });
+    },
+  );
+  upstream.setTimeout(configuration.upstreamTimeoutMs ?? 8_000, () => {
+    upstream.destroy(new Error('The private workspace frame timed out.'));
+  });
+  upstream.on('error', () => {
+    if (!response.headersSent && !response.destroyed) workspaceFrameUnavailable(response, 502);
+  });
+  request.pipe(upstream);
+}
+
+export async function handleWorkspaceFrameRequest(request, response, configuration) {
+  const requestUrl = new URL(request.url || '/', configuration.publicOrigin || 'https://invalid');
+  if (!requestUrl.pathname.startsWith(workspaceFrameRoutePrefix)) return false;
+  const frameConfiguration = workspaceFrameConfiguration(configuration);
+  const parsed = parseWorkspaceFramePath(requestUrl.pathname);
+  if (!frameConfiguration || !parsed || !['GET', 'HEAD'].includes(request.method || 'GET')) {
+    workspaceFrameUnavailable(response);
+    return true;
+  }
+  try {
+    const access = workspaceFrameAccess(parsed, frameConfiguration);
+    if (!access) {
+      workspaceFrameUnavailable(response);
+      return true;
+    }
+    const active = await activeWorkspacePreview(frameConfiguration);
+    if (active.directory !== access.directory) {
+      workspaceFrameUnavailable(response);
+      return true;
+    }
+    proxyWorkspaceFrameHttp(request, response, requestUrl, parsed, active, frameConfiguration);
+  } catch {
+    workspaceFrameUnavailable(response, 503);
+  }
+  return true;
+}
+
+function proxyWorkspaceFrameUpgrade(
+  request,
+  socket,
+  head,
+  requestUrl,
+  parsed,
+  active,
+  configuration,
+) {
+  const upstream = createProxyRequest({
+    headers: workspaceFrameUpstreamHeaders(request, active, configuration),
+    hostname: '127.0.0.1',
+    method: request.method,
+    path: workspaceFrameUpstreamPath(requestUrl, parsed),
+    port: active.port,
+  });
+  upstream.on('upgrade', (upstreamResponse, upstreamSocket, upstreamHead) => {
+    const statusLine = `HTTP/${upstreamResponse.httpVersion} ${upstreamResponse.statusCode} ${upstreamResponse.statusMessage}\r\n`;
+    const headers = Object.entries(upstreamResponse.headers)
+      .flatMap(([name, value]) =>
+        Array.isArray(value)
+          ? value.map((item) => `${name}: ${item}\r\n`)
+          : [`${name}: ${value}\r\n`],
+      )
+      .join('');
+    socket.write(`${statusLine}${headers}\r\n`);
+    if (upstreamHead.length) socket.write(upstreamHead);
+    if (head.length) upstreamSocket.write(head);
+    upstreamSocket.pipe(socket).pipe(upstreamSocket);
+  });
+  upstream.on('error', () => socket.destroy());
+  upstream.end();
+}
+
+export async function handleWorkspaceFrameUpgrade(request, socket, head, configuration) {
+  const requestUrl = new URL(request.url || '/', configuration.publicOrigin || 'https://invalid');
+  if (!requestUrl.pathname.startsWith(workspaceFrameRoutePrefix)) return false;
+  const frameConfiguration = workspaceFrameConfiguration(configuration);
+  const parsed = parseWorkspaceFramePath(requestUrl.pathname);
+  if (!frameConfiguration || !parsed) {
+    socket.destroy();
+    return true;
+  }
+  try {
+    const access = workspaceFrameAccess(parsed, frameConfiguration);
+    const active = access ? await activeWorkspacePreview(frameConfiguration) : undefined;
+    if (!access || active?.directory !== access.directory) {
+      socket.destroy();
+      return true;
+    }
+    proxyWorkspaceFrameUpgrade(
+      request,
+      socket,
+      head,
+      requestUrl,
+      parsed,
+      active,
+      frameConfiguration,
+    );
+  } catch {
+    socket.destroy();
+  }
+  return true;
+}
+
+export function previewHostRequestListener(configuration = previewHostConfiguration()) {
+  return async (incoming, outgoing) => {
+    if (await handleWorkspaceFrameRequest(incoming, outgoing, configuration)) return;
     const origin = configuration.publicOrigin || `http://${incoming.headers.host || '127.0.0.1'}`;
     const request = new Request(new URL(incoming.url || '/', origin), {
       headers: incoming.headers,
@@ -309,7 +677,24 @@ export function startPreviewHost(configuration = previewHostConfiguration()) {
       return;
     }
     Readable.fromWeb(result.body).pipe(outgoing);
+  };
+}
+
+export function attachPreviewHostUpgradeHandler(
+  server,
+  configuration = previewHostConfiguration(),
+) {
+  server.on('upgrade', (request, socket, head) => {
+    void handleWorkspaceFrameUpgrade(request, socket, head, configuration).then((handled) => {
+      if (!handled) socket.destroy();
+    });
   });
+  return server;
+}
+
+export function startPreviewHost(configuration = previewHostConfiguration()) {
+  const server = createServer(previewHostRequestListener(configuration));
+  attachPreviewHostUpgradeHandler(server, configuration);
   return server.listen(configuration.port, '0.0.0.0', () => {
     const address = server.address();
     console.log(

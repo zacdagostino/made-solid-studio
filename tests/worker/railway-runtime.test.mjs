@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
@@ -15,16 +14,12 @@ import {
 } from '../../scripts/workspace-preview-access.mjs';
 import {
   startWorkspacePreviewProxy,
+  workspacePreviewProxyConfiguration,
   workspacePreviewReentryUrl,
 } from '../../scripts/workspace-preview-proxy.mjs';
 
 const secret = 'a-private-preview-secret-that-is-longer-than-thirty-two-characters';
 const execFile = promisify(execFileCallback);
-
-function workspaceFrameCookie(token) {
-  const frameId = createHash('sha256').update(token).digest('hex').slice(0, 24);
-  return `__Host-made-solid-workspace-frame-${frameId}=${encodeURIComponent(token)}`;
-}
 
 test('creates expiring private workspace preview capabilities', () => {
   const token = createWorkspacePreviewToken('prospect-site', secret, {
@@ -52,6 +47,39 @@ test('creates expiring private workspace preview capabilities', () => {
   assert.ok(url.searchParams.get('access'));
 });
 
+test('requires distinct exact HTTPS Studio, Workspace, and Preview origins', () => {
+  const environment = {
+    PREVIEW_PUBLIC_ORIGIN: 'https://preview.madesolid.com.au',
+    SITEFORGE_ACTIVE_PREVIEW_PATH: '/tmp/active.json',
+    SITEFORGE_PUBLIC_ORIGIN: 'https://studio.madesolid.com.au',
+    SITEFORGE_WORKSPACE_PREVIEW_ORIGIN: 'https://workspace.madesolid.com.au',
+    SITEFORGE_WORKSPACE_PREVIEW_SECRET: secret,
+  };
+  assert.deepEqual(workspacePreviewProxyConfiguration(environment), {
+    activePreviewPath: '/tmp/active.json',
+    clientFrameOrigin: 'https://preview.madesolid.com.au',
+    port: 3000,
+    secret,
+    studioOrigin: 'https://studio.madesolid.com.au',
+  });
+  assert.throws(
+    () =>
+      workspacePreviewProxyConfiguration({
+        ...environment,
+        PREVIEW_PUBLIC_ORIGIN: environment.SITEFORGE_WORKSPACE_PREVIEW_ORIGIN,
+      }),
+    /must be distinct/,
+  );
+  assert.throws(
+    () =>
+      workspacePreviewProxyConfiguration({
+        ...environment,
+        PREVIEW_PUBLIC_ORIGIN: 'https://preview.madesolid.com.au/client',
+      }),
+    /without a path/,
+  );
+});
+
 test('returns expired workspace documents through the stable authenticated Studio route', async () => {
   assert.equal(
     workspacePreviewReentryUrl('https://studio.madesolid.com.au', '/services?viewport=mobile'),
@@ -60,6 +88,7 @@ test('returns expired workspace documents through the stable authenticated Studi
 
   const server = startWorkspacePreviewProxy({
     activePreviewPath: '/tmp/not-read-without-valid-access.json',
+    clientFrameOrigin: 'https://preview.madesolid.com.au',
     port: 0,
     secret,
     studioOrigin: 'https://studio.madesolid.com.au',
@@ -70,7 +99,11 @@ test('returns expired workspace documents through the stable authenticated Studi
   try {
     const origin = `http://127.0.0.1:${address.port}`;
     const documentResponse = await fetch(`${origin}/services?viewport=mobile`, {
-      headers: { Accept: 'text/html', 'Sec-Fetch-Mode': 'navigate' },
+      headers: {
+        Accept: 'text/html',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+      },
       redirect: 'manual',
     });
     assert.equal(documentResponse.status, 303);
@@ -83,6 +116,7 @@ test('returns expired workspace documents through the stable authenticated Studi
       headers: {
         Accept: 'text/html',
         Cookie: '__Host-made-solid-workspace=%E0%A4%A',
+        'Sec-Fetch-Dest': 'document',
         'Sec-Fetch-Mode': 'navigate',
       },
       redirect: 'manual',
@@ -139,6 +173,7 @@ test('keeps an authenticated top-level workspace visit in an isolated workspace 
   );
   const server = startWorkspacePreviewProxy({
     activePreviewPath,
+    clientFrameOrigin: 'https://preview.madesolid.com.au',
     port: 0,
     secret,
     studioOrigin: 'https://studio.madesolid.com.au',
@@ -172,85 +207,29 @@ test('keeps an authenticated top-level workspace visit in an isolated workspace 
       shell,
       /class="client-preview" sandbox="allow-modals allow-popups allow-scripts"[^>]+title="Client website live preview"/,
     );
+    assert.match(
+      shell,
+      /src="https:\/\/preview\.madesolid\.com\.au\/__made-solid\/workspace-frame\/prospect-site\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\/services"/,
+    );
     assert.match(shell, /title="Client website Codex editor"/);
     assert.match(shell, /\/__made-solid\/workspace-codex\?access=/);
     assert.match(shell, /#\/codex-panel\?workspace=prospect-site/);
     assert.doesNotMatch(shell, /Made Solid Studio workspace/);
     assert.match(
       response.headers.get('content-security-policy') || '',
-      /frame-src 'self' https:\/\/studio\.madesolid\.com\.au/,
+      /frame-src https:\/\/preview\.madesolid\.com\.au https:\/\/studio\.madesolid\.com\.au/,
     );
     assert.match(response.headers.get('content-security-policy') || '', /frame-ancestors 'none'/);
     assert.doesNotMatch(shell, /Client website must not be served top-level/);
     assert.equal(upstreamRequests.length, 0);
-    const frameSetCookie = response.headers.get('set-cookie') || '';
-    const frameCapabilityCookie = frameSetCookie.split(/,\s*__Host-made-solid-workspace-last=/)[0];
-    const frameCookie = frameSetCookie.split(';')[0];
-    assert.match(frameCookie, /^__Host-made-solid-workspace-frame-/);
-    assert.match(frameCapabilityCookie, /HttpOnly; Secure; SameSite=None; Partitioned/);
-    assert.doesNotMatch(frameCapabilityCookie, /SameSite=Strict/);
-
-    const iframe = await fetch(`http://127.0.0.1:${address.port}/services`, {
-      headers: {
-        Accept: 'text/html',
-        Cookie: frameCookie,
-        'Sec-Fetch-Dest': 'iframe',
-        'Sec-Fetch-Mode': 'navigate',
-      },
-    });
-    assert.equal(iframe.status, 200);
-    assert.match(await iframe.text(), /Client website must not be served top-level/);
-    assert.match(iframe.headers.get('content-security-policy') || '', /default-src 'self'/);
-    assert.match(iframe.headers.get('content-security-policy') || '', /frame-ancestors 'self'/);
-    assert.doesNotMatch(iframe.headers.get('content-security-policy') || '', /frame-ancestors \*/);
-    assert.equal(upstreamRequests.length, 1);
-
-    for (const resourcePath of [
-      '/_next/static/app.css',
-      '/_next/static/app.js',
-      '/_next/image?url=%2Fhero.jpg&w=640&q=75',
-    ]) {
-      const resource = await fetch(`http://127.0.0.1:${address.port}${resourcePath}`, {
-        headers: {
-          Cookie: frameCookie,
-          'Sec-Fetch-Dest': resourcePath.endsWith('.css') ? 'style' : 'script',
-          'Sec-Fetch-Mode': 'no-cors',
-        },
-      });
-      assert.equal(resource.status, 200);
-    }
-    assert.deepEqual(upstreamRequests.slice(1), [
-      '/_next/static/app.css',
-      '/_next/static/app.js',
-      '/_next/image?url=%2Fhero.jpg&w=640&q=75',
-    ]);
+    const workspaceOriginAsset = await fetch(
+      `http://127.0.0.1:${address.port}/_next/static/app.css`,
+      { headers: { Cookie: `__Host-made-solid-workspace=${encodeURIComponent(token)}` } },
+    );
+    assert.equal(workspaceOriginAsset.status, 404);
+    assert.equal(upstreamRequests.length, 0);
 
     const otherToken = createWorkspacePreviewToken('another-client', secret);
-    const ambiguousCrossTabAsset = await fetch(
-      `http://127.0.0.1:${address.port}/_next/static/app.css`,
-      {
-        headers: {
-          Cookie: `${frameCookie}; ${workspaceFrameCookie(otherToken)}`,
-          'Sec-Fetch-Dest': 'style',
-          'Sec-Fetch-Mode': 'no-cors',
-        },
-      },
-    );
-    assert.equal(ambiguousCrossTabAsset.status, 404);
-    assert.equal(upstreamRequests.length, 4);
-
-    const selectedFrameAsset = await fetch(
-      `http://127.0.0.1:${address.port}/_next/static/app.css?__made_solid_frame=${createHash('sha256').update(token).digest('hex').slice(0, 24)}`,
-      {
-        headers: {
-          Cookie: `${frameCookie}; ${workspaceFrameCookie(otherToken)}`,
-          'Sec-Fetch-Dest': 'style',
-          'Sec-Fetch-Mode': 'no-cors',
-        },
-      },
-    );
-    assert.equal(selectedFrameAsset.status, 200);
-    assert.equal(upstreamRequests.at(-1), '/_next/static/app.css');
 
     const tokenEntry = await fetch(
       `http://127.0.0.1:${address.port}/services?access=${encodeURIComponent(token)}`,
@@ -352,6 +331,7 @@ test('returns a stalled valid workspace document through authenticated Studio re
   );
   const server = startWorkspacePreviewProxy({
     activePreviewPath,
+    clientFrameOrigin: 'https://preview.madesolid.com.au',
     port: 0,
     secret,
     studioOrigin: 'https://studio.madesolid.com.au',
@@ -365,17 +345,13 @@ test('returns a stalled valid workspace document through authenticated Studio re
     const response = await fetch(`http://127.0.0.1:${address.port}/services`, {
       headers: {
         Accept: 'text/html',
-        Cookie: workspaceFrameCookie(token),
+        Cookie: `__Host-made-solid-workspace=${encodeURIComponent(token)}`,
         'Sec-Fetch-Dest': 'iframe',
         'Sec-Fetch-Mode': 'navigate',
       },
       redirect: 'manual',
     });
-    assert.equal(response.status, 303);
-    assert.equal(
-      response.headers.get('location'),
-      'https://studio.madesolid.com.au/#/workspace-preview-access?path=%2Fservices',
-    );
+    assert.equal(response.status, 404);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     stalledPreview.closeAllConnections();

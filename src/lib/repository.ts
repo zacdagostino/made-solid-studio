@@ -388,6 +388,8 @@ const localLockedWorkspaceDevDependenciesPackageId =
   'agent-package-local-v19-4-locked-workspace-dev-dependencies';
 const localReliableWorkspaceDevelopmentSurfacesPackageId =
   'agent-package-local-v19-5-reliable-workspace-development-surfaces';
+const localOpaqueWorkspaceFrameCapabilityPackageId =
+  'agent-package-local-v19-6-opaque-workspace-frame-capability';
 
 type StoreName =
   | 'activities'
@@ -2988,10 +2990,28 @@ export class SiteforgeRepository {
         'Makes Workspace visibly and technically behave as the stable live client development environment without weakening client or Studio isolation.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localOpaqueWorkspaceFrameCapabilityPackage: AgentPackage = {
+      ...localReliableWorkspaceDevelopmentSurfacesPackage,
+      id: localOpaqueWorkspaceFrameCapabilityPackageId,
+      version: 19.6,
+      basePackageId: localReliableWorkspaceDevelopmentSurfacesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v19.6',
+      contractAddendum:
+        'Keep the client development document in an opaque sandbox on the distinct private Preview origin. Authenticate the document, every rewritten runtime asset, navigation, API path, and HMR upgrade through one short-lived exact-client signed capability path instead of a frame cookie.',
+      instructionsAddendum:
+        'Never grant allow-same-origin to the live client frame and never serve client assets from the Workspace origin. Route the live document through the existing private Preview host, rewrite HTML, CSS, JavaScript, JSON, Vite, Next, redirect, and websocket roots beneath its exact signed capability, and validate the capability and current active directory on every request. Keep proxy responses private and no-store, with no referrer, cookies, service-worker scope, site-data clearing, or remote connections and forms. Preserve any upstream CSP sandbox directive, allow framing only from the exact Workspace origin, strip the capability before proxying upstream, and reject expired, mismatched, stale-client, and cross-client paths.',
+      summary:
+        'Opaque Workspace frame capability test package: restores real client assets and HMR without browser cookie exceptions or shared cross-client frame storage.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the existing Preview origin a secure live-development transport while Workspace remains the stable shell and every client frame remains opaque and isolated.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localOpaqueWorkspaceFrameCapabilityPackage,
           localReliableWorkspaceDevelopmentSurfacesPackage,
           localLockedWorkspaceDevDependenciesPackage,
           localLiveCodexLauncherRecoveryPackage,

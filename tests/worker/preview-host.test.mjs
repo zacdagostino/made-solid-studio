@@ -1,13 +1,23 @@
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import {
   handlePreviewRequest,
+  parseWorkspaceFramePath,
   parsePreviewPath,
   preparePreviewHtml,
+  prepareWorkspaceFrameHtml,
+  previewHostRequestListener,
   previewHostConfiguration,
   rewritePreviewRootReferences,
   rewritePreviewRuntimeReferences,
+  rewriteWorkspaceFrameRuntimeReferences,
 } from '../../preview-host/server.mjs';
+import { createWorkspacePreviewToken } from '../../scripts/workspace-preview-access.mjs';
 
 const runId = '12345678-1234-1234-1234-123456789abc';
 const token = 'a'.repeat(64);
@@ -18,6 +28,7 @@ const configuration = {
   serviceRoleKey: 'server-only-key',
   supabaseUrl: 'https://project.supabase.co',
 };
+const workspaceSecret = 'workspace-preview-secret-longer-than-thirty-two-characters';
 
 test('requires HTTPS for a deployed preview origin', () => {
   assert.throws(
@@ -46,6 +57,25 @@ test('parses visitor and working-draft capability routes without path traversal'
   });
   assert.equal(parsePreviewPath(`/site/${runId}/${token}/../private.txt`), undefined);
   assert.equal(parsePreviewPath(`/site/not-a-run/${token}/`), undefined);
+});
+
+test('parses exact client frame routes without traversal', () => {
+  assert.deepEqual(
+    parseWorkspaceFramePath(
+      '/__made-solid/workspace-frame/prospect-site/payload.signature/_next/app.js',
+    ),
+    {
+      directory: 'prospect-site',
+      token: 'payload.signature',
+      upstreamPath: '/_next/app.js',
+    },
+  );
+  assert.equal(
+    parseWorkspaceFramePath(
+      '/__made-solid/workspace-frame/prospect-site/payload.signature/%2e%2e/private',
+    ),
+    undefined,
+  );
 });
 
 test('keeps the compiled Next runtime and roots site resources inside the capability', () => {
@@ -85,6 +115,150 @@ test('keeps lazy Next chunks inside the capability at runtime', () => {
   assert.match(runtime, new RegExp(`s\\.p="${previewRoot}_next/"`));
   assert.match(runtime, /marker="\/_next\/"/);
   assert.match(runtime, new RegExp(`logo="${previewRoot}assets/logo\\.png"`));
+});
+
+test('keeps Vite and Next live runtime requests inside an exact frame route', () => {
+  const frameBase = '/__made-solid/workspace-frame/prospect-site/payload.signature/';
+  const html = prepareWorkspaceFrameHtml(
+    '<!doctype html><html><head><script type="module" src="/@vite/client"></script><link rel="stylesheet" href="/_next/app.css"></head><body><img src="/hero.png" srcset="/small.png 1x, /large.png 2x"><script id="__NEXT_DATA__" type="application/json">{"assetPrefix":""}</script></body></html>',
+    frameBase,
+  );
+  assert.match(html, new RegExp(`<base href="${frameBase}">`));
+  assert.match(html, new RegExp(`src="${frameBase}@vite/client"`));
+  assert.match(html, new RegExp(`href="${frameBase}_next/app\\.css"`));
+  assert.match(html, new RegExp(`src="${frameBase}hero\\.png"`));
+  assert.match(html, new RegExp(`srcset="${frameBase}small\\.png 1x, ${frameBase}large\\.png 2x"`));
+  assert.match(html, new RegExp(`"assetPrefix":"${frameBase.slice(0, -1)}"`));
+  assert.doesNotMatch(html, /data-siteforge-preview-navigation/);
+
+  const viteClient = rewriteWorkspaceFrameRuntimeReferences(
+    'const base$1 = "/" || "/";const socketHost = `${null || importMetaUrl.hostname}:${hmrPort || importMetaUrl.port}${"/"}`;const base = "/" || "/";',
+    frameBase,
+  );
+  assert.match(viteClient, new RegExp(`const base\\$1 = "${frameBase}"`));
+  assert.match(viteClient, new RegExp(`\\$\\{"${frameBase}"\\}`));
+  assert.match(viteClient, new RegExp(`const base = "${frameBase}"`));
+});
+
+test('proxies a live frame through an exact preview-origin capability', async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'siteforge-preview-frame-'));
+  const activeWorkspacePreviewPath = join(fixtureRoot, 'active.json');
+  const upstreamRequests = [];
+  const upstream = createServer((request, response) => {
+    upstreamRequests.push({
+      cookie: request.headers.cookie,
+      referrer: request.headers.referer,
+      url: request.url,
+    });
+    if (request.url === '/styles.css') {
+      response.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8' });
+      response.end('.hero{background:url("/hero.png")}');
+      return;
+    }
+    if (request.url === '/app.js') {
+      response.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' });
+      response.end('window.loaded=true;const chunk="/_next/chunk.js";');
+      return;
+    }
+    if (request.url === '/hero.png') {
+      response.writeHead(200, { 'Content-Type': 'image/png' });
+      response.end(Buffer.from([137, 80, 78, 71]));
+      return;
+    }
+    response.writeHead(200, {
+      'Content-Security-Policy': "default-src 'self'; frame-ancestors *; sandbox allow-scripts",
+      'Content-Type': 'text/html; charset=utf-8',
+      Location: '/welcome',
+      'Set-Cookie': 'client-global=unsafe; Path=/',
+    });
+    response.end(
+      '<!doctype html><html><head><link rel="stylesheet" href="/styles.css"></head><body><img src="/hero.png"><script src="/app.js"></script></body></html>',
+    );
+  });
+  upstream.listen(0, '127.0.0.1');
+  await once(upstream, 'listening');
+  const upstreamAddress = upstream.address();
+  assert.ok(upstreamAddress && typeof upstreamAddress !== 'string');
+  await writeFile(
+    activeWorkspacePreviewPath,
+    JSON.stringify({ directory: 'prospect-site', port: upstreamAddress.port }),
+  );
+  const frameConfiguration = {
+    activeWorkspacePreviewPath,
+    publicOrigin: 'https://preview.madesolid.com.au',
+    serviceRoleKey: 'not-used',
+    supabaseUrl: 'https://project.supabase.co',
+    workspaceOrigin: 'https://workspace.madesolid.com.au',
+    workspacePreviewSecret: workspaceSecret,
+  };
+  const proxy = createServer(previewHostRequestListener(frameConfiguration));
+  proxy.listen(0, '127.0.0.1');
+  await once(proxy, 'listening');
+  const proxyAddress = proxy.address();
+  assert.ok(proxyAddress && typeof proxyAddress !== 'string');
+  const localOrigin = `http://127.0.0.1:${proxyAddress.port}`;
+  const token = createWorkspacePreviewToken('prospect-site', workspaceSecret);
+  const frameRoot = `/__made-solid/workspace-frame/prospect-site/${token}/`;
+  try {
+    const documentResponse = await fetch(`${localOrigin}${frameRoot}`, {
+      redirect: 'manual',
+    });
+    assert.equal(documentResponse.status, 200);
+    assert.equal(documentResponse.headers.get('location'), `${frameRoot}welcome`);
+    assert.equal(documentResponse.headers.get('set-cookie'), null);
+    assert.match(
+      documentResponse.headers.get('content-security-policy') || '',
+      /default-src 'self'/,
+    );
+    assert.match(
+      documentResponse.headers.get('content-security-policy') || '',
+      /frame-ancestors https:\/\/workspace\.madesolid\.com\.au/,
+    );
+    assert.match(
+      documentResponse.headers.get('content-security-policy') || '',
+      /sandbox allow-scripts/,
+    );
+    assert.equal(documentResponse.headers.get('cache-control'), 'private, no-store');
+    assert.equal(documentResponse.headers.get('referrer-policy'), 'no-referrer');
+    const document = await documentResponse.text();
+    assert.match(document, new RegExp(`href="${frameRoot}styles\\.css"`));
+    assert.match(document, new RegExp(`src="${frameRoot}app\\.js"`));
+
+    const [css, script, image] = await Promise.all(
+      ['styles.css', 'app.js', 'hero.png'].map((path) =>
+        fetch(`${localOrigin}${frameRoot}${path}`),
+      ),
+    );
+    assert.equal(css.status, 200);
+    assert.match(await css.text(), new RegExp(`url\\("${frameRoot}hero\\.png"\\)`));
+    assert.equal(script.status, 200);
+    assert.match(await script.text(), new RegExp(`${frameRoot}_next/chunk\\.js`));
+    assert.equal(image.status, 200);
+    assert.ok(upstreamRequests.every((request) => request.cookie === undefined));
+    assert.ok(upstreamRequests.every((request) => request.referrer === undefined));
+
+    const wrongFrame = await fetch(
+      `${localOrigin}/__made-solid/workspace-frame/prospect-site/payload.invalid/styles.css`,
+    );
+    assert.equal(wrongFrame.status, 404);
+    const expiredToken = createWorkspacePreviewToken('prospect-site', workspaceSecret, { now: 0 });
+    const expiredFrame = await fetch(
+      `${localOrigin}/__made-solid/workspace-frame/prospect-site/${expiredToken}/styles.css`,
+    );
+    assert.equal(expiredFrame.status, 404);
+    const crossClientFrame = await fetch(
+      `${localOrigin}/__made-solid/workspace-frame/another-client/${token}/styles.css`,
+    );
+    assert.equal(crossClientFrame.status, 404);
+  } finally {
+    proxy.closeAllConnections();
+    upstream.closeAllConnections();
+    await Promise.all([
+      new Promise((resolve) => proxy.close(resolve)),
+      new Promise((resolve) => upstream.close(resolve)),
+    ]);
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
 });
 
 test('serves a complete hydrated HTML artifact with private visitor protections', async () => {
