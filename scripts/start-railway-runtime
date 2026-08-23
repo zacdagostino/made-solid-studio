@@ -121,9 +121,9 @@ maintain_codex_app_server() {
 trap stop_runtime INT TERM EXIT
 
 (
-  cd "$studio_workspace_directory"
+  cd "$application_directory"
   exec env -u NODE_ENV node "$application_directory/node_modules/vite/bin/vite.js" \
-    --config "$studio_workspace_directory/vite.config.ts" \
+    --config "$application_directory/vite.config.ts" \
     --mode development \
     --force \
     --host 0.0.0.0 \
@@ -144,7 +144,7 @@ child_processes+=("$!")
 maintain_codex_app_server &
 child_processes+=("$!")
 
-echo "[railway-runtime] Live editable Made Solid Studio is starting from $studio_workspace_directory on port $port."
+echo "[railway-runtime] Made Solid Studio release shell is starting from $application_directory on port $port; Codex retains both persistent workspace roots."
 set +e
 wait -n "${child_processes[@]}"
 exit_code=$?

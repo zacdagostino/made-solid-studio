@@ -218,6 +218,10 @@ const ownerApiCreditsSwitchMigrationUrl = new URL(
   '../../supabase/migrations/20260823100000_owner_api_credits_switch_test_package.sql',
   import.meta.url,
 );
+const deployedStudioShellMigrationUrl = new URL(
+  '../../supabase/migrations/20260823110000_deployed_studio_shell_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -286,9 +290,35 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 71);
+  assert.equal(Number(revision[1]), 72);
   assert.match(app, /shows chats for that client plus clearly labelled universal Studio chats/);
-  assert.match(app, /authenticated owner can switch all Studio AI work/);
+  assert.match(app, /gives only the authenticated Studio owner a disclosed, reversible switch/);
+  assert.match(app, /every successful Railway release now serves its reviewed Studio shell/);
+});
+
+test('registers the deployed Studio shell above immutable v19.9', async () => {
+  const [migration, repository, launcher] = await Promise.all([
+    readFile(deployedStudioShellMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(new URL('../../scripts/start-railway-runtime', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /Deployed Studio shell test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v20\.0/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v19\.9'/,
+  );
+  assert.match(repository, /version: 20,/);
+  assert.match(repository, /basePackageId: localOwnerApiCreditsSwitchPackage\.id/);
+  const ledger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    ledger.indexOf('localDeployedStudioShellPackage,') <
+      ledger.indexOf('localOwnerApiCreditsSwitchPackage,'),
+  );
+  assert.match(launcher, /cd "\$application_directory"/);
+  assert.match(launcher, /--config "\$application_directory\/vite\.config\.ts"/);
+  assert.match(launcher, /SITEFORGE_STUDIO_WORKSPACE_DIR="\$workspace_root\/siteforge-os"/);
+  assert.match(launcher, /MADE_SOLID_WEBSITE_DIRECTORY="\$workspace_root\/made-solid-website"/);
 });
 
 test('registers the owner API credits switch above immutable v19.8', async () => {

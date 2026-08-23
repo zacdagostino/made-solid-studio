@@ -395,6 +395,7 @@ const localNextCompatibleWorkspaceRuntimePackageId =
 const localExecutableNextWorkspaceRuntimePackageId =
   'agent-package-local-v19-8-executable-next-workspace-runtime';
 const localOwnerApiCreditsSwitchPackageId = 'agent-package-local-v19-9-owner-api-credits-switch';
+const localDeployedStudioShellPackageId = 'agent-package-local-v20-0-deployed-studio-shell';
 
 type StoreName =
   | 'activities'
@@ -3063,10 +3064,28 @@ export class SiteforgeRepository {
         'Keeps the Studio usable after subscription quota exhaustion while making the billing boundary explicit, reversible, owner-only, and credential-safe.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localDeployedStudioShellPackage: AgentPackage = {
+      ...localOwnerApiCreditsSwitchPackage,
+      id: localDeployedStudioShellPackageId,
+      version: 20,
+      basePackageId: localOwnerApiCreditsSwitchPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v20.0',
+      contractAddendum:
+        'The public Studio shell always runs the exact reviewed Railway image release while Codex keeps both persistent Git workspaces available for repository-scoped editing, commits, builds, and deployment.',
+      instructionsAddendum:
+        'Serve Studio application code and runtime middleware from the immutable Railway image. Keep /data/workspaces/siteforge-os and /data/workspaces/made-solid-website as the exact Codex workspace roots. A Codex source change becomes production only after it is reviewed, committed, pushed, built, and deployed; an uncommitted persistent checkout must never pin the public shell to an obsolete release.',
+      summary:
+        'Deployed Studio shell test package: prevents persistent uncommitted work from leaving the live owner interface on an obsolete release.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes every successful Railway deployment visible immediately without deleting or weakening either persistent editable repository.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localDeployedStudioShellPackage,
           localOwnerApiCreditsSwitchPackage,
           localExecutableNextWorkspaceRuntimePackage,
           localNextCompatibleWorkspaceRuntimePackage,
@@ -3214,6 +3233,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localDeployedStudioShellPackage,
           localOwnerApiCreditsSwitchPackage,
           localExecutableNextWorkspaceRuntimePackage,
           localNextCompatibleWorkspaceRuntimePackage,
@@ -3364,6 +3384,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localDeployedStudioShellPackage,
             localOwnerApiCreditsSwitchPackage,
             localExecutableNextWorkspaceRuntimePackage,
             localNextCompatibleWorkspaceRuntimePackage,

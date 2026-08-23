@@ -8866,9 +8866,9 @@ function BuilderRunPanel({
             title: 'Codex Workspace Agent and visual feedback',
             detail:
               'The Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy. It defaults to included ChatGPT subscription access and gives only the authenticated Studio owner a disclosed, reversible switch to separately billed OpenAI API credits for all Studio AI work when subscription allowance is exhausted. A client website editor shows chats for that client plus clearly labelled universal Studio chats, hides every other client, and starts new client chats with only that website repository available to edit. Reviewers can send text, images, or both, choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. Studio source edits apply in place without restarting the workspace, and a compact top status announces the brief update while the current route and content remain mounted. A refresh restores the open selected conversation and its exact transcript reading position without changing the active prospect route. The stable workspace.madesolid.com.au address returns expired or missing browser access through the reviewer’s existing authenticated Studio session, then restores the active private development server without exposing its capability in the clean URL. Observable activity and queue state appears without invented progress.',
-            revision: `v${selectedAgentPackage.version}.71`,
+            revision: `v${selectedAgentPackage.version}.72`,
             change:
-              'Latest edit: the authenticated owner can switch all Studio AI work from ChatGPT subscription access to separately billed OpenAI API credits, with the active mode shown in Codex settings and no browser access to the key.',
+              'Latest edit: every successful Railway release now serves its reviewed Studio shell immediately while both persistent repositories remain available to Codex for edits, commits, builds, and deployments.',
           },
           {
             id: 'inbound-client-email-review',
