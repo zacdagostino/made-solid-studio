@@ -40,6 +40,7 @@ if [[ "${SITEFORGE_RUNTIME_AUTH_REQUIRED:-0}" == "1" ]]; then
   codex_configuration+=(
     --config 'sandbox_mode="danger-full-access"'
     --config 'approval_policy="never"'
+    --config 'sandbox_permissions=[]'
   )
 fi
 

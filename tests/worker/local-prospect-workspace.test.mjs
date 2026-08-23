@@ -5,19 +5,24 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
   developmentServerHostFlag,
+  authorizeWorkspaceCodexRequest,
   localCaptureTarget,
   previewUrl,
+  prospectCodexWorkspace,
   readFinalEditState,
   readLearningBundle,
   readRefinementLedger,
   studioOrigin,
   workspacePreviewWorkspace,
+  workspaceCodexCookieName,
 } from '../../scripts/local-workspace-vite-plugin.mjs';
+import { createWorkspacePreviewToken } from '../../scripts/workspace-preview-access.mjs';
 
 const scriptUrl = new URL('../../scripts/open-prospect-workspace.mjs', import.meta.url);
 const packageUrl = new URL('../../package.json', import.meta.url);
 const viteConfigUrl = new URL('../../vite.config.ts', import.meta.url);
 const vitePluginUrl = new URL('../../scripts/local-workspace-vite-plugin.mjs', import.meta.url);
+const studioRuntimeUrl = new URL('../../src/lib/studio-runtime.ts', import.meta.url);
 const appUrl = new URL('../../src/App.tsx', import.meta.url);
 const localDevUrl = new URL('../../worker/local-dev.mjs', import.meta.url);
 const finaliseUrl = new URL('../../scripts/finalize-prospect-workspace.mjs', import.meta.url);
@@ -78,7 +83,7 @@ test('exposes same-origin one-click workspace setup through the local Studio ser
   assert.match(source, /\/__made-solid\/local-workspace/);
   assert.match(source, /\/__made-solid\/workspace-preview-access/);
   assert.match(source, /activeWorkspacePreview\(\)/);
-  assert.match(source, /readyWorkspacePreview\(request\)/);
+  assert.match(source, /readyWorkspacePreview\(request, requestedDirectory\)/);
   assert.match(source, /workspacePreviewRecoveryPromise/);
   assert.match(source, /websiteIsReady\(active\.port\)/);
   assert.match(source, /workspacePreviewUrl\(origin, active\.directory, secret\)/);
@@ -135,6 +140,56 @@ test('recovers workspace previews only from configured persistent repository roo
   );
   assert.equal(workspacePreviewWorkspace('../siteforge-os', environment, pathExists), undefined);
   assert.equal(workspacePreviewWorkspace('missing-site', environment, pathExists), undefined);
+  assert.equal(
+    prospectCodexWorkspace('customer-site', environment, pathExists),
+    '/data/prospect-workspaces/customer-site',
+  );
+  assert.equal(prospectCodexWorkspace('siteforge-os', environment, pathExists), undefined);
+  assert.equal(prospectCodexWorkspace('../customer-site', environment, pathExists), undefined);
+});
+
+test('binds every client Codex request to its exact workspace capability cookie', () => {
+  const secret = 'workspace-codex-test-secret-with-at-least-thirty-two-characters';
+  const environment = {
+    SITEFORGE_WORKSPACE_PREVIEW_SECRET: secret,
+    SITEFORGE_PROSPECT_WORKSPACES_DIR: '/data/prospect-workspaces',
+  };
+  const pathExists = (path) =>
+    path === '/data/prospect-workspaces/client-a/.git' ||
+    path === '/data/prospect-workspaces/client-a/package.json' ||
+    path === '/data/prospect-workspaces/client-b/.git' ||
+    path === '/data/prospect-workspaces/client-b/package.json';
+  const token = createWorkspacePreviewToken('client-a', secret);
+  const request = {
+    headers: {
+      cookie: `${workspaceCodexCookieName('client-a')}=${encodeURIComponent(token)}`,
+    },
+  };
+
+  assert.equal(authorizeWorkspaceCodexRequest(request, 'client-a', environment, pathExists), true);
+  assert.equal(authorizeWorkspaceCodexRequest(request, 'client-b', environment, pathExists), false);
+  assert.equal(
+    authorizeWorkspaceCodexRequest({ headers: {} }, 'client-a', environment, pathExists),
+    false,
+  );
+  assert.equal(
+    authorizeWorkspaceCodexRequest(request, '../client-a', environment, pathExists),
+    false,
+  );
+});
+
+test('requires the server-bound Workspace Codex identity on scoped status and mutations', async () => {
+  const [service, runtime] = await Promise.all([
+    readFile(vitePluginUrl, 'utf8'),
+    readFile(studioRuntimeUrl, 'utf8'),
+  ]);
+
+  assert.match(runtime, /window\.location\.pathname !== '\/__made-solid\/workspace-codex'/);
+  assert.match(runtime, /X-Made-Solid-Workspace-Codex/);
+  assert.match(service, /request\.headers\['x-made-solid-workspace-codex'\]/);
+  assert.match(service, /workspace !== embeddedWorkspace/);
+  assert.match(service, /input\.workspace !== embeddedWorkspace/);
+  assert.match(service, /authorizeWorkspaceCodexRequest\(request, embeddedWorkspace\)/);
 });
 
 test('uses the development server host flag supported by the saved workspace', () => {
@@ -167,6 +222,9 @@ test('turns a missing ledger middleware response into an actionable reconnect st
   assert.match(source, /responseType\.includes\('application\/json'\)/);
   assert.match(source, /live refinement service is not connected/i);
   assert.match(source, /Restart Made Solid Studio to reconnect it/);
+  assert.match(source, /previewWindow && !previewWindow\.closed/);
+  assert.match(source, /window\.location\.assign\(destination\)/);
+  assert.doesNotMatch(source, /window\.history\.replaceState\(null, '', destination\)/);
 });
 
 test('reads a committed learning bundle through the validated local workspace service', async () => {
@@ -256,10 +314,20 @@ test('uses the forwarded Codespaces port URL only inside Codespaces', () => {
 });
 
 test('limits the embedded Studio origin to local and Codespaces hosts', () => {
-  assert.equal(studioOrigin({ headers: { host: 'localhost:5173' } }), 'http://localhost:5173');
+  assert.equal(studioOrigin({ headers: { host: 'localhost:5173' } }, {}), 'http://localhost:5173');
   assert.equal(
-    studioOrigin({ headers: { host: 'silver-fiesta-5173.app.github.dev' } }),
+    studioOrigin({ headers: { host: 'silver-fiesta-5173.app.github.dev' } }, {}),
     'https://silver-fiesta-5173.app.github.dev',
   );
-  assert.equal(studioOrigin({ headers: { host: 'attacker.example' } }), 'http://127.0.0.1:5173');
+  assert.equal(
+    studioOrigin({ headers: { host: 'attacker.example' } }, {}),
+    'http://127.0.0.1:5173',
+  );
+  assert.equal(
+    studioOrigin(
+      { headers: { host: 'localhost:5173' } },
+      { SITEFORGE_PUBLIC_ORIGIN: 'https://studio.madesolid.com.au/' },
+    ),
+    'https://studio.madesolid.com.au',
+  );
 });

@@ -2990,6 +2990,97 @@ test('keeps Codex above a separately served prospect development preview', async
   await expect(page).toHaveScreenshot('codex-development-preview.png');
 });
 
+test('separates the current client chats from universal Studio chats', async ({ page }) => {
+  await page.unroute('**/__made-solid/codex-status*');
+  let newThreadRequest;
+  await page.route('**/__made-solid/codex-status*', async (route) => {
+    const requestUrl = new URL(route.request().url());
+    expect(requestUrl.searchParams.get('workspace')).toBe('lece-group');
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'ready',
+        detail: 'Connected to the client website editor.',
+        thread: {
+          id: 'client-thread',
+          name: 'Homepage revisions',
+          status: 'idle',
+          scope: 'client',
+        },
+        threads: [
+          {
+            id: 'client-thread',
+            name: 'Homepage revisions',
+            status: 'idle',
+            scope: 'client',
+          },
+          {
+            id: 'universal-thread',
+            name: 'Studio planning',
+            status: 'idle',
+            scope: 'universal',
+          },
+        ],
+        messages: [],
+        activities: [],
+        agents: [],
+        queuedCount: 0,
+        interruptingCount: 0,
+        queuedMessages: [],
+        models: [
+          {
+            id: 'gpt-client-editor',
+            label: 'Client editor',
+            defaultEffort: 'medium',
+            isDefault: true,
+            supportsImages: true,
+            efforts: [{ id: 'medium', description: 'Balanced reasoning' }],
+            serviceTiers: [],
+          },
+        ],
+      }),
+    });
+  });
+  await page.route('**/__made-solid/codex-feedback', async (route) => {
+    newThreadRequest = route.request().postDataJSON();
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        thread: { id: 'new-client-thread', name: 'New chat', status: 'idle', scope: 'client' },
+      }),
+    });
+  });
+  await page.route('http://127.0.0.1:3000/**', async (route) => {
+    await route.fulfill({
+      contentType: 'text/html',
+      body: '<!doctype html><html><body><main><h1>Lece Group website</h1></main></body></html>',
+    });
+  });
+  const source = encodeURIComponent('http://127.0.0.1:3000/');
+  await page.goto(`/#/preview?source=${source}&workspace=lece-group`);
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Lece Group website editor' });
+  await expect(dialog.getByText('Editing only Lece Group')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Conversation' }).click();
+  await expect(dialog.getByRole('group', { name: 'This client' })).toContainText(
+    'Homepage revisions',
+  );
+  await expect(dialog.getByRole('group', { name: 'Universal Studio' })).toContainText(
+    'Studio planning',
+  );
+  await dialog.getByRole('button', { name: 'New Lece Group website chat' }).click();
+  expect(newThreadRequest).toMatchObject({
+    action: 'new-thread',
+    workspace: 'lece-group',
+    threadScope: 'client',
+  });
+  const overflow = await dialog.evaluate((element) => element.scrollWidth - element.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+  const accessibility = await new AxeBuilder({ page }).include('.codex-chat-dialog').analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect(dialog).toHaveScreenshot('codex-client-scoped-chat.png');
+});
+
 test('keeps the model control usable at the compact 320px viewport', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop');
   await page.setViewportSize({ width: 320, height: 568 });

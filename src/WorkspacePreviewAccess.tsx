@@ -3,6 +3,7 @@ import { studioRuntimeFetch } from './lib/studio-runtime';
 
 type WorkspacePreviewAccessResponse = {
   detail?: unknown;
+  directory?: unknown;
   previewUrl?: unknown;
 };
 
@@ -13,6 +14,22 @@ export function workspacePreviewReturnPath(hash = window.location.hash) {
   if (!value.startsWith('/') || value.startsWith('//') || value.length > 2_000) return '/';
   const parsed = new URL(value, 'https://workspace.madesolid.invalid');
   return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+}
+
+export function workspacePreviewStudioRoute(hash = window.location.hash) {
+  if (!hash.startsWith('#/workspace-preview-access')) return '/prospects';
+  const query = new URLSearchParams(hash.slice('#/workspace-preview-access?'.length));
+  const value = query.get('return') ?? '/prospects';
+  return value.startsWith('/') && !value.startsWith('//') && value.length <= 2_000
+    ? value
+    : '/prospects';
+}
+
+export function workspacePreviewDirectory(hash = window.location.hash) {
+  if (!hash.startsWith('#/workspace-preview-access')) return undefined;
+  const query = new URLSearchParams(hash.slice('#/workspace-preview-access?'.length));
+  const value = query.get('workspace') ?? '';
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(value) ? value : undefined;
 }
 
 function previewDestination(previewUrl: string, returnPath: string) {
@@ -27,12 +44,29 @@ function previewDestination(previewUrl: string, returnPath: string) {
   return destination.href;
 }
 
+export function workspaceEditorDestination(
+  previewUrl: string,
+  returnPath: string,
+  studioRoute = '/prospects',
+  workspaceDirectory?: string,
+) {
+  const destination = new URL(previewDestination(previewUrl, returnPath));
+  if (workspaceDirectory) {
+    destination.searchParams.set('__made_solid_workspace', workspaceDirectory);
+  }
+  destination.searchParams.set('__made_solid_return', studioRoute);
+  return destination.href;
+}
+
 export function WorkspacePreviewAccess() {
   const [error, setError] = useState('');
 
   useEffect(() => {
     let active = true;
-    void studioRuntimeFetch('/__made-solid/workspace-preview-access')
+    const requestedDirectory = workspacePreviewDirectory();
+    const accessUrl = new URL('/__made-solid/workspace-preview-access', window.location.origin);
+    if (requestedDirectory) accessUrl.searchParams.set('directory', requestedDirectory);
+    void studioRuntimeFetch(`${accessUrl.pathname}${accessUrl.search}`)
       .then(async (response) => {
         const payload = (await response.json()) as WorkspacePreviewAccessResponse;
         if (!response.ok || typeof payload.previewUrl !== 'string') {
@@ -42,9 +76,22 @@ export function WorkspacePreviewAccess() {
               : 'The workspace preview could not be opened.',
           );
         }
+        const directory =
+          typeof payload.directory === 'string' &&
+          /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(payload.directory)
+            ? payload.directory
+            : undefined;
+        if (requestedDirectory && directory !== requestedDirectory) {
+          throw new Error('The workspace access response did not match the requested client.');
+        }
         if (active) {
           window.location.replace(
-            previewDestination(payload.previewUrl, workspacePreviewReturnPath()),
+            workspaceEditorDestination(
+              payload.previewUrl,
+              workspacePreviewReturnPath(),
+              workspacePreviewStudioRoute(),
+              directory,
+            ),
           );
         }
       })

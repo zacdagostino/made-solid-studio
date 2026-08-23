@@ -184,10 +184,34 @@ type Route =
 
 const lastRouteStorageKey = 'siteforge-os.last-route';
 
-function studioPreviewUrl(source: string) {
+function studioPreviewUrl(
+  source: string,
+  returnRoute = window.location.hash,
+  workspaceDirectory?: string,
+) {
   const shell = new URL(window.location.href);
-  shell.hash = `/preview?source=${encodeURIComponent(source)}`;
+  const query = new URLSearchParams({ source });
+  if (returnRoute.startsWith('#/') && !returnRoute.startsWith('#//')) {
+    query.set('return', returnRoute.slice(1));
+  }
+  if (workspaceDirectory) query.set('workspace', workspaceDirectory);
+  shell.hash = `/preview?${query.toString()}`;
   return shell.href;
+}
+
+function workspaceEditorUrl(
+  source: string,
+  returnRoute = window.location.hash,
+  workspaceDirectory?: string,
+) {
+  const destination = new URL(source);
+  if (returnRoute.startsWith('#/') && !returnRoute.startsWith('#//')) {
+    destination.searchParams.set('__made_solid_return', returnRoute.slice(1));
+  }
+  if (workspaceDirectory) {
+    destination.searchParams.set('__made_solid_workspace', workspaceDirectory);
+  }
+  return destination.href;
 }
 
 const workspaceTabs = [
@@ -8841,10 +8865,10 @@ function BuilderRunPanel({
             id: 'visual-codex-feedback',
             title: 'Codex Workspace Agent and visual feedback',
             detail:
-              'The subscription-only Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy. Reviewers can send text, images, or both, choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. Studio source edits apply in place without restarting the workspace, and a compact top status announces the brief update while the current route and content remain mounted. A refresh restores the open selected conversation and its exact transcript reading position without changing the active prospect route. The stable workspace.madesolid.com.au address returns expired or missing browser access through the reviewer’s existing authenticated Studio session, then restores the active private development server without exposing its capability in the clean URL. Observable activity and queue state appears without invented progress.',
-            revision: `v${selectedAgentPackage.version}.61`,
+              'The subscription-only Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy. A client website editor shows chats for that client plus clearly labelled universal Studio chats, hides every other client, and starts new client chats with only that website repository available to edit. Reviewers can send text, images, or both, choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. Studio source edits apply in place without restarting the workspace, and a compact top status announces the brief update while the current route and content remain mounted. A refresh restores the open selected conversation and its exact transcript reading position without changing the active prospect route. The stable workspace.madesolid.com.au address returns expired or missing browser access through the reviewer’s existing authenticated Studio session, then restores the active private development server without exposing its capability in the clean URL. Observable activity and queue state appears without invented progress.',
+            revision: `v${selectedAgentPackage.version}.64`,
             change:
-              'Latest edit: the live editable Railway Studio now rebuilds Vite dependencies with the matching React development runtime, preventing the blank screen while preserving authenticated workspace preview re-entry.',
+              'Latest edit: workspace.madesolid.com.au now remains the dedicated live development workspace, with Studio-owned editing controls and client-scoped Codex around the client preview.',
           },
           {
             id: 'inbound-client-email-review',
@@ -16207,7 +16231,9 @@ function EditVersionHistory({
           lastEvent = JSON.parse(line) as CommittedPreviewProgress;
           setProgress(lastEvent);
           if (lastEvent.status === 'complete' && lastEvent.previewUrl && previewWindow) {
-            previewWindow.location.replace(studioPreviewUrl(lastEvent.previewUrl));
+            previewWindow.location.replace(
+              studioPreviewUrl(lastEvent.previewUrl, window.location.hash, directory),
+            );
           }
         }
         if (done) break;
@@ -16532,8 +16558,17 @@ function LocalDevelopmentPublicationPanel({
           if (!line.trim()) continue;
           const event = JSON.parse(line) as LocalWorkspaceSetup;
           setLocalWorkspaceSetup(event);
-          if (event.status === 'complete' && event.previewUrl && previewWindow) {
-            previewWindow.location.replace(studioPreviewUrl(event.previewUrl));
+          if (event.status === 'complete' && event.previewUrl) {
+            const destination = workspaceEditorUrl(
+              event.previewUrl,
+              window.location.hash,
+              localWorkspaceDirectoryName,
+            );
+            if (previewWindow && !previewWindow.closed) {
+              previewWindow.location.replace(destination);
+            } else {
+              window.location.assign(destination);
+            }
           } else if (event.status === 'failed') {
             previewWindow?.close();
           }
@@ -16657,7 +16692,11 @@ function LocalDevelopmentPublicationPanel({
             ) : null}
             {localWorkspaceSetup.previewUrl ? (
               <ButtonLink
-                href={studioPreviewUrl(localWorkspaceSetup.previewUrl)}
+                href={workspaceEditorUrl(
+                  localWorkspaceSetup.previewUrl,
+                  window.location.hash,
+                  localWorkspaceDirectoryName,
+                )}
                 rel="noreferrer"
                 target="_blank"
                 variant="secondary"

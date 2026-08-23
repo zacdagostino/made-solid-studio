@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ArrowLeft } from 'lucide-react';
 
 function codespaceName(hostname: string) {
   return /^(.+)-\d+\.app\.github\.dev$/.exec(hostname)?.[1];
@@ -14,6 +15,10 @@ function isAllowedDevelopmentPreview(url: URL) {
   return Boolean(sourceCodespace && studioCodespace && sourceCodespace === studioCodespace);
 }
 
+function previewRoute() {
+  return new URLSearchParams(window.location.hash.slice('#/preview?'.length));
+}
+
 function isSavedPreview(url: URL) {
   return (
     url.protocol === 'https:' &&
@@ -23,8 +28,7 @@ function isSavedPreview(url: URL) {
 }
 
 function previewSourceUrl() {
-  const query = window.location.hash.slice('#/preview?'.length);
-  const source = new URLSearchParams(query).get('source');
+  const source = previewRoute().get('source');
   if (!source) return undefined;
   try {
     const url = new URL(source);
@@ -35,6 +39,25 @@ function previewSourceUrl() {
   } catch {
     return undefined;
   }
+}
+
+export function previewReturnRoute() {
+  const route = previewRoute().get('return');
+  if (!route?.startsWith('/') || route.startsWith('//') || route.length > 2_000) {
+    return '/prospects';
+  }
+  return route;
+}
+
+export function previewWorkspaceDirectory() {
+  const directory = previewRoute().get('workspace') ?? '';
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(directory) ? directory : undefined;
+}
+
+function shellUrl(source: URL, returnRoute: string, workspaceDirectory?: string) {
+  const query = new URLSearchParams({ source: source.href, return: returnRoute });
+  if (workspaceDirectory) query.set('workspace', workspaceDirectory);
+  return `#/preview?${query.toString()}`;
 }
 
 function previewDocumentUrl(source: URL) {
@@ -97,9 +120,20 @@ function previewCapabilityRoot(source: URL) {
 
 export function PreviewFrame() {
   const [source, setSource] = useState(previewSourceUrl);
+  const [returnRoute] = useState(previewReturnRoute);
+  const [workspaceDirectory] = useState(previewWorkspaceDirectory);
   const [isLoading, setIsLoading] = useState(Boolean(source));
   const [error, setError] = useState<string>();
   const [document, setDocument] = useState<string>();
+
+  function returnToStudio() {
+    if (window.top && window.top !== window) {
+      window.top.location.href = new URL(`#${returnRoute}`, window.location.origin).href;
+      return;
+    }
+    window.history.replaceState(null, '', `#${returnRoute}`);
+    window.location.reload();
+  }
 
   useEffect(() => {
     if (!source) {
@@ -176,6 +210,15 @@ export function PreviewFrame() {
       <main className="preview-message">
         <h1>Preview unavailable</h1>
         <p>{error}</p>
+        <a
+          href={`#${returnRoute}`}
+          onClick={(event) => {
+            event.preventDefault();
+            returnToStudio();
+          }}
+        >
+          Return to Made Solid Studio
+        </a>
       </main>
     );
   if (!source)
@@ -186,7 +229,25 @@ export function PreviewFrame() {
       </main>
     );
   return (
-    <main aria-busy={isLoading} className="private-preview-shell">
+    <main
+      aria-busy={isLoading}
+      aria-label="Client website workspace"
+      className="private-preview-shell"
+    >
+      <header className="private-preview-toolbar">
+        <a
+          className="private-preview-toolbar__return"
+          href={`#${returnRoute}`}
+          onClick={(event) => {
+            event.preventDefault();
+            returnToStudio();
+          }}
+        >
+          <ArrowLeft aria-hidden="true" size={18} />
+          Back to Studio
+        </a>
+        <span>Client website workspace</span>
+      </header>
       {isLoading ? (
         <div className="private-preview-loader" role="status">
           <p>Loading private preview…</p>
@@ -205,7 +266,18 @@ export function PreviewFrame() {
         <iframe
           className="private-preview-frame"
           onError={() => setError('The development website preview is unavailable.')}
-          onLoad={() => setIsLoading(false)}
+          onLoad={() => {
+            setIsLoading(false);
+            if (!source.searchParams.has('access')) return;
+            const cleanSource = new URL(source);
+            cleanSource.searchParams.delete('access');
+            window.history.replaceState(
+              null,
+              '',
+              shellUrl(cleanSource, returnRoute, workspaceDirectory),
+            );
+            setSource(cleanSource);
+          }}
           sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
           src={source.href}
           title="Prospect development website preview"

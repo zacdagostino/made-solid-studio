@@ -12,11 +12,12 @@ import {
   loadGoogleSpeechConfiguration,
   synthesizeGoogleSpeech,
 } from './google-cloud-tts.mjs';
-import { workspacePreviewUrl } from './workspace-preview-access.mjs';
+import { verifyWorkspacePreviewToken, workspacePreviewUrl } from './workspace-preview-access.mjs';
 import { assertPublicUrl } from '../worker/security.mjs';
 
 const localWorkspaceEndpoint = '/__made-solid/local-workspace';
 const workspacePreviewAccessEndpoint = '/__made-solid/workspace-preview-access';
+const workspaceCodexEndpoint = '/__made-solid/workspace-codex';
 const refinementLedgerEndpoint = '/__made-solid/refinement-ledger';
 const learningBundleEndpoint = '/__made-solid/learning-bundle';
 const finalEditEndpoint = '/__made-solid/final-edit';
@@ -32,6 +33,56 @@ const buildIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 const directoryPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 const maximumCaptureAssetBytes = 5 * 1024 * 1024;
 const captureAssetCache = new Map();
+
+function requestCookie(request, requestedName) {
+  for (const source of String(request.headers.cookie || '').split(';')) {
+    const [name, ...value] = source.trim().split('=');
+    if (name !== requestedName || !value.length) continue;
+    try {
+      return decodeURIComponent(value.join('='));
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+export function workspaceCodexCookieName(directory) {
+  return `__Host-made-solid-workspace-codex-${createHash('sha256')
+    .update(directory)
+    .digest('hex')
+    .slice(0, 16)}`;
+}
+
+export function authorizeWorkspaceCodexRequest(
+  request,
+  directory,
+  environment = process.env,
+  pathExists = existsSync,
+) {
+  if (!directoryPattern.test(directory || '')) return false;
+  const secret = environment.SITEFORGE_WORKSPACE_PREVIEW_SECRET?.trim();
+  if (!secret || !workspacePreviewWorkspace(directory, environment, pathExists)) return false;
+  const token = requestCookie(request, workspaceCodexCookieName(directory));
+  const access = verifyWorkspacePreviewToken(token, secret);
+  return access?.directory === directory;
+}
+
+function workspaceCodexDocument(directory) {
+  const title = directory.replace(/[._-]+/g, ' ');
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${title} Codex editor</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>`;
+}
 
 function sendJson(response, statusCode, value) {
   response.writeHead(statusCode, {
@@ -78,6 +129,20 @@ export function workspacePreviewWorkspace(
     (candidate) =>
       pathExists(resolve(candidate, '.git')) && pathExists(resolve(candidate, 'package.json')),
   );
+}
+
+export function prospectCodexWorkspace(
+  directory,
+  environment = process.env,
+  pathExists = existsSync,
+) {
+  if (!directoryPattern.test(directory)) return undefined;
+  const prospectRoot = environment.SITEFORGE_PROSPECT_WORKSPACES_DIR?.trim();
+  if (!prospectRoot) return undefined;
+  const candidate = resolve(prospectRoot, directory);
+  return pathExists(resolve(candidate, '.git')) && pathExists(resolve(candidate, 'package.json'))
+    ? candidate
+    : undefined;
 }
 
 async function fetchPublicCaptureAsset(value) {
@@ -591,8 +656,8 @@ export function previewUrl(request, port, environment = process.env) {
   return `http://localhost:${port}`;
 }
 
-export function studioOrigin(request) {
-  const configuredOrigin = process.env.SITEFORGE_PUBLIC_ORIGIN?.trim().replace(/\/+$/, '');
+export function studioOrigin(request, environment = process.env) {
+  const configuredOrigin = environment.SITEFORGE_PUBLIC_ORIGIN?.trim().replace(/\/+$/, '');
   if (configuredOrigin && /^https:\/\/[a-z0-9.-]+(?::\d{1,5})?$/i.test(configuredOrigin)) {
     return configuredOrigin;
   }
@@ -651,7 +716,6 @@ async function launchWebsite({
     destination,
     'env',
     'NODE_ENV=development',
-    `MADE_SOLID_STUDIO_ORIGIN=${studioOrigin(request)}`,
     'npm',
     'run',
     'dev',
@@ -739,6 +803,7 @@ export function localWorkspacePlugin() {
   );
   const codexFeedbackBridgeOptions = {
     cwd: process.env.SITEFORGE_STUDIO_WORKSPACE_DIR?.trim() || process.cwd(),
+    resolveClientWorkspace: (directory) => prospectCodexWorkspace(directory),
     storageRoot: runtimeDataDirectory
       ? resolve(runtimeDataDirectory, 'codex-feedback')
       : resolve('.made-solid', 'codex-feedback'),
@@ -781,12 +846,27 @@ export function localWorkspacePlugin() {
     captureBrowserPromise ??= chromium.launch({ headless: true });
     return captureBrowserPromise;
   };
-  const readyWorkspacePreview = async (request) => {
-    const active = await activeWorkspacePreview();
-    if (await websiteIsReady(active.port)) return active;
-    if (workspacePreviewRecoveryPromise) return workspacePreviewRecoveryPromise;
+  const readyWorkspacePreview = async (request, requestedDirectory) => {
+    const active = await activeWorkspacePreview().catch(() => undefined);
+    if (
+      active &&
+      (!requestedDirectory || active.directory === requestedDirectory) &&
+      (await websiteIsReady(active.port))
+    )
+      return active;
+    const recoveryDirectory = requestedDirectory || active?.directory;
+    if (!recoveryDirectory) {
+      throw new Error(
+        'The saved workspace no longer exists in an approved persistent workspace root.',
+      );
+    }
+    if (workspacePreviewRecoveryPromise) {
+      await workspacePreviewRecoveryPromise.catch(() => undefined);
+      return readyWorkspacePreview(request, requestedDirectory);
+    }
     const recovery = (async () => {
-      const destination = workspacePreviewWorkspace(active.directory);
+      const directory = recoveryDirectory;
+      const destination = workspacePreviewWorkspace(directory);
       if (!destination) {
         throw new Error(
           'The saved workspace no longer exists in an approved persistent workspace root.',
@@ -794,7 +874,7 @@ export function localWorkspacePlugin() {
       }
       await launchWebsite({
         destination,
-        directory: active.directory,
+        directory,
         request,
         writeEvent: () => undefined,
         finish: () => undefined,
@@ -827,6 +907,52 @@ export function localWorkspacePlugin() {
         sendJson(response, 200, { status: 'ready' });
         return;
       }
+      if (requestUrl.pathname === workspaceCodexEndpoint) {
+        if (request.method !== 'GET' && request.method !== 'HEAD') {
+          response.statusCode = 405;
+          response.end('Method not allowed');
+          return;
+        }
+        const directory = requestUrl.searchParams.get('workspace') || '';
+        const secret = process.env.SITEFORGE_WORKSPACE_PREVIEW_SECRET?.trim();
+        if (!directoryPattern.test(directory) || !secret || !workspacePreviewWorkspace(directory)) {
+          response.statusCode = 404;
+          response.end('Workspace Codex editor unavailable.');
+          return;
+        }
+        const cookieName = workspaceCodexCookieName(directory);
+        const queryToken = requestUrl.searchParams.get('access');
+        const token = queryToken || requestCookie(request, cookieName);
+        const access = verifyWorkspacePreviewToken(token, secret);
+        if (!access || access.directory !== directory) {
+          response.statusCode = 403;
+          response.end('Workspace Codex editor access has expired.');
+          return;
+        }
+        if (queryToken) {
+          requestUrl.searchParams.delete('access');
+          response.writeHead(303, {
+            'Cache-Control': 'no-store',
+            Location: `${requestUrl.pathname}${requestUrl.search}${requestUrl.hash}`,
+            'Set-Cookie': `${cookieName}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Strict`,
+            'X-Content-Type-Options': 'nosniff',
+          });
+          response.end();
+          return;
+        }
+        response.writeHead(200, {
+          'Cache-Control': 'no-store',
+          'Content-Security-Policy':
+            "frame-ancestors https://workspace.madesolid.com.au; base-uri 'none'; form-action 'none'",
+          'Content-Type': 'text/html; charset=utf-8',
+          'Referrer-Policy': 'no-referrer',
+          'X-Content-Type-Options': 'nosniff',
+          'X-Robots-Tag': 'noindex, nofollow, noarchive',
+        });
+        if (request.method === 'HEAD') response.end();
+        else response.end(workspaceCodexDocument(directory));
+        return;
+      }
       if (requestUrl.pathname.startsWith('/__made-solid/')) {
         const authorization = await authorizeStudioRuntimeRequest(request);
         if (!authorization.authorized) {
@@ -844,11 +970,20 @@ export function localWorkspacePlugin() {
           return;
         }
         try {
-          const active = await readyWorkspacePreview(request);
+          const requestedDirectory = requestUrl.searchParams.get('directory') || undefined;
+          if (requestedDirectory && !directoryPattern.test(requestedDirectory)) {
+            sendJson(response, 400, {
+              status: 'invalid',
+              detail: 'Choose a valid client workspace before opening the preview.',
+            });
+            return;
+          }
+          const active = await readyWorkspacePreview(request, requestedDirectory);
           const origin = process.env.SITEFORGE_WORKSPACE_PREVIEW_ORIGIN?.trim();
           const secret = process.env.SITEFORGE_WORKSPACE_PREVIEW_SECRET?.trim();
           if (!origin || !secret) throw new Error('The workspace preview is not configured.');
           sendJson(response, 200, {
+            directory: active.directory,
             previewUrl: workspacePreviewUrl(origin, active.directory, secret),
             status: 'ready',
           });
@@ -1033,6 +1168,23 @@ export function localWorkspacePlugin() {
             return;
           }
           try {
+            const workspace = requestUrl.searchParams.get('workspace') || undefined;
+            const embeddedWorkspace = String(
+              request.headers['x-made-solid-workspace-codex'] || '',
+            ).trim();
+            if (
+              embeddedWorkspace &&
+              (workspace !== embeddedWorkspace ||
+                !authorizeWorkspaceCodexRequest(request, embeddedWorkspace))
+            ) {
+              sendJson(response, 403, {
+                status: 'forbidden',
+                detail: 'This Codex editor is not authorized for the requested client workspace.',
+                models: [],
+                queuedCount: 0,
+              });
+              return;
+            }
             const bridge = await codexFeedbackBridge();
             await bridge.maintain();
             sendJson(
@@ -1040,6 +1192,9 @@ export function localWorkspacePlugin() {
               200,
               await bridge.inspect({
                 threadId: requestUrl.searchParams.get('threadId') || undefined,
+                workspace,
+                threadScope:
+                  requestUrl.searchParams.get('threadScope') === 'client' ? 'client' : 'universal',
               }),
             );
           } catch (error) {
@@ -1060,16 +1215,30 @@ export function localWorkspacePlugin() {
         }
         try {
           const input = JSON.parse(await readRequestBody(request, 110 * 1024 * 1024));
+          const embeddedWorkspace = String(
+            request.headers['x-made-solid-workspace-codex'] || '',
+          ).trim();
+          if (
+            embeddedWorkspace &&
+            (input.workspace !== embeddedWorkspace ||
+              !authorizeWorkspaceCodexRequest(request, embeddedWorkspace))
+          ) {
+            sendJson(response, 403, {
+              status: 'forbidden',
+              detail: 'This Codex editor is not authorized for the requested client workspace.',
+            });
+            return;
+          }
           const bridge = await codexFeedbackBridge();
           const result =
             input.action === 'update-queued'
               ? await bridge.updateQueued(input.id, input)
               : input.action === 'delete-queued'
-                ? await bridge.deleteQueued(input.id)
+                ? await bridge.deleteQueued(input.id, input)
                 : input.action === 'interrupt-queued'
-                  ? await bridge.interruptQueued(input.id)
+                  ? await bridge.interruptQueued(input.id, input)
                   : input.action === 'delete-empty-thread'
-                    ? await bridge.deleteEmptyThread(input.threadId)
+                    ? await bridge.deleteEmptyThread(input)
                     : input.action === 'new-thread'
                       ? await bridge.createThread(input)
                       : input.action === 'continue-interrupted-thread'

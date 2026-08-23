@@ -32,11 +32,19 @@ async function studioRuntimeAccessToken() {
   return session?.access_token;
 }
 
+function embeddedWorkspaceCodexDirectory() {
+  if (window.location.pathname !== '/__made-solid/workspace-codex') return undefined;
+  const directory = new URLSearchParams(window.location.search).get('workspace') ?? '';
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(directory) ? directory : undefined;
+}
+
 export async function studioRuntimeFetch(input: RequestInfo | URL, init: RequestInit = {}) {
   const requestHeaders = new Headers(input instanceof Request ? input.headers : undefined);
   new Headers(init.headers).forEach((value, name) => requestHeaders.set(name, value));
   const performFetch = (accessToken?: string) => {
     const headers = new Headers(requestHeaders);
+    const embeddedWorkspace = embeddedWorkspaceCodexDirectory();
+    if (embeddedWorkspace) headers.set('X-Made-Solid-Workspace-Codex', embeddedWorkspace);
     if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
     else headers.delete('Authorization');
     return fetch(input instanceof Request ? input.clone() : input, {

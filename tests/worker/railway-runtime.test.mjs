@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
@@ -19,6 +20,11 @@ import {
 
 const secret = 'a-private-preview-secret-that-is-longer-than-thirty-two-characters';
 const execFile = promisify(execFileCallback);
+
+function workspaceFrameCookie(token) {
+  const frameId = createHash('sha256').update(token).digest('hex').slice(0, 24);
+  return `__Host-made-solid-workspace-frame-${frameId}=${encodeURIComponent(token)}`;
+}
 
 test('creates expiring private workspace preview capabilities', () => {
   const token = createWorkspacePreviewToken('prospect-site', secret, {
@@ -96,6 +102,147 @@ test('returns expired workspace documents through the stable authenticated Studi
   }
 });
 
+test('keeps an authenticated top-level workspace visit in an isolated workspace shell', async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'siteforge-top-level-preview-'));
+  const activePreviewPath = join(fixtureRoot, 'active-preview.json');
+  let upstreamRequests = 0;
+  const preview = createServer((_request, response) => {
+    upstreamRequests += 1;
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    response.end('<h1>Client website must not be served top-level</h1>');
+  });
+  preview.listen(0, '127.0.0.1');
+  await once(preview, 'listening');
+  const previewAddress = preview.address();
+  assert.ok(previewAddress && typeof previewAddress !== 'string');
+  await writeFile(
+    activePreviewPath,
+    JSON.stringify({ directory: 'prospect-site', port: previewAddress.port }),
+  );
+  const server = startWorkspacePreviewProxy({
+    activePreviewPath,
+    port: 0,
+    secret,
+    studioOrigin: 'https://studio.madesolid.com.au',
+  });
+  if (!server.listening) await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  try {
+    const token = createWorkspacePreviewToken('prospect-site', secret);
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/services?__made_solid_workspace=prospect-site`,
+      {
+        headers: {
+          Accept: 'text/html',
+          Cookie: `__Host-made-solid-workspace=${encodeURIComponent(token)}`,
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+        },
+        redirect: 'manual',
+      },
+    );
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('location'), null);
+    const shell = await response.text();
+    assert.match(shell, /<title>Made Solid Workspace<\/title>/);
+    assert.match(shell, />Back to Studio<\/a>/);
+    assert.match(
+      shell,
+      /class="client-preview" sandbox="allow-modals allow-popups allow-scripts"[^>]+title="Client website live preview"/,
+    );
+    assert.match(shell, /title="Client website Codex editor"/);
+    assert.match(shell, /\/__made-solid\/workspace-codex\?access=/);
+    assert.match(shell, /#\/codex-panel\?workspace=prospect-site/);
+    assert.doesNotMatch(shell, /Made Solid Studio workspace/);
+    assert.match(
+      response.headers.get('content-security-policy') || '',
+      /frame-src 'self' https:\/\/studio\.madesolid\.com\.au/,
+    );
+    assert.match(response.headers.get('content-security-policy') || '', /frame-ancestors 'none'/);
+    assert.doesNotMatch(shell, /Client website must not be served top-level/);
+    assert.equal(upstreamRequests, 0);
+    const frameCookie = (response.headers.get('set-cookie') || '').split(';')[0];
+    assert.match(frameCookie, /^__Host-made-solid-workspace-frame-/);
+
+    const iframe = await fetch(`http://127.0.0.1:${address.port}/services`, {
+      headers: {
+        Accept: 'text/html',
+        Cookie: frameCookie,
+        'Sec-Fetch-Dest': 'iframe',
+        'Sec-Fetch-Mode': 'navigate',
+      },
+    });
+    assert.equal(iframe.status, 200);
+    assert.match(await iframe.text(), /Client website must not be served top-level/);
+    assert.equal(upstreamRequests, 1);
+
+    const tokenEntry = await fetch(
+      `http://127.0.0.1:${address.port}/services?access=${encodeURIComponent(token)}`,
+      {
+        headers: {
+          Accept: 'text/html',
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+        },
+        redirect: 'manual',
+      },
+    );
+    assert.equal(tokenEntry.status, 303);
+    assert.equal(
+      tokenEntry.headers.get('location'),
+      '/services?__made_solid_workspace=prospect-site',
+    );
+    assert.doesNotMatch(tokenEntry.headers.get('location') || '', /access=/);
+    assert.match(tokenEntry.headers.get('set-cookie') || '', /HttpOnly; Secure; SameSite=Strict/);
+
+    const otherToken = createWorkspacePreviewToken('another-client', secret);
+    const wrongClient = await fetch(
+      `http://127.0.0.1:${address.port}/services?__made_solid_workspace=another-client`,
+      {
+        headers: {
+          Accept: 'text/html',
+          Cookie: `__Host-made-solid-workspace=${encodeURIComponent(otherToken)}`,
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+        },
+        redirect: 'manual',
+      },
+    );
+    assert.equal(wrongClient.status, 303);
+    assert.equal(
+      wrongClient.headers.get('location'),
+      'https://studio.madesolid.com.au/#/workspace-preview-access?path=%2Fservices&workspace=another-client',
+    );
+
+    await writeFile(
+      activePreviewPath,
+      JSON.stringify({ directory: 'another-client', port: previewAddress.port }),
+    );
+    const staleTabCookie = await fetch(
+      `http://127.0.0.1:${address.port}/services?__made_solid_workspace=prospect-site`,
+      {
+        headers: {
+          Accept: 'text/html',
+          Cookie: `__Host-made-solid-workspace=${encodeURIComponent(otherToken)}`,
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+        },
+        redirect: 'manual',
+      },
+    );
+    assert.equal(staleTabCookie.status, 303);
+    assert.equal(
+      staleTabCookie.headers.get('location'),
+      'https://studio.madesolid.com.au/#/workspace-preview-access?path=%2Fservices&workspace=prospect-site',
+    );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => preview.close(resolve));
+    await rm(fixtureRoot, { force: true, recursive: true });
+  }
+});
+
 test('returns a stalled valid workspace document through authenticated Studio re-entry', async () => {
   const fixtureRoot = await mkdtemp(join(tmpdir(), 'siteforge-stalled-preview-'));
   const activePreviewPath = join(fixtureRoot, 'active-preview.json');
@@ -123,7 +270,8 @@ test('returns a stalled valid workspace document through authenticated Studio re
     const response = await fetch(`http://127.0.0.1:${address.port}/services`, {
       headers: {
         Accept: 'text/html',
-        Cookie: `__Host-made-solid-workspace=${encodeURIComponent(token)}`,
+        Cookie: workspaceFrameCookie(token),
+        'Sec-Fetch-Dest': 'iframe',
         'Sec-Fetch-Mode': 'navigate',
       },
       redirect: 'manual',
@@ -159,6 +307,7 @@ test('registers a single-volume Singapore Railway runtime with a health check', 
     viteConfiguration,
     /frame-ancestors 'self' https:\/\/madesolid\.com\.au https:\/\/www\.madesolid\.com\.au/,
   );
+  assert.doesNotMatch(viteConfiguration, /frame-ancestors[^\n]*workspace\.madesolid\.com\.au/);
   assert.match(launcher, /studio_workspace_directory="\$workspace_root\/siteforge-os"/);
   assert.match(launcher, /ln -s "\$application_directory\/node_modules"/);
   assert.match(launcher, /exec env -u NODE_ENV node/);
@@ -238,6 +387,7 @@ test('keeps OpenAI API credentials out of the subscription-backed Railway proces
   assert.match(appServerLauncher, /forced_login_method="chatgpt"/);
   assert.match(appServerLauncher, /sandbox_mode="danger-full-access"/);
   assert.match(appServerLauncher, /approval_policy="never"/);
+  assert.match(appServerLauncher, /sandbox_permissions=\[\]/);
   assert.doesNotMatch(appServerLauncher, /sandbox_workspace_write/);
   assert.match(appServerLauncher, /--strict-config app-server/);
   assert.match(appServerLauncher, /expected_studio_workspace=.*siteforge-os/);

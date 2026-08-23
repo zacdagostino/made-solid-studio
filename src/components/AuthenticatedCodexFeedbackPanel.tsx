@@ -2,7 +2,13 @@ import { useEffect, useState } from 'react';
 import { getSupabaseClient, isSupabaseConfigured, usesLocalStorage } from '../lib/supabase';
 import { CodexFeedbackPanel } from './CodexFeedbackPanel';
 
-export function AuthenticatedCodexFeedbackPanel({ embedded = false }: { embedded?: boolean }) {
+export function AuthenticatedCodexFeedbackPanel({
+  embedded = false,
+  workspaceDirectory,
+}: {
+  embedded?: boolean;
+  workspaceDirectory?: string;
+}) {
   const [authenticated, setAuthenticated] = useState(!isSupabaseConfigured || usesLocalStorage);
 
   useEffect(() => {
@@ -24,5 +30,7 @@ export function AuthenticatedCodexFeedbackPanel({ embedded = false }: { embedded
     };
   }, []);
 
-  return authenticated ? <CodexFeedbackPanel embedded={embedded} /> : null;
+  return authenticated ? (
+    <CodexFeedbackPanel embedded={embedded} workspaceDirectory={workspaceDirectory} />
+  ) : null;
 }

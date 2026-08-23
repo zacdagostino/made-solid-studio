@@ -377,6 +377,11 @@ const localAuthenticatedGoogleVoiceCataloguePackageId =
 const localResilientStudioSessionRecoveryPackageId =
   'agent-package-local-v18-8-resilient-studio-session-recovery';
 const localRenderableRailwayStudioPackageId = 'agent-package-local-v18-9-renderable-railway-studio';
+const localStudioOwnedWorkspaceShellPackageId =
+  'agent-package-local-v19-0-studio-owned-workspace-shell';
+const localClientScopedCodexChatsPackageId = 'agent-package-local-v19-1-client-scoped-codex-chats';
+const localWorkspaceHostedEditorShellPackageId =
+  'agent-package-local-v19-2-workspace-hosted-editor-shell';
 
 type StoreName =
   | 'activities'
@@ -2875,10 +2880,64 @@ export class SiteforgeRepository {
         'Makes the permanent editable Studio reliably render after live source changes and Railway restarts without replacing either persistent repository.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localStudioOwnedWorkspaceShellPackage: AgentPackage = {
+      ...localRenderableRailwayStudioPackage,
+      id: localStudioOwnedWorkspaceShellPackageId,
+      version: 19,
+      basePackageId: localRenderableRailwayStudioPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v19.0',
+      contractAddendum:
+        'Editable client websites run inside a Studio-owned workspace shell with a persistent return path and Studio Codex access; generated client source no longer contains the Codex panel or its host bridge.',
+      instructionsAddendum:
+        'Keep workspace navigation and Codex controls in the authenticated Studio shell, outside the generated client project. Open the private client development server inside that shell, preserve a clear Back to Studio route across refresh and direct stable-host re-entry, and fall back to same-tab navigation when a browser blocks the requested preview tab. Do not add Studio iframe, bridge, chat, or navigation files to generated website source.',
+      summary:
+        'Studio-owned workspace shell test package: keeps editable client previews recoverable while moving Codex and return navigation out of client project files.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents the client dev server from trapping reviewers and keeps Studio editing tools separate from deliverable website source.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localClientScopedCodexChatsPackage: AgentPackage = {
+      ...localStudioOwnedWorkspaceShellPackage,
+      id: localClientScopedCodexChatsPackageId,
+      version: 19.1,
+      basePackageId: localStudioOwnedWorkspaceShellPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v19.1',
+      contractAddendum:
+        'The client website editor separates conversations for the current client from universal Studio conversations, hides every other client, and binds new client conversations to that website repository only.',
+      instructionsAddendum:
+        'Resolve client chat scope on the server from the authenticated editable workspace. List only conversations whose exact working directory is the current client repository plus explicitly universal Studio conversations. Reject cross-client thread IDs for reads and mutations. Start client conversations with the exact client directory as their only writable runtime root, preserve that boundary through queued turns and interruption recovery, and label the scope persistently in the editor UI. Keep universal conversations available and clearly identified without presenting them as client-confined.',
+      summary:
+        'Client-scoped Codex chats test package: isolates each website editor while retaining clearly labelled universal Studio conversations.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Lets reviewers run multiple website-specific chats without exposing or accidentally editing another client project.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localWorkspaceHostedEditorShellPackage: AgentPackage = {
+      ...localClientScopedCodexChatsPackage,
+      id: localWorkspaceHostedEditorShellPackageId,
+      version: 19.2,
+      basePackageId: localClientScopedCodexChatsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v19.2',
+      contractAddendum:
+        'The stable workspace hostname remains the reviewer-facing development workspace, with a native runtime-owned shell around the isolated live client preview and an exact-client Codex editor.',
+      instructionsAddendum:
+        'Serve a native runtime-owned top-level editor shell at workspace.madesolid.com.au without adding Studio files to the client repository. Keep the client development server inside an opaque sandboxed preview frame, preserve live updates and refresh on the workspace hostname, and make Back to Studio navigate the top-level browser to Studio. Frame only a dedicated Studio Codex document that exchanges a short-lived exact-client capability for an HttpOnly cookie; keep normal Studio documents non-frameable from Workspace and bind every embedded Codex request to that same client.',
+      summary:
+        'Workspace-hosted editor shell test package: restores the distinct live development workspace instead of redirecting its browser tab to Studio.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps Workspace as the dedicated instant-update editing place while preserving Studio ownership and client repository isolation.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localWorkspaceHostedEditorShellPackage,
+          localClientScopedCodexChatsPackage,
+          localStudioOwnedWorkspaceShellPackage,
           localRenderableRailwayStudioPackage,
           localResilientStudioSessionRecoveryPackage,
           localAuthenticatedGoogleVoiceCataloguePackage,
@@ -3016,6 +3075,9 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localWorkspaceHostedEditorShellPackage,
+          localClientScopedCodexChatsPackage,
+          localStudioOwnedWorkspaceShellPackage,
           localRenderableRailwayStudioPackage,
           localResilientStudioSessionRecoveryPackage,
           localAuthenticatedGoogleVoiceCataloguePackage,
@@ -3156,6 +3218,9 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localWorkspaceHostedEditorShellPackage,
+            localClientScopedCodexChatsPackage,
+            localStudioOwnedWorkspaceShellPackage,
             localRenderableRailwayStudioPackage,
             localResilientStudioSessionRecoveryPackage,
             localAuthenticatedGoogleVoiceCataloguePackage,

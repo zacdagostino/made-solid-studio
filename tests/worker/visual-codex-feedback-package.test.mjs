@@ -178,6 +178,18 @@ const renderableRailwayStudioMigrationUrl = new URL(
   '../../supabase/migrations/20260822113000_renderable_railway_studio_test_package.sql',
   import.meta.url,
 );
+const studioOwnedWorkspaceShellMigrationUrl = new URL(
+  '../../supabase/migrations/20260822114000_studio_owned_workspace_shell_test_package.sql',
+  import.meta.url,
+);
+const clientScopedCodexChatsMigrationUrl = new URL(
+  '../../supabase/migrations/20260822115000_client_scoped_codex_chats_test_package.sql',
+  import.meta.url,
+);
+const workspaceHostedEditorShellMigrationUrl = new URL(
+  '../../supabase/migrations/20260822120000_workspace_hosted_editor_shell_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -208,16 +220,8 @@ const websiteLauncherUrl = new URL('../../scripts/start-made-solid-website', imp
 const portCleanupUrl = new URL('../../scripts/clean-codespace-ports', import.meta.url);
 const portPublisherUrl = new URL('../../scripts/publish-codespace-ports', import.meta.url);
 const workspaceSettingsUrl = new URL('../../.vscode/settings.json', import.meta.url);
-const workspacePanelUrl = new URL(
-  '../../worker/builder-template/src/components/foundation/workspace-codex-panel.tsx',
-  import.meta.url,
-);
 const foundationLayoutUrl = new URL(
   '../../worker/builder-template/src/app/layout.tsx',
-  import.meta.url,
-);
-const workspaceBridgeUrl = new URL(
-  '../../worker/builder-template/public/made-solid-codex-bridge.js',
   import.meta.url,
 );
 const extensionManifestUrl = new URL(
@@ -254,12 +258,94 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 61);
-  assert.match(app, /matching React development runtime/);
-  assert.match(app, /preventing the blank screen/);
+  assert.equal(Number(revision[1]), 64);
+  assert.match(app, /shows chats for that client plus clearly labelled universal Studio chats/);
+  assert.match(
+    app,
+    /workspace\.madesolid\.com\.au now remains the dedicated live development workspace/,
+  );
 });
 
-test('registers the renderable Railway Studio as the newest immutable package', async () => {
+test('registers the workspace-hosted editor shell once above the retained package ledger', async () => {
+  const [migration, repository, proxy, preview] = await Promise.all([
+    readFile(workspaceHostedEditorShellMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(new URL('../../scripts/workspace-preview-proxy.mjs', import.meta.url), 'utf8'),
+    readFile(new URL('../../src/PreviewFrame.tsx', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /Workspace-hosted editor shell test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v19\.2/);
+  assert.match(migration, /Frame only a dedicated Studio Codex document/);
+  assert.doesNotMatch(migration, /Permit the workspace hostname as a Studio frame ancestor/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v19\.1'/,
+  );
+  assert.match(repository, /version: 19\.2,/);
+  assert.match(repository, /basePackageId: localClientScopedCodexChatsPackage\.id/);
+  const ledger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    ledger.indexOf('localWorkspaceHostedEditorShellPackage,') <
+      ledger.indexOf('localClientScopedCodexChatsPackage,'),
+  );
+  assert.match(proxy, /Made Solid Workspace/);
+  assert.match(proxy, /serveWorkspaceShell/);
+  assert.match(preview, /window\.top\.location\.href/);
+});
+
+test('registers client-scoped Codex chats once above the retained package ledger', async () => {
+  const [migration, repository, component, bridge] = await Promise.all([
+    readFile(clientScopedCodexChatsMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(componentUrl, 'utf8'),
+    readFile(new URL('../../scripts/codex-feedback-bridge.mjs', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Client-scoped Codex chats test package:/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /made-solid-studio-builder-agent-v19\.1/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v19\.0'/,
+  );
+  assert.match(repository, /version: 19\.1,/);
+  assert.match(repository, /basePackageId: localStudioOwnedWorkspaceShellPackage\.id/);
+  const ledger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    ledger.indexOf('localClientScopedCodexChatsPackage,') <
+      ledger.indexOf('localStudioOwnedWorkspaceShellPackage,'),
+  );
+  assert.match(component, /Editing only/);
+  assert.match(component, /Universal Studio/);
+  assert.match(bridge, /clientWorkspaceInstruction/);
+  assert.match(bridge, /assertThreadScope/);
+});
+
+test('registers the Studio-owned workspace shell once above the retained package ledger', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(studioOwnedWorkspaceShellMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Studio-owned workspace shell test package:/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /not exists/i);
+  assert.match(migration, /made-solid-studio-builder-agent-v19\.0/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v18\.9'/,
+  );
+  assert.match(repository, /version: 19,/);
+  assert.match(repository, /basePackageId: localRenderableRailwayStudioPackage\.id/);
+  const ledger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    ledger.indexOf('localStudioOwnedWorkspaceShellPackage,') <
+      ledger.indexOf('localRenderableRailwayStudioPackage,'),
+  );
+});
+
+test('retains the renderable Railway Studio as the immutable v18.9 base package', async () => {
   const [migration, repository, launcher] = await Promise.all([
     readFile(renderableRailwayStudioMigrationUrl, 'utf8'),
     readFile(repositoryUrl, 'utf8'),
@@ -800,7 +886,7 @@ test('registers authenticated Studio controls as the newest immutable package', 
   assert.match(main, /<AuthenticatedCodexFeedbackPanel/);
   assert.match(panelGate, /getSession\(\)/);
   assert.match(panelGate, /onAuthStateChange/);
-  assert.match(panelGate, /authenticated \? <CodexFeedbackPanel/);
+  assert.match(panelGate, /authenticated \? \([\s\S]*<CodexFeedbackPanel/);
 });
 
 test('registers renderable workspace previews as the newest immutable package', async () => {
@@ -1380,8 +1466,8 @@ test('registers the dual-repository Codex workspace above interrupted-chat recov
     packageLedger.indexOf('localDualRepositoryCodexWorkspacePackage,') <
       packageLedger.indexOf('localCodespaceInterruptedChatRecoveryPackage,'),
   );
-  assert.match(bridge, /railwayContainerThreadSettings\(this\.runtimeWorkspaceRoots\)/);
-  assert.match(bridge, /railwayContainerTurnSettings\(this\.runtimeWorkspaceRoots\)/);
+  assert.match(bridge, /railwayContainerThreadSettings\(scope\)/);
+  assert.match(bridge, /railwayContainerTurnSettings\(recordScope\)/);
   assert.match(bridge, /resolve\(this\.cwd, '\.\.', 'made-solid-website'\)/);
   assert.match(bridge, /capabilities:\s*\{\s*experimentalApi: true/);
 });
@@ -1553,11 +1639,14 @@ test('uses shared controls, a compact model selector, and live model discovery f
   assert.match(component, /expanded: phase === 'selecting'/);
   assert.match(
     main,
-    /<App\s*\/>[\s\S]*<AuthenticatedCodexFeedbackPanel embedded=\{isCodexPanelRoute\}\s*\/>/,
+    /<App\s*\/>[\s\S]*<AuthenticatedCodexFeedbackPanel[\s\S]*embedded=\{isCodexPanelRoute\}[\s\S]*workspaceDirectory=\{workspaceDirectory\}/,
   );
   assert.match(main, /document\.documentElement\.dataset\.codexPanel = 'embedded'/);
-  assert.match(app, /studioPreviewUrl\(previewUrl\)/);
-  assert.match(app, /studioPreviewUrl\(event\.previewUrl\)/);
+  assert.match(app, /studioPreviewUrl\(lastEvent\.previewUrl, window\.location\.hash, directory\)/);
+  assert.match(
+    app,
+    /workspaceEditorUrl\([\s\S]*event\.previewUrl,[\s\S]*window\.location\.hash,[\s\S]*localWorkspaceDirectoryName/,
+  );
   assert.match(component, /codex-status/);
   assert.match(component, /codex-feedback/);
   assert.match(component, /captureVisiblePage/);
@@ -1659,21 +1748,15 @@ test('starts and opens the Made Solid website on stable public labelled ports', 
   assert.match(service, /'3000', '3001', '5173', '8788'/);
 });
 
-test('mounts the shared Codex panel directly in raw development websites only', async () => {
-  const [panel, bridge, layout, service] = await Promise.all([
-    readFile(workspacePanelUrl, 'utf8'),
-    readFile(workspaceBridgeUrl, 'utf8'),
+test('keeps the shared Codex panel in the Studio-owned preview shell', async () => {
+  const [layout, service, previewFrame] = await Promise.all([
     readFile(foundationLayoutUrl, 'utf8'),
     readFile(localServiceUrl, 'utf8'),
+    readFile(new URL('../../src/PreviewFrame.tsx', import.meta.url), 'utf8'),
   ]);
-  assert.match(layout, /<WorkspaceCodexPanel\s*\/>/);
-  assert.match(layout, /made-solid-codex-bridge\.js/);
-  assert.match(panel, /MADE_SOLID_STUDIO_ORIGIN/);
-  assert.match(panel, /data-made-solid-codex-panel/);
-  assert.match(panel, /allow="display-capture"/);
-  assert.match(bridge, /event\.origin !== trustedOrigin/);
-  assert.match(bridge, /event\.source !== frame\.contentWindow/);
-  assert.match(bridge, /expanded \? '100vw'/);
-  assert.match(service, /MADE_SOLID_STUDIO_ORIGIN=/);
-  assert.match(service, /studioOrigin\(request\)/);
+  assert.doesNotMatch(layout, /WorkspaceCodexPanel/);
+  assert.doesNotMatch(layout, /made-solid-codex-bridge\.js/);
+  assert.doesNotMatch(service, /MADE_SOLID_STUDIO_ORIGIN=/);
+  assert.match(previewFrame, /Back to Studio/);
+  assert.match(previewFrame, /window\.top\.location\.href/);
 });

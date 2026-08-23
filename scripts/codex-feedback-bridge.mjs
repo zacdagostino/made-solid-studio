@@ -177,7 +177,7 @@ function selectThread(threads, cwd) {
   );
 }
 
-function publicThread(thread, { discardable = false } = {}) {
+function publicThread(thread, { discardable = false, scope = 'universal' } = {}) {
   const turn = activeTurn(thread);
   const lastTurn = [...(Array.isArray(thread?.turns) ? thread.turns : [])]
     .reverse()
@@ -198,6 +198,7 @@ function publicThread(thread, { discardable = false } = {}) {
     lastTurnStatus: typeof lastTurn?.status === 'string' ? lastTurn.status : undefined,
     interrupted: lastTurn?.status === 'interrupted',
     discardable,
+    scope,
   };
 }
 
@@ -867,17 +868,37 @@ function recordImageAttachments(record, storageRoot) {
     : [];
 }
 
-function railwayContainerThreadSettings(runtimeWorkspaceRoots) {
+function railwayContainerThreadSettings(scope) {
+  if (scope.scope === 'client') {
+    return {
+      runtimeWorkspaceRoots: scope.runtimeWorkspaceRoots,
+      sandbox: 'workspace-write',
+      approvalPolicy: 'never',
+    };
+  }
   return {
-    runtimeWorkspaceRoots,
+    runtimeWorkspaceRoots: scope.runtimeWorkspaceRoots,
     sandbox: 'danger-full-access',
     approvalPolicy: 'never',
   };
 }
 
-function railwayContainerTurnSettings(runtimeWorkspaceRoots) {
+function railwayContainerTurnSettings(scope) {
+  if (scope.scope === 'client') {
+    return {
+      runtimeWorkspaceRoots: scope.runtimeWorkspaceRoots,
+      sandboxPolicy: {
+        type: 'workspaceWrite',
+        writableRoots: scope.runtimeWorkspaceRoots,
+        networkAccess: true,
+        excludeSlashTmp: true,
+        excludeTmpdirEnvVar: true,
+      },
+      approvalPolicy: 'never',
+    };
+  }
   return {
-    runtimeWorkspaceRoots,
+    runtimeWorkspaceRoots: scope.runtimeWorkspaceRoots,
     sandboxPolicy: {
       type: 'dangerFullAccess',
     },
@@ -885,11 +906,18 @@ function railwayContainerTurnSettings(runtimeWorkspaceRoots) {
   };
 }
 
+function clientWorkspaceInstruction(scope) {
+  return scope.scope === 'client'
+    ? `This conversation is exclusively for the client website workspace at ${scope.cwd}. Edit files only inside that exact workspace. Do not inspect, edit, or create files in Studio, the Made Solid website, or any other client's workspace.`
+    : '';
+}
+
 export class CodexFeedbackBridge {
   constructor({
     cwd = process.cwd(),
     runtimeWorkspaceRoots,
     storageRoot = resolve('.made-solid', 'codex-feedback'),
+    resolveClientWorkspace,
     connect = connectCodexAppServer,
   } = {}) {
     this.cwd = resolve(cwd);
@@ -905,6 +933,7 @@ export class CodexFeedbackBridge {
       ),
     ];
     this.storageRoot = storageRoot;
+    this.resolveClientWorkspace = resolveClientWorkspace;
     this.connect = connect;
     this.flushRequested = false;
     this.flushPromise = undefined;
@@ -913,14 +942,85 @@ export class CodexFeedbackBridge {
     this.maintenancePromise = undefined;
   }
 
-  async inspect({ threadId } = {}) {
+  workspaceScope({ workspace, threadScope } = {}) {
+    if (threadScope !== 'client') {
+      return {
+        scope: 'universal',
+        cwd: this.cwd,
+        runtimeWorkspaceRoots: this.runtimeWorkspaceRoots,
+      };
+    }
+    if (typeof workspace !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(workspace)) {
+      throw new Error('Choose a valid client website workspace.');
+    }
+    const clientWorkspace = this.resolveClientWorkspace?.(workspace);
+    if (!clientWorkspace) throw new Error('That client website workspace is unavailable.');
+    const cwd = resolve(clientWorkspace);
+    return { scope: 'client', cwd, runtimeWorkspaceRoots: [cwd], workspace };
+  }
+
+  async listedThreads(client, scope) {
+    const universalResult = await client.request('thread/list', {
+      limit: 50,
+      cwd: this.cwd,
+      sortKey: 'updated_at',
+    });
+    const universal = (Array.isArray(universalResult.data) ? universalResult.data : []).map(
+      (thread) => ({ ...thread, __madeSolidScope: 'universal' }),
+    );
+    if (scope.scope !== 'client') return universal;
+    const clientResult = await client.request('thread/list', {
+      limit: 50,
+      cwd: scope.cwd,
+      sortKey: 'updated_at',
+    });
+    const clientThreads = (Array.isArray(clientResult.data) ? clientResult.data : []).map(
+      (thread) => ({ ...thread, __madeSolidScope: 'client' }),
+    );
+    return [...clientThreads, ...universal].slice(0, 50);
+  }
+
+  assertThreadScope(thread, scope) {
+    const cwd = typeof thread?.cwd === 'string' ? resolve(thread.cwd) : '';
+    const permitted = cwd === this.cwd || (scope.scope === 'client' && cwd === scope.cwd);
+    if (!permitted) throw new Error('That conversation is not available in this website editor.');
+    return cwd === this.cwd ? 'universal' : 'client';
+  }
+
+  async assertExactThreadScope(threadId, scope) {
+    let thread = this.startedThreads.get(String(threadId));
+    if (!thread) {
+      const client = await this.connect();
+      try {
+        const result = await client.request('thread/read', { threadId, includeTurns: false });
+        thread = result?.thread;
+      } finally {
+        client.close();
+      }
+    }
+    if (!thread?.id) throw new Error('That conversation is unavailable.');
+    const actualScope = this.assertThreadScope(thread, scope);
+    if (actualScope !== scope.scope) {
+      throw new Error('That conversation belongs to a different workspace.');
+    }
+  }
+
+  async inspect({ threadId, workspace, threadScope } = {}) {
+    const scope = this.workspaceScope({
+      workspace,
+      threadScope: workspace ? 'client' : 'universal',
+    });
+    const requestedScope = threadScope === 'client' ? 'client' : 'universal';
+    if (requestedScope === 'client' && scope.scope !== 'client') {
+      throw new Error('Choose a valid client website workspace.');
+    }
     const client = await this.connect();
     try {
       const [accountResult, rateLimitResult, modelResult, threadResult] = await Promise.all([
         client.request('account/read', {}),
         client.request('account/rateLimits/read', null).catch(() => undefined),
         client.request('model/list', { limit: 100, includeHidden: false }),
-        client.request('thread/list', { limit: 50, cwd: this.cwd, sortKey: 'updated_at' }),
+        this.listedThreads(client, scope).then((data) => ({ data })),
       ]);
       const models = (modelResult.data || []).map(publicModel).filter((model) => model.id);
       const listedThreads = Array.isArray(threadResult.data) ? threadResult.data : [];
@@ -933,9 +1033,21 @@ export class CodexFeedbackBridge {
           return listedThread ? { ...startedThread, ...listedThread } : startedThread;
         }),
         ...listedThreads.filter((thread) => !startedThreadIds.has(String(thread.id))),
-      ].slice(0, 50);
+      ]
+        .filter((thread) => {
+          try {
+            this.assertThreadScope(thread, scope);
+            return true;
+          } catch {
+            return false;
+          }
+        })
+        .slice(0, 50);
       let requestedThread = threadCandidates.find(
-        (candidate) => String(candidate.id) === String(threadId || ''),
+        (candidate) =>
+          String(candidate.id) === String(threadId || '') &&
+          (candidate.__madeSolidScope || this.assertThreadScope(candidate, scope)) ===
+            requestedScope,
       );
       let requestedThreadDetail;
       if (
@@ -948,15 +1060,21 @@ export class CodexFeedbackBridge {
             threadId,
             includeTurns: true,
           });
-          if (requestedThreadDetail?.thread?.id) {
-            requestedThread = requestedThreadDetail.thread;
-            threadCandidates.unshift(requestedThread);
-          }
         } catch {
           // A stale browser selection falls back to the newest listed Studio thread.
         }
+        if (requestedThreadDetail?.thread?.id) {
+          const directScope = this.assertThreadScope(requestedThreadDetail.thread, scope);
+          if (directScope !== requestedScope) {
+            throw new Error('That conversation belongs to a different workspace.');
+          }
+          requestedThreadDetail.thread.__madeSolidScope = directScope;
+          requestedThread = requestedThreadDetail.thread;
+          threadCandidates.unshift(requestedThread);
+        }
       }
-      const thread = requestedThread || selectThread(threadCandidates, this.cwd);
+      const requestedCwd = requestedScope === 'client' ? scope.cwd : this.cwd;
+      const thread = requestedThread || selectThread(threadCandidates, requestedCwd);
       let threadDetail =
         String(requestedThreadDetail?.thread?.id || '') === String(thread?.id || '')
           ? requestedThreadDetail
@@ -1072,9 +1190,18 @@ export class CodexFeedbackBridge {
       };
       const records = await this.readRecords();
       const queued = records.filter((record) => record.status === 'queued');
-      const selectedQueued = queued.filter(
-        (record) => !record.threadId || String(record.threadId) === String(thread?.id || ''),
-      );
+      const selectedThreadScope = detailedThread
+        ? detailedThread.__madeSolidScope || this.assertThreadScope(detailedThread, scope)
+        : requestedScope;
+      const selectedQueued = queued.filter((record) => {
+        const recordMatchesSelectedScope =
+          record.threadScope === selectedThreadScope &&
+          (selectedThreadScope !== 'client' || record.workspace === scope.workspace);
+        if (record.threadId) {
+          return recordMatchesSelectedScope && String(record.threadId) === String(thread?.id || '');
+        }
+        return recordMatchesSelectedScope;
+      });
       return {
         status: 'ready',
         detail: thread
@@ -1091,6 +1218,8 @@ export class CodexFeedbackBridge {
         ),
         thread: detailedThread
           ? publicThread(detailedThread, {
+              scope:
+                detailedThread.__madeSolidScope || this.assertThreadScope(detailedThread, scope),
               discardable:
                 this.startedThreads.has(String(detailedThread.id)) ||
                 (!detailedThread.name &&
@@ -1101,6 +1230,7 @@ export class CodexFeedbackBridge {
         threads: threadCandidates.map((candidate) =>
           String(candidate.id) === String(thread?.id)
             ? publicThread(detailedThread || candidate, {
+                scope: candidate.__madeSolidScope || this.assertThreadScope(candidate, scope),
                 discardable:
                   this.startedThreads.has(String(candidate.id)) ||
                   (!candidate.name &&
@@ -1108,13 +1238,14 @@ export class CodexFeedbackBridge {
                     !hasConversationContent(detailedThread)),
               })
             : publicThread(candidate, {
+                scope: candidate.__madeSolidScope || this.assertThreadScope(candidate, scope),
                 discardable:
                   this.startedThreads.has(String(candidate.id)) ||
                   (!candidate.name && !candidate.preview),
               }),
         ),
         messages: messagesWithFeedbackRecords(threadDetail?.thread, records, thread?.id),
-        activities: publicActivities(threadDetail?.thread, this.runtimeWorkspaceRoots),
+        activities: publicActivities(threadDetail?.thread, scope.runtimeWorkspaceRoots),
         agents: agentThreads.map((agentThread, index) =>
           publicAgent(
             agentThread,
@@ -1150,6 +1281,7 @@ export class CodexFeedbackBridge {
   }
 
   async enqueue(input) {
+    const scope = this.workspaceScope(input);
     const prompt = typeof input.prompt === 'string' ? input.prompt.trim() : '';
     if (prompt.length > maximumPromptLength) {
       throw new Error('Keep the prompt within 4,000 characters.');
@@ -1173,6 +1305,7 @@ export class CodexFeedbackBridge {
       typeof input.threadId === 'string' && /^[A-Za-z0-9-]{1,100}$/.test(input.threadId)
         ? input.threadId
         : undefined;
+    if (threadId) await this.assertExactThreadScope(threadId, scope);
     await mkdir(this.storageRoot, { recursive: true, mode: 0o700 });
     const id = randomUUID();
     const attachments = screenshots.map((screenshot) => {
@@ -1208,6 +1341,8 @@ export class CodexFeedbackBridge {
           ? input.context.replace(/[\r\n]+/g, ' ').slice(0, 1_000)
           : '',
       threadId,
+      threadScope: scope.scope,
+      workspace: scope.workspace,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -1227,6 +1362,7 @@ export class CodexFeedbackBridge {
   }
 
   async createThread(input) {
+    const scope = this.workspaceScope(input);
     const model = typeof input.model === 'string' ? input.model.trim() : '';
     const effort = typeof input.effort === 'string' ? input.effort.trim() : '';
     if (!/^[A-Za-z0-9._-]{1,100}$/.test(model) || !/^[A-Za-z0-9_-]{1,30}$/.test(effort)) {
@@ -1250,8 +1386,8 @@ export class CodexFeedbackBridge {
       }
       const serviceTier = selectedServiceTier(input, availableModel);
       const result = await client.request('thread/start', {
-        cwd: this.cwd,
-        ...railwayContainerThreadSettings(this.runtimeWorkspaceRoots),
+        cwd: scope.cwd,
+        ...railwayContainerThreadSettings(scope),
         model,
         serviceTier,
         config: { model_reasoning_effort: effort },
@@ -1266,7 +1402,7 @@ export class CodexFeedbackBridge {
       return {
         status: 'ready',
         detail: 'New Codex conversation created.',
-        thread: publicThread(result.thread, { discardable: true }),
+        thread: publicThread(result.thread, { discardable: true, scope: scope.scope }),
       };
     } finally {
       client.close();
@@ -1274,6 +1410,7 @@ export class CodexFeedbackBridge {
   }
 
   async continueInterruptedThread(input) {
+    const scope = this.workspaceScope(input);
     const threadId = typeof input.threadId === 'string' ? input.threadId.trim() : '';
     const model = typeof input.model === 'string' ? input.model.trim() : '';
     const effort = typeof input.effort === 'string' ? input.effort.trim() : '';
@@ -1301,6 +1438,10 @@ export class CodexFeedbackBridge {
       }
       const serviceTier = selectedServiceTier(input, availableModel);
       const thread = threadResult.thread;
+      const actualThreadScope = this.assertThreadScope(thread, scope);
+      if (actualThreadScope !== scope.scope) {
+        throw new Error('That conversation belongs to a different workspace.');
+      }
       if (thread?.status?.type === 'active') {
         throw new Error('This conversation is already working.');
       }
@@ -1313,7 +1454,7 @@ export class CodexFeedbackBridge {
       if (thread?.status?.type === 'notLoaded') {
         await client.request('thread/resume', {
           threadId,
-          ...railwayContainerThreadSettings(this.runtimeWorkspaceRoots),
+          ...railwayContainerThreadSettings(scope),
         });
       }
       let agentThreads = [];
@@ -1375,11 +1516,11 @@ export class CodexFeedbackBridge {
         input: [
           {
             type: 'text',
-            text: `The previous turn was interrupted when the Codespace paused. Continue the original request from the saved work and transcript. Inspect the current shared workspace first, preserve existing changes, finish the remaining implementation and verification, and report the final result.${teamContinuation}\n\n${progressUpdateInstruction}`,
+            text: `The previous turn was interrupted when the Codespace paused. Continue the original request from the saved work and transcript. Inspect the current shared workspace first, preserve existing changes, finish the remaining implementation and verification, and report the final result.${teamContinuation}\n\n${clientWorkspaceInstruction(scope)}\n\n${progressUpdateInstruction}`,
           },
         ],
-        cwd: this.cwd,
-        ...railwayContainerTurnSettings(this.runtimeWorkspaceRoots),
+        cwd: scope.cwd,
+        ...railwayContainerTurnSettings(scope),
         model,
         effort,
         serviceTier,
@@ -1417,19 +1558,18 @@ export class CodexFeedbackBridge {
     }
   }
 
-  async interruptActiveTurn(threadId) {
+  async interruptActiveTurn(threadId, scopeInput = {}) {
+    const scope = this.workspaceScope(scopeInput);
     const client = await this.connect();
     try {
-      const threadResult = await client.request('thread/list', {
-        limit: 50,
-        cwd: this.cwd,
-        sortKey: 'updated_at',
-      });
-      const threadCandidates = Array.isArray(threadResult.data) ? threadResult.data : [];
+      const threadCandidates = await this.listedThreads(client, scope);
       const thread = threadId
         ? threadCandidates.find((candidate) => String(candidate.id) === String(threadId))
-        : selectThread(threadCandidates, this.cwd);
+        : selectThread(threadCandidates, scope.cwd);
       if (!thread) return false;
+      if (this.assertThreadScope(thread, scope) !== scope.scope) {
+        throw new Error('That conversation belongs to a different workspace.');
+      }
       const threadDetail = await client.request('thread/read', {
         threadId: thread.id,
         includeTurns: true,
@@ -1444,7 +1584,7 @@ export class CodexFeedbackBridge {
   }
 
   async updateQueued(id, input) {
-    const record = await this.queuedRecord(id);
+    const record = await this.queuedRecord(id, input);
     const prompt = typeof input.prompt === 'string' ? input.prompt.trim() : '';
     if (!prompt || prompt.length > maximumPromptLength) {
       throw new Error('Add a prompt between 1 and 4,000 characters.');
@@ -1457,8 +1597,8 @@ export class CodexFeedbackBridge {
     return { status: 'queued', id: record.id, detail: 'Queued message updated.' };
   }
 
-  async deleteQueued(id) {
-    const record = await this.queuedRecord(id);
+  async deleteQueued(id, input) {
+    const record = await this.queuedRecord(id, input);
     await atomicWriteJson(resolve(this.storageRoot, `${record.id}.json`), {
       ...record,
       status: 'cancelled',
@@ -1468,8 +1608,8 @@ export class CodexFeedbackBridge {
     return { status: 'cancelled', id: record.id, detail: 'Queued message deleted.' };
   }
 
-  async interruptQueued(id) {
-    const record = await this.queuedRecord(id);
+  async interruptQueued(id, input) {
+    const record = await this.queuedRecord(id, input);
     const queued = await this.readRecords('queued');
     await Promise.all(
       queued
@@ -1482,7 +1622,10 @@ export class CodexFeedbackBridge {
           }),
         ),
     );
-    const interrupted = await this.interruptActiveTurn(record.threadId);
+    const interrupted = await this.interruptActiveTurn(record.threadId, {
+      workspace: record.workspace,
+      threadScope: record.threadScope,
+    });
     if (interrupted) {
       const activeRecords = (await this.readRecords()).filter(
         (candidate) =>
@@ -1508,17 +1651,33 @@ export class CodexFeedbackBridge {
     };
   }
 
-  async queuedRecord(id) {
+  async queuedRecord(id, scopeInput) {
     if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id)) {
       throw new Error('Choose a valid queued message.');
     }
     const records = await this.readRecords('queued');
     const record = records.find((candidate) => candidate.id === id);
     if (!record) throw new Error('That message is no longer queued.');
+    if (scopeInput) {
+      const requestedScope = this.workspaceScope(scopeInput);
+      const recordScope = this.workspaceScope({
+        workspace: record.workspace,
+        threadScope: record.threadScope,
+      });
+      if (
+        requestedScope.scope !== recordScope.scope ||
+        requestedScope.cwd !== recordScope.cwd ||
+        requestedScope.workspace !== recordScope.workspace
+      ) {
+        throw new Error('That queued message belongs to a different workspace.');
+      }
+    }
     return record;
   }
 
-  async deleteEmptyThread(threadId) {
+  async deleteEmptyThread(input) {
+    const threadId = typeof input === 'string' ? input : input?.threadId;
+    const scope = this.workspaceScope(typeof input === 'string' ? {} : input);
     if (typeof threadId !== 'string' || !/^[A-Za-z0-9-]{1,100}$/.test(threadId)) {
       throw new Error('Choose a valid empty conversation.');
     }
@@ -1536,6 +1695,9 @@ export class CodexFeedbackBridge {
         const detail = error instanceof Error ? error.message : '';
         if (!startedThread || !/not materialized|includeTurns/i.test(detail)) throw error;
         result = { thread: startedThread };
+      }
+      if (this.assertThreadScope(result.thread, scope) !== scope.scope) {
+        throw new Error('That conversation belongs to a different workspace.');
       }
       if (result.thread?.status?.type === 'active' || hasConversationContent(result.thread)) {
         return {
@@ -1620,12 +1782,25 @@ export class CodexFeedbackBridge {
       this.flushRequested = false;
       const queued = await this.readRecords('queued');
       for (const record of queued) {
+        let recordScope;
+        try {
+          recordScope = this.workspaceScope({
+            workspace: record.workspace,
+            threadScope: record.threadScope,
+          });
+        } catch (error) {
+          await this.markFailed(
+            record,
+            error instanceof Error ? error.message : 'The client website workspace is unavailable.',
+          );
+          continue;
+        }
         const client = await this.connect().catch(() => undefined);
         if (!client) return;
         try {
           const [modelResult, threadResult] = await Promise.all([
             client.request('model/list', { limit: 100, includeHidden: false }),
-            client.request('thread/list', { limit: 50, cwd: this.cwd, sortKey: 'updated_at' }),
+            this.listedThreads(client, recordScope).then((data) => ({ data })),
           ]);
           const availableModel = (modelResult.data || [])
             .map(publicModel)
@@ -1656,24 +1831,32 @@ export class CodexFeedbackBridge {
             ? threadCandidates.find(
                 (candidate) => String(candidate.id) === String(record.threadId),
               ) || this.startedThreads.get(String(record.threadId))
-            : selectThread(threadCandidates, this.cwd);
+            : selectThread(threadCandidates, recordScope.cwd);
           if (!thread && record.threadId) {
             try {
               const directThread = await client.request('thread/read', {
                 threadId: record.threadId,
                 includeTurns: true,
               });
-              thread = directThread?.thread;
+              if (directThread?.thread) {
+                this.assertThreadScope(directThread.thread, recordScope);
+                thread = directThread.thread;
+              }
             } catch {
               // The durable queue remains private and retries after the thread is available.
             }
           }
           if (!thread) continue;
+          const actualThreadScope = this.assertThreadScope(thread, recordScope);
+          if (actualThreadScope !== recordScope.scope) {
+            await this.markFailed(record, 'That conversation belongs to a different workspace.');
+            continue;
+          }
           if (thread.status?.type === 'active') continue;
           if (thread.status?.type === 'notLoaded') {
             await client.request('thread/resume', {
               threadId: thread.id,
-              ...railwayContainerThreadSettings(this.runtimeWorkspaceRoots),
+              ...railwayContainerThreadSettings(recordScope),
             });
             const resumedThread = await client.request('thread/read', {
               threadId: thread.id,
@@ -1711,15 +1894,15 @@ export class CodexFeedbackBridge {
                             ? `\n\n${teamDelegationInstruction}`
                             : ''
                         }`
-                  }\n\n${progressUpdateInstruction}`,
+                  }\n\n${clientWorkspaceInstruction(recordScope)}\n\n${progressUpdateInstruction}`,
                 },
                 ...imageAttachments.map((attachment) => ({
                   type: 'localImage',
                   path: attachment.path,
                 })),
               ],
-              cwd: this.cwd,
-              ...railwayContainerTurnSettings(this.runtimeWorkspaceRoots),
+              cwd: recordScope.cwd,
+              ...railwayContainerTurnSettings(recordScope),
               model: dispatchingRecord.model,
               effort: dispatchingRecord.effort,
               serviceTier: dispatchingRecord.serviceTier || 'default',
@@ -1832,16 +2015,25 @@ export class CodexFeedbackBridge {
       for (const record of running) {
         try {
           if (!record.threadId) continue;
+          const recordScope = this.workspaceScope({
+            workspace: record.workspace,
+            threadScope: record.threadScope,
+          });
           const detail = await client.request('thread/read', {
             threadId: record.threadId,
             includeTurns: true,
           });
           let detailedThread = detail?.thread;
           if (!detailedThread?.id) continue;
+          const actualThreadScope = this.assertThreadScope(detailedThread, recordScope);
+          if (actualThreadScope !== recordScope.scope) {
+            await this.markFailed(record, 'That conversation belongs to a different workspace.');
+            continue;
+          }
           if (detailedThread.status?.type === 'notLoaded') {
             await client.request('thread/resume', {
               threadId: detailedThread.id,
-              ...railwayContainerThreadSettings(this.runtimeWorkspaceRoots),
+              ...railwayContainerThreadSettings(recordScope),
             });
             const resumedDetail = await client.request('thread/read', {
               threadId: detailedThread.id,
@@ -1937,11 +2129,11 @@ export class CodexFeedbackBridge {
             input: [
               {
                 type: 'text',
-                text: `The Codespace paused while this turn was still running. Continue the same request from the saved transcript and current workspace. Preserve existing changes, finish the remaining implementation and verification, and report the final result.${teamRecoveryInstruction}\n\n${progressUpdateInstruction}`,
+                text: `The Codespace paused while this turn was still running. Continue the same request from the saved transcript and current workspace. Preserve existing changes, finish the remaining implementation and verification, and report the final result.${teamRecoveryInstruction}\n\n${clientWorkspaceInstruction(recordScope)}\n\n${progressUpdateInstruction}`,
               },
             ],
-            cwd: this.cwd,
-            ...railwayContainerTurnSettings(this.runtimeWorkspaceRoots),
+            cwd: recordScope.cwd,
+            ...railwayContainerTurnSettings(recordScope),
             model: record.model,
             effort: record.effort,
             serviceTier: record.serviceTier || 'default',

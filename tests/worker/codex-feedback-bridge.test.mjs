@@ -67,25 +67,29 @@ function fakeConnection(state) {
       }
       if (method === 'thread/list') {
         if (params.ancestorThreadId) return { data: state.agentThreads || [] };
+        const threads = [
+          ...(state.newThreads || []),
+          ...(state.extraThreads || []),
+          {
+            id: 'thread-1',
+            name: 'Current Studio chat',
+            cwd: '/workspaces/siteforge-os',
+            updatedAt: Math.floor(Date.now() / 1_000) - 12,
+            status:
+              state.threadStatus ||
+              (state.busy ? { type: 'active', activeFlags: ['turn'] } : { type: 'idle' }),
+          },
+          {
+            id: 'thread-2',
+            name: 'Earlier Studio chat',
+            cwd: '/workspaces/siteforge-os',
+            status: state.threadStatus || { type: 'idle' },
+          },
+        ];
         return {
-          data: [
-            ...(state.newThreads || []),
-            {
-              id: 'thread-1',
-              name: 'Current Studio chat',
-              cwd: '/workspaces/siteforge-os',
-              updatedAt: Math.floor(Date.now() / 1_000) - 12,
-              status:
-                state.threadStatus ||
-                (state.busy ? { type: 'active', activeFlags: ['turn'] } : { type: 'idle' }),
-            },
-            {
-              id: 'thread-2',
-              name: 'Earlier Studio chat',
-              cwd: '/workspaces/siteforge-os',
-              status: state.threadStatus || { type: 'idle' },
-            },
-          ],
+          data: state.filterThreadsByCwd
+            ? threads.filter((thread) => thread.cwd === params.cwd)
+            : threads,
         };
       }
       if (method === 'thread/read') {
@@ -100,6 +104,8 @@ function fakeConnection(state) {
           }
           return { thread: newThread };
         }
+        const extraThread = state.extraThreads?.find((thread) => thread.id === params.threadId);
+        if (extraThread) return { thread: { ...extraThread, turns: extraThread.turns || [] } };
         const submittedTurns = state.turns
           .filter((turn) => turn.threadId === params.threadId)
           .map((turn, index) => ({
@@ -123,6 +129,7 @@ function fakeConnection(state) {
         return {
           thread: {
             id: params.threadId,
+            cwd: '/workspaces/siteforge-os',
             status:
               state.threadStatus ||
               (state.busy ? { type: 'active', activeFlags: [] } : { type: 'idle' }),
@@ -1394,4 +1401,167 @@ test('rejects unsupported models and prompts before creating a Codex turn', asyn
   await new Promise((resolveWait) => setTimeout(resolveWait, 20));
   assert.equal((await bridge.readRecords('failed')).length, 1);
   assert.equal(state.turns.length, 0);
+});
+
+test('keeps current-client and universal chats visible while excluding every other client', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-client-scope-'));
+  const clientDirectory = '/workspaces/prospect-workspaces/acme';
+  const state = {
+    busy: false,
+    turns: [],
+    filterThreadsByCwd: true,
+    extraThreads: [
+      { id: 'thread-acme', name: 'Acme website', cwd: clientDirectory, status: { type: 'idle' } },
+      {
+        id: 'thread-other-client',
+        name: 'Other website',
+        cwd: '/workspaces/prospect-workspaces/other',
+        status: { type: 'idle' },
+      },
+    ],
+  };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    resolveClientWorkspace: (workspace) => (workspace === 'acme' ? clientDirectory : undefined),
+    connect: fakeConnection(state),
+  });
+
+  const clientStatus = await bridge.inspect({ workspace: 'acme', threadScope: 'client' });
+  assert.equal(clientStatus.thread.id, 'thread-acme');
+  assert.deepEqual(
+    clientStatus.threads.map((thread) => [thread.id, thread.scope]),
+    [
+      ['thread-acme', 'client'],
+      ['thread-1', 'universal'],
+      ['thread-2', 'universal'],
+    ],
+  );
+  const universalStatus = await bridge.inspect({
+    workspace: 'acme',
+    threadScope: 'universal',
+    threadId: 'thread-1',
+  });
+  assert.equal(universalStatus.thread.scope, 'universal');
+  assert.ok(universalStatus.threads.some((thread) => thread.id === 'thread-acme'));
+  await assert.rejects(
+    bridge.inspect({
+      workspace: 'acme',
+      threadScope: 'client',
+      threadId: 'thread-other-client',
+    }),
+    /not available in this website editor/i,
+  );
+});
+
+test('confines client delivery and recovery to the exact resolved repository', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-client-turn-'));
+  const clientDirectory = '/workspaces/prospect-workspaces/acme';
+  const state = { busy: false, turns: [], filterThreadsByCwd: true, extraThreads: [] };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    resolveClientWorkspace: (workspace) => (workspace === 'acme' ? clientDirectory : undefined),
+    connect: fakeConnection(state),
+  });
+
+  const created = await bridge.createThread({
+    model: 'gpt-text-only',
+    effort: 'medium',
+    workspace: 'acme',
+    threadScope: 'client',
+  });
+  assert.equal(created.thread.scope, 'client');
+  assert.equal(state.threadStarts[0].cwd, clientDirectory);
+  assert.equal(state.threadStarts[0].sandbox, 'workspace-write');
+  assert.deepEqual(state.threadStarts[0].runtimeWorkspaceRoots, [clientDirectory]);
+
+  await bridge.enqueue({
+    prompt: 'Edit only this client website.',
+    model: 'gpt-text-only',
+    effort: 'medium',
+    threadId: created.thread.id,
+    workspace: 'acme',
+    threadScope: 'client',
+  });
+  assert.equal(state.turns[0].cwd, clientDirectory);
+  assert.deepEqual(state.turns[0].sandboxPolicy, {
+    type: 'workspaceWrite',
+    writableRoots: [clientDirectory],
+    networkAccess: true,
+    excludeSlashTmp: true,
+    excludeTmpdirEnvVar: true,
+  });
+  assert.match(state.turns[0].input[0].text, /Edit files only inside that exact workspace/);
+});
+
+test('rejects direct cross-client delivery before it creates a durable queue record', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-client-direct-'));
+  const clientDirectory = '/workspaces/prospect-workspaces/acme';
+  const state = {
+    busy: false,
+    turns: [],
+    extraThreads: [
+      {
+        id: 'thread-other-client',
+        cwd: '/workspaces/prospect-workspaces/other',
+        status: { type: 'idle' },
+      },
+    ],
+  };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    resolveClientWorkspace: (workspace) => (workspace === 'acme' ? clientDirectory : undefined),
+    connect: fakeConnection(state),
+  });
+  await assert.rejects(
+    bridge.enqueue({
+      prompt: 'Try to cross the client boundary.',
+      model: 'gpt-text-only',
+      effort: 'medium',
+      threadId: 'thread-other-client',
+      workspace: 'acme',
+      threadScope: 'client',
+    }),
+    /not available in this website editor/i,
+  );
+  assert.deepEqual(await bridge.readRecords(), []);
+});
+
+test('authorizes queued mutations against the stored client workspace', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-client-queue-auth-'));
+  const clientDirectory = '/workspaces/prospect-workspaces/acme';
+  const state = { busy: false, turns: [], filterThreadsByCwd: true, extraThreads: [] };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    resolveClientWorkspace: (workspace) => (workspace === 'acme' ? clientDirectory : undefined),
+    connect: fakeConnection(state),
+  });
+  const created = await bridge.createThread({
+    model: 'gpt-text-only',
+    effort: 'medium',
+    workspace: 'acme',
+    threadScope: 'client',
+  });
+  state.newThreads[0].status = { type: 'active', activeFlags: ['turn'] };
+  for (const prompt of ['Update me', 'Delete me', 'Interrupt me']) {
+    await bridge.enqueue({
+      prompt,
+      model: 'gpt-text-only',
+      effort: 'medium',
+      threadId: created.thread.id,
+      workspace: 'acme',
+      threadScope: 'client',
+    });
+  }
+  const queued = await bridge.readRecords('queued');
+  const wrongScope = { threadScope: 'universal' };
+  await assert.rejects(
+    bridge.updateQueued(queued[0].id, { ...wrongScope, prompt: 'Unauthorized' }),
+    /different workspace/i,
+  );
+  await assert.rejects(bridge.deleteQueued(queued[1].id, wrongScope), /different workspace/i);
+  await assert.rejects(bridge.interruptQueued(queued[2].id, wrongScope), /different workspace/i);
 });

@@ -14,6 +14,7 @@ import {
   CircleDot,
   CircleX,
   CornerDownRight,
+  Globe2,
   ImageUp,
   FilePenLine,
   ListChecks,
@@ -22,6 +23,7 @@ import {
   MessageSquareText,
   MonitorUp,
   Pause,
+  PanelsTopLeft,
   Pencil,
   Play,
   Plus,
@@ -92,6 +94,7 @@ type CodexThread = {
   lastTurnStatus?: string;
   interrupted?: boolean;
   discardable?: boolean;
+  scope?: 'client' | 'universal';
 };
 
 type CodexUsageWindow = {
@@ -297,14 +300,20 @@ type CodexChatSession = {
   isOpen: boolean;
   positions: Record<string, CodexTranscriptPosition>;
   selectedThreadId: string;
+  selectedThreadScope?: CodexThread['scope'];
 };
 
-function readCodexChatSession(): CodexChatSession {
+function scopedStorageKey(base: string, workspaceDirectory?: string) {
+  return workspaceDirectory ? `${base}:client:${workspaceDirectory}` : base;
+}
+
+function readCodexChatSession(workspaceDirectory?: string): CodexChatSession {
   const fallback = { isOpen: false, positions: {}, selectedThreadId: '' };
   if (typeof window === 'undefined') return fallback;
   try {
     const stored = JSON.parse(
-      window.localStorage.getItem(codexChatSessionKey) || '{}',
+      window.localStorage.getItem(scopedStorageKey(codexChatSessionKey, workspaceDirectory)) ||
+        '{}',
     ) as Partial<CodexChatSession>;
     const positions =
       stored.positions && typeof stored.positions === 'object' ? stored.positions : {};
@@ -312,15 +321,22 @@ function readCodexChatSession(): CodexChatSession {
       isOpen: stored.isOpen === true,
       positions,
       selectedThreadId: typeof stored.selectedThreadId === 'string' ? stored.selectedThreadId : '',
+      selectedThreadScope:
+        stored.selectedThreadScope === 'client' || stored.selectedThreadScope === 'universal'
+          ? stored.selectedThreadScope
+          : undefined,
     };
   } catch {
     return fallback;
   }
 }
 
-function writeCodexChatSession(session: CodexChatSession) {
+function writeCodexChatSession(session: CodexChatSession, workspaceDirectory?: string) {
   try {
-    window.localStorage.setItem(codexChatSessionKey, JSON.stringify(session));
+    window.localStorage.setItem(
+      scopedStorageKey(codexChatSessionKey, workspaceDirectory),
+      JSON.stringify(session),
+    );
   } catch {
     // Chat remains usable when browser storage is unavailable or full.
   }
@@ -702,9 +718,11 @@ function CodexConversationLoading({ transition }: { transition: ConversationTran
   );
 }
 
-function readCodexDraft() {
+function readCodexDraft(workspaceDirectory?: string) {
   if (typeof window === 'undefined') return '';
-  return (window.localStorage.getItem(codexDraftKey) || '').slice(0, 4_000);
+  return (
+    window.localStorage.getItem(scopedStorageKey(codexDraftKey, workspaceDirectory)) || ''
+  ).slice(0, 4_000);
 }
 
 function readPhotoFile(file: File) {
@@ -968,12 +986,18 @@ function loadCloudSpeechSegment(blob: Blob, signal: AbortSignal): Promise<CloudS
   });
 }
 
-export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean }) {
+export function CodexFeedbackPanel({
+  embedded = false,
+  workspaceDirectory,
+}: {
+  embedded?: boolean;
+  workspaceDirectory?: string;
+}) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const conversationTriggerRef = useRef<HTMLButtonElement>(null);
   const conversationPickerRef = useRef<HTMLDivElement>(null);
   const conversationTransitionIdRef = useRef(0);
-  const initialChatSessionRef = useRef(readCodexChatSession());
+  const initialChatSessionRef = useRef(readCodexChatSession(workspaceDirectory));
   const previousWorkingRef = useRef(false);
   const knownTimelineIdsRef = useRef(new Set<string>());
   const knownTimelineThreadRef = useRef('');
@@ -1028,10 +1052,11 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   );
   const [conversationPickerOpen, setConversationPickerOpen] = useState(false);
   const selectedThreadIdRef = useRef(initialChatSessionRef.current.selectedThreadId);
+  const selectedThreadScopeRef = useRef(initialChatSessionRef.current.selectedThreadScope);
   const [sourceScreenshot, setSourceScreenshot] = useState('');
   const [selection, setSelection] = useState<Selection>();
   const [draftAttachments, setDraftAttachments] = useState<DraftAttachment[]>([]);
-  const [prompt, setPrompt] = useState(readCodexDraft);
+  const [prompt, setPrompt] = useState(() => readCodexDraft(workspaceDirectory));
   const [error, setError] = useState<string>();
   const [browserCaptureAvailable, setBrowserCaptureAvailable] = useState(false);
   const [clock, setClock] = useState(() => Date.now());
@@ -1612,11 +1637,14 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
     setMountedChatLog(log);
   }, []);
 
-  const updateChatSession = useCallback((update: Partial<CodexChatSession>) => {
-    const nextSession = { ...chatSessionRef.current, ...update };
-    chatSessionRef.current = nextSession;
-    writeCodexChatSession(nextSession);
-  }, []);
+  const updateChatSession = useCallback(
+    (update: Partial<CodexChatSession>) => {
+      const nextSession = { ...chatSessionRef.current, ...update };
+      chatSessionRef.current = nextSession;
+      writeCodexChatSession(nextSession, workspaceDirectory);
+    },
+    [workspaceDirectory],
+  );
 
   const saveChatPosition = useCallback(
     (threadIdOverride?: string) => {
@@ -1674,13 +1702,14 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   }, [mountedChatLog, saveChatPosition, updateChatFollowingLatest]);
 
   const selectConversation = useCallback(
-    (threadId: string) => {
+    (threadId: string, threadScope?: CodexThread['scope']) => {
       saveChatPosition();
       stopCodexSpeech(false);
       selectedThreadIdRef.current = threadId;
+      selectedThreadScopeRef.current = threadScope;
       setSelectedThreadId(threadId);
       restoredChatThreadRef.current = '';
-      updateChatSession({ selectedThreadId: threadId });
+      updateChatSession({ selectedThreadId: threadId, selectedThreadScope: threadScope });
       setConversationPickerOpen(false);
       setExpandedAgentId('');
       setTeamResumeState(undefined);
@@ -1689,13 +1718,23 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   );
 
   const refreshStatus = useCallback(
-    async (threadIdOverride?: string) => {
+    async (threadIdOverride?: string, threadScopeOverride?: CodexThread['scope']) => {
       const requestedThreadId = threadIdOverride ?? selectedThreadIdRef.current;
       try {
-        const query = requestedThreadId ? `?threadId=${encodeURIComponent(requestedThreadId)}` : '';
-        const response = await studioRuntimeFetch(`${statusEndpoint}${query}`, {
-          headers: { Accept: 'application/json' },
-        });
+        const requestedScope =
+          threadScopeOverride ??
+          selectedThreadScopeRef.current ??
+          (workspaceDirectory ? 'client' : 'universal');
+        const query = new URLSearchParams();
+        if (requestedThreadId) query.set('threadId', requestedThreadId);
+        if (workspaceDirectory) query.set('workspace', workspaceDirectory);
+        if (requestedScope) query.set('threadScope', requestedScope);
+        const response = await studioRuntimeFetch(
+          `${statusEndpoint}${query.size ? `?${query.toString()}` : ''}`,
+          {
+            headers: { Accept: 'application/json' },
+          },
+        );
         if (
           response.status === 404 ||
           !response.headers.get('content-type')?.includes('application/json')
@@ -1713,7 +1752,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
           (!requestedThreadId ||
             !nextStatus.threads.some((thread) => thread.id === requestedThreadId))
         ) {
-          selectConversation(nextStatus.thread.id);
+          selectConversation(nextStatus.thread.id, nextStatus.thread.scope);
         }
         if (!selectedModelId || !nextStatus.models.some((model) => model.id === selectedModelId)) {
           const nextModel =
@@ -1734,7 +1773,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
         return false;
       }
     },
-    [effortPreferences, selectConversation, selectedEffort, selectedModelId],
+    [effortPreferences, selectConversation, selectedEffort, selectedModelId, workspaceDirectory],
   );
 
   useEffect(() => {
@@ -1891,9 +1930,10 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   ]);
 
   useEffect(() => {
-    if (prompt) window.localStorage.setItem(codexDraftKey, prompt);
-    else window.localStorage.removeItem(codexDraftKey);
-  }, [prompt]);
+    const key = scopedStorageKey(codexDraftKey, workspaceDirectory);
+    if (prompt) window.localStorage.setItem(key, prompt);
+    else window.localStorage.removeItem(key);
+  }, [prompt, workspaceDirectory]);
 
   const displayedThreadId = selectedThreadId || status?.thread?.id || '';
   const pendingChatAccepted = Boolean(
@@ -2133,6 +2173,11 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
   const selectedThread =
     status?.threads.find((thread) => thread.id === (selectedThreadId || status?.thread?.id)) ??
     status?.thread;
+  const clientWorkspaceLabel = workspaceDirectory
+    ? workspaceDirectory.replace(/[._-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
+    : '';
+  const clientThreads = (status?.threads ?? []).filter((thread) => thread.scope === 'client');
+  const universalThreads = (status?.threads ?? []).filter((thread) => thread.scope !== 'client');
   const selectedModel = availableModels.find((model) => model.id === selectedModelId);
   const fastModeAvailable =
     selectedModel?.serviceTiers?.some((tier) => tier.id === 'priority') === true;
@@ -2209,7 +2254,12 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
       const response = await studioRuntimeFetch(feedbackEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ action: 'delete-empty-thread', threadId }),
+        body: JSON.stringify({
+          action: 'delete-empty-thread',
+          threadId,
+          threadScope: candidate.scope || (workspaceDirectory ? 'client' : 'universal'),
+          workspace: workspaceDirectory,
+        }),
       });
       const result = (await response.json()) as { deleted?: boolean };
       if (!response.ok || !result.deleted) return;
@@ -2244,6 +2294,8 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
           model: selectedModel.id,
           effort: selectedEffort,
           serviceTier: selectedServiceTier,
+          threadScope: workspaceDirectory ? 'client' : 'universal',
+          workspace: workspaceDirectory,
         }),
       });
       const result = (await response.json()) as {
@@ -2271,7 +2323,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
             }
           : current,
       );
-      selectConversation(newThread.id);
+      selectConversation(newThread.id, newThread.scope);
       setPendingChatMessage(undefined);
     } catch (cause) {
       setError(
@@ -2291,6 +2343,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
     )
       return;
     const previousThreadId = selectedThreadId || status?.thread?.id || '';
+    const previousThreadScope = selectedThread?.scope;
     const transitionId = conversationTransitionIdRef.current + 1;
     conversationTransitionIdRef.current = transitionId;
     setConversationTransition({
@@ -2299,10 +2352,10 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
       label: threadTitle(thread),
     });
     setError(undefined);
-    selectConversation(thread.id);
-    const loaded = await refreshStatus(thread.id);
+    selectConversation(thread.id, thread.scope);
+    const loaded = await refreshStatus(thread.id, thread.scope);
     if (!loaded && selectedThreadIdRef.current === thread.id) {
-      selectConversation(previousThreadId);
+      selectConversation(previousThreadId, previousThreadScope);
       setError('That conversation could not be loaded. Your previous chat is still available.');
     }
     setConversationTransition((current) => (current?.id === transitionId ? undefined : current));
@@ -2338,6 +2391,8 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
           model: selectedModel.id,
           effort: selectedEffort,
           serviceTier: selectedServiceTier,
+          threadScope: selectedThread?.scope || (workspaceDirectory ? 'client' : 'universal'),
+          workspace: workspaceDirectory,
         }),
       });
       const result = (await response.json()) as {
@@ -2358,7 +2413,7 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
           ? { threadId: selectedThread.id, agentIds: resumedAgentIds, failedAgentIds }
           : undefined,
       );
-      await refreshStatus(selectedThread.id);
+      await refreshStatus(selectedThread.id, selectedThread.scope);
       scrollChatToLatest();
     } catch (cause) {
       setTeamResumeState(undefined);
@@ -2655,7 +2710,13 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
       const response = await studioRuntimeFetch(feedbackEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ action, id, prompt: queuedPrompt }),
+        body: JSON.stringify({
+          action,
+          id,
+          prompt: queuedPrompt,
+          threadScope: selectedThread?.scope || (workspaceDirectory ? 'client' : 'universal'),
+          workspace: workspaceDirectory,
+        }),
       });
       const result = (await response.json()) as { id?: string; detail?: string };
       if (!response.ok)
@@ -2735,6 +2796,8 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
           workMode,
           context: `${document.title} · ${window.location.href}`,
           threadId: submittedThreadId,
+          threadScope: selectedThread?.scope || (workspaceDirectory ? 'client' : 'universal'),
+          workspace: workspaceDirectory,
         }),
       });
       const result = (await response.json()) as { id?: string; detail?: string };
@@ -2840,7 +2903,8 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                 </span>
                 <div>
                   <Dialog.Title>
-                    Codex <span aria-hidden="true">Workspace Agent</span>
+                    {workspaceDirectory ? `${clientWorkspaceLabel} website editor` : 'Codex'}{' '}
+                    <span aria-hidden="true">Workspace Agent</span>
                   </Dialog.Title>
                   <div className="codex-feedback-dialog__status">
                     <span
@@ -2876,9 +2940,29 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
             </header>
 
             <Dialog.Description className="sr-only" id="codex-feedback-description">
-              Chat with the subscription-only Codex Workspace Agent and optionally attach a photo or
-              screenshot.
+              {workspaceDirectory
+                ? `Chat with Codex about the ${clientWorkspaceLabel} client website or open a universal Studio chat. Other client conversations are hidden.`
+                : 'Chat with the subscription-only Codex Workspace Agent and optionally attach a photo or screenshot.'}
             </Dialog.Description>
+            <section aria-label="Chat workspace scope" className="codex-workspace-scope">
+              {workspaceDirectory ? (
+                <PanelsTopLeft aria-hidden="true" size={18} />
+              ) : (
+                <Globe2 aria-hidden="true" size={18} />
+              )}
+              <span>
+                <strong>
+                  {workspaceDirectory
+                    ? `Editing only ${clientWorkspaceLabel}`
+                    : 'Universal Studio chats'}
+                </strong>
+                <small>
+                  {workspaceDirectory
+                    ? 'Client chats can edit this website only. Universal Studio chats remain available below.'
+                    : 'These conversations aren’t tied to one client website.'}
+                </small>
+              </span>
+            </section>
             <p aria-live="polite" className="sr-only" role="status">
               {speechStatus}
             </p>
@@ -2909,6 +2993,13 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                         : threadTitle(selectedThread)}
                     </strong>
                     <small>
+                      {workspaceDirectory ? (
+                        <span
+                          className={`codex-thread-scope is-${selectedThread?.scope ?? 'client'}`}
+                        >
+                          {selectedThread?.scope === 'universal' ? 'Universal' : 'This client'}
+                        </span>
+                      ) : null}
                       {conversationTransition
                         ? conversationTransition.kind === 'create'
                           ? 'Preparing conversation'
@@ -2938,12 +3029,11 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                 <IconButton
                   className="codex-conversation-picker__new"
                   disabled={
-                    !status?.thread ||
-                    !selectedModel ||
-                    isCreatingThread ||
-                    Boolean(conversationTransition)
+                    !status || !selectedModel || isCreatingThread || Boolean(conversationTransition)
                   }
-                  label="New chat"
+                  label={
+                    workspaceDirectory ? `New ${clientWorkspaceLabel} website chat` : 'New chat'
+                  }
                   onClick={() => void createConversation()}
                   variant="quiet"
                 >
@@ -2960,55 +3050,88 @@ export function CodexFeedbackPanel({ embedded = false }: { embedded?: boolean })
                     id="codex-conversation-menu"
                     role="menu"
                   >
-                    {(status?.threads ?? []).map((thread) => {
-                      const selected = thread.id === (selectedThreadId || status?.thread?.id);
-                      const lastUsedAt = threadLastUsedAt(thread);
-                      const usedAt = timestampMilliseconds(lastUsedAt);
-                      return (
-                        <Button
-                          aria-checked={selected}
-                          className="codex-conversation-picker__option"
-                          disabled={Boolean(conversationTransition)}
-                          key={thread.id}
-                          onClick={() => {
-                            void discardEmptyConversation(
-                              selectedThreadId || status?.thread?.id || '',
-                            );
-                            void switchConversation(thread);
-                          }}
-                          role="menuitemradio"
-                          variant="quiet"
-                        >
-                          <span className="codex-conversation-picker__state" aria-hidden="true">
-                            {thread.working ? (
-                              <LoaderCircle className="is-spinning" size={16} />
-                            ) : selected ? (
-                              <Check size={16} />
-                            ) : (
-                              <Clock3 size={15} />
-                            )}
-                          </span>
-                          <span className="codex-conversation-picker__option-copy">
-                            <strong>{threadTitle(thread)}</strong>
-                            <small>
-                              <span>
-                                {thread.working
-                                  ? 'Working'
-                                  : thread.interrupted
-                                    ? 'Interrupted'
-                                    : 'Ready'}
-                              </span>
-                              <time
-                                dateTime={usedAt ? new Date(usedAt).toISOString() : undefined}
-                                title={usedAt ? new Date(usedAt).toLocaleString() : undefined}
+                    {(workspaceDirectory
+                      ? [
+                          {
+                            icon: <PanelsTopLeft aria-hidden="true" size={14} />,
+                            label: 'This client',
+                            threads: clientThreads,
+                          },
+                          {
+                            icon: <Globe2 aria-hidden="true" size={14} />,
+                            label: 'Universal Studio',
+                            threads: universalThreads,
+                          },
+                        ]
+                      : [
+                          {
+                            icon: <Globe2 aria-hidden="true" size={14} />,
+                            label: 'Studio conversations',
+                            threads: universalThreads,
+                          },
+                        ]
+                    ).map((group) =>
+                      group.threads.length ? (
+                        <div aria-label={group.label} key={group.label} role="group">
+                          <p className="codex-conversation-picker__group-label" role="presentation">
+                            {group.icon}
+                            {group.label}
+                          </p>
+                          {group.threads.map((thread) => {
+                            const selected = thread.id === (selectedThreadId || status?.thread?.id);
+                            const lastUsedAt = threadLastUsedAt(thread);
+                            const usedAt = timestampMilliseconds(lastUsedAt);
+                            return (
+                              <Button
+                                aria-checked={selected}
+                                className="codex-conversation-picker__option"
+                                disabled={Boolean(conversationTransition)}
+                                key={thread.id}
+                                onClick={() => {
+                                  void discardEmptyConversation(
+                                    selectedThreadId || status?.thread?.id || '',
+                                  );
+                                  void switchConversation(thread);
+                                }}
+                                role="menuitemradio"
+                                variant="quiet"
                               >
-                                Last used {lastUsedTime(lastUsedAt, clock)}
-                              </time>
-                            </small>
-                          </span>
-                        </Button>
-                      );
-                    })}
+                                <span
+                                  className="codex-conversation-picker__state"
+                                  aria-hidden="true"
+                                >
+                                  {thread.working ? (
+                                    <LoaderCircle className="is-spinning" size={16} />
+                                  ) : selected ? (
+                                    <Check size={16} />
+                                  ) : (
+                                    <Clock3 size={15} />
+                                  )}
+                                </span>
+                                <span className="codex-conversation-picker__option-copy">
+                                  <strong>{threadTitle(thread)}</strong>
+                                  <small>
+                                    <span>
+                                      {thread.working
+                                        ? 'Working'
+                                        : thread.interrupted
+                                          ? 'Interrupted'
+                                          : 'Ready'}
+                                    </span>
+                                    <time
+                                      dateTime={usedAt ? new Date(usedAt).toISOString() : undefined}
+                                      title={usedAt ? new Date(usedAt).toLocaleString() : undefined}
+                                    >
+                                      Last used {lastUsedTime(lastUsedAt, clock)}
+                                    </time>
+                                  </small>
+                                </span>
+                              </Button>
+                            );
+                          })}
+                        </div>
+                      ) : null,
+                    )}
                   </div>
                 ) : null}
               </div>
