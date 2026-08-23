@@ -73,7 +73,22 @@ test('loads live client resources through a secure distinct-origin frame and iso
   const upstreamRequests = [];
   const upstreamUpgrades = [];
   const upstream = createHttpServer((request, response) => {
-    upstreamRequests.push({ cookie: request.headers.cookie || '', url: request.url || '' });
+    upstreamRequests.push({
+      cookie: request.headers.cookie || '',
+      origin: request.headers.origin || '',
+      secFetchMode: request.headers['sec-fetch-mode'] || '',
+      secFetchSite: request.headers['sec-fetch-site'] || '',
+      url: request.url || '',
+    });
+    if (
+      request.headers.origin ||
+      request.headers['sec-fetch-mode'] ||
+      request.headers['sec-fetch-site']
+    ) {
+      response.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('Unauthorized');
+      return;
+    }
     if (request.url === '/_next/static/app.css') {
       response.writeHead(200, {
         'Cache-Control': 'public, max-age=3600',
@@ -115,7 +130,21 @@ test('loads live client resources through a secure distinct-origin frame and iso
     </main></body></html>`);
   });
   upstream.on('upgrade', (request, socket) => {
-    upstreamUpgrades.push({ cookie: request.headers.cookie || '', url: request.url || '' });
+    upstreamUpgrades.push({
+      cookie: request.headers.cookie || '',
+      origin: request.headers.origin || '',
+      secFetchMode: request.headers['sec-fetch-mode'] || '',
+      secFetchSite: request.headers['sec-fetch-site'] || '',
+      url: request.url || '',
+    });
+    if (
+      request.headers.origin ||
+      request.headers['sec-fetch-mode'] ||
+      request.headers['sec-fetch-site']
+    ) {
+      socket.end('HTTP/1.1 403 Unauthorized\r\nConnection: close\r\n\r\n');
+      return;
+    }
     const websocketAccept = createHash('sha1')
       .update(`${request.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
       .digest('base64');
@@ -216,6 +245,9 @@ test('loads live client resources through a secure distinct-origin frame and iso
       ]),
     );
     expect(upstreamRequests.every(({ cookie }) => cookie === '')).toBe(true);
+    expect(upstreamRequests.every(({ origin }) => origin === '')).toBe(true);
+    expect(upstreamRequests.every(({ secFetchMode }) => secFetchMode === '')).toBe(true);
+    expect(upstreamRequests.every(({ secFetchSite }) => secFetchSite === '')).toBe(true);
     const websocketOpened = await clientDocumentFrame.evaluate(
       () =>
         new Promise((resolve) => {
@@ -231,7 +263,9 @@ test('loads live client resources through a secure distinct-origin frame and iso
         }),
     );
     expect(websocketOpened).toBe(true);
-    expect(upstreamUpgrades).toEqual([{ cookie: '', url: '/hmr' }]);
+    expect(upstreamUpgrades).toEqual([
+      { cookie: '', origin: '', secFetchMode: '', secFetchSite: '', url: '/hmr' },
+    ]);
 
     const otherPage = await context.newPage();
     await otherPage.goto(`${workspaceOrigin}/other`);

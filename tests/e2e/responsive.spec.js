@@ -3743,8 +3743,9 @@ test('displays the newest test package above retained package versions', async (
 
   const packagePicker = page.getByLabel('Test agent package');
   await expect(packagePicker).toHaveValue(
-    'agent-package-local-v19-6-opaque-workspace-frame-capability',
+    'agent-package-local-v19-7-next-compatible-workspace-runtime',
   );
+  await expect(packagePicker).toContainText('v19.7 · Approved test');
   await expect(packagePicker).toContainText('v19.6 · Approved test');
   await expect(packagePicker).toContainText('v19.5 · Approved test');
   await expect(packagePicker).toContainText('v19.4 · Approved test');
@@ -3887,6 +3888,7 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v19.7', 'Next-compatible Workspace runtime'],
     ['v19.6', 'Opaque Workspace frame capability'],
     ['v19.5', 'Reliable Workspace development surfaces'],
     ['v19.4', 'Locked workspace development dependencies'],
@@ -4446,8 +4448,8 @@ test('separates test refinement from the published builder agent package', async
   );
   await expect(page.getByRole('heading', { name: 'Every saved build package' })).toBeVisible();
   const versionCards = page.locator('.agent-package-version-ledger__list article');
-  await expect(versionCards).toHaveCount(138);
-  await expect(versionCards.first().getByRole('heading')).toHaveText('v19.6');
+  await expect(versionCards).toHaveCount(139);
+  await expect(versionCards.first().getByRole('heading')).toHaveText('v19.7');
   const stagedV7Card = versionCards.filter({
     hasText: 'Five tested behaviours staged for the next production package.',
   });

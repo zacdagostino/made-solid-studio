@@ -84,6 +84,10 @@ export SUPABASE_URL="${SUPABASE_URL:-$SITEFORGE_SUPABASE_URL}"
 export SUPABASE_SERVICE_ROLE_KEY="${SUPABASE_SERVICE_ROLE_KEY:-$SITEFORGE_SUPABASE_SERVICE_ROLE_KEY}"
 unset OPENAI_API_KEY SITEFORGE_CODEX_API_KEY CODEX_API_KEY
 
+if ! node "$application_directory/scripts/restore-active-workspace-preview.mjs"; then
+  echo "[railway-runtime] Saved workspace restart failed; Studio will retry after owner access."
+fi
+
 declare -a child_processes=()
 stopping=0
 

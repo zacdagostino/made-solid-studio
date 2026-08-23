@@ -206,6 +206,10 @@ const opaqueWorkspaceFrameCapabilityMigrationUrl = new URL(
   '../../supabase/migrations/20260823070000_opaque_workspace_frame_capability_test_package.sql',
   import.meta.url,
 );
+const nextCompatibleWorkspaceRuntimeMigrationUrl = new URL(
+  '../../supabase/migrations/20260823080000_next_compatible_workspace_runtime_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -274,9 +278,42 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 68);
+  assert.equal(Number(revision[1]), 69);
   assert.match(app, /shows chats for that client plus clearly labelled universal Studio chats/);
-  assert.match(app, /short-lived signed Preview path/);
+  assert.match(app, /removes opaque cross-site browser provenance/);
+});
+
+test('registers the Next-compatible Workspace runtime above immutable v19.6', async () => {
+  const [migration, repository, previewHost, launcher, restoreScript] = await Promise.all([
+    readFile(nextCompatibleWorkspaceRuntimeMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(new URL('../../preview-host/server.mjs', import.meta.url), 'utf8'),
+    readFile(new URL('../../scripts/start-railway-runtime', import.meta.url), 'utf8'),
+    readFile(
+      new URL('../../scripts/restore-active-workspace-preview.mjs', import.meta.url),
+      'utf8',
+    ),
+  ]);
+  assert.match(migration, /Next-compatible Workspace runtime test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v19\.7/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v19\.6'/,
+  );
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 19\.7,/);
+  assert.match(repository, /basePackageId: localOpaqueWorkspaceFrameCapabilityPackage\.id/);
+  const ledger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    ledger.indexOf('localNextCompatibleWorkspaceRuntimePackage,') <
+      ledger.indexOf('localOpaqueWorkspaceFrameCapabilityPackage,'),
+  );
+  assert.match(previewHost, /delete headers\.origin/);
+  assert.match(previewHost, /startsWith\('sec-fetch-'\)/);
+  assert.match(launcher, /restore-active-workspace-preview\.mjs/);
+  assert.match(restoreScript, /SITEFORGE_PROSPECT_WORKSPACES_DIR/);
+  assert.match(restoreScript, /NODE_ENV=development/);
 });
 
 test('registers the opaque Workspace frame capability above immutable v19.5', async () => {

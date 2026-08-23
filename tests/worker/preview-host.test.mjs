@@ -147,9 +147,21 @@ test('proxies a live frame through an exact preview-origin capability', async ()
   const upstream = createServer((request, response) => {
     upstreamRequests.push({
       cookie: request.headers.cookie,
+      origin: request.headers.origin,
       referrer: request.headers.referer,
+      secFetchMode: request.headers['sec-fetch-mode'],
+      secFetchSite: request.headers['sec-fetch-site'],
       url: request.url,
     });
+    if (
+      request.headers.origin ||
+      request.headers['sec-fetch-mode'] ||
+      request.headers['sec-fetch-site']
+    ) {
+      response.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('Unauthorized');
+      return;
+    }
     if (request.url === '/styles.css') {
       response.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8' });
       response.end('.hero{background:url("/hero.png")}');
@@ -226,7 +238,13 @@ test('proxies a live frame through an exact preview-origin capability', async ()
 
     const [css, script, image] = await Promise.all(
       ['styles.css', 'app.js', 'hero.png'].map((path) =>
-        fetch(`${localOrigin}${frameRoot}${path}`),
+        fetch(`${localOrigin}${frameRoot}${path}`, {
+          headers: {
+            Origin: 'null',
+            'Sec-Fetch-Mode': 'no-cors',
+            'Sec-Fetch-Site': 'cross-site',
+          },
+        }),
       ),
     );
     assert.equal(css.status, 200);
@@ -235,7 +253,10 @@ test('proxies a live frame through an exact preview-origin capability', async ()
     assert.match(await script.text(), new RegExp(`${frameRoot}_next/chunk\\.js`));
     assert.equal(image.status, 200);
     assert.ok(upstreamRequests.every((request) => request.cookie === undefined));
+    assert.ok(upstreamRequests.every((request) => request.origin === undefined));
     assert.ok(upstreamRequests.every((request) => request.referrer === undefined));
+    assert.ok(upstreamRequests.every((request) => request.secFetchMode === undefined));
+    assert.ok(upstreamRequests.every((request) => request.secFetchSite === undefined));
 
     const wrongFrame = await fetch(
       `${localOrigin}/__made-solid/workspace-frame/prospect-site/payload.invalid/styles.css`,

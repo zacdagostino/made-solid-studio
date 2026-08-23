@@ -31,7 +31,13 @@ stays in an opaque sandbox and loads from `preview.madesolid.com.au` through a s
 path. That same exact-client path authenticates rewritten HTML, CSS, JavaScript, images, navigation,
 API requests, and HMR without relying on third-party frame cookies or sharing browser storage between
 clients. The Preview host removes the capability before proxying to the local development server;
-signed-out, expired, stale-client, and cross-client requests remain unavailable.
+it also removes the opaque frame's browser `Origin` and stale `Sec-Fetch-*` metadata before the trusted loopback hop because Next.js
+rejects cross-origin development requests even after the Preview host has authenticated them. On
+Railway boot, the runtime validates the persisted active-preview record against approved workspace
+roots and existing locked dependencies, rejects reserved ports, and restarts that exact development
+server in its persistent tmux session when its recorded port is absent. A failed automatic restore
+leaves Studio running so the signed-in owner can use the same authenticated recovery path.
+Signed-out, expired, stale-client, and cross-client requests remain unavailable.
 
 ## Create the service
 

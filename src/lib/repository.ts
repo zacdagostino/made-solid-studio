@@ -390,6 +390,8 @@ const localReliableWorkspaceDevelopmentSurfacesPackageId =
   'agent-package-local-v19-5-reliable-workspace-development-surfaces';
 const localOpaqueWorkspaceFrameCapabilityPackageId =
   'agent-package-local-v19-6-opaque-workspace-frame-capability';
+const localNextCompatibleWorkspaceRuntimePackageId =
+  'agent-package-local-v19-7-next-compatible-workspace-runtime';
 
 type StoreName =
   | 'activities'
@@ -3007,10 +3009,28 @@ export class SiteforgeRepository {
         'Makes the existing Preview origin a secure live-development transport while Workspace remains the stable shell and every client frame remains opaque and isolated.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localNextCompatibleWorkspaceRuntimePackage: AgentPackage = {
+      ...localOpaqueWorkspaceFrameCapabilityPackage,
+      id: localNextCompatibleWorkspaceRuntimePackageId,
+      version: 19.7,
+      basePackageId: localOpaqueWorkspaceFrameCapabilityPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v19.7',
+      contractAddendum:
+        'The trusted Preview-to-localhost hop removes the opaque browser Origin and stale cross-site Fetch Metadata before reaching Next.js or Vite, while the signed exact-client path remains the server-side authorization boundary. Railway boot safely restores a persisted approved active workspace when its recorded local server is absent.',
+      instructionsAddendum:
+        'Strip Origin, Sec-Fetch-*, Cookie, Referer, and the signed capability path before proxying authenticated live-frame HTTP and HMR traffic to the trusted loopback development server. Continue returning the narrow opaque-frame CORS response without forwarding that browser provenance upstream. On Railway boot, read only the validated active-preview record, reject reserved ports and traversal, resolve the directory through approved persistent workspace roots, require its Git checkout, package manifest, and existing locked dependencies, reuse its recorded port, and start its development command in the exact persistent tmux session only when the server is absent. A failed boot restore must leave Studio available for owner-authorized recovery.',
+      summary:
+        'Next-compatible Workspace runtime test package: removes opaque cross-site browser provenance that Next rejects and safely restores the approved active client after Railway restarts.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes Next.js client assets and HMR load through the secure Preview transport immediately after deploy or restart without broadening workspace authorization.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localNextCompatibleWorkspaceRuntimePackage,
           localOpaqueWorkspaceFrameCapabilityPackage,
           localReliableWorkspaceDevelopmentSurfacesPackage,
           localLockedWorkspaceDevDependenciesPackage,
@@ -3155,6 +3175,9 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localNextCompatibleWorkspaceRuntimePackage,
+          localOpaqueWorkspaceFrameCapabilityPackage,
+          localReliableWorkspaceDevelopmentSurfacesPackage,
           localLockedWorkspaceDevDependenciesPackage,
           localLiveCodexLauncherRecoveryPackage,
           localWorkspaceHostedEditorShellPackage,
@@ -3300,6 +3323,9 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localNextCompatibleWorkspaceRuntimePackage,
+            localOpaqueWorkspaceFrameCapabilityPackage,
+            localReliableWorkspaceDevelopmentSurfacesPackage,
             localLockedWorkspaceDevDependenciesPackage,
             localLiveCodexLauncherRecoveryPackage,
             localWorkspaceHostedEditorShellPackage,

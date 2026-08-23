@@ -435,15 +435,18 @@ function workspaceFrameUnavailable(response, status = 404) {
   response.end('Private workspace frame unavailable.');
 }
 
-function workspaceFrameUpstreamHeaders(request, active, configuration) {
+function workspaceFrameUpstreamHeaders(request, active) {
   const headers = { ...request.headers };
   delete headers.cookie;
   delete headers['accept-encoding'];
+  delete headers.origin;
   delete headers.referer;
+  for (const headerName of Object.keys(headers)) {
+    if (headerName.toLowerCase().startsWith('sec-fetch-')) delete headers[headerName];
+  }
   headers.host = `127.0.0.1:${active.port}`;
   headers['x-forwarded-host'] = request.headers.host || '';
   headers['x-forwarded-proto'] = 'https';
-  if (headers.origin === 'null') headers.origin = configuration.publicOrigin;
   return headers;
 }
 
@@ -495,7 +498,7 @@ function workspaceFrameLocation(location, parsed) {
 function proxyWorkspaceFrameHttp(request, response, requestUrl, parsed, active, configuration) {
   const upstream = createProxyRequest(
     {
-      headers: workspaceFrameUpstreamHeaders(request, active, configuration),
+      headers: workspaceFrameUpstreamHeaders(request, active),
       hostname: '127.0.0.1',
       method: request.method,
       path: workspaceFrameUpstreamPath(requestUrl, parsed),
@@ -597,17 +600,9 @@ export async function handleWorkspaceFrameRequest(request, response, configurati
   return true;
 }
 
-function proxyWorkspaceFrameUpgrade(
-  request,
-  socket,
-  head,
-  requestUrl,
-  parsed,
-  active,
-  configuration,
-) {
+function proxyWorkspaceFrameUpgrade(request, socket, head, requestUrl, parsed, active) {
   const upstream = createProxyRequest({
-    headers: workspaceFrameUpstreamHeaders(request, active, configuration),
+    headers: workspaceFrameUpstreamHeaders(request, active),
     hostname: '127.0.0.1',
     method: request.method,
     path: workspaceFrameUpstreamPath(requestUrl, parsed),
@@ -647,15 +642,7 @@ export async function handleWorkspaceFrameUpgrade(request, socket, head, configu
       socket.destroy();
       return true;
     }
-    proxyWorkspaceFrameUpgrade(
-      request,
-      socket,
-      head,
-      requestUrl,
-      parsed,
-      active,
-      frameConfiguration,
-    );
+    proxyWorkspaceFrameUpgrade(request, socket, head, requestUrl, parsed, active);
   } catch {
     socket.destroy();
   }
