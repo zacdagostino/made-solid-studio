@@ -77,8 +77,9 @@ SITEFORGE_PUBLIC_ORIGIN=https://studio.madesolid.com.au
 PREVIEW_PUBLIC_ORIGIN=https://preview.madesolid.com.au
 SITEFORGE_WORKSPACE_PREVIEW_ORIGIN=https://workspace.madesolid.com.au
 SITEFORGE_GITHUB_TOKEN=
-SITEFORGE_CODEX_AUTH_MODE=chatgpt
+SITEFORGE_CODEX_AUTH_MODE=runtime
 SITEFORGE_OPENAI_API_ENABLED=false
+SITEFORGE_CODEX_API_KEY=
 
 MADE_SOLID_HANDOFF_URL=https://madesolid.com.au/api/integrations/studio/handoffs
 MADE_SOLID_REPORT_PREVIEW_URL=https://madesolid.com.au/api/integrations/studio/report-previews
@@ -96,9 +97,10 @@ read/write and only the additional GitHub permissions required by the existing p
 The runtime clones the two main repositories into `/data/workspaces`, fast-forwards clean clones on
 restart, and preserves any uncommitted work instead of overwriting it.
 
-Do not add `OPENAI_API_KEY`, `SITEFORGE_CODEX_API_KEY`, or `CODEX_API_KEY`. The launcher also removes
-them defensively and forces ChatGPT authentication for the Workspace Agent, Website Builder, and
-Test Builder.
+Add `SITEFORGE_CODEX_API_KEY` only when you want the authenticated owner to be able to switch all
+Studio AI work to separately billed OpenAI API credits. Never add `CODEX_API_KEY` or any API key as
+a `VITE_*` variable. ChatGPT subscription access remains the default, and the server passes the key
+only to Codex/API worker processes while API credits mode is on.
 
 The `VITE_*` values are build-time variables. Redeploy after adding or changing them.
 

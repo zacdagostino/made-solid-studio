@@ -3742,9 +3742,8 @@ test('displays the newest test package above retained package versions', async (
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const packagePicker = page.getByLabel('Test agent package');
-  await expect(packagePicker).toHaveValue(
-    'agent-package-local-v19-8-executable-next-workspace-runtime',
-  );
+  await expect(packagePicker).toHaveValue('agent-package-local-v19-9-owner-api-credits-switch');
+  await expect(packagePicker).toContainText('v19.9 · Approved test');
   await expect(packagePicker).toContainText('v19.8 · Approved test');
   await expect(packagePicker).toContainText('v19.7 · Approved test');
   await expect(packagePicker).toContainText('v19.6 · Approved test');
@@ -3889,6 +3888,7 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v19.9', 'Owner API credits switch'],
     ['v19.8', 'Executable Next Workspace runtime'],
     ['v19.7', 'Next-compatible Workspace runtime'],
     ['v19.6', 'Opaque Workspace frame capability'],
@@ -4450,8 +4450,8 @@ test('separates test refinement from the published builder agent package', async
   );
   await expect(page.getByRole('heading', { name: 'Every saved build package' })).toBeVisible();
   const versionCards = page.locator('.agent-package-version-ledger__list article');
-  await expect(versionCards).toHaveCount(140);
-  await expect(versionCards.first().getByRole('heading')).toHaveText('v19.8');
+  await expect(versionCards).toHaveCount(141);
+  await expect(versionCards.first().getByRole('heading')).toHaveText('v19.9');
   const stagedV7Card = versionCards.filter({
     hasText: 'Five tested behaviours staged for the next production package.',
   });

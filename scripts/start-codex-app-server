@@ -10,21 +10,30 @@ if ! command -v codex >/dev/null 2>&1; then
   exit 1
 fi
 
-login_status="$(codex --config 'forced_login_method="chatgpt"' login status 2>&1 || true)"
-if [[ ! "$login_status" =~ [Ll]ogged[[:space:]]in[[:space:]]using[[:space:]][Cc]hat[Gg][Pp][Tt] ]]; then
-  echo "The Studio Codex Workspace Agent requires a ChatGPT subscription sign-in."
-  echo "Run 'codex login --device-auth' in this trusted environment, then restart Studio."
-  echo "API-key authentication is deliberately blocked for this agent."
-  exit 1
-fi
-
-# The cached ChatGPT login is the only credential this process may use. Keep
-# unrelated server-side API keys out of the app-server environment as defence
-# in depth if the surrounding worker host also runs OpenAI API features.
-unset OPENAI_API_KEY SITEFORGE_CODEX_API_KEY CODEX_API_KEY
-
 studio_workspace_directory="${SITEFORGE_STUDIO_WORKSPACE_DIR:-$project_directory}"
-declare -a codex_configuration=(--config 'forced_login_method="chatgpt"')
+billing_mode="$(node "$project_directory/scripts/runtime-ai-billing.mjs")"
+declare -a codex_configuration=()
+
+if [[ "$billing_mode" == "api_credits" ]]; then
+  codex_api_key="${SITEFORGE_CODEX_API_KEY:-${OPENAI_API_KEY:-}}"
+  if [[ -z "$codex_api_key" ]]; then
+    echo "The Studio Codex Workspace Agent needs a server-side API key in API credits mode."
+    exit 1
+  fi
+  export CODEX_API_KEY="$codex_api_key"
+  unset OPENAI_API_KEY SITEFORGE_CODEX_API_KEY
+  echo "[codex-runtime] using separately billed OpenAI API credits."
+else
+  login_status="$(codex --config 'forced_login_method="chatgpt"' login status 2>&1 || true)"
+  if [[ ! "$login_status" =~ [Ll]ogged[[:space:]]in[[:space:]]using[[:space:]][Cc]hat[Gg][Pp][Tt] ]]; then
+    echo "The Studio Codex Workspace Agent requires a ChatGPT subscription sign-in."
+    echo "Run 'codex login --device-auth' in this trusted environment, then restart Studio."
+    exit 1
+  fi
+  unset OPENAI_API_KEY SITEFORGE_CODEX_API_KEY CODEX_API_KEY
+  codex_configuration+=(--config 'forced_login_method="chatgpt"')
+  echo "[codex-runtime] using ChatGPT subscription access."
+fi
 
 if [[ "${SITEFORGE_RUNTIME_AUTH_REQUIRED:-0}" == "1" ]]; then
   runtime_workspaces_directory="${SITEFORGE_RUNTIME_WORKSPACES_DIR:?SITEFORGE_RUNTIME_WORKSPACES_DIR is required}"

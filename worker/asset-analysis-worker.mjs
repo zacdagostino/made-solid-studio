@@ -2347,7 +2347,6 @@ async function processNext(client, workerId, apiKey, model) {
 }
 
 async function main() {
-  const apiKey = openAiApiKey(process.env, ['OPENAI_API_KEY']);
   const supabaseUrl = requiredEnvironment('SITEFORGE_SUPABASE_URL');
   const serviceRoleKey = requiredEnvironment('SITEFORGE_SUPABASE_SERVICE_ROLE_KEY');
   const model = process.env.SITEFORGE_ASSET_VISION_MODEL?.trim() || 'gpt-5';
@@ -2359,7 +2358,12 @@ async function main() {
   const runOnce = process.argv.includes('--once');
   let keepRunning = true;
   while (keepRunning) {
-    const claimed = await processNext(client, workerId, apiKey, model);
+    const claimed = await processNext(
+      client,
+      workerId,
+      openAiApiKey(process.env, ['OPENAI_API_KEY']),
+      model,
+    );
     if (runOnce) {
       if (!claimed) console.log('[asset-analysis-worker] no queued asset analyses.');
       keepRunning = false;

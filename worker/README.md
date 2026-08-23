@@ -39,8 +39,10 @@ a `VITE_` variable, browser code, or a committed file.
 ```bash
 SITEFORGE_SUPABASE_URL=https://your-project.supabase.co
 SITEFORGE_SUPABASE_SERVICE_ROLE_KEY=your-server-only-key
-# Website builds require the trusted worker's cached ChatGPT subscription login.
-SITEFORGE_CODEX_AUTH_MODE=chatgpt
+# Railway uses the persistent owner choice; ChatGPT subscription remains the default.
+SITEFORGE_CODEX_AUTH_MODE=runtime
+# Optional server-only key for the owner-controlled API credits switch.
+SITEFORGE_CODEX_API_KEY=your-server-only-openai-key
 # Separately billed OpenAI API workers are off by default.
 SITEFORGE_OPENAI_API_ENABLED=false
 VITE_SITEFORGE_OPENAI_API_ENABLED=false
@@ -49,9 +51,10 @@ VITE_SITEFORGE_OPENAI_API_ENABLED=false
 Run `codex login --device-auth` once in the trusted Codespace or local worker environment before
 starting the builder. The named `builds` tmux window created by `scripts/codespace-work` verifies
 that the active login is ChatGPT-backed. It never copies or stores the cached credential in Studio.
-The Studio Workspace Agent, Website Builder, Test Builder, and exported-site Codex launcher all
-force `forced_login_method="chatgpt"`, strip API keys from the Codex process, and stop instead of
-falling back to usage-based access.
+The Studio Workspace Agent, Website Builder, and Test Builder default to
+`forced_login_method="chatgpt"`. On Railway, only the authenticated owner can deliberately switch
+those runtimes and the API-backed workers to separately billed API credits. The key remains
+server-side and the active billing mode is visible in Codex settings.
 
 The Agent Package Drafter, capability analysis, UX vision, asset vision, and structured visual
 content recovery use the separately billed OpenAI API. Enable them only after approving that spend,
@@ -81,8 +84,8 @@ SITEFORGE_AI_PRICING_JSON='{"gpt-5.6":{"inputPerMillion":5,"cachedInputPerMillio
 ```
 
 The worker always records provider token usage. ChatGPT-backed builds are labelled as included
-Codex subscription usage and never turned into estimated API spend. API-key builder mode is not
-supported. Separately enabled OpenAI API calls are priced from the reviewed rate card when possible,
+Codex subscription usage and never turned into estimated API spend. Owner-enabled API-credit builds
+are labelled as API usage. Separately enabled OpenAI API calls are priced from the reviewed rate card when possible,
 so the in-app total never treats an unknown amount as a real cost.
 
 Without overrides, private homepage and page-set tests use GPT-5.6 Terra at medium reasoning;

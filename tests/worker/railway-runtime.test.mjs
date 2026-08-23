@@ -442,20 +442,20 @@ test('retains Railway container access below the newer chat and preview packages
   );
 });
 
-test('keeps OpenAI API credentials out of the subscription-backed Railway processes', async () => {
+test('keeps the owner billing switch private while preserving both Railway workspace roots', async () => {
   const [dockerfile, launcher, appServerLauncher] = await Promise.all([
     readFile('Dockerfile', 'utf8'),
     readFile('scripts/start-railway-runtime', 'utf8'),
     readFile('scripts/start-codex-app-server', 'utf8'),
   ]);
   assert.match(dockerfile, /@openai\/codex@0\.148\.0/);
-  assert.match(launcher, /SITEFORGE_CODEX_AUTH_MODE=chatgpt/);
-  assert.match(launcher, /SITEFORGE_OPENAI_API_ENABLED=false/);
-  assert.match(launcher, /unset OPENAI_API_KEY SITEFORGE_CODEX_API_KEY CODEX_API_KEY/);
+  assert.match(launcher, /SITEFORGE_CODEX_AUTH_MODE=runtime/);
+  assert.match(launcher, /unset CODEX_API_KEY/);
   assert.match(launcher, /SITEFORGE_RUNTIME_AUTH_REQUIRED=1/);
   assert.match(launcher, /SITEFORGE_RUNTIME_OWNER_USER_ID/);
   assert.match(launcher, /SITEFORGE_RUNTIME_OWNER_ORGANIZATION_ID/);
   assert.match(appServerLauncher, /forced_login_method="chatgpt"/);
+  assert.match(appServerLauncher, /CODEX_API_KEY="\$codex_api_key"/);
   assert.match(appServerLauncher, /sandbox_mode="danger-full-access"/);
   assert.match(appServerLauncher, /approval_policy="never"/);
   assert.doesNotMatch(appServerLauncher, /sandbox_permissions/);

@@ -1,7 +1,16 @@
+import {
+  apiCreditsBillingMode,
+  runtimeAiBillingMode,
+  runtimeAiApiKey,
+} from '../scripts/runtime-ai-billing.mjs';
+
 const enabledValue = 'true';
 
 export function openAiApiEnabled(environment = process.env) {
-  return environment.SITEFORGE_OPENAI_API_ENABLED?.trim().toLowerCase() === enabledValue;
+  return (
+    runtimeAiBillingMode(environment) === apiCreditsBillingMode ||
+    environment.SITEFORGE_OPENAI_API_ENABLED?.trim().toLowerCase() === enabledValue
+  );
 }
 
 export function openAiApiKey(environment = process.env, names = ['OPENAI_API_KEY']) {
@@ -10,7 +19,7 @@ export function openAiApiKey(environment = process.env, names = ['OPENAI_API_KEY
     const value = environment[name]?.trim();
     if (value) return value;
   }
-  return undefined;
+  return runtimeAiApiKey(environment);
 }
 
 export function requireOpenAiApiKey(

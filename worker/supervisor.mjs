@@ -10,13 +10,11 @@ const workerScripts = [
   ['audit-specialist-3', 'audit-specialist-worker.mjs'],
   ['assets', 'asset-analysis-worker.mjs'],
 ];
-if (openAiApiEnabled()) {
-  workerScripts.push(
-    ['visual-content', 'visual-content-worker.mjs'],
-    ['capabilities', 'capability-analysis-worker.mjs'],
-    ['agent-packages', 'agent-package-worker.mjs'],
-  );
-}
+const apiWorkerScripts = [
+  ['visual-content', 'visual-content-worker.mjs'],
+  ['capabilities', 'capability-analysis-worker.mjs'],
+  ['agent-packages', 'agent-package-worker.mjs'],
+];
 if (process.env.SITEFORGE_EXTERNAL_BUILDER !== '1') {
   workerScripts.push(['builder', 'builder-worker.mjs']);
 }
@@ -41,7 +39,11 @@ if (process.env.SITEFORGE_GITHUB_TOKEN || process.env.GITHUB_TOKEN) {
 }
 const restartDelayMs = 2_000;
 let stopping = false;
-const children = new Set();
+const children = new Map();
+
+function shouldRun(name) {
+  return !apiWorkerScripts.some(([apiName]) => apiName === name) || openAiApiEnabled();
+}
 
 function startWorker(name, script) {
   if (stopping) return;
@@ -49,10 +51,10 @@ function startWorker(name, script) {
     env: process.env,
     stdio: 'inherit',
   });
-  children.add(child);
+  children.set(name, child);
   child.once('exit', (code, signal) => {
-    children.delete(child);
-    if (stopping) return;
+    children.delete(name);
+    if (stopping || !shouldRun(name)) return;
     console.error(
       `[worker-supervisor] ${name} stopped (${signal ?? code ?? 'unknown'}); restarting.`,
     );
@@ -63,13 +65,27 @@ function startWorker(name, script) {
 function stop() {
   if (stopping) return;
   stopping = true;
-  for (const child of children) child.kill('SIGTERM');
+  for (const child of children.values()) child.kill('SIGTERM');
+}
+
+function reconcileApiWorkers() {
+  for (const [name, script] of apiWorkerScripts) {
+    const child = children.get(name);
+    if (openAiApiEnabled()) {
+      if (!child) startWorker(name, script);
+    } else if (child) {
+      children.delete(name);
+      child.kill('SIGTERM');
+    }
+  }
 }
 
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
 
 console.log(
-  `[worker-supervisor] starting ${workerScripts.map(([name]) => name).join(', ')} workers.`,
+  `[worker-supervisor] starting ${workerScripts.map(([name]) => name).join(', ')} workers; API workers follow the owner billing switch.`,
 );
 workerScripts.forEach(([name, script]) => startWorker(name, script));
+reconcileApiWorkers();
+setInterval(reconcileApiWorkers, 2_000).unref();

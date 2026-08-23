@@ -95,6 +95,7 @@ async function enableGoogleSpeech(page, onSpeechRequest = () => {}) {
 
 test.beforeEach(async ({ page }) => {
   let statusRequestCount = 0;
+  let billingMode = 'chatgpt_subscription';
   await page.addInitScript(
     ({ screenshot, tabScreenshot }) => {
       class MockSpeechSynthesisUtterance extends EventTarget {
@@ -314,6 +315,19 @@ test.beforeEach(async ({ page }) => {
       body: JSON.stringify({ status: 'unavailable' }),
     });
   });
+  await page.route('**/__made-solid/ai-billing-mode', async (route) => {
+    if (route.request().method() === 'POST') {
+      billingMode = route.request().postDataJSON().mode;
+    }
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        apiKeyConfigured: true,
+        label: billingMode === 'api_credits' ? 'OpenAI API credits' : 'ChatGPT subscription',
+        mode: billingMode,
+      }),
+    });
+  });
   await page.route('**/__made-solid/codex-status*', async (route) => {
     statusRequestCount += 1;
     const selectedThreadId = new URL(route.request().url()).searchParams.get('threadId');
@@ -339,6 +353,11 @@ test.beforeEach(async ({ page }) => {
         status: 'ready',
         detail: 'Connected to the local Codex conversation.',
         account: { type: 'chatgpt', planType: 'plus' },
+        billing: {
+          apiKeyConfigured: true,
+          label: billingMode === 'api_credits' ? 'OpenAI API credits' : 'ChatGPT subscription',
+          mode: billingMode,
+        },
         subscriptionUsage: usageUnavailable
           ? undefined
           : {
@@ -2936,6 +2955,28 @@ test('shows live Codex subscription usage in chat settings', async ({ page }) =>
   await expect(usage.getByRole('progressbar', { name: '7-day usage: 51% used' })).toHaveAttribute(
     'aria-valuenow',
     '51',
+  );
+});
+
+test('lets the owner switch all Studio AI work to disclosed API credits', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openChatSettings(composer);
+
+  const switcher = composer.getByRole('button', { name: /Use API credits/ });
+  await expect(switcher).toHaveAttribute('aria-pressed', 'false');
+  await expect(switcher).toContainText('if your ChatGPT subscription allowance runs out');
+  await switcher.click();
+
+  const enabled = composer.getByRole('button', { name: /OpenAI API credits/ });
+  await expect(enabled).toHaveAttribute('aria-pressed', 'true');
+  await expect(enabled).toContainText(
+    'Separately billed for Studio chat, builders, and AI analysis',
+  );
+  await expect(composer.getByText('OpenAI API credits · connected')).toBeVisible();
+  await expect(composer.getByRole('group', { name: 'Chat settings' })).toHaveScreenshot(
+    'owner-api-credits-switch.png',
   );
 });
 

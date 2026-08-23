@@ -27,13 +27,14 @@ test('requires both the explicit API flag and a supported key', () => {
   assert.equal(requireOpenAiApiKey('Test analysis', environment), 'approved-api-key');
 });
 
-test('keeps API-only workers out of the default supervisor process set', async () => {
+test('keeps API-only workers dynamically tied to the owner billing switch', async () => {
   const [supervisor, capture, asset, uxVision] = await Promise.all([
     readFile(new URL('../../worker/supervisor.mjs', import.meta.url), 'utf8'),
     readFile(new URL('../../worker/capture-worker.mjs', import.meta.url), 'utf8'),
     readFile(new URL('../../worker/asset-analysis-worker.mjs', import.meta.url), 'utf8'),
     readFile(new URL('../../worker/ux-vision.mjs', import.meta.url), 'utf8'),
   ]);
+  assert.match(supervisor, /function reconcileApiWorkers/);
   assert.match(supervisor, /if \(openAiApiEnabled\(\)\)/);
   assert.match(supervisor, /visual-content-worker\.mjs/);
   assert.match(supervisor, /capability-analysis-worker\.mjs/);

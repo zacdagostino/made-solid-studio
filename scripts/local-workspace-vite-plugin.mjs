@@ -8,6 +8,11 @@ import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 import { authorizeStudioRuntimeRequest } from './studio-runtime-auth.mjs';
 import {
+  apiCreditsBillingMode,
+  runtimeAiBillingStatus,
+  writeRuntimeAiBillingMode,
+} from './runtime-ai-billing.mjs';
+import {
   googleSpeechConfiguration,
   loadGoogleSpeechConfiguration,
   synthesizeGoogleSpeech,
@@ -24,6 +29,7 @@ const finalEditEndpoint = '/__made-solid/final-edit';
 const committedPreviewEndpoint = '/__made-solid/committed-preview';
 const codexFeedbackEndpoint = '/__made-solid/codex-feedback';
 const codexStatusEndpoint = '/__made-solid/codex-status';
+const aiBillingModeEndpoint = '/__made-solid/ai-billing-mode';
 const codexSpeechEndpoint = '/__made-solid/codex-speech';
 const codexAttachmentPrefix = '/__made-solid/codex-attachment/';
 const localPageCaptureEndpoint = '/__made-solid/page-screenshot';
@@ -984,6 +990,37 @@ export function localWorkspacePlugin() {
           return;
         }
       }
+      if (requestUrl.pathname === aiBillingModeEndpoint) {
+        const fetchSite = request.headers['sec-fetch-site'];
+        if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
+          sendJson(response, 403, {
+            status: 'failed',
+            detail: 'AI billing settings are only available from Made Solid Studio.',
+          });
+          return;
+        }
+        if (request.method === 'GET') {
+          sendJson(response, 200, runtimeAiBillingStatus());
+          return;
+        }
+        if (request.method !== 'POST') {
+          response.statusCode = 405;
+          response.end('Method not allowed');
+          return;
+        }
+        try {
+          const input = JSON.parse(await readRequestBody(request, 8_192));
+          const mode = input.mode === apiCreditsBillingMode ? apiCreditsBillingMode : input.mode;
+          sendJson(response, 200, await writeRuntimeAiBillingMode(mode));
+        } catch (error) {
+          sendJson(response, 400, {
+            status: 'failed',
+            detail:
+              error instanceof Error ? error.message : 'The AI billing mode could not change.',
+          });
+        }
+        return;
+      }
       if (requestUrl.pathname === workspacePreviewAccessEndpoint) {
         if (request.method !== 'GET') {
           response.statusCode = 405;
@@ -1208,16 +1245,13 @@ export function localWorkspacePlugin() {
             }
             const bridge = await codexFeedbackBridge();
             await bridge.maintain();
-            sendJson(
-              response,
-              200,
-              await bridge.inspect({
-                threadId: requestUrl.searchParams.get('threadId') || undefined,
-                workspace,
-                threadScope:
-                  requestUrl.searchParams.get('threadScope') === 'client' ? 'client' : 'universal',
-              }),
-            );
+            const inspected = await bridge.inspect({
+              threadId: requestUrl.searchParams.get('threadId') || undefined,
+              workspace,
+              threadScope:
+                requestUrl.searchParams.get('threadScope') === 'client' ? 'client' : 'universal',
+            });
+            sendJson(response, 200, { ...inspected, billing: runtimeAiBillingStatus() });
           } catch (error) {
             sendJson(response, 503, {
               status: 'unavailable',

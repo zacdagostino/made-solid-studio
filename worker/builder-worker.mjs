@@ -23,6 +23,11 @@ import { fileURLToPath } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
 import AxeBuilder from '@axe-core/playwright';
 import { chromium } from 'playwright';
+import {
+  apiCreditsBillingMode,
+  runtimeAiBillingMode,
+  runtimeAiApiKey,
+} from '../scripts/runtime-ai-billing.mjs';
 import { createDiagnosticWriter, diagnosticText } from './diagnostics.mjs';
 import { codexUsage, recordAiUsage } from './ai-usage.mjs';
 import {
@@ -212,15 +217,19 @@ function requiredEnvironment(name) {
 }
 
 function builderCodexAuthentication(environment = process.env) {
-  const configuredMode = environment.SITEFORGE_CODEX_AUTH_MODE?.trim().toLowerCase();
-  const mode = configuredMode || 'chatgpt';
-  if (mode !== 'chatgpt') {
-    throw new Error(
-      'The Codex Website Builder and Codex Test Builder are subscription-only. SITEFORGE_CODEX_AUTH_MODE must be chatgpt.',
-    );
+  if (runtimeAiBillingMode(environment) === apiCreditsBillingMode) {
+    const credential = runtimeAiApiKey(environment);
+    if (!credential)
+      throw new Error('A server-side OpenAI API key is required in API credits mode.');
+    return {
+      mode: 'api_key',
+      billingMode: 'api_usage',
+      label: 'OpenAI API credits',
+      credential,
+    };
   }
   return {
-    mode,
+    mode: 'chatgpt',
     billingMode: 'chatgpt_subscription',
     label: 'ChatGPT subscription',
   };
@@ -238,12 +247,14 @@ function builderCodexEnvironment(authentication, environment = process.env) {
   };
   const codexHome = environment.SITEFORGE_CODEX_HOME?.trim() || environment.CODEX_HOME?.trim();
   if (codexHome) values.CODEX_HOME = codexHome;
+  if (authentication.mode === 'api_key') values.CODEX_API_KEY = authentication.credential;
   return Object.fromEntries(
     Object.entries(values).filter(([, value]) => typeof value === 'string' && value.length > 0),
   );
 }
 
 async function assertBuilderCodexAuthentication(codexExecutable, authentication, environment) {
+  if (authentication.mode === 'api_key') return;
   let result;
   try {
     result = await runCommand(
@@ -518,14 +529,18 @@ function failureDetails(error) {
       context: error.context,
     };
   }
-  if (/SITEFORGE_CODEX_AUTH_MODE|ChatGPT subscription|signed in with ChatGPT/.test(message)) {
+  if (
+    /SITEFORGE_CODEX_AUTH_MODE|ChatGPT subscription|signed in with ChatGPT|server-side OpenAI API key/.test(
+      message,
+    )
+  ) {
     return {
       ...base,
       code: 'builder_credentials_missing',
       stage: 'worker_configuration',
       summary: 'The protected builder authentication is incomplete.',
       action:
-        'Sign the trusted worker in with ChatGPT, confirm SITEFORGE_CODEX_AUTH_MODE=chatgpt, then retry the build. API-key fallback is not supported.',
+        'Use the default ChatGPT subscription sign-in, or configure the server-side API key before enabling API credits, then retry the build.',
     };
   }
   if (/approved Build Manifest is no longer available/.test(message)) {

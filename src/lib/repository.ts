@@ -394,6 +394,7 @@ const localNextCompatibleWorkspaceRuntimePackageId =
   'agent-package-local-v19-7-next-compatible-workspace-runtime';
 const localExecutableNextWorkspaceRuntimePackageId =
   'agent-package-local-v19-8-executable-next-workspace-runtime';
+const localOwnerApiCreditsSwitchPackageId = 'agent-package-local-v19-9-owner-api-credits-switch';
 
 type StoreName =
   | 'activities'
@@ -3045,10 +3046,28 @@ export class SiteforgeRepository {
         'Makes downloaded Next.js client code actually execute and live-update inside the secure Workspace preview instead of leaving a blank or static server-rendered surface.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localOwnerApiCreditsSwitchPackage: AgentPackage = {
+      ...localExecutableNextWorkspaceRuntimePackage,
+      id: localOwnerApiCreditsSwitchPackageId,
+      version: 19.9,
+      basePackageId: localExecutableNextWorkspaceRuntimePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v19.9',
+      contractAddendum:
+        'The authenticated Studio owner can deliberately switch all Codex and OpenAI-backed Studio work between included ChatGPT subscription access and separately billed OpenAI API credits without exposing credentials to the browser.',
+      instructionsAddendum:
+        'Default every Railway runtime to ChatGPT subscription access. Persist an owner-only billing preference on the Railway volume, require a server-side API key before enabling API credits, restart only the Codex app-server when the preference changes, and apply the same effective mode to Studio chat, website/test builders, analysis workers, and asset enrichment. Never reveal the key, silently enable API billing, switch during active or queued Codex work, or weaken the exact owner, organization, client, and repository boundaries.',
+      summary:
+        'Owner API credits switch test package: adds a disclosed private control that can move all Studio AI work to separately billed API usage when subscription allowance is exhausted.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps the Studio usable after subscription quota exhaustion while making the billing boundary explicit, reversible, owner-only, and credential-safe.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localOwnerApiCreditsSwitchPackage,
           localExecutableNextWorkspaceRuntimePackage,
           localNextCompatibleWorkspaceRuntimePackage,
           localOpaqueWorkspaceFrameCapabilityPackage,
@@ -3195,6 +3214,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localOwnerApiCreditsSwitchPackage,
           localExecutableNextWorkspaceRuntimePackage,
           localNextCompatibleWorkspaceRuntimePackage,
           localOpaqueWorkspaceFrameCapabilityPackage,
@@ -3344,6 +3364,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localOwnerApiCreditsSwitchPackage,
             localExecutableNextWorkspaceRuntimePackage,
             localNextCompatibleWorkspaceRuntimePackage,
             localOpaqueWorkspaceFrameCapabilityPackage,

@@ -6,6 +6,10 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 import ts from 'typescript';
 import {
+  apiCreditsBillingMode,
+  writeRuntimeAiBillingMode,
+} from '../../scripts/runtime-ai-billing.mjs';
+import {
   applyLocalDevelopmentHandoff,
   copyLocalDevelopmentSource,
 } from '../../worker/local-development-handoff.mjs';
@@ -1050,16 +1054,28 @@ test('defaults website builds to ChatGPT subscription authentication without for
   assert.equal(environment.CODEX_API_KEY, undefined);
 });
 
-test('rejects API-key mode for both Codex builders', () => {
-  assert.throws(
-    () =>
-      builderCodexAuthentication({
-        SITEFORGE_CODEX_AUTH_MODE: 'api_key',
-        SITEFORGE_CODEX_API_KEY: 'dedicated-builder-key',
-        OPENAI_API_KEY: 'shared-analysis-key',
-      }),
-    /subscription-only/,
-  );
+test('uses API credits for both Codex builders only after the owner switch is persisted', async () => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), 'siteforge-builder-billing-'));
+  const environment = {
+    SITEFORGE_RUNTIME_DATA_DIR: dataDirectory,
+    SITEFORGE_CODEX_API_KEY: 'dedicated-builder-key',
+  };
+  try {
+    await writeRuntimeAiBillingMode(apiCreditsBillingMode, environment);
+    const authentication = builderCodexAuthentication(environment);
+    assert.deepEqual(authentication, {
+      mode: 'api_key',
+      billingMode: 'api_usage',
+      label: 'OpenAI API credits',
+      credential: 'dedicated-builder-key',
+    });
+    assert.equal(
+      builderCodexEnvironment(authentication, environment).CODEX_API_KEY,
+      'dedicated-builder-key',
+    );
+  } finally {
+    await rm(dataDirectory, { recursive: true, force: true });
+  }
 });
 
 test('keeps prospect-build prerequisites and activity tied to the current package', async () => {

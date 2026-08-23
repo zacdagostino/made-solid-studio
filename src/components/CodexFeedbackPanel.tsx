@@ -14,6 +14,7 @@ import {
   CircleDot,
   CircleX,
   CornerDownRight,
+  CreditCard,
   Globe2,
   ImageUp,
   FilePenLine,
@@ -110,6 +111,11 @@ type CodexStatus = {
   subscriptionUsage?: {
     primary?: CodexUsageWindow;
     secondary?: CodexUsageWindow;
+  };
+  billing?: {
+    apiKeyConfigured: boolean;
+    mode: 'chatgpt_subscription' | 'api_credits';
+    label: string;
   };
   thread?: CodexThread;
   threads: CodexThread[];
@@ -222,6 +228,7 @@ const feedbackEndpoint = '/__made-solid/codex-feedback';
 const localPageCaptureEndpoint = '/__made-solid/page-screenshot';
 const codexAttachmentPrefix = '/__made-solid/codex-attachment/';
 const codexSpeechEndpoint = '/__made-solid/codex-speech';
+const aiBillingModeEndpoint = '/__made-solid/ai-billing-mode';
 const browserCaptureSource = 'made-solid-browser-capture';
 const codexPreferencesKey = 'made-solid-codex-preferences-v1';
 const codexDraftKey = 'made-solid-codex-draft-v1';
@@ -1086,6 +1093,7 @@ export function CodexFeedbackPanel({
   const [isChatFollowingLatest, setIsChatFollowingLatest] = useState(true);
   const [isComposerExpanded, setIsComposerExpanded] = useState(false);
   const [composerSettingsOpen, setComposerSettingsOpen] = useState(false);
+  const [billingModeChanging, setBillingModeChanging] = useState(false);
   const [isPreparingPhoto, setIsPreparingPhoto] = useState(false);
   const [expandedAgentId, setExpandedAgentId] = useState('');
   const [speechMessageId, setSpeechMessageId] = useState('');
@@ -1775,6 +1783,32 @@ export function CodexFeedbackPanel({
     },
     [effortPreferences, selectConversation, selectedEffort, selectedModelId, workspaceDirectory],
   );
+
+  const changeBillingMode = useCallback(async () => {
+    const currentMode = status?.billing?.mode ?? 'chatgpt_subscription';
+    const nextMode = currentMode === 'api_credits' ? 'chatgpt_subscription' : 'api_credits';
+    setBillingModeChanging(true);
+    setError(undefined);
+    try {
+      const response = await studioRuntimeFetch(aiBillingModeEndpoint, {
+        body: JSON.stringify({ mode: nextMode }),
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        method: 'POST',
+      });
+      const result = (await response.json()) as CodexStatus['billing'] & { detail?: string };
+      if (!response.ok) throw new Error(result?.detail || 'The AI billing mode could not change.');
+      setStatus((current) => (current ? { ...current, billing: result } : current));
+      window.setTimeout(() => void refreshStatus(), 2_500);
+    } catch (changeError) {
+      setError(
+        changeError instanceof Error
+          ? changeError.message
+          : 'The AI billing mode could not change.',
+      );
+    } finally {
+      setBillingModeChanging(false);
+    }
+  }, [refreshStatus, status?.billing?.mode]);
 
   useEffect(() => {
     void refreshStatus();
@@ -2917,9 +2951,8 @@ export function CodexFeedbackPanel({
                       className={status?.status === 'ready' ? 'is-ready' : ''}
                     />
                     <span>
-                      {status?.thread
-                        ? 'ChatGPT subscription · connected'
-                        : 'ChatGPT subscription · waiting'}
+                      {status?.billing?.label ?? 'ChatGPT subscription'} ·{' '}
+                      {status?.thread ? 'connected' : 'waiting'}
                     </span>
                     <StatusBadge tone={status?.thread ? 'success' : 'warning'}>
                       {activeAgents.length
@@ -3863,6 +3896,46 @@ export function CodexFeedbackPanel({
                   role="group"
                 >
                   <CodexSubscriptionUsage usage={status?.subscriptionUsage} />
+                  <Button
+                    aria-pressed={status?.billing?.mode === 'api_credits'}
+                    className={`codex-agent-mode${status?.billing?.mode === 'api_credits' ? ' is-active' : ''}`}
+                    disabled={
+                      billingModeChanging ||
+                      Boolean(status?.thread?.working) ||
+                      Boolean(status?.queuedCount) ||
+                      (status?.billing?.mode !== 'api_credits' &&
+                        status?.billing?.apiKeyConfigured !== true)
+                    }
+                    onClick={() => void changeBillingMode()}
+                    variant="quiet"
+                  >
+                    {billingModeChanging ? (
+                      <LoaderCircle aria-hidden="true" className="is-spinning" size={17} />
+                    ) : (
+                      <CreditCard aria-hidden="true" size={17} />
+                    )}
+                    <span className="codex-agent-mode__copy">
+                      <strong>
+                        {status?.billing?.mode === 'api_credits'
+                          ? 'OpenAI API credits'
+                          : 'Use API credits'}
+                      </strong>
+                      <small>
+                        {status?.billing?.apiKeyConfigured
+                          ? status.billing.mode === 'api_credits'
+                            ? 'Separately billed for Studio chat, builders, and AI analysis'
+                            : 'Switch here if your ChatGPT subscription allowance runs out'
+                          : 'Add a server-side OpenAI API key in Railway to enable this'}
+                      </small>
+                    </span>
+                    <span aria-hidden="true" className="codex-agent-mode__state">
+                      {billingModeChanging
+                        ? 'Switching'
+                        : status?.billing?.mode === 'api_credits'
+                          ? 'On'
+                          : 'Off'}
+                    </span>
+                  </Button>
                   <Button
                     aria-pressed={workMode === 'team'}
                     className={`codex-agent-mode${workMode === 'team' ? ' is-active' : ''}`}

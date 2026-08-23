@@ -214,6 +214,10 @@ const executableNextWorkspaceRuntimeMigrationUrl = new URL(
   '../../supabase/migrations/20260823090000_executable_next_workspace_runtime_test_package.sql',
   import.meta.url,
 );
+const ownerApiCreditsSwitchMigrationUrl = new URL(
+  '../../supabase/migrations/20260823100000_owner_api_credits_switch_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -282,9 +286,29 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 70);
+  assert.equal(Number(revision[1]), 71);
   assert.match(app, /shows chats for that client plus clearly labelled universal Studio chats/);
-  assert.match(app, /Next\.js client code now hydrates/);
+  assert.match(app, /authenticated owner can switch all Studio AI work/);
+});
+
+test('registers the owner API credits switch above immutable v19.8', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(ownerApiCreditsSwitchMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /Owner API credits switch test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v19\.9/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v19\.8'/,
+  );
+  assert.match(repository, /version: 19\.9,/);
+  assert.match(repository, /basePackageId: localExecutableNextWorkspaceRuntimePackage\.id/);
+  const ledger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    ledger.indexOf('localOwnerApiCreditsSwitchPackage,') <
+      ledger.indexOf('localExecutableNextWorkspaceRuntimePackage,'),
+  );
 });
 
 test('registers the executable Next Workspace runtime above immutable v19.7', async () => {
