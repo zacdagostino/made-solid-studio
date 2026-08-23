@@ -2259,14 +2259,17 @@ test('stacks editable queued messages with exact interrupt and delete actions', 
       action: 'update-queued',
       id: '11111111-1111-4111-8111-111111111111',
       prompt: 'Use the revised nav direction.',
+      threadScope: 'universal',
     },
     {
       action: 'interrupt-queued',
       id: '22222222-2222-4222-8222-222222222222',
+      threadScope: 'universal',
     },
     {
       action: 'delete-queued',
       id: '11111111-1111-4111-8111-111111111111',
+      threadScope: 'universal',
     },
   ]);
 });

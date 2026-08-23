@@ -382,6 +382,8 @@ const localStudioOwnedWorkspaceShellPackageId =
 const localClientScopedCodexChatsPackageId = 'agent-package-local-v19-1-client-scoped-codex-chats';
 const localWorkspaceHostedEditorShellPackageId =
   'agent-package-local-v19-2-workspace-hosted-editor-shell';
+const localLiveCodexLauncherRecoveryPackageId =
+  'agent-package-local-v19-3-live-codex-launcher-recovery';
 
 type StoreName =
   | 'activities'
@@ -2931,10 +2933,28 @@ export class SiteforgeRepository {
         'Keeps Workspace as the dedicated instant-update editing place while preserving Studio ownership and client repository isolation.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localLiveCodexLauncherRecoveryPackage: AgentPackage = {
+      ...localWorkspaceHostedEditorShellPackage,
+      id: localLiveCodexLauncherRecoveryPackageId,
+      version: 19.3,
+      basePackageId: localWorkspaceHostedEditorShellPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v19.3',
+      contractAddendum:
+        'The Railway Codex app-server starts with only configuration keys supported by the pinned Codex CLI, preserving the owner-only ChatGPT subscription runtime and restoring the live launcher.',
+      instructionsAddendum:
+        'Start the Railway Codex app-server with strict configuration, forced ChatGPT authentication, danger-full-access inside the isolated container, and no approvals. Do not pass unsupported sandbox_permissions configuration. Retain the exact owner and organization authorization gate and both configured Made Solid repository roots for universal Studio conversations.',
+      summary:
+        'Live Codex launcher recovery test package: removes the unsupported startup option that hid the otherwise owner-authenticated Railway launcher.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps the private Railway Codex launcher available after deployment without weakening authentication or changing its two-repository runtime boundary.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localLiveCodexLauncherRecoveryPackage,
           localWorkspaceHostedEditorShellPackage,
           localClientScopedCodexChatsPackage,
           localStudioOwnedWorkspaceShellPackage,
@@ -3075,6 +3095,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localLiveCodexLauncherRecoveryPackage,
           localWorkspaceHostedEditorShellPackage,
           localClientScopedCodexChatsPackage,
           localStudioOwnedWorkspaceShellPackage,
@@ -3218,6 +3239,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localLiveCodexLauncherRecoveryPackage,
             localWorkspaceHostedEditorShellPackage,
             localClientScopedCodexChatsPackage,
             localStudioOwnedWorkspaceShellPackage,

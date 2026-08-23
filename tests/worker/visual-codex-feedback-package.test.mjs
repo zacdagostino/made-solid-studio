@@ -190,6 +190,10 @@ const workspaceHostedEditorShellMigrationUrl = new URL(
   '../../supabase/migrations/20260822120000_workspace_hosted_editor_shell_test_package.sql',
   import.meta.url,
 );
+const liveCodexLauncherRecoveryMigrationUrl = new URL(
+  '../../supabase/migrations/20260823040000_live_codex_launcher_recovery_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -258,12 +262,33 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 64);
+  assert.equal(Number(revision[1]), 65);
   assert.match(app, /shows chats for that client plus clearly labelled universal Studio chats/);
+  assert.match(app, /owner-only Railway Codex launcher starts reliably again/);
+});
+
+test('registers live Codex launcher recovery above the retained package ledger', async () => {
+  const [migration, repository, launcher] = await Promise.all([
+    readFile(liveCodexLauncherRecoveryMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(appServerLauncherUrl, 'utf8'),
+  ]);
+  assert.match(migration, /Live Codex launcher recovery test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v19\.3/);
   assert.match(
-    app,
-    /workspace\.madesolid\.com\.au now remains the dedicated live development workspace/,
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v19\.2'/,
   );
+  assert.match(repository, /version: 19\.3,/);
+  assert.match(repository, /basePackageId: localWorkspaceHostedEditorShellPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localLiveCodexLauncherRecoveryPackage,') <
+      packageLedger.indexOf('localWorkspaceHostedEditorShellPackage,'),
+  );
+  assert.match(launcher, /sandbox_mode="danger-full-access"/);
+  assert.match(launcher, /approval_policy="never"/);
+  assert.doesNotMatch(launcher, /sandbox_permissions/);
 });
 
 test('registers the workspace-hosted editor shell once above the retained package ledger', async () => {

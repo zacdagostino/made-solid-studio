@@ -387,7 +387,7 @@ test('keeps OpenAI API credentials out of the subscription-backed Railway proces
   assert.match(appServerLauncher, /forced_login_method="chatgpt"/);
   assert.match(appServerLauncher, /sandbox_mode="danger-full-access"/);
   assert.match(appServerLauncher, /approval_policy="never"/);
-  assert.match(appServerLauncher, /sandbox_permissions=\[\]/);
+  assert.doesNotMatch(appServerLauncher, /sandbox_permissions/);
   assert.doesNotMatch(appServerLauncher, /sandbox_workspace_write/);
   assert.match(appServerLauncher, /--strict-config app-server/);
   assert.match(appServerLauncher, /expected_studio_workspace=.*siteforge-os/);
