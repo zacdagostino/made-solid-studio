@@ -198,6 +198,10 @@ const lockedWorkspaceDevDependenciesMigrationUrl = new URL(
   '../../supabase/migrations/20260823050000_locked_workspace_dev_dependencies_test_package.sql',
   import.meta.url,
 );
+const reliableWorkspaceDevelopmentSurfacesMigrationUrl = new URL(
+  '../../supabase/migrations/20260823060000_reliable_workspace_development_surfaces_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -266,9 +270,38 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 66);
+  assert.equal(Number(revision[1]), 67);
   assert.match(app, /shows chats for that client plus clearly labelled universal Studio chats/);
-  assert.match(app, /complete locked development toolchain before launch/);
+  assert.match(app, /instant live Preview and scoped Codex surfaces/);
+});
+
+test('registers reliable Workspace development surfaces above the retained package ledger', async () => {
+  const [migration, repository, proxy, vitePlugin] = await Promise.all([
+    readFile(reliableWorkspaceDevelopmentSurfacesMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(new URL('../../scripts/workspace-preview-proxy.mjs', import.meta.url), 'utf8'),
+    readFile(new URL('../../scripts/local-workspace-vite-plugin.mjs', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Reliable Workspace development surfaces test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v19\.5/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v19\.4'/,
+  );
+  assert.match(repository, /version: 19\.5,/);
+  assert.match(repository, /basePackageId: localLockedWorkspaceDevDependenciesPackage\.id/);
+  const ledger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    ledger.indexOf('localReliableWorkspaceDevelopmentSurfacesPackage,') <
+      ledger.indexOf('localLockedWorkspaceDevDependenciesPackage,'),
+  );
+  assert.match(proxy, /SameSite=None; Partitioned/);
+  assert.match(proxy, /Codex scoped to this website/);
+  assert.match(proxy, />Exit to Studio<\/a>/);
+  assert.match(proxy, /frame-ancestors 'self'/);
+  assert.match(vitePlugin, /renderWorkspaceCodexDocument/);
+  assert.match(vitePlugin, /transformIndexHtml/);
 });
 
 test('registers locked workspace development dependencies above the retained package ledger', async () => {

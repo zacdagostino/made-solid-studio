@@ -105,10 +105,28 @@ test('returns expired workspace documents through the stable authenticated Studi
 test('keeps an authenticated top-level workspace visit in an isolated workspace shell', async () => {
   const fixtureRoot = await mkdtemp(join(tmpdir(), 'siteforge-top-level-preview-'));
   const activePreviewPath = join(fixtureRoot, 'active-preview.json');
-  let upstreamRequests = 0;
-  const preview = createServer((_request, response) => {
-    upstreamRequests += 1;
-    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  const upstreamRequests = [];
+  const preview = createServer((request, response) => {
+    upstreamRequests.push(request.url);
+    if (request.url === '/_next/static/app.css') {
+      response.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8' });
+      response.end('body { color: rgb(12, 34, 56); }');
+      return;
+    }
+    if (request.url === '/_next/static/app.js') {
+      response.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' });
+      response.end('window.__clientJavaScriptLoaded = true;');
+      return;
+    }
+    if (request.url === '/_next/image?url=%2Fhero.jpg&w=640&q=75') {
+      response.writeHead(200, { 'Content-Type': 'image/svg+xml' });
+      response.end('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"/>');
+      return;
+    }
+    response.writeHead(200, {
+      'Content-Security-Policy': "default-src 'self'; frame-ancestors *",
+      'Content-Type': 'text/html; charset=utf-8',
+    });
     response.end('<h1>Client website must not be served top-level</h1>');
   });
   preview.listen(0, '127.0.0.1');
@@ -146,7 +164,10 @@ test('keeps an authenticated top-level workspace visit in an isolated workspace 
     assert.equal(response.headers.get('location'), null);
     const shell = await response.text();
     assert.match(shell, /<title>Made Solid Workspace<\/title>/);
-    assert.match(shell, />Back to Studio<\/a>/);
+    assert.match(shell, /Made Solid Workspace/);
+    assert.match(shell, /Instant live development/);
+    assert.match(shell, /Codex scoped to this website/);
+    assert.match(shell, />Exit to Studio<\/a>/);
     assert.match(
       shell,
       /class="client-preview" sandbox="allow-modals allow-popups allow-scripts"[^>]+title="Client website live preview"/,
@@ -161,9 +182,13 @@ test('keeps an authenticated top-level workspace visit in an isolated workspace 
     );
     assert.match(response.headers.get('content-security-policy') || '', /frame-ancestors 'none'/);
     assert.doesNotMatch(shell, /Client website must not be served top-level/);
-    assert.equal(upstreamRequests, 0);
-    const frameCookie = (response.headers.get('set-cookie') || '').split(';')[0];
+    assert.equal(upstreamRequests.length, 0);
+    const frameSetCookie = response.headers.get('set-cookie') || '';
+    const frameCapabilityCookie = frameSetCookie.split(/,\s*__Host-made-solid-workspace-last=/)[0];
+    const frameCookie = frameSetCookie.split(';')[0];
     assert.match(frameCookie, /^__Host-made-solid-workspace-frame-/);
+    assert.match(frameCapabilityCookie, /HttpOnly; Secure; SameSite=None; Partitioned/);
+    assert.doesNotMatch(frameCapabilityCookie, /SameSite=Strict/);
 
     const iframe = await fetch(`http://127.0.0.1:${address.port}/services`, {
       headers: {
@@ -175,7 +200,57 @@ test('keeps an authenticated top-level workspace visit in an isolated workspace 
     });
     assert.equal(iframe.status, 200);
     assert.match(await iframe.text(), /Client website must not be served top-level/);
-    assert.equal(upstreamRequests, 1);
+    assert.match(iframe.headers.get('content-security-policy') || '', /default-src 'self'/);
+    assert.match(iframe.headers.get('content-security-policy') || '', /frame-ancestors 'self'/);
+    assert.doesNotMatch(iframe.headers.get('content-security-policy') || '', /frame-ancestors \*/);
+    assert.equal(upstreamRequests.length, 1);
+
+    for (const resourcePath of [
+      '/_next/static/app.css',
+      '/_next/static/app.js',
+      '/_next/image?url=%2Fhero.jpg&w=640&q=75',
+    ]) {
+      const resource = await fetch(`http://127.0.0.1:${address.port}${resourcePath}`, {
+        headers: {
+          Cookie: frameCookie,
+          'Sec-Fetch-Dest': resourcePath.endsWith('.css') ? 'style' : 'script',
+          'Sec-Fetch-Mode': 'no-cors',
+        },
+      });
+      assert.equal(resource.status, 200);
+    }
+    assert.deepEqual(upstreamRequests.slice(1), [
+      '/_next/static/app.css',
+      '/_next/static/app.js',
+      '/_next/image?url=%2Fhero.jpg&w=640&q=75',
+    ]);
+
+    const otherToken = createWorkspacePreviewToken('another-client', secret);
+    const ambiguousCrossTabAsset = await fetch(
+      `http://127.0.0.1:${address.port}/_next/static/app.css`,
+      {
+        headers: {
+          Cookie: `${frameCookie}; ${workspaceFrameCookie(otherToken)}`,
+          'Sec-Fetch-Dest': 'style',
+          'Sec-Fetch-Mode': 'no-cors',
+        },
+      },
+    );
+    assert.equal(ambiguousCrossTabAsset.status, 404);
+    assert.equal(upstreamRequests.length, 4);
+
+    const selectedFrameAsset = await fetch(
+      `http://127.0.0.1:${address.port}/_next/static/app.css?__made_solid_frame=${createHash('sha256').update(token).digest('hex').slice(0, 24)}`,
+      {
+        headers: {
+          Cookie: `${frameCookie}; ${workspaceFrameCookie(otherToken)}`,
+          'Sec-Fetch-Dest': 'style',
+          'Sec-Fetch-Mode': 'no-cors',
+        },
+      },
+    );
+    assert.equal(selectedFrameAsset.status, 200);
+    assert.equal(upstreamRequests.at(-1), '/_next/static/app.css');
 
     const tokenEntry = await fetch(
       `http://127.0.0.1:${address.port}/services?access=${encodeURIComponent(token)}`,
@@ -195,8 +270,11 @@ test('keeps an authenticated top-level workspace visit in an isolated workspace 
     );
     assert.doesNotMatch(tokenEntry.headers.get('location') || '', /access=/);
     assert.match(tokenEntry.headers.get('set-cookie') || '', /HttpOnly; Secure; SameSite=Strict/);
+    assert.match(
+      tokenEntry.headers.get('set-cookie') || '',
+      /__Host-made-solid-workspace-last=prospect-site; Path=\/; Max-Age=2592000; HttpOnly; Secure; SameSite=Strict/,
+    );
 
-    const otherToken = createWorkspacePreviewToken('another-client', secret);
     const wrongClient = await fetch(
       `http://127.0.0.1:${address.port}/services?__made_solid_workspace=another-client`,
       {
@@ -236,6 +314,23 @@ test('keeps an authenticated top-level workspace visit in an isolated workspace 
       staleTabCookie.headers.get('location'),
       'https://studio.madesolid.com.au/#/workspace-preview-access?path=%2Fservices&workspace=prospect-site',
     );
+
+    const expiredBareVisit = await fetch(`http://127.0.0.1:${address.port}/`, {
+      headers: {
+        Accept: 'text/html',
+        Cookie:
+          '__Host-made-solid-workspace=expired; __Host-made-solid-workspace-last=prospect-site',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+      },
+      redirect: 'manual',
+    });
+    assert.equal(expiredBareVisit.status, 303);
+    assert.equal(
+      expiredBareVisit.headers.get('location'),
+      'https://studio.madesolid.com.au/#/workspace-preview-access?path=%2F&workspace=prospect-site',
+    );
+    assert.doesNotMatch(expiredBareVisit.headers.get('location') || '', /access=/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await new Promise((resolve) => preview.close(resolve));

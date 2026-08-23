@@ -12,6 +12,7 @@ import {
   readFinalEditState,
   readLearningBundle,
   readRefinementLedger,
+  renderWorkspaceCodexDocument,
   studioOrigin,
   workspacePreviewWorkspace,
   workspaceCodexCookieName,
@@ -196,6 +197,31 @@ test('requires the server-bound Workspace Codex identity on scoped status and mu
   assert.match(service, /workspace !== embeddedWorkspace/);
   assert.match(service, /input\.workspace !== embeddedWorkspace/);
   assert.match(service, /authorizeWorkspaceCodexRequest\(request, embeddedWorkspace\)/);
+});
+
+test('passes the dedicated Workspace Codex document through the Vite HTML transform', async () => {
+  let transformedUrl;
+  let transformedSource;
+  const document = await renderWorkspaceCodexDocument(
+    {
+      transformIndexHtml: async (url, source) => {
+        transformedUrl = url;
+        transformedSource = source;
+        return source.replace(
+          '<head>',
+          '<head><script type="module">window.__vite_plugin_react_preamble_installed__ = true;</script>',
+        );
+      },
+    },
+    'client-a',
+    '/__made-solid/workspace-codex?workspace=client-a',
+  );
+
+  assert.equal(transformedUrl, '/__made-solid/workspace-codex');
+  assert.match(transformedSource, /src="\/src\/main\.tsx"/);
+  assert.match(transformedSource, /RefreshRuntime\.injectIntoGlobalHook\(window\)/);
+  assert.match(document, /__vite_plugin_react_preamble_installed__/);
+  assert.match(document, /<title>client a Codex editor<\/title>/);
 });
 
 test('uses the development server host flag supported by the saved workspace', () => {

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { verifyWorkspacePreviewToken } from './workspace-preview-access.mjs';
 
 const cookieName = '__Host-made-solid-workspace';
+const lastWorkspaceCookieName = '__Host-made-solid-workspace-last';
 const workspaceQueryName = '__made_solid_workspace';
 const returnQueryName = '__made_solid_return';
 const frameQueryName = '__made_solid_frame';
@@ -167,7 +168,10 @@ function cleanAccessRedirect(response, requestUrl, token, directory) {
   response.writeHead(303, {
     'Cache-Control': 'no-store',
     Location: location || '/',
-    'Set-Cookie': `${cookieName}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Strict`,
+    'Set-Cookie': [
+      `${cookieName}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Strict`,
+      `${lastWorkspaceCookieName}=${encodeURIComponent(directory)}; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=Strict`,
+    ],
     'X-Content-Type-Options': 'nosniff',
   });
   response.end();
@@ -219,6 +223,8 @@ export function workspaceShellDocument(studioOrigin, requestUrl, directory, toke
   const codexSource = JSON.stringify(codex.href).replaceAll('<', '\\u003c');
   const studioOriginSource = JSON.stringify(studioOrigin).replaceAll('<', '\\u003c');
   const workspaceLabel = directory.replaceAll('-', ' ').replaceAll('_', ' ');
+  // This isolated runtime-owned HTML cannot import the React UI primitives. Its two native
+  // surface controls keep the same 44px target and explicit hover, focus, active, and pressed states.
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -230,35 +236,115 @@ export function workspaceShellDocument(studioOrigin, requestUrl, directory, toke
       * { box-sizing: border-box; }
       html, body { width: 100%; height: 100%; margin: 0; }
       body { display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; background: #111; color: #f7f7f4; }
-      header { min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 16px; border-bottom: 1px solid #343434; background: #171717; }
-      a { min-height: 44px; display: inline-flex; align-items: center; padding: 0 14px; border: 1px solid #555; border-radius: 8px; color: inherit; text-decoration: none; font-weight: 700; }
+      header { min-height: 72px; display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto auto; align-items: center; gap: 18px; padding: 10px 16px; border-bottom: 1px solid #343434; background: #171717; }
+      a { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; padding: 0 14px; border: 1px solid #555; border-radius: 8px; color: inherit; text-decoration: none; font-weight: 700; white-space: nowrap; }
       a:hover { background: #292929; }
       a:focus-visible { outline: 3px solid #dfff00; outline-offset: 2px; }
-      p { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #c8c8c2; }
-      strong { color: #f7f7f4; text-transform: capitalize; }
+      p { min-width: 0; margin: 0; color: #c8c8c2; }
+      strong { color: #f7f7f4; }
+      .workspace-brand { min-width: 0; display: flex; align-items: center; gap: 10px; }
+      .workspace-mark { width: 38px; height: 38px; flex: 0 0 38px; display: grid; place-items: center; border-radius: 8px; background: #dfff00; color: #111; font-size: 12px; font-weight: 900; letter-spacing: -.04em; }
+      .workspace-name { min-width: 0; display: grid; gap: 1px; }
+      .workspace-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; line-height: 1.2; }
+      .workspace-name span { color: #aaa9a2; font-size: 12px; line-height: 1.3; }
+      .workspace-context { min-width: 0; display: flex; align-items: center; justify-content: center; gap: 10px; overflow: hidden; }
+      .workspace-context p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .workspace-context strong { text-transform: capitalize; }
+      .workspace-live { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; color: #dfff00; font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+      .workspace-live::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: #75dfb3; box-shadow: 0 0 0 3px rgba(117, 223, 179, .12); }
+      .workspace-scope { color: #aaa9a2; font-size: 12px; }
+      .workspace-switcher { display: inline-flex; gap: 4px; padding: 3px; border: 1px solid #3d3d3d; border-radius: 9px; background: #101010; }
+      .workspace-switcher button { min-width: 72px; min-height: 44px; border: 0; border-radius: 6px; padding: 0 12px; color: #c8c8c2; background: transparent; font: inherit; font-weight: 750; cursor: pointer; }
+      .workspace-switcher button:hover { background: #292929; color: #fff; }
+      .workspace-switcher button:active { background: #3a3a3a; transform: translateY(1px); }
+      .workspace-switcher button[aria-pressed='true'] { background: #dfff00; color: #111; }
+      .workspace-switcher button[aria-pressed='true']:active { background: #c8e600; }
+      .workspace-switcher button:focus-visible { outline: 3px solid #dfff00; outline-offset: 3px; }
+      .workspace-surfaces { position: relative; min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); overflow: hidden; }
       iframe { display: block; border: 0; }
       .client-preview { width: 100%; height: 100%; background: #fff; }
       .codex-editor { position: fixed; z-index: 2; right: 0; bottom: 0; width: 84px; height: 84px; background: transparent; transition: width 160ms ease, height 160ms ease; }
-      body[data-codex-open='true'] .codex-editor { width: min(560px, 100vw); height: calc(100dvh - 57px); }
-      @media (max-width: 520px) { header { align-items: flex-start; flex-direction: column; gap: 4px; } p { width: 100%; } }
-      @media (max-width: 520px) { body[data-codex-open='true'] .codex-editor { width: 100vw; height: calc(100dvh - 101px); } }
+      body[data-surface='codex'] .workspace-surfaces, body[data-codex-open='true'] .workspace-surfaces { grid-template-columns: minmax(0, 3fr) minmax(360px, 2fr); }
+      body[data-surface='codex'] .codex-editor, body[data-codex-open='true'] .codex-editor { position: static; width: 100%; height: 100%; border-left: 1px solid #343434; background: #181818; }
+      @media (max-width: 1000px) {
+        header { grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px 12px; }
+        .workspace-context { grid-column: 1 / -1; justify-content: flex-start; }
+        .workspace-scope { margin-left: auto; }
+      }
+      @media (max-width: 760px) {
+        .workspace-surfaces, body[data-surface='codex'] .workspace-surfaces, body[data-codex-open='true'] .workspace-surfaces { display: block; }
+        .client-preview, .codex-editor, body[data-surface='codex'] .codex-editor, body[data-codex-open='true'] .codex-editor { position: static; width: 100%; height: 100%; border: 0; }
+        body[data-surface='preview'] .codex-editor { display: none; }
+        body[data-surface='codex'] .client-preview, body[data-codex-open='true'] .client-preview { display: none; }
+      }
+      @media (max-width: 520px) {
+        header { grid-template-columns: minmax(0, 1fr) auto; }
+        .workspace-switcher { grid-column: 1 / -1; width: 100%; }
+        .workspace-switcher button { flex: 1; }
+        .workspace-context { grid-row: 2; }
+        .workspace-switcher { grid-row: 3; }
+      }
+      @media (max-width: 420px) {
+        header { padding-inline: 10px; }
+        .workspace-mark { width: 34px; height: 34px; flex-basis: 34px; }
+        .workspace-name strong { font-size: 14px; }
+        .workspace-name span { font-size: 11px; }
+        .workspace-context { gap: 8px; }
+        .workspace-scope { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        a { padding-inline: 10px; font-size: 13px; }
+      }
       @media (prefers-reduced-motion: reduce) { .codex-editor { transition: none; } }
     </style>
   </head>
   <body>
     <header>
-      <a href=${studioSource}>Back to Studio</a>
-      <p><strong>${workspaceLabel}</strong> website workspace</p>
+      <div class="workspace-brand">
+        <span aria-hidden="true" class="workspace-mark">MS</span>
+        <span class="workspace-name">
+          <strong>Made Solid Workspace</strong>
+          <span>Instant live development</span>
+        </span>
+      </div>
+      <div class="workspace-context" aria-label="Current development workspace">
+        <span class="workspace-live">Live</span>
+        <p><strong>${workspaceLabel}</strong> website preview</p>
+        <span class="workspace-scope">Codex scoped to this website</span>
+      </div>
+      <div class="workspace-switcher" aria-label="Workspace surface">
+        <button aria-pressed="true" data-surface="preview" type="button">Preview</button>
+        <button aria-pressed="false" data-surface="codex" type="button">Codex</button>
+      </div>
+      <a href=${studioSource}>Exit to Studio</a>
     </header>
-    <iframe class="client-preview" sandbox="allow-modals allow-popups allow-scripts" src=${source} title="Client website live preview"></iframe>
-    <iframe class="codex-editor" sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts" src=${codexSource} title="Client website Codex editor"></iframe>
+    <main aria-label="Workspace development surfaces" class="workspace-surfaces">
+      <iframe class="client-preview" sandbox="allow-modals allow-popups allow-scripts" src=${source} title="Client website live preview"></iframe>
+      <iframe class="codex-editor" sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts" src=${codexSource} title="Client website Codex editor"></iframe>
+    </main>
     <script nonce="${nonce}">
       (() => {
         const editor = document.querySelector('.codex-editor');
+        const surfaceButtons = [...document.querySelectorAll('[data-surface]')];
+        const selectSurface = (surface, openEditor = false) => {
+          document.body.dataset.surface = surface;
+          surfaceButtons.forEach((button) => {
+            button.setAttribute('aria-pressed', String(button.dataset.surface === surface));
+          });
+          if (openEditor && editor.contentWindow) {
+            editor.contentWindow.postMessage(
+              { source: 'made-solid-codex-host', action: 'open' },
+              ${studioOriginSource},
+            );
+          }
+        };
+        selectSurface('preview');
+        surfaceButtons.forEach((button) => {
+          button.addEventListener('click', () => selectSurface(button.dataset.surface, button.dataset.surface === 'codex'));
+        });
         window.addEventListener('message', (event) => {
           if (event.origin !== ${studioOriginSource} || event.source !== editor.contentWindow) return;
           if (!event.data || event.data.source !== 'made-solid-codex-panel') return;
           document.body.dataset.codexOpen = event.data.open ? 'true' : 'false';
+          if (event.data.open) selectSurface('codex');
         });
       })();
     </script>
@@ -282,7 +368,10 @@ function serveWorkspaceShell(request, response, configuration, directory, token)
     'Referrer-Policy': 'no-referrer',
     'X-Content-Type-Options': 'nosniff',
     'X-Robots-Tag': 'noindex, nofollow, noarchive',
-    'Set-Cookie': `${frameCookiePrefix}${workspaceFrameId(token)}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Strict`,
+    'Set-Cookie': [
+      `${frameCookiePrefix}${workspaceFrameId(token)}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=None; Partitioned`,
+      `${lastWorkspaceCookieName}=${encodeURIComponent(directory)}; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=Strict`,
+    ],
   });
   if (request.method === 'HEAD') response.end();
   else response.end(document);
@@ -298,7 +387,9 @@ function requestStudioReentry(request, response, configuration, workspaceDirecto
     Location: workspacePreviewReentryUrl(
       configuration.studioOrigin,
       request.url,
-      workspaceDirectory,
+      directoryPattern.test(workspaceDirectory || '')
+        ? workspaceDirectory
+        : requestCookie(request, lastWorkspaceCookieName),
     ),
     'Referrer-Policy': 'no-referrer',
     'X-Content-Type-Options': 'nosniff',
@@ -337,6 +428,9 @@ function proxyHttp(request, response, active, configuration) {
     (upstreamResponse) => {
       const headers = {
         ...upstreamResponse.headers,
+        'content-security-policy': clientPreviewContentSecurityPolicy(
+          upstreamResponse.headers['content-security-policy'],
+        ),
         'referrer-policy': 'same-origin',
         'x-content-type-options': 'nosniff',
         'x-robots-tag': 'noindex, nofollow, noarchive',
@@ -354,6 +448,19 @@ function proxyHttp(request, response, active, configuration) {
     else unavailable(response, 502);
   });
   request.pipe(upstream);
+}
+
+function clientPreviewContentSecurityPolicy(existing) {
+  const sources = Array.isArray(existing) ? existing : [existing || ''];
+  const policies = sources.map((source) => {
+    const directives = String(source)
+      .split(';')
+      .map((value) => value.trim())
+      .filter((value) => value && !value.toLowerCase().startsWith('frame-ancestors'));
+    directives.push("frame-ancestors 'self'");
+    return directives.join('; ');
+  });
+  return Array.isArray(existing) ? policies : policies[0];
 }
 
 function proxyUpgrade(request, socket, head, active) {

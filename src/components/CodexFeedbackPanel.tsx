@@ -1792,12 +1792,17 @@ export function CodexFeedbackPanel({
   useEffect(() => {
     if (!embedded || window.parent === window) return;
     const receiveWorkspaceContext = (event: MessageEvent) => {
-      if (
-        event.source !== window.parent ||
-        event.data?.source !== 'made-solid-codex-host' ||
-        typeof event.data.url !== 'string'
-      )
+      if (event.source !== window.parent || event.data?.source !== 'made-solid-codex-host') return;
+      if (event.data.action === 'open') {
+        setHasUnseenCompletion(false);
+        restoredChatThreadRef.current = '';
+        updateChatSession({ isOpen: true });
+        setPhase('compose');
+        setError(undefined);
+        void refreshStatus();
         return;
+      }
+      if (typeof event.data.url !== 'string') return;
       try {
         const pageUrl = new URL(event.data.url);
         if (pageUrl.origin !== event.origin) return;
@@ -1815,7 +1820,7 @@ export function CodexFeedbackPanel({
     };
     window.addEventListener('message', receiveWorkspaceContext);
     return () => window.removeEventListener('message', receiveWorkspaceContext);
-  }, [embedded]);
+  }, [embedded, refreshStatus, updateChatSession]);
 
   useEffect(() => {
     const log = mountedChatLog;

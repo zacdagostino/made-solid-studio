@@ -8866,9 +8866,9 @@ function BuilderRunPanel({
             title: 'Codex Workspace Agent and visual feedback',
             detail:
               'The subscription-only Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy. A client website editor shows chats for that client plus clearly labelled universal Studio chats, hides every other client, and starts new client chats with only that website repository available to edit. Reviewers can send text, images, or both, choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. Studio source edits apply in place without restarting the workspace, and a compact top status announces the brief update while the current route and content remain mounted. A refresh restores the open selected conversation and its exact transcript reading position without changing the active prospect route. The stable workspace.madesolid.com.au address returns expired or missing browser access through the reviewer’s existing authenticated Studio session, then restores the active private development server without exposing its capability in the clean URL. Observable activity and queue state appears without invented progress.',
-            revision: `v${selectedAgentPackage.version}.66`,
+            revision: `v${selectedAgentPackage.version}.67`,
             change:
-              'Latest edit: Railway now installs each client workspace’s complete locked development toolchain before launch, preventing Next.js from changing client project dependencies.',
+              'Latest edit: Workspace now clearly presents instant live Preview and scoped Codex surfaces, restores client CSS, JavaScript, images, and the real Codex UI, and labels Studio navigation as an intentional exit.',
           },
           {
             id: 'inbound-client-email-review',

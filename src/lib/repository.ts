@@ -386,6 +386,8 @@ const localLiveCodexLauncherRecoveryPackageId =
   'agent-package-local-v19-3-live-codex-launcher-recovery';
 const localLockedWorkspaceDevDependenciesPackageId =
   'agent-package-local-v19-4-locked-workspace-dev-dependencies';
+const localReliableWorkspaceDevelopmentSurfacesPackageId =
+  'agent-package-local-v19-5-reliable-workspace-development-surfaces';
 
 type StoreName =
   | 'activities'
@@ -2969,10 +2971,28 @@ export class SiteforgeRepository {
         'Makes every client website workspace reproducible on Railway by installing its exact locked development toolchain before Next.js starts.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localReliableWorkspaceDevelopmentSurfacesPackage: AgentPackage = {
+      ...localLockedWorkspaceDevDependenciesPackage,
+      id: localReliableWorkspaceDevelopmentSurfacesPackageId,
+      version: 19.5,
+      basePackageId: localLockedWorkspaceDevDependenciesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v19.5',
+      contractAddendum:
+        'Made Solid Workspace visibly remains the stable instant-development environment. Its opaque client frame receives a short-lived partitioned frame capability so same-client CSS, JavaScript, images, and live updates load without making the top-level capability cross-site, while the dedicated scoped Codex document is transformed by Vite before rendering.',
+      instructionsAddendum:
+        'Present the current client preview and client-scoped Codex as explicit Workspace surfaces with Preview and Codex controls, a desktop split editing state, and one-surface-at-a-time mobile switching. Label navigation to Studio as an intentional exit. Keep the top-level capability cookie HttpOnly, Secure, and SameSite=Strict; use an HttpOnly, Secure, SameSite=None, Partitioned cookie only for the opaque client frame; reject ambiguous cross-client frame cookies; and constrain proxied client documents to same-origin framing. Preserve only the validated non-secret last workspace directory in a separate long-lived Strict cookie so an expired bare visit can ask authenticated Studio to issue a fresh capability for that client. Transform the dedicated Codex HTML through Vite so React refresh and the real editor render, while normal Studio pages remain non-frameable from Workspace.',
+      summary:
+        'Reliable Workspace development surfaces test package: restores client assets and Codex rendering while making Preview, scoped Codex, instant updates, and Studio exit unambiguous.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes Workspace visibly and technically behave as the stable live client development environment without weakening client or Studio isolation.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localReliableWorkspaceDevelopmentSurfacesPackage,
           localLockedWorkspaceDevDependenciesPackage,
           localLiveCodexLauncherRecoveryPackage,
           localWorkspaceHostedEditorShellPackage,

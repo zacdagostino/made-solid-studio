@@ -79,9 +79,27 @@ function workspaceCodexDocument(directory) {
   </head>
   <body>
     <div id="root"></div>
+    <script type="module">
+      import RefreshRuntime from '/@react-refresh';
+      RefreshRuntime.injectIntoGlobalHook(window);
+      window.$RefreshReg$ = () => {};
+      window.$RefreshSig$ = () => (type) => type;
+      window.__vite_plugin_react_preamble_installed__ = true;
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>`;
+}
+
+export async function renderWorkspaceCodexDocument(server, directory) {
+  const source = workspaceCodexDocument(directory);
+  if (typeof server.transformIndexHtml === 'function') {
+    return server.transformIndexHtml(workspaceCodexEndpoint, source);
+  }
+  const outputDirectory = resolve(server.config.root, server.config.build.outDir);
+  const builtDocument = await readFile(resolve(outputDirectory, 'index.html'), 'utf8');
+  const title = directory.replace(/[._-]+/g, ' ');
+  return builtDocument.replace(/<title>[^<]*<\/title>/, `<title>${title} Codex editor</title>`);
 }
 
 function sendJson(response, statusCode, value) {
@@ -942,6 +960,7 @@ export function localWorkspacePlugin() {
           response.end();
           return;
         }
+        const document = await renderWorkspaceCodexDocument(server, directory);
         response.writeHead(200, {
           'Cache-Control': 'no-store',
           'Content-Security-Policy':
@@ -952,7 +971,7 @@ export function localWorkspacePlugin() {
           'X-Robots-Tag': 'noindex, nofollow, noarchive',
         });
         if (request.method === 'HEAD') response.end();
-        else response.end(workspaceCodexDocument(directory));
+        else response.end(document);
         return;
       }
       if (requestUrl.pathname.startsWith('/__made-solid/')) {
