@@ -194,6 +194,10 @@ const liveCodexLauncherRecoveryMigrationUrl = new URL(
   '../../supabase/migrations/20260823040000_live_codex_launcher_recovery_test_package.sql',
   import.meta.url,
 );
+const lockedWorkspaceDevDependenciesMigrationUrl = new URL(
+  '../../supabase/migrations/20260823050000_locked_workspace_dev_dependencies_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -262,9 +266,36 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 65);
+  assert.equal(Number(revision[1]), 66);
   assert.match(app, /shows chats for that client plus clearly labelled universal Studio chats/);
-  assert.match(app, /owner-only Railway Codex launcher starts reliably again/);
+  assert.match(app, /complete locked development toolchain before launch/);
+});
+
+test('registers locked workspace development dependencies above the retained package ledger', async () => {
+  const [migration, repository, workspaceLauncher, localService] = await Promise.all([
+    readFile(lockedWorkspaceDevDependenciesMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(new URL('../../scripts/open-prospect-workspace.mjs', import.meta.url), 'utf8'),
+    readFile(localServiceUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /Locked workspace development dependencies test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v19\.4/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v19\.3'/,
+  );
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 19\.4,/);
+  assert.match(repository, /basePackageId: localLiveCodexLauncherRecoveryPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localLockedWorkspaceDevDependenciesPackage,') <
+      packageLedger.indexOf('localLiveCodexLauncherRecoveryPackage,'),
+  );
+  assert.equal((workspaceLauncher.match(/'--include=dev'/g) ?? []).length, 1);
+  assert.equal((localService.match(/'--include=dev'/g) ?? []).length, 2);
 });
 
 test('registers live Codex launcher recovery above the retained package ledger', async () => {

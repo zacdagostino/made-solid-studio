@@ -783,7 +783,9 @@ async function launchCommittedPreview({ directory, commit, request, writeEvent, 
       phase: 'installing',
       detail: `Preparing locked dependencies for edit v${version.version}.`,
     });
-    await run('npm', ['ci', '--no-audit', '--no-fund'], { cwd: destination });
+    await run('npm', ['ci', '--include=dev', '--no-audit', '--no-fund'], {
+      cwd: destination,
+    });
   }
   await launchWebsite({
     destination,
@@ -1587,7 +1589,7 @@ export function localWorkspacePlugin() {
             });
             const install = spawn(
               'npm',
-              ['--prefix', destination, 'ci', '--no-audit', '--no-fund'],
+              ['--prefix', destination, 'ci', '--include=dev', '--no-audit', '--no-fund'],
               { cwd: process.cwd(), env: process.env, stdio: ['ignore', 'ignore', 'ignore'] },
             );
             install.once('error', () =>

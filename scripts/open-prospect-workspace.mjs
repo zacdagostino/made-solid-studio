@@ -118,7 +118,7 @@ try {
   console.log('[workspace] Website dependencies are already installed.');
 } catch {
   console.log('[workspace] Installing the prospect website dependencies.');
-  await run('npm', ['--prefix', destination, 'ci', '--no-audit', '--no-fund']);
+  await run('npm', ['--prefix', destination, 'ci', '--include=dev', '--no-audit', '--no-fund']);
 }
 
 console.log(

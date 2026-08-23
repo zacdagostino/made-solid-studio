@@ -384,6 +384,8 @@ const localWorkspaceHostedEditorShellPackageId =
   'agent-package-local-v19-2-workspace-hosted-editor-shell';
 const localLiveCodexLauncherRecoveryPackageId =
   'agent-package-local-v19-3-live-codex-launcher-recovery';
+const localLockedWorkspaceDevDependenciesPackageId =
+  'agent-package-local-v19-4-locked-workspace-dev-dependencies';
 
 type StoreName =
   | 'activities'
@@ -2950,10 +2952,28 @@ export class SiteforgeRepository {
         'Keeps the private Railway Codex launcher available after deployment without weakening authentication or changing its two-repository runtime boundary.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localLockedWorkspaceDevDependenciesPackage: AgentPackage = {
+      ...localLiveCodexLauncherRecoveryPackage,
+      id: localLockedWorkspaceDevDependenciesPackageId,
+      version: 19.4,
+      basePackageId: localLiveCodexLauncherRecoveryPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v19.4',
+      contractAddendum:
+        'Every editable client workspace installs the complete dependency graph pinned by its lockfile, including development tooling, even when the Railway container itself runs with NODE_ENV=production.',
+      instructionsAddendum:
+        'Run npm ci with --include=dev whenever Studio prepares a cloned client repository, an exported completed build, or an immutable committed-preview worktree. Keep NODE_ENV=development for the website development server, and never allow Next.js to repair, install, or upgrade missing TypeScript tooling in client project files.',
+      summary:
+        'Locked workspace development dependencies test package: preserves client lockfiles and prevents Next.js from mutating editable website projects on Railway.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes every client website workspace reproducible on Railway by installing its exact locked development toolchain before Next.js starts.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localLockedWorkspaceDevDependenciesPackage,
           localLiveCodexLauncherRecoveryPackage,
           localWorkspaceHostedEditorShellPackage,
           localClientScopedCodexChatsPackage,
@@ -3095,6 +3115,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localLockedWorkspaceDevDependenciesPackage,
           localLiveCodexLauncherRecoveryPackage,
           localWorkspaceHostedEditorShellPackage,
           localClientScopedCodexChatsPackage,
@@ -3239,6 +3260,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localLockedWorkspaceDevDependenciesPackage,
             localLiveCodexLauncherRecoveryPackage,
             localWorkspaceHostedEditorShellPackage,
             localClientScopedCodexChatsPackage,

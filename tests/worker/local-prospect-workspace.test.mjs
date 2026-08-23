@@ -65,7 +65,8 @@ test('opens a private prospect repository inside the ignored Studio workspace di
   assert.match(source, /made-solid:log/);
   assert.match(source, /made-solid:summary/);
   assert.match(source, /made-solid:bundle/);
-  assert.match(source, /'ci', '--no-audit', '--no-fund'/);
+  assert.match(source, /'ci',[\s\S]*?'--include=dev',[\s\S]*?'--no-audit',[\s\S]*?'--no-fund'/);
+  assert.equal((source.match(/'--include=dev'/g) ?? []).length, 1);
   assert.match(source, /current editor file tree/);
   assert.doesNotMatch(source, /code', \['--add'/);
 });
@@ -97,7 +98,12 @@ test('exposes same-origin one-click workspace setup through the local Studio ser
   assert.match(source, /directoryPattern\.test\(directory\)/);
   assert.match(source, /existsSync\(resolve\('prospect-workspaces', directory, '\.git'\)\)/);
   assert.match(source, /'npm'/);
-  assert.match(source, /'ci', '--no-audit', '--no-fund'/);
+  assert.equal((source.match(/'--include=dev'/g) ?? []).length, 2);
+  assert.match(source, /await run\('npm', \['ci', '--include=dev', '--no-audit', '--no-fund'\]/);
+  assert.match(
+    source,
+    /'--prefix',[\s\S]*?destination,[\s\S]*?'ci',[\s\S]*?'--include=dev',[\s\S]*?'--no-audit',[\s\S]*?'--no-fund'/,
+  );
   assert.match(source, /'tmux'/);
   assert.match(source, /'new-session'/);
   assert.match(source, /remain-on-exit/);
