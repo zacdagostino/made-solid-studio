@@ -11,9 +11,11 @@ import {
   parsePreviewPath,
   preparePreviewHtml,
   prepareWorkspaceFrameHtml,
+  prepareWorkspaceFrameResponseBody,
   previewHostRequestListener,
   previewHostConfiguration,
   rewritePreviewRootReferences,
+  rewriteNextWorkspaceFrameRuntimeReferences,
   rewritePreviewRuntimeReferences,
   rewriteWorkspaceFrameRuntimeReferences,
 } from '../../preview-host/server.mjs';
@@ -117,6 +119,42 @@ test('keeps lazy Next chunks inside the capability at runtime', () => {
   assert.match(runtime, new RegExp(`logo="${previewRoot}assets/logo\\.png"`));
 });
 
+test('does not rewrite embedded JavaScript source strings as client paths', () => {
+  const frameBase = '/__made-solid/workspace-frame/client-a/payload.signature/';
+  const embeddedSource = 'eval(__webpack_require__.ts("/**\\n * @license React\\n */"));';
+
+  assert.equal(rewriteWorkspaceFrameRuntimeReferences(embeddedSource, frameBase), embeddedSource);
+  const nextRuntime =
+    'const nextIndex = pathname.indexOf("/_next/"); const CHUNK_BASE_PATH = "/_next/"; const RUNTIME_PUBLIC_PATH = "/_next/"; __webpack_require__.p = "/_next/"; eval(__webpack_require__.ts("/**\\n * @license React\\n */"));';
+  const expectedNextRuntime = nextRuntime
+    .replace('const CHUNK_BASE_PATH = "/_next/"', `const CHUNK_BASE_PATH = "${frameBase}_next/"`)
+    .replace(
+      'const RUNTIME_PUBLIC_PATH = "/_next/"',
+      `const RUNTIME_PUBLIC_PATH = "${frameBase}_next/"`,
+    )
+    .replace('__webpack_require__.p = "/_next/"', `__webpack_require__.p = "${frameBase}_next/"`);
+  assert.equal(
+    prepareWorkspaceFrameResponseBody(
+      nextRuntime,
+      'application/javascript',
+      '/_next/static/chunks/main-app.js',
+      frameBase,
+    ),
+    expectedNextRuntime,
+  );
+  assert.equal(
+    rewriteNextWorkspaceFrameRuntimeReferences(nextRuntime, frameBase),
+    expectedNextRuntime,
+  );
+  assert.equal(
+    rewriteNextWorkspaceFrameRuntimeReferences(
+      `const SUSPENSE_END_DATA = '/$'; const SUSPENSE_PENDING_START_DATA = '/$?';`,
+      frameBase,
+    ),
+    `const SUSPENSE_END_DATA = '/$'; const SUSPENSE_PENDING_START_DATA = '/$?';`,
+  );
+});
+
 test('keeps Vite and Next live runtime requests inside an exact frame route', () => {
   const frameBase = '/__made-solid/workspace-frame/prospect-site/payload.signature/';
   const html = prepareWorkspaceFrameHtml(
@@ -129,6 +167,7 @@ test('keeps Vite and Next live runtime requests inside an exact frame route', ()
   assert.match(html, new RegExp(`src="${frameBase}hero\\.png"`));
   assert.match(html, new RegExp(`srcset="${frameBase}small\\.png 1x, ${frameBase}large\\.png 2x"`));
   assert.match(html, new RegExp(`"assetPrefix":"${frameBase.slice(0, -1)}"`));
+  assert.match(html, /data-made-solid-opaque-runtime/);
   assert.doesNotMatch(html, /data-siteforge-preview-navigation/);
 
   const viteClient = rewriteWorkspaceFrameRuntimeReferences(

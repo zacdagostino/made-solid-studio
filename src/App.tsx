@@ -8866,9 +8866,9 @@ function BuilderRunPanel({
             title: 'Codex Workspace Agent and visual feedback',
             detail:
               'The subscription-only Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy. A client website editor shows chats for that client plus clearly labelled universal Studio chats, hides every other client, and starts new client chats with only that website repository available to edit. Reviewers can send text, images, or both, choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. Studio source edits apply in place without restarting the workspace, and a compact top status announces the brief update while the current route and content remain mounted. A refresh restores the open selected conversation and its exact transcript reading position without changing the active prospect route. The stable workspace.madesolid.com.au address returns expired or missing browser access through the reviewer’s existing authenticated Studio session, then restores the active private development server without exposing its capability in the clean URL. Observable activity and queue state appears without invented progress.',
-            revision: `v${selectedAgentPackage.version}.69`,
+            revision: `v${selectedAgentPackage.version}.70`,
             change:
-              'Latest edit: the secure Preview proxy now removes opaque cross-site browser provenance before the trusted Next.js hop, so client assets and HMR load normally, and Railway boot restores the approved active client server when needed.',
+              'Latest edit: Next.js client code now hydrates, responds to interaction, paints, and hot-reloads on the exact client capability inside the opaque Workspace preview instead of remaining blank or server-rendered only.',
           },
           {
             id: 'inbound-client-email-review',

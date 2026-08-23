@@ -210,6 +210,10 @@ const nextCompatibleWorkspaceRuntimeMigrationUrl = new URL(
   '../../supabase/migrations/20260823080000_next_compatible_workspace_runtime_test_package.sql',
   import.meta.url,
 );
+const executableNextWorkspaceRuntimeMigrationUrl = new URL(
+  '../../supabase/migrations/20260823090000_executable_next_workspace_runtime_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -278,9 +282,34 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 69);
+  assert.equal(Number(revision[1]), 70);
   assert.match(app, /shows chats for that client plus clearly labelled universal Studio chats/);
-  assert.match(app, /removes opaque cross-site browser provenance/);
+  assert.match(app, /Next\.js client code now hydrates/);
+});
+
+test('registers the executable Next Workspace runtime above immutable v19.7', async () => {
+  const [migration, repository, previewHost] = await Promise.all([
+    readFile(executableNextWorkspaceRuntimeMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(new URL('../../preview-host/server.mjs', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /Executable Next Workspace runtime test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v19\.8/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v19\.7'/,
+  );
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 19\.8,/);
+  assert.match(repository, /basePackageId: localNextCompatibleWorkspaceRuntimePackage\.id/);
+  const ledger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    ledger.indexOf('localExecutableNextWorkspaceRuntimePackage,') <
+      ledger.indexOf('localNextCompatibleWorkspaceRuntimePackage,'),
+  );
+  assert.match(previewHost, /CHUNK_BASE_PATH\|RUNTIME_PUBLIC_PATH/);
+  assert.match(previewHost, /data-made-solid-opaque-runtime/);
 });
 
 test('registers the Next-compatible Workspace runtime above immutable v19.6', async () => {

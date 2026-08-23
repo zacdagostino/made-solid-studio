@@ -392,6 +392,8 @@ const localOpaqueWorkspaceFrameCapabilityPackageId =
   'agent-package-local-v19-6-opaque-workspace-frame-capability';
 const localNextCompatibleWorkspaceRuntimePackageId =
   'agent-package-local-v19-7-next-compatible-workspace-runtime';
+const localExecutableNextWorkspaceRuntimePackageId =
+  'agent-package-local-v19-8-executable-next-workspace-runtime';
 
 type StoreName =
   | 'activities'
@@ -3026,10 +3028,28 @@ export class SiteforgeRepository {
         'Makes Next.js client assets and HMR load through the secure Preview transport immediately after deploy or restart without broadening workspace authorization.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localExecutableNextWorkspaceRuntimePackage: AgentPackage = {
+      ...localNextCompatibleWorkspaceRuntimePackage,
+      id: localExecutableNextWorkspaceRuntimePackageId,
+      version: 19.8,
+      basePackageId: localNextCompatibleWorkspaceRuntimePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v19.8',
+      contractAddendum:
+        'Next.js source remains byte-compatible inside the opaque client frame except for its exact Webpack and Turbopack runtime public-path declarations, which are rooted beneath the signed client capability. A document-local, memory-only compatibility layer supports Next development storage without persistence or shared client state.',
+      instructionsAddendum:
+        'Never broadly replace slash-prefixed strings in proxied Next.js JavaScript. Preserve React hydration sentinels, embedded source, and Next asset-prefix detection while rewriting only the exact CHUNK_BASE_PATH, RUNTIME_PUBLIC_PATH, and Webpack public-path assignments to the validated frame capability. For Next development documents only, install an early per-document memory sessionStorage and cookie surface when the opaque sandbox blocks native access. Keep the frame opaque and prove real Next initialization, React interaction, painted output, and HMR on the exact capability path in HTTPS Chromium.',
+      summary:
+        'Executable Next Workspace runtime test package: restores client-side React hydration and exact-capability hot reload while keeping each client frame opaque and isolated.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes downloaded Next.js client code actually execute and live-update inside the secure Workspace preview instead of leaving a blank or static server-rendered surface.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localExecutableNextWorkspaceRuntimePackage,
           localNextCompatibleWorkspaceRuntimePackage,
           localOpaqueWorkspaceFrameCapabilityPackage,
           localReliableWorkspaceDevelopmentSurfacesPackage,
@@ -3175,6 +3195,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localExecutableNextWorkspaceRuntimePackage,
           localNextCompatibleWorkspaceRuntimePackage,
           localOpaqueWorkspaceFrameCapabilityPackage,
           localReliableWorkspaceDevelopmentSurfacesPackage,
@@ -3323,6 +3344,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localExecutableNextWorkspaceRuntimePackage,
             localNextCompatibleWorkspaceRuntimePackage,
             localOpaqueWorkspaceFrameCapabilityPackage,
             localReliableWorkspaceDevelopmentSurfacesPackage,

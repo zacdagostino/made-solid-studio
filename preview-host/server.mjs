@@ -151,12 +151,60 @@ export function rewriteWorkspaceFrameRuntimeReferences(source, base) {
     .replace(
       /(const socketHost\s*=\s*`[^`\n]*\$\{)["']\/["'](\}`;)/g,
       (_match, assignment, suffix) => `${assignment}${JSON.stringify(pathBase)}${suffix}`,
-    )
-    .replace(
-      /(["'`])\/(?!\/|__made-solid\/workspace-frame\/)/g,
-      (_match, quote) => `${quote}${base}`,
     );
 }
+
+export function rewriteNextWorkspaceFrameRuntimeReferences(source, base) {
+  return source
+    .replace(
+      /(\bconst\s+(?:CHUNK_BASE_PATH|RUNTIME_PUBLIC_PATH)\s*=\s*["'])\/_next\//g,
+      (_match, assignment) => `${assignment}${base}_next/`,
+    )
+    .replace(
+      /(\b__webpack_require__\.p\s*=\s*["'])\/_next\//g,
+      (_match, assignment) => `${assignment}${base}_next/`,
+    );
+}
+
+const opaqueFrameRuntimeScript = `
+  (() => {
+    const createMemoryStorage = () => {
+      const entries = new Map();
+      return {
+        clear: () => entries.clear(),
+        getItem: (key) => entries.has(String(key)) ? entries.get(String(key)) : null,
+        key: (index) => Array.from(entries.keys())[Number(index)] ?? null,
+        get length() { return entries.size; },
+        removeItem: (key) => entries.delete(String(key)),
+        setItem: (key, value) => entries.set(String(key), String(value)),
+      };
+    };
+    try {
+      window.sessionStorage.length;
+    } catch {
+      Object.defineProperty(window, 'sessionStorage', {
+        configurable: true,
+        value: createMemoryStorage(),
+      });
+    }
+    const cookies = new Map();
+    try {
+      document.cookie;
+    } catch {
+      try {
+        Object.defineProperty(document, 'cookie', {
+          configurable: true,
+          get: () => Array.from(cookies, ([key, value]) => key + '=' + value).join('; '),
+          set: (source) => {
+            const [pair] = String(source).split(';', 1);
+            const separator = pair.indexOf('=');
+            if (separator > 0) cookies.set(pair.slice(0, separator).trim(), pair.slice(separator + 1));
+          },
+        });
+      } catch {}
+    }
+  })();
+`;
 
 const previewNavigationScript = `
   (() => {
@@ -193,7 +241,10 @@ export function preparePreviewHtml(source, base) {
 
 export function prepareWorkspaceFrameHtml(source, base) {
   const rootedSource = rewriteWorkspaceFrameRuntimeReferences(source, base);
-  const baseElement = `<base href="${base}">`;
+  const opaqueRuntime = source.includes('/_next/')
+    ? `<script data-made-solid-opaque-runtime>${opaqueFrameRuntimeScript}</script>`
+    : '';
+  const baseElement = `<base href="${base}">${opaqueRuntime}`;
   const withBase = rootedSource.replace(/<head(\s[^>]*)?>/i, (match) => `${match}${baseElement}`);
   return (/<head(\s[^>]*)?>/i.test(rootedSource) ? withBase : `${baseElement}${withBase}`)
     .replace(/"assetPrefix":""/g, `"assetPrefix":"${base.replace(/\/$/, '')}"`)
@@ -209,6 +260,24 @@ export function prepareWorkspaceFrameHtml(source, base) {
         .join(',');
       return `${prefix}${rewritten}`;
     });
+}
+
+export function prepareWorkspaceFrameResponseBody(source, contentType, upstreamPath, frameBase) {
+  if (contentType.includes('text/html')) return prepareWorkspaceFrameHtml(source, frameBase);
+  if (upstreamPath.startsWith('/_next/') && contentType.includes('javascript')) {
+    return rewriteNextWorkspaceFrameRuntimeReferences(source, frameBase);
+  }
+  if (upstreamPath.startsWith('/_next/') && contentType.includes('application/json')) {
+    return source;
+  }
+  if (
+    contentType.includes('javascript') ||
+    contentType.includes('text/css') ||
+    contentType.includes('application/json')
+  ) {
+    return rewriteWorkspaceFrameRuntimeReferences(source, frameBase);
+  }
+  return rewritePreviewRootReferences(source, frameBase);
 }
 
 function isLockedStarterDocument(html) {
@@ -550,13 +619,12 @@ function proxyWorkspaceFrameHttp(request, response, requestUrl, parsed, active, 
       upstreamResponse.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
       upstreamResponse.on('end', () => {
         const source = Buffer.concat(chunks).toString('utf8');
-        const document = contentType.includes('text/html')
-          ? prepareWorkspaceFrameHtml(source, frameBase)
-          : contentType.includes('javascript') ||
-              contentType.includes('text/css') ||
-              contentType.includes('application/json')
-            ? rewriteWorkspaceFrameRuntimeReferences(source, frameBase)
-            : rewritePreviewRootReferences(source, frameBase);
+        const document = prepareWorkspaceFrameResponseBody(
+          source,
+          contentType,
+          parsed.upstreamPath,
+          frameBase,
+        );
         headers['content-length'] = String(Buffer.byteLength(document));
         response.writeHead(upstreamResponse.statusCode || 502, headers);
         if (request.method === 'HEAD') response.end();
