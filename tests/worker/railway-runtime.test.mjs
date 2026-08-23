@@ -431,6 +431,69 @@ test('preserves verified persistent repositories when GitHub is temporarily unav
   }
 });
 
+test('fast-forwards a dirty persistent checkout when local work does not overlap', async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'siteforge-railway-dirty-refresh-'));
+  const workspaceRoot = join(fixtureRoot, 'workspaces');
+  const fakeBin = join(fixtureRoot, 'bin');
+  const remoteRoot = join(fixtureRoot, 'remotes');
+  await mkdir(fakeBin, { recursive: true });
+  await mkdir(remoteRoot, { recursive: true });
+  const fakeGh = join(fakeBin, 'gh');
+  await writeFile(
+    fakeGh,
+    '#!/usr/bin/env bash\nif [[ "$1" == "auth" || "$1 $2" == "repo view" ]]; then exit 0; fi\nexit 1\n',
+  );
+  await chmod(fakeGh, 0o755);
+
+  try {
+    const repositories = new Map();
+    for (const directory of ['siteforge-os', 'made-solid-website']) {
+      const remote = join(remoteRoot, directory);
+      repositories.set(directory, remote);
+      const source = join(fixtureRoot, `${directory}-source`);
+      const destination = join(workspaceRoot, directory);
+      await execFile('git', ['init', '--bare', '-q', remote]);
+      await execFile('git', ['init', '-q', '-b', 'main', source]);
+      await execFile('git', ['-C', source, 'config', 'user.email', 'test@example.com']);
+      await execFile('git', ['-C', source, 'config', 'user.name', 'Railway test']);
+      await writeFile(join(source, 'tracked.txt'), 'initial\n');
+      await execFile('git', ['-C', source, 'add', 'tracked.txt']);
+      await execFile('git', ['-C', source, 'commit', '-qm', 'initial']);
+      await execFile('git', ['-C', source, 'remote', 'add', 'origin', remote]);
+      await execFile('git', ['-C', source, 'push', '-q', '-u', 'origin', 'main']);
+      await execFile('git', ['clone', '-q', '--branch', 'main', remote, destination]);
+      await writeFile(join(destination, 'local-work.txt'), 'preserve me\n');
+      await writeFile(join(source, 'tracked.txt'), 'updated\n');
+      await execFile('git', ['-C', source, 'add', 'tracked.txt']);
+      await execFile('git', ['-C', source, 'commit', '-qm', 'update']);
+      await execFile('git', ['-C', source, 'push', '-q']);
+    }
+
+    const { stdout } = await execFile('bash', ['scripts/bootstrap-railway-workspaces'], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+        SITEFORGE_GITHUB_TOKEN: 'available-test-token',
+        SITEFORGE_RUNTIME_WORKSPACES_DIR: workspaceRoot,
+        SITEFORGE_STUDIO_REPOSITORY: repositories.get('siteforge-os'),
+        SITEFORGE_WEBSITE_REPOSITORY: repositories.get('made-solid-website'),
+      },
+    });
+    assert.match(stdout, /attempting a non-destructive fast-forward/);
+    assert.equal(
+      await readFile(join(workspaceRoot, 'siteforge-os', 'tracked.txt'), 'utf8'),
+      'updated\n',
+    );
+    assert.equal(
+      await readFile(join(workspaceRoot, 'siteforge-os', 'local-work.txt'), 'utf8'),
+      'preserve me\n',
+    );
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
 test('retains Railway container access below the newer chat and preview packages', async () => {
   const repository = await readFile('src/lib/repository.ts', 'utf8');
   assert.match(repository, /version: 16\.2,/);

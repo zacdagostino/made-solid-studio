@@ -68,22 +68,30 @@ prepare_repository() {
     exit 1
   fi
 
-  if [[ -n "$(git -C "$destination" status --porcelain)" ]]; then
-    echo "[railway-runtime] preserving uncommitted $label changes; automatic update skipped."
-    return
-  fi
-
   if [[ "$github_available" != true ]]; then
-    echo "[railway-runtime] preserving the clean $label checkout; automatic update skipped while GitHub is unavailable."
+    echo "[railway-runtime] preserving the $label checkout; automatic update skipped while GitHub is unavailable."
     return
   fi
 
-  echo "[railway-runtime] refreshing the clean $label repository."
+  local has_uncommitted_changes=false
+  if [[ -n "$(git -C "$destination" status --porcelain)" ]]; then
+    has_uncommitted_changes=true
+    echo "[railway-runtime] the $label checkout has uncommitted work; attempting a non-destructive fast-forward."
+  else
+    echo "[railway-runtime] refreshing the clean $label repository."
+  fi
   git -C "$destination" fetch --prune origin
   local branch
   branch="$(git -C "$destination" branch --show-current)"
   if [[ -n "$branch" ]] && git -C "$destination" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
-    git -C "$destination" merge --ff-only "origin/$branch"
+    if ! git -C "$destination" merge --ff-only "origin/$branch"; then
+      if [[ "$has_uncommitted_changes" == true ]]; then
+        echo "[railway-runtime] preserving overlapping uncommitted $label changes; GitHub update deferred."
+        return
+      fi
+      echo "The clean $label checkout could not fast-forward from origin/$branch."
+      exit 1
+    fi
   fi
 }
 
