@@ -11,29 +11,57 @@ function configuredHostname(value?: string) {
   return match?.[1]?.toLowerCase();
 }
 
+function loopbackRuntimeTarget(value?: string) {
+  if (!value) return undefined;
+  const match = /^http:\/\/(?:127\.0\.0\.1|localhost):(\d{1,5})$/.exec(value.trim());
+  const port = Number(match?.[1]);
+  if (!match || port < 1 || port > 65_535) {
+    throw new Error('SITEFORGE_RUNTIME_API_PROXY_ORIGIN must be an exact loopback HTTP origin.');
+  }
+  return value.trim();
+}
+
 export default defineConfig(({ mode }) => {
   const environment = loadEnv(mode, '.', '');
+  const workspaceDevelopment = environment.SITEFORGE_WORKSPACE_DEVELOPMENT === '1';
+  const runtimeApiTarget = loopbackRuntimeTarget(environment.SITEFORGE_RUNTIME_API_PROXY_ORIGIN);
+  if (workspaceDevelopment !== Boolean(runtimeApiTarget)) {
+    throw new Error(
+      'Workspace development mode and its internal runtime API proxy must be configured together.',
+    );
+  }
   const railwayAllowedHosts = [
     'healthcheck.railway.app',
     configuredHostname(environment.RAILWAY_PUBLIC_DOMAIN),
     configuredHostname(environment.SITEFORGE_PUBLIC_ORIGIN),
+    configuredHostname(environment.SITEFORGE_WORKSPACE_PREVIEW_ORIGIN),
   ].filter((host): host is string => Boolean(host));
+  const frameAncestors = workspaceDevelopment
+    ? "frame-ancestors 'none'"
+    : "frame-ancestors 'self' https://madesolid.com.au https://www.madesolid.com.au";
 
   return {
-    plugins: [react(), localWorkspacePlugin()],
+    plugins: [react(), ...(workspaceDevelopment ? [] : [localWorkspacePlugin()])],
     preview: {
       allowedHosts: railwayAllowedHosts,
       headers: {
-        'Content-Security-Policy':
-          "frame-ancestors 'self' https://madesolid.com.au https://www.madesolid.com.au",
+        'Content-Security-Policy': frameAncestors,
       },
     },
     server: {
       allowedHosts: ['silver-fiesta-xg6xjqvw4pvhp477-5173.app.github.dev', ...railwayAllowedHosts],
       headers: {
-        'Content-Security-Policy':
-          "frame-ancestors 'self' https://madesolid.com.au https://www.madesolid.com.au",
+        'Content-Security-Policy': frameAncestors,
       },
+      proxy: runtimeApiTarget
+        ? {
+            '/__made-solid': {
+              changeOrigin: true,
+              target: runtimeApiTarget,
+              ws: true,
+            },
+          }
+        : undefined,
     },
   };
 });

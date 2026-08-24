@@ -397,6 +397,8 @@ const localExecutableNextWorkspaceRuntimePackageId =
 const localOwnerApiCreditsSwitchPackageId = 'agent-package-local-v19-9-owner-api-credits-switch';
 const localDeployedStudioShellPackageId = 'agent-package-local-v20-0-deployed-studio-shell';
 const localCanonicalWorkspaceEntryPackageId = 'agent-package-local-v20-1-canonical-workspace-entry';
+const localWorkspaceDevelopmentStudioPackageId =
+  'agent-package-local-v20-2-workspace-development-studio';
 
 type StoreName =
   | 'activities'
@@ -3099,10 +3101,28 @@ export class SiteforgeRepository {
         'Separates Studio entry from explicit website editing so the Workspace hostname cannot surprise the reviewer with an unrelated client preview.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localWorkspaceDevelopmentStudioPackage: AgentPackage = {
+      ...localCanonicalWorkspaceEntryPackage,
+      id: localWorkspaceDevelopmentStudioPackageId,
+      version: 20.2,
+      basePackageId: localCanonicalWorkspaceEntryPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v20.2',
+      contractAddendum:
+        'The Studio hostname serves the exact reviewed production release, while the owner-authenticated Workspace hostname serves the complete Made Solid Studio application from its persistent editable checkout with immediate development updates.',
+      instructionsAddendum:
+        'Serve production Studio only from immutable built release assets and never expose its Vite source or HMR endpoints. Serve Workspace from /data/workspaces/siteforge-os with Vite development and hot updates behind the same owner and organization authorization boundary used by the private runtime. A bare Workspace visit opens the full development Studio UI without selecting a client. Open client website development as a clean route inside that UI, preserve Studio navigation, and show only the selected client chats plus clearly labelled universal Studio chats. Keep every client preview in its opaque exact-client Preview-origin capability frame; never expose capability tokens in the clean Workspace URL, leak secrets to the editable browser process, or allow one client route, chat, asset, API request, or HMR channel to cross into another client.',
+      summary:
+        'Workspace development Studio test package: separates reviewed production from the authenticated live Studio checkout while keeping client editors isolated inside the complete development UI.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Restores Workspace as the instant-development Studio environment without replacing it with a client website or weakening production, owner, repository, or exact-client boundaries.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localWorkspaceDevelopmentStudioPackage,
           localCanonicalWorkspaceEntryPackage,
           localDeployedStudioShellPackage,
           localOwnerApiCreditsSwitchPackage,

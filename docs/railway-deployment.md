@@ -6,25 +6,32 @@ artifact store.
 
 ## Runtime topology
 
-One Railway service exposes three HTTPS domains mapped to separate target ports. Studio runs its
-Vite development server from the persistent editable checkout, so reviewed source edits appear in
-the signed-in Studio immediately and survive container replacement without falling back to the
-older image build:
+One Railway service exposes three HTTPS domains mapped to separate target ports. The public Studio
+serves the immutable build from the reviewed Railway image. Workspace serves the same Studio UI
+from the persistent editable checkout through Vite HMR, behind a short-lived owner exchange and an
+HttpOnly session cookie:
 
 | Domain purpose                           | Suggested hostname           |     Target port |
 | ---------------------------------------- | ---------------------------- | --------------: |
 | Authenticated Studio                     | `studio.madesolid.com.au`    | `8080` (`PORT`) |
 | Private completed and live client frames | `preview.madesolid.com.au`   |          `8787` |
-| Owner-authenticated workspace preview    | `workspace.madesolid.com.au` |          `3000` |
+| Owner-authenticated development Studio   | `workspace.madesolid.com.au` |          `3000` |
 
 Railway supports multiple domains with different target ports on one service. Keep the Codex App
 Server on its loopback-only port `4500`; never add a Railway domain for it.
 
-The editable workspace uses `https://workspace.madesolid.com.au/` as its stable browser URL. Its
-short-lived top-level capability and secure cookie still expire, but a top-level visit automatically returns
-through the signed-in Studio owner session, issues fresh access for the active workspace, and comes
-back to the same path. If Railway replaced the container, that owner-authenticated access also
-restarts the saved development server from its approved persistent repository before returning.
+The editable Studio uses `https://workspace.madesolid.com.au/` as its stable browser URL. An
+unauthenticated document returns through the signed-in production Studio, which verifies the owner
+and issues a two-minute, owner-bound exchange. The Workspace gateway removes that exchange from the
+URL and replaces it with an eight-hour `HttpOnly`, `Secure`, `SameSite=Strict` session cookie before
+proxying HTML, source modules, assets, and HMR WebSockets. Supabase access and refresh tokens never
+cross origins in a URL. The internal Vite server listens only on loopback and receives a minimal
+allowlisted environment without Railway service credentials. It proxies authenticated runtime API
+requests to the single immutable production runtime, so it does not start duplicate workers, Codex
+bridges, or maintenance loops.
+
+If Railway replaced the container, the owner-authenticated client-preview access also restarts the
+saved client development server from its approved persistent repository before returning.
 Recovered source servers run with `NODE_ENV=development` even though the permanent Railway parent
 runs in production, keeping Vite and React browser transforms consistent. The live client document
 stays in an opaque sandbox and loads from `preview.madesolid.com.au` through a short-lived signed
@@ -52,11 +59,14 @@ A volume-backed Railway service has a short restart window during deployment bec
 deployments cannot mount the same volume simultaneously. Supabase-backed jobs and Codex threads
 remain durable across that restart.
 
-The image retains the locked dependency installation and production build fallback, but the Studio
-domain starts Vite from `/data/workspaces/siteforge-os` with `NODE_ENV=development`. If the
+The image retains the locked dependency installation and reviewed production build. The Studio
+domain serves `/app/dist`; it never exposes `/src`, React Refresh, or the Vite HMR client. The
+Workspace domain uses the deployed image's trusted Vite configuration with
+`/data/workspaces/siteforge-os` as its working root. That keeps a dirty or behind editable checkout
+from replacing the gateway/runtime policy while still applying source edits immediately. If the
 persistent checkout has no `node_modules`, the launcher links the image's locked installation rather
-than installing packages during startup. Do not point `studio.madesolid.com.au` at the packaged
-`/app/dist` preview: that would hide saved source edits after every deployment.
+than installing packages during startup. A Workspace Vite or gateway failure is restarted
+independently and cannot stop production Studio, workers, the private Preview host, or Codex.
 
 ## Configure variables
 
@@ -76,6 +86,8 @@ SITEFORGE_RUNTIME_OWNER_ORGANIZATION_ID=
 SITEFORGE_PUBLIC_ORIGIN=https://studio.madesolid.com.au
 PREVIEW_PUBLIC_ORIGIN=https://preview.madesolid.com.au
 SITEFORGE_WORKSPACE_PREVIEW_ORIGIN=https://workspace.madesolid.com.au
+SITEFORGE_WORKSPACE_PROXY_PORT=3000
+SITEFORGE_WORKSPACE_STUDIO_PORT=5173
 SITEFORGE_GITHUB_TOKEN=
 SITEFORGE_CODEX_AUTH_MODE=runtime
 SITEFORGE_OPENAI_API_ENABLED=false
@@ -137,16 +149,21 @@ OpenAI request.
 
 ## Final checks
 
-- Open Studio directly and sign in through Supabase.
+- Open Studio directly and sign in through Supabase. Confirm its HTML references hashed production
+  assets and does not load `/@vite/client` or `/src/main.tsx`.
+- Open Workspace through the owner exchange. Confirm the clean address stays on Workspace, the full
+  Studio UI renders, `/@vite/client` is available only with its owner cookie, and an editable source
+  change appears through HMR without changing the production Studio.
 - Confirm `/health` returns `200` while every `/__made-solid/*` runtime route rejects a signed-out
   request.
 - Start a Codex message, close the browser, return from a phone, and confirm the same thread resumes.
 - Run one Agent Studio test and one complete prospect build; confirm both show ChatGPT subscription
   billing mode.
-- Open a generated preview and editable workspace preview. Expire the workspace cookie, revisit the
-  clean workspace URL, and confirm the signed-in owner returns automatically to the same path with no
-  capability in the address bar. Redeploy with an active workspace, revisit the clean URL, and confirm
-  its development server restarts. Inspect the rendered page and browser console rather than relying
+- Open a generated preview and client website editor inside the Workspace Studio. Expire the
+  Workspace owner cookie, revisit the clean Workspace URL, and confirm the signed-in owner returns
+  automatically to the same path with no capability in the address bar. Redeploy with an active
+  client workspace, revisit its exact route, and confirm its development server restarts. Inspect the
+  rendered page and browser console rather than relying
   on HTTP `200`; confirm there is visible content and no runtime or failed-resource error. Confirm a
   signed-out or non-owner request remains unavailable.
 - Check mobile `375 x 812`, tablet `768 x 1024`, and desktop `1440 x 900`.

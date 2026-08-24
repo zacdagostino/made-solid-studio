@@ -11,9 +11,22 @@ prospect_workspaces_directory="$runtime_data_directory/prospect-workspaces"
 codex_home_directory="$runtime_data_directory/codex"
 preview_secret_file="$runtime_directory/workspace-preview-secret"
 port="${PORT:-8080}"
+workspace_gateway_port="${SITEFORGE_WORKSPACE_PROXY_PORT:-3000}"
+workspace_studio_port="${SITEFORGE_WORKSPACE_STUDIO_PORT:-5173}"
 
-if [[ ! "$port" =~ ^[0-9]+$ ]] || ((port < 1 || port > 65535)); then
-  echo "PORT must be a valid TCP port."
+for port_configuration in \
+  "PORT:$port" \
+  "SITEFORGE_WORKSPACE_PROXY_PORT:$workspace_gateway_port" \
+  "SITEFORGE_WORKSPACE_STUDIO_PORT:$workspace_studio_port"; do
+  port_name="${port_configuration%%:*}"
+  port_value="${port_configuration#*:}"
+  if [[ ! "$port_value" =~ ^[0-9]+$ ]] || ((port_value < 1 || port_value > 65535)); then
+    echo "$port_name must be a valid TCP port."
+    exit 1
+  fi
+done
+if [[ "$port" == "$workspace_gateway_port" || "$port" == "$workspace_studio_port" || "$workspace_gateway_port" == "$workspace_studio_port" ]]; then
+  echo "Production Studio, Workspace gateway, and Workspace Vite must use distinct ports."
   exit 1
 fi
 for required_name in \
@@ -77,7 +90,8 @@ export SITEFORGE_CODEX_HOME="$codex_home_directory"
 export CODEX_HOME="$codex_home_directory"
 export SITEFORGE_ACTIVE_PREVIEW_PATH="$runtime_directory/active-preview.json"
 export SITEFORGE_PREVIEW_PORT="${SITEFORGE_PREVIEW_PORT:-8787}"
-export SITEFORGE_WORKSPACE_PROXY_PORT="${SITEFORGE_WORKSPACE_PROXY_PORT:-3000}"
+export SITEFORGE_WORKSPACE_PROXY_PORT="$workspace_gateway_port"
+export SITEFORGE_WORKSPACE_STUDIO_PORT="$workspace_studio_port"
 export SITEFORGE_CODEX_AUTH_MODE=runtime
 export SUPABASE_URL="${SUPABASE_URL:-$SITEFORGE_SUPABASE_URL}"
 export SUPABASE_SERVICE_ROLE_KEY="${SUPABASE_SERVICE_ROLE_KEY:-$SITEFORGE_SUPABASE_SERVICE_ROLE_KEY}"
@@ -88,6 +102,7 @@ if ! node "$application_directory/scripts/restore-active-workspace-preview.mjs";
 fi
 
 declare -a child_processes=()
+declare -a critical_processes=()
 stopping=0
 
 stop_runtime() {
@@ -118,35 +133,92 @@ maintain_codex_app_server() {
   done
 }
 
+maintain_workspace_studio() {
+  local workspace_process=''
+  local workspace_stopping=0
+  trap 'workspace_stopping=1; [[ -z "$workspace_process" ]] || kill -TERM "$workspace_process" 2>/dev/null || true' INT TERM
+  while ((workspace_stopping == 0)); do
+    (
+      cd "$studio_workspace_directory"
+      exec env -i \
+        PATH="$PATH" \
+        SITEFORGE_PUBLIC_ORIGIN="$SITEFORGE_WORKSPACE_PREVIEW_ORIGIN" \
+        SITEFORGE_RUNTIME_API_PROXY_ORIGIN="http://127.0.0.1:$port" \
+        SITEFORGE_WORKSPACE_DEVELOPMENT=1 \
+        SITEFORGE_WORKSPACE_PREVIEW_ORIGIN="$SITEFORGE_WORKSPACE_PREVIEW_ORIGIN" \
+        VITE_SITEFORGE_OPENAI_API_ENABLED=false \
+        VITE_SITEFORGE_PREVIEW_ORIGIN="${VITE_SITEFORGE_PREVIEW_ORIGIN:-}" \
+        VITE_SUPABASE_PUBLISHABLE_KEY="${VITE_SUPABASE_PUBLISHABLE_KEY:-}" \
+        VITE_SUPABASE_URL="${VITE_SUPABASE_URL:-}" \
+        node "$application_directory/node_modules/vite/bin/vite.js" \
+          --config "$application_directory/vite.config.ts" \
+          --mode development \
+          --force \
+          --host 127.0.0.1 \
+          --port "$workspace_studio_port" \
+          --strictPort
+    ) &
+    workspace_process=$!
+    wait "$workspace_process" 2>/dev/null || true
+    workspace_process=''
+    if ((workspace_stopping == 0)); then
+      echo "[railway-runtime] Workspace Studio stopped; production remains available while it restarts."
+      sleep 2
+    fi
+  done
+}
+
+maintain_workspace_gateway() {
+  local gateway_process=''
+  local gateway_stopping=0
+  trap 'gateway_stopping=1; [[ -z "$gateway_process" ]] || kill -TERM "$gateway_process" 2>/dev/null || true' INT TERM
+  while ((gateway_stopping == 0)); do
+    node "$application_directory/scripts/workspace-studio-gateway.mjs" &
+    gateway_process=$!
+    wait "$gateway_process" 2>/dev/null || true
+    gateway_process=''
+    if ((gateway_stopping == 0)); then
+      echo "[railway-runtime] Workspace owner gateway stopped; production remains available while it restarts."
+      sleep 2
+    fi
+  done
+}
+
 trap stop_runtime INT TERM EXIT
 
 (
   cd "$application_directory"
-  exec env -u NODE_ENV node "$application_directory/node_modules/vite/bin/vite.js" \
+  exec node "$application_directory/node_modules/vite/bin/vite.js" preview \
     --config "$application_directory/vite.config.ts" \
-    --mode development \
-    --force \
     --host 0.0.0.0 \
     --port "$port" \
     --strictPort
 ) &
 child_processes+=("$!")
+critical_processes+=("$!")
 
 node "$application_directory/worker/supervisor.mjs" &
 child_processes+=("$!")
+critical_processes+=("$!")
 
 node "$application_directory/preview-host/server.mjs" &
 child_processes+=("$!")
+critical_processes+=("$!")
 
-node "$application_directory/scripts/workspace-preview-proxy.mjs" &
+maintain_workspace_studio &
+child_processes+=("$!")
+
+maintain_workspace_gateway &
 child_processes+=("$!")
 
 maintain_codex_app_server &
 child_processes+=("$!")
+critical_processes+=("$!")
 
-echo "[railway-runtime] Made Solid Studio release shell is starting from $application_directory on port $port; Codex retains both persistent workspace roots."
+echo "[railway-runtime] Production Studio is starting from the reviewed image on port $port."
+echo "[railway-runtime] Editable Workspace Studio is starting from $studio_workspace_directory behind the owner gateway on port $workspace_gateway_port."
 set +e
-wait -n "${child_processes[@]}"
+wait -n "${critical_processes[@]}"
 exit_code=$?
 set -e
 echo "[railway-runtime] a required runtime process stopped; shutting down for a clean restart."

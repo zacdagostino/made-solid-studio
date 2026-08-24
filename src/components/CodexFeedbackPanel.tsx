@@ -51,6 +51,7 @@ import {
   preferredEnglishSpeechVoice,
 } from '../lib/codex-speech';
 import { studioRuntimeFetch } from '../lib/studio-runtime';
+import { openCodexPanelEvent } from '../lib/codex-panel-events';
 import { isSupabaseConfigured, usesLocalStorage } from '../lib/supabase';
 import {
   useCallback,
@@ -1815,6 +1816,19 @@ export function CodexFeedbackPanel({
     const interval = window.setInterval(() => void refreshStatus(), 5_000);
     return () => window.clearInterval(interval);
   }, [refreshStatus]);
+
+  useEffect(() => {
+    const openPanel = () => {
+      setHasUnseenCompletion(false);
+      restoredChatThreadRef.current = '';
+      updateChatSession({ isOpen: true });
+      setPhase('compose');
+      setError(undefined);
+      void refreshStatus();
+    };
+    window.addEventListener(openCodexPanelEvent, openPanel);
+    return () => window.removeEventListener(openCodexPanelEvent, openPanel);
+  }, [refreshStatus, updateChatSession]);
 
   useEffect(() => {
     void browserCaptureRequest('ping', 1_000)

@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type PropsWithChildren } from 'react';
 import { subscribeToStudioUpdates } from '../lib/studio-hot-update';
+import type { StudioSurface } from '../lib/studio-surface';
 import { Button, IconButton } from './ui';
 
 export type AppPage =
@@ -63,7 +64,13 @@ function Navigation({
   );
 }
 
-function Brand({ hidden = false }: { hidden?: boolean }) {
+function Brand({
+  hidden = false,
+  surface = 'production',
+}: {
+  hidden?: boolean;
+  surface?: StudioSurface;
+}) {
   return (
     <div className={hidden ? 'brand brand--loading-hidden' : 'brand'}>
       <span aria-hidden="true" className="brand__mark" />
@@ -71,7 +78,9 @@ function Brand({ hidden = false }: { hidden?: boolean }) {
         <strong>
           <span>Made Solid</span> <span className="brand__studio">Studio</span>
         </strong>
-        <small>Website operations</small>
+        <small>
+          {surface === 'development' ? 'Development · Live source' : 'Website operations'}
+        </small>
       </span>
     </div>
   );
@@ -177,6 +186,7 @@ export function AppShell({
   onSignOut,
   userEmail,
   isLoading = false,
+  surface = 'production',
 }: PropsWithChildren<{
   activePage?: AppPage;
   /** Remounts the content transition when the active route or workspace section changes. */
@@ -186,6 +196,7 @@ export function AppShell({
   onSignOut?: () => Promise<void>;
   userEmail?: string;
   isLoading?: boolean;
+  surface?: StudioSurface;
 }>) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [isStudioUpdating, setIsStudioUpdating] = useState(false);
@@ -211,7 +222,13 @@ export function AppShell({
   return (
     <div className="app-shell">
       <aside aria-label="Primary navigation" className="sidebar">
-        <Brand hidden={isLoading} />
+        <Brand hidden={isLoading} surface={surface} />
+        {surface === 'development' ? (
+          <div className="development-surface-badge" role="status">
+            <span aria-hidden="true" />
+            Development
+          </div>
+        ) : null}
         <Navigation activePage={activePage} onNavigate={onNavigate} />
         <div className="navigation-footer">
           <AppearanceControl
@@ -246,7 +263,7 @@ export function AppShell({
             >
               <Dialog.Title className="sr-only">Navigation</Dialog.Title>
               <div className="drawer-header">
-                <Brand hidden={isLoading} />
+                <Brand hidden={isLoading} surface={surface} />
                 <Dialog.Close asChild>
                   <IconButton label="Close navigation menu" variant="quiet">
                     <X aria-hidden="true" size={20} />
@@ -272,7 +289,13 @@ export function AppShell({
             </Dialog.Content>
           </Dialog.Portal>
         </Dialog.Root>
-        <Brand hidden={isLoading} />
+        <Brand hidden={isLoading} surface={surface} />
+        {surface === 'development' ? (
+          <span className="development-surface-badge development-surface-badge--mobile">
+            <span aria-hidden="true" />
+            Live source
+          </span>
+        ) : null}
       </header>
 
       {isHydrating || isStudioUpdating ? (

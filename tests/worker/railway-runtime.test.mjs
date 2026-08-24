@@ -10,6 +10,7 @@ import { promisify } from 'node:util';
 import {
   createWorkspacePreviewToken,
   verifyWorkspacePreviewToken,
+  workspaceFrameUrl,
   workspacePreviewUrl,
 } from '../../scripts/workspace-preview-access.mjs';
 import {
@@ -45,6 +46,15 @@ test('creates expiring private workspace preview capabilities', () => {
   );
   assert.equal(url.origin, 'https://workspace.example.com');
   assert.ok(url.searchParams.get('access'));
+  const frameUrl = new URL(
+    workspaceFrameUrl('https://preview.example.com', 'prospect-site', secret),
+  );
+  assert.equal(frameUrl.origin, 'https://preview.example.com');
+  assert.match(
+    frameUrl.pathname,
+    /^\/__made-solid\/workspace-frame\/prospect-site\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\/$/,
+  );
+  assert.equal(frameUrl.search, '');
 });
 
 test('requires distinct exact HTTPS Studio, Workspace, and Preview origins', () => {
@@ -432,6 +442,9 @@ test('registers a single-volume Singapore Railway runtime with a health check', 
   assert.equal(configuration.deploy.restartPolicyType, 'ALWAYS');
   assert.match(viteConfiguration, /healthcheck\.railway\.app/);
   assert.match(viteConfiguration, /SITEFORGE_PUBLIC_ORIGIN/);
+  assert.match(viteConfiguration, /SITEFORGE_RUNTIME_API_PROXY_ORIGIN/);
+  assert.match(viteConfiguration, /workspaceDevelopment \? \[\] : \[localWorkspacePlugin\(\)\]/);
+  assert.match(viteConfiguration, /'\/__made-solid'/);
   assert.match(viteConfiguration, /server:[\s\S]*\.\.\.railwayAllowedHosts/);
   assert.match(
     viteConfiguration,
@@ -440,12 +453,27 @@ test('registers a single-volume Singapore Railway runtime with a health check', 
   assert.doesNotMatch(viteConfiguration, /frame-ancestors[^\n]*workspace\.madesolid\.com\.au/);
   assert.match(launcher, /studio_workspace_directory="\$workspace_root\/siteforge-os"/);
   assert.match(launcher, /ln -s "\$application_directory\/node_modules"/);
-  assert.match(launcher, /exec env -u NODE_ENV node/);
   assert.match(launcher, /cd "\$application_directory"/);
+  assert.match(launcher, /vite\.js" preview/);
   assert.match(launcher, /--config "\$application_directory\/vite\.config\.ts"/);
+  assert.match(launcher, /cd "\$studio_workspace_directory"/);
+  assert.match(launcher, /exec env -i/);
+  assert.match(launcher, /SITEFORGE_WORKSPACE_DEVELOPMENT=1/);
+  assert.match(launcher, /SITEFORGE_RUNTIME_API_PROXY_ORIGIN="http:\/\/127\.0\.0\.1:\$port"/);
+  assert.doesNotMatch(launcher, /--config "\$studio_workspace_directory\/vite\.config\.ts"/);
+  assert.equal(
+    (launcher.match(/--config "\$application_directory\/vite\.config\.ts"/g) || []).length,
+    2,
+  );
   assert.match(launcher, /--mode development/);
-  assert.match(launcher, /--force/);
-  assert.doesNotMatch(launcher, /vite\/bin\/vite\.js" preview/);
+  assert.match(launcher, /--host 127\.0\.0\.1/);
+  assert.match(launcher, /workspace-studio-gateway\.mjs/);
+  assert.doesNotMatch(
+    launcher,
+    /node "\$application_directory\/scripts\/workspace-preview-proxy\.mjs"/,
+  );
+  assert.match(launcher, /wait -n "\$\{critical_processes\[@\]\}"/);
+  assert.match(launcher, /production remains available while it restarts/);
 });
 
 test('preserves verified persistent repositories when GitHub is temporarily unavailable', async () => {

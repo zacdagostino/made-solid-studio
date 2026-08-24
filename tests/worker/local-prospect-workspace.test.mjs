@@ -91,7 +91,9 @@ test('exposes same-origin one-click workspace setup through the local Studio ser
   assert.doesNotMatch(source, /requestedDirectory \|\| active\?\.directory/);
   assert.match(source, /workspacePreviewRecoveryPromise/);
   assert.match(source, /websiteIsReady\(active\.port\)/);
-  assert.match(source, /workspacePreviewUrl\(origin, active\.directory, secret\)/);
+  assert.match(source, /clientPreviewUrl: workspaceFrameUrl\(origin, active\.directory, secret\)/);
+  assert.match(source, /\/__made-solid\/workspace-development-access/);
+  assert.match(source, /createWorkspaceStudioToken\(secret, ownerUserId/);
   assert.match(source, /\/__made-solid\/refinement-ledger/);
   assert.match(source, /request\.method !== 'POST'/);
   assert.match(source, /sec-fetch-site/);

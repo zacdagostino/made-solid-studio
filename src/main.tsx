@@ -2,10 +2,14 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { PreviewFrame, previewWorkspaceDirectory } from './PreviewFrame';
-import { WorkspacePreviewAccess } from './WorkspacePreviewAccess';
+import { restoreLegacyWorkspacePreviewRoute } from './WorkspacePreviewAccess';
 import { AuthenticatedCodexFeedbackPanel } from './components/AuthenticatedCodexFeedbackPanel';
 import { installStudioHotUpdateNotifications } from './lib/studio-hot-update';
+import { restoreWorkspaceRouteQuery } from './lib/studio-surface';
 import './styles.css';
+
+restoreWorkspaceRouteQuery();
+restoreLegacyWorkspacePreviewRoute();
 
 const removeStudioHotUpdateNotifications = installStudioHotUpdateNotifications();
 if (import.meta.hot) {
@@ -13,7 +17,6 @@ if (import.meta.hot) {
 }
 
 const isPreviewRoute = window.location.hash.startsWith('#/preview?');
-const isWorkspacePreviewAccessRoute = window.location.hash.startsWith('#/workspace-preview-access');
 const isCodexPanelRoute = window.location.hash.startsWith('#/codex-panel');
 const codexPanelDirectory = (() => {
   if (!isCodexPanelRoute) return undefined;
@@ -33,16 +36,12 @@ if (isCodexPanelRoute) {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    {isCodexPanelRoute ? null : isPreviewRoute ? (
-      <PreviewFrame />
-    ) : isWorkspacePreviewAccessRoute ? (
-      <WorkspacePreviewAccess />
-    ) : (
-      <App />
-    )}
-    <AuthenticatedCodexFeedbackPanel
-      embedded={isCodexPanelRoute}
-      workspaceDirectory={workspaceDirectory}
-    />
+    {isCodexPanelRoute ? null : isPreviewRoute ? <PreviewFrame /> : <App />}
+    {isCodexPanelRoute || isPreviewRoute ? (
+      <AuthenticatedCodexFeedbackPanel
+        embedded={isCodexPanelRoute}
+        workspaceDirectory={workspaceDirectory}
+      />
+    ) : null}
   </StrictMode>,
 );

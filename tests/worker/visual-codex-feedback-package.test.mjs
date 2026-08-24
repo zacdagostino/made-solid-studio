@@ -226,6 +226,10 @@ const canonicalWorkspaceEntryMigrationUrl = new URL(
   '../../supabase/migrations/20260824100000_canonical_workspace_entry_test_package.sql',
   import.meta.url,
 );
+const workspaceDevelopmentStudioMigrationUrl = new URL(
+  '../../supabase/migrations/20260824110000_workspace_development_studio_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -294,10 +298,35 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 73);
+  assert.equal(Number(revision[1]), 74);
   assert.match(app, /shows chats for that client plus clearly labelled universal Studio chats/);
   assert.match(app, /gives only the authenticated Studio owner a disclosed, reversible switch/);
-  assert.match(app, /a direct Workspace visit now opens Studio/);
+  assert.match(app, /Workspace now runs the authenticated live-development Studio/);
+});
+
+test('registers the Workspace development Studio above immutable v20.1', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(workspaceDevelopmentStudioMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /Workspace development Studio test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v20\.2/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v20\.1'/,
+  );
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /not exists/i);
+  assert.match(migration, /Serve production Studio only from immutable built release assets/);
+  assert.match(migration, /Serve Workspace from \/data\/workspaces\/siteforge-os/);
+  assert.match(migration, /never expose capability tokens in the clean Workspace URL/);
+  assert.match(repository, /version: 20\.2,/);
+  assert.match(repository, /basePackageId: localCanonicalWorkspaceEntryPackage\.id/);
+  const ledger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    ledger.indexOf('localWorkspaceDevelopmentStudioPackage,') <
+      ledger.indexOf('localCanonicalWorkspaceEntryPackage,'),
+  );
 });
 
 test('registers canonical Workspace entry above immutable v20.0', async () => {
@@ -325,8 +354,8 @@ test('registers canonical Workspace entry above immutable v20.0', async () => {
   );
   assert.match(proxy, /Location: `\$\{configuration\.studioOrigin\}\/#\/prospects`/);
   assert.doesNotMatch(proxy, /requestCookie\(request, lastWorkspaceCookieName\)/);
-  assert.match(access, /if \(!requestedDirectory\)/);
-  assert.match(access, /window\.location\.replace\('\/#\/prospects'\)/);
+  assert.match(access, /restoreLegacyWorkspacePreviewRoute/);
+  assert.match(access, /#\/workspace-development-access\?path=/);
   assert.match(vitePlugin, /if \(!directoryPattern\.test\(requestedDirectory\)\)/);
   assert.doesNotMatch(vitePlugin, /requestedDirectory \|\| active\?\.directory/);
 });
@@ -640,7 +669,10 @@ test('retains the renderable Railway Studio as the immutable v18.9 base package'
     ledger.indexOf('localRenderableRailwayStudioPackage,') <
       ledger.indexOf('localResilientStudioSessionRecoveryPackage,'),
   );
-  assert.match(launcher, /exec env -u NODE_ENV node/);
+  assert.match(launcher, /vite\.js" preview/);
+  assert.match(launcher, /--config "\$application_directory\/vite\.config\.ts"/);
+  assert.match(launcher, /maintain_workspace_studio/);
+  assert.match(launcher, /cd "\$studio_workspace_directory"/);
   assert.match(launcher, /--mode development/);
   assert.match(launcher, /--force/);
 });
@@ -747,7 +779,9 @@ test('registers the live editable Studio runtime as the newest immutable package
     packageLedger.indexOf('localLiveEditableStudioRuntimePackage,') <
       packageLedger.indexOf('localImageOnlyCodexMessagePackage,'),
   );
-  assert.match(launcher, /exec env -u NODE_ENV node/);
+  assert.match(launcher, /maintain_workspace_studio/);
+  assert.match(launcher, /SITEFORGE_WORKSPACE_DEVELOPMENT=1/);
+  assert.match(launcher, /--host 127\.0\.0\.1/);
   assert.match(launcher, /--mode development/);
   assert.match(launcher, /--force/);
   assert.match(launcher, /studio_workspace_directory/);
@@ -1920,10 +1954,9 @@ test('uses shared controls, a compact model selector, and live model discovery f
   );
   assert.match(main, /document\.documentElement\.dataset\.codexPanel = 'embedded'/);
   assert.match(app, /studioPreviewUrl\(lastEvent\.previewUrl, window\.location\.hash, directory\)/);
-  assert.match(
-    app,
-    /workspaceEditorUrl\([\s\S]*event\.previewUrl,[\s\S]*window\.location\.hash,[\s\S]*localWorkspaceDirectoryName/,
-  );
+  assert.match(app, /workspaceEditorUrl\(window\.location\.hash\)/);
+  assert.match(app, /function workspaceEditorUrl\(returnRoute = window\.location\.hash\)/);
+  assert.match(app, /return developmentStudioUrl\(returnRoute\)/);
   assert.match(component, /codex-status/);
   assert.match(component, /codex-feedback/);
   assert.match(component, /captureVisiblePage/);

@@ -17,11 +17,17 @@ import {
   loadGoogleSpeechConfiguration,
   synthesizeGoogleSpeech,
 } from './google-cloud-tts.mjs';
-import { verifyWorkspacePreviewToken, workspacePreviewUrl } from './workspace-preview-access.mjs';
+import {
+  createWorkspaceStudioToken,
+  verifyWorkspacePreviewToken,
+  workspaceFrameUrl,
+  workspacePreviewUrl,
+} from './workspace-preview-access.mjs';
 import { assertPublicUrl } from '../worker/security.mjs';
 
 const localWorkspaceEndpoint = '/__made-solid/local-workspace';
 const workspacePreviewAccessEndpoint = '/__made-solid/workspace-preview-access';
+const workspaceDevelopmentAccessEndpoint = '/__made-solid/workspace-development-access';
 const workspaceCodexEndpoint = '/__made-solid/workspace-codex';
 const refinementLedgerEndpoint = '/__made-solid/refinement-ledger';
 const learningBundleEndpoint = '/__made-solid/learning-bundle';
@@ -970,6 +976,7 @@ export function localWorkspacePlugin() {
         else response.end(document);
         return;
       }
+      let runtimeAuthorization;
       if (requestUrl.pathname.startsWith('/__made-solid/')) {
         const authorization = await authorizeStudioRuntimeRequest(request);
         if (!authorization.authorized) {
@@ -979,6 +986,43 @@ export function localWorkspacePlugin() {
           });
           return;
         }
+        runtimeAuthorization = authorization;
+      }
+      if (requestUrl.pathname === workspaceDevelopmentAccessEndpoint) {
+        if (request.method !== 'GET') {
+          response.statusCode = 405;
+          response.end('Method not allowed');
+          return;
+        }
+        const fetchSite = String(request.headers['sec-fetch-site'] || '').toLowerCase();
+        if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
+          sendJson(response, 403, {
+            status: 'failed',
+            detail: 'Workspace access is only available from Made Solid Studio.',
+          });
+          return;
+        }
+        try {
+          const origin = process.env.SITEFORGE_WORKSPACE_PREVIEW_ORIGIN?.trim();
+          const secret = process.env.SITEFORGE_WORKSPACE_PREVIEW_SECRET?.trim();
+          const ownerUserId = runtimeAuthorization?.userId;
+          if (!origin || !secret || !ownerUserId) {
+            throw new Error('The Workspace development origin is not configured.');
+          }
+          const workspaceUrl = new URL(origin);
+          workspaceUrl.searchParams.set(
+            'access',
+            createWorkspaceStudioToken(secret, ownerUserId, { lifetimeMs: 2 * 60 * 1_000 }),
+          );
+          sendJson(response, 200, { status: 'ready', workspaceUrl: workspaceUrl.href });
+        } catch (error) {
+          sendJson(response, 503, {
+            status: 'unavailable',
+            detail:
+              error instanceof Error ? error.message : 'Workspace development is unavailable.',
+          });
+        }
+        return;
       }
       if (requestUrl.pathname === aiBillingModeEndpoint) {
         const fetchSite = request.headers['sec-fetch-site'];
@@ -1027,12 +1071,12 @@ export function localWorkspacePlugin() {
             return;
           }
           const active = await readyWorkspacePreview(request, requestedDirectory);
-          const origin = process.env.SITEFORGE_WORKSPACE_PREVIEW_ORIGIN?.trim();
+          const origin = process.env.PREVIEW_PUBLIC_ORIGIN?.trim();
           const secret = process.env.SITEFORGE_WORKSPACE_PREVIEW_SECRET?.trim();
           if (!origin || !secret) throw new Error('The workspace preview is not configured.');
           sendJson(response, 200, {
+            clientPreviewUrl: workspaceFrameUrl(origin, active.directory, secret),
             directory: active.directory,
-            previewUrl: workspacePreviewUrl(origin, active.directory, secret),
             status: 'ready',
           });
         } catch (error) {

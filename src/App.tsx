@@ -79,6 +79,7 @@ import agentPackageWorkerSource from '../worker/agent-package-worker.mjs?raw';
 import madeSolidHandoffWorkerSource from '../worker/made-solid-handoff-worker.mjs?raw';
 import buildManifestSource from './lib/build-manifest.ts?raw';
 import { AppShell, type AppPage } from './components/AppShell';
+import { AuthenticatedCodexFeedbackPanel } from './components/AuthenticatedCodexFeedbackPanel';
 import { AgentArchitectureOverview } from './components/AgentArchitectureOverview';
 import { MarkdownContent } from './components/MarkdownContent';
 import { TaxExpensesPage } from './components/TaxExpensesPage';
@@ -87,6 +88,10 @@ import { OutreachReadinessPanel } from './components/OutreachReadinessPanel';
 import { ClientEmailDesk } from './components/ClientEmailDesk';
 import { AuditReportPanel } from './components/AuditReportPanel';
 import { ClientReportPreview } from './components/ClientReportPreview';
+import {
+  WorkspaceDevelopmentAccess,
+  workspaceDevelopmentReturnPath,
+} from './WorkspaceDevelopmentAccess';
 import {
   Button,
   ButtonGroup,
@@ -152,6 +157,8 @@ import { detectCapabilities } from './lib/capability-inventory';
 import { siteforgeRepository, type WorkspaceRepository } from './lib/repository';
 import { getSupabaseClient, isSupabaseConfigured, usesLocalStorage } from './lib/supabase';
 import { studioRuntimeFetch } from './lib/studio-runtime';
+import { openCodexPanel } from './lib/codex-panel-events';
+import { developmentStudioUrl, isDevelopmentStudio, studioSurface } from './lib/studio-surface';
 import {
   clearWorkspaceCache,
   readWorkspaceCache,
@@ -179,6 +186,7 @@ type Route =
   | { page: 'usage'; builderRunId?: string }
   | { page: 'tax' }
   | { page: 'settings' }
+  | { page: 'workspace-development-access'; returnPath: string }
   | { page: 'agent-studio'; section?: AgentStudioSection; businessId?: string }
   | { page: 'prospects'; businessId?: string; versionId?: string; tab?: WorkspaceTab };
 
@@ -199,19 +207,8 @@ function studioPreviewUrl(
   return shell.href;
 }
 
-function workspaceEditorUrl(
-  source: string,
-  returnRoute = window.location.hash,
-  workspaceDirectory?: string,
-) {
-  const destination = new URL(source);
-  if (returnRoute.startsWith('#/') && !returnRoute.startsWith('#//')) {
-    destination.searchParams.set('__made_solid_return', returnRoute.slice(1));
-  }
-  if (workspaceDirectory) {
-    destination.searchParams.set('__made_solid_workspace', workspaceDirectory);
-  }
-  return destination.href;
+function workspaceEditorUrl(returnRoute = window.location.hash) {
+  return developmentStudioUrl(returnRoute);
 }
 
 const workspaceTabs = [
@@ -239,6 +236,12 @@ function isAgentStudioSection(value: string | undefined): value is AgentStudioSe
 }
 
 function routeFromHash(hash: string): Route {
+  if (hash.startsWith('#/workspace-development-access')) {
+    return {
+      page: 'workspace-development-access',
+      returnPath: workspaceDevelopmentReturnPath(hash),
+    };
+  }
   const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   if (parts[0] === 'prospects') {
     return {
@@ -272,6 +275,9 @@ function hrefForRoute(route: Route) {
   if (route.page === 'data') return '#/data';
   if (route.page === 'usage') return `#/usage${route.builderRunId ? `/${route.builderRunId}` : ''}`;
   if (route.page === 'tax') return '#/tax';
+  if (route.page === 'workspace-development-access') {
+    return `#/workspace-development-access?path=${encodeURIComponent(route.returnPath)}`;
+  }
   if (route.page === 'agent-studio') {
     const section = route.section ?? 'refine';
     return `#/agent-studio/${section}${route.businessId ? `/${route.businessId}` : ''}`;
@@ -288,6 +294,9 @@ function storedRouteHash() {
 }
 
 function persistRouteHash(hash: string) {
+  // This is a one-use authentication handoff, not a place the user can return to. Persisting it
+  // would make a later bare Studio visit unexpectedly reopen Development Workspace.
+  if (routeFromHash(hash).page === 'workspace-development-access') return;
   try {
     window.localStorage.setItem(lastRouteStorageKey, hash);
   } catch {
@@ -296,7 +305,15 @@ function persistRouteHash(hash: string) {
 }
 
 function initialRoute() {
-  const hash = window.location.hash || storedRouteHash() || '#/today';
+  const storedHash = storedRouteHash();
+  const stored = storedHash ? routeFromHash(storedHash) : undefined;
+  const safeStoredHash =
+    stored?.page === 'workspace-development-access'
+      ? undefined
+      : isDevelopmentStudio() && stored?.page === 'prospects' && stored.businessId
+        ? '#/prospects'
+        : storedHash;
+  const hash = window.location.hash || safeStoredHash || '#/today';
   persistRouteHash(hash);
   if (!window.location.hash && hash) window.history.replaceState(null, '', hash);
   return routeFromHash(hash);
@@ -8865,10 +8882,10 @@ function BuilderRunPanel({
             id: 'visual-codex-feedback',
             title: 'Codex Workspace Agent and visual feedback',
             detail:
-              'The Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy. It defaults to included ChatGPT subscription access and gives only the authenticated Studio owner a disclosed, reversible switch to separately billed OpenAI API credits for all Studio AI work when subscription allowance is exhausted. A client website editor shows chats for that client plus clearly labelled universal Studio chats, hides every other client, and starts new client chats with only that website repository available to edit. Reviewers can send text, images, or both, choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. Studio source edits apply in place without restarting the workspace, and a compact top status announces the brief update while the current route and content remain mounted. A refresh restores the open selected conversation and its exact transcript reading position without changing the active prospect route. A direct workspace.madesolid.com.au visit opens the canonical Studio UI; only an explicit exact-client launch opens or recovers that client’s private development shell without exposing its capability in the clean URL. Observable activity and queue state appears without invented progress.',
-            revision: `v${selectedAgentPackage.version}.73`,
+              'The Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy. It defaults to included ChatGPT subscription access and gives only the authenticated Studio owner a disclosed, reversible switch to separately billed OpenAI API credits for all Studio AI work when subscription allowance is exhausted. Production Studio stays on its exact reviewed release, while an authenticated workspace.madesolid.com.au visit opens the full Studio UI from the persistent editable checkout with immediate source updates. A client website editor remains a clean route inside that development Studio and shows chats for that client plus clearly labelled universal Studio chats, hides every other client, and starts new client chats with only that website repository available to edit. Reviewers can send text, images, or both, choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. Studio source edits apply in place without restarting the workspace, and a compact top status announces the brief update while the current route and content remain mounted. A refresh restores the open selected conversation and its exact transcript reading position without changing the active prospect route. Exact-client preview capabilities stay private and out of the clean Workspace URL. Observable activity and queue state appears without invented progress.',
+            revision: `v${selectedAgentPackage.version}.74`,
             change:
-              'Latest edit: a direct Workspace visit now opens Studio, while only an explicit exact-client website-editor launch can open or recover a client development shell.',
+              'Latest edit: Workspace now runs the authenticated live-development Studio from its editable checkout, while production Studio stays on the reviewed release and client editors remain isolated routes inside the full Workspace UI.',
           },
           {
             id: 'inbound-client-email-review',
@@ -16354,14 +16371,29 @@ function defaultGithubRepositoryOwner(publication?: GithubWorkspacePublication) 
   return import.meta.env.VITE_GITHUB_REPOSITORY_OWNER?.trim() || 'zacdagostino';
 }
 
+function editableWorkspaceDirectoryName(workspace: ProspectWorkspace) {
+  const completedBuild = workspace.builderRuns.find(
+    (run) =>
+      run.buildMode === 'full_site' && (run.status === 'ready' || run.status === 'review_required'),
+  );
+  const publication = completedBuild
+    ? workspace.githubWorkspacePublications.find(
+        (candidate) => candidate.builderRunId === completedBuild.id,
+      )
+    : undefined;
+  return publication?.repositoryName ?? githubRepositoryName(workspace.business.name);
+}
+
 function LocalDevelopmentPublicationPanel({
   workspace,
   onPublish,
   onCancel,
+  onWorkspaceReady,
 }: {
   workspace: ProspectWorkspace;
   onPublish: (builderRunId: string, input: GithubWorkspacePublicationInput) => Promise<void>;
   onCancel: (publicationId: string) => Promise<void>;
+  onWorkspaceReady?: () => void;
 }) {
   const latestCompletedBuild = workspace.builderRuns.find(
     (run) =>
@@ -16398,8 +16430,7 @@ function LocalDevelopmentPublicationPanel({
   const normalizedOwner = repositoryOwner.trim();
   const normalizedName = repositoryName.trim();
   const repositoryTarget = `${normalizedOwner || 'owner'}/${normalizedName || 'repository'}`;
-  const localWorkspaceDirectoryName =
-    publication?.repositoryName ?? githubRepositoryName(workspace.business.name);
+  const localWorkspaceDirectoryName = editableWorkspaceDirectoryName(workspace);
   const localWorkspaceDirectory = `prospect-workspaces/${localWorkspaceDirectoryName}`;
   const localWorkspaceCommand = publication?.fullName
     ? `npm run workspace:open -- --repository ${publication.fullName}`
@@ -16411,6 +16442,7 @@ function LocalDevelopmentPublicationPanel({
     detail: 'Loading the local refinement ledger.',
     entries: [],
   });
+  const developmentSurface = isDevelopmentStudio();
 
   useEffect(() => {
     if (!completedBuild) return;
@@ -16519,7 +16551,7 @@ function LocalDevelopmentPublicationPanel({
 
   async function openLocalWorkspace() {
     if (!completedBuild || localWorkspaceSetup.status === 'running') return;
-    const previewWindow = window.open('', '_blank');
+    const previewWindow = developmentSurface ? null : window.open('', '_blank');
     if (previewWindow) {
       previewWindow.opener = null;
       previewWindow.document.title = 'Preparing website preview';
@@ -16559,15 +16591,15 @@ function LocalDevelopmentPublicationPanel({
           const event = JSON.parse(line) as LocalWorkspaceSetup;
           setLocalWorkspaceSetup(event);
           if (event.status === 'complete' && event.previewUrl) {
-            const destination = workspaceEditorUrl(
-              event.previewUrl,
-              window.location.hash,
-              localWorkspaceDirectoryName,
-            );
-            if (previewWindow && !previewWindow.closed) {
-              previewWindow.location.replace(destination);
+            if (developmentSurface) {
+              onWorkspaceReady?.();
             } else {
-              window.location.assign(destination);
+              const destination = workspaceEditorUrl(window.location.hash);
+              if (previewWindow && !previewWindow.closed) {
+                previewWindow.location.replace(destination);
+              } else {
+                window.location.assign(destination);
+              }
             }
           } else if (event.status === 'failed') {
             previewWindow?.close();
@@ -16649,8 +16681,12 @@ function LocalDevelopmentPublicationPanel({
               {localWorkspaceSetup.status === 'running'
                 ? 'Preparing local workspace'
                 : localWorkspaceSetup.status === 'complete'
-                  ? 'Website launched'
-                  : 'Open local workspace'}
+                  ? developmentSurface
+                    ? 'Live editor ready'
+                    : 'Development Workspace ready'
+                  : developmentSurface
+                    ? 'Start live editor'
+                    : 'Open in Development Workspace'}
             </Button>
             {localWorkspaceSetup.status !== 'idle' ? (
               <div
@@ -16692,17 +16728,13 @@ function LocalDevelopmentPublicationPanel({
             ) : null}
             {localWorkspaceSetup.previewUrl ? (
               <ButtonLink
-                href={workspaceEditorUrl(
-                  localWorkspaceSetup.previewUrl,
-                  window.location.hash,
-                  localWorkspaceDirectoryName,
-                )}
+                href={workspaceEditorUrl(window.location.hash)}
                 rel="noreferrer"
                 target="_blank"
                 variant="secondary"
               >
                 <ExternalLink aria-hidden="true" size={16} />
-                Open website preview
+                Open Development Workspace
               </ButtonLink>
             ) : null}
             <section
@@ -17048,6 +17080,174 @@ function LocalDevelopmentPublicationPanel({
   );
 }
 
+type ClientDevelopmentAccessResponse = {
+  clientPreviewUrl?: unknown;
+  detail?: unknown;
+  directory?: unknown;
+  status?: unknown;
+};
+
+function validClientPreviewUrl(value: unknown, directory: string) {
+  if (typeof value !== 'string') return undefined;
+  try {
+    const url = new URL(value);
+    const configuredOrigin =
+      import.meta.env.VITE_SITEFORGE_PREVIEW_ORIGIN?.trim() || 'https://preview.madesolid.com.au';
+    const previewOrigin = new URL(configuredOrigin).origin;
+    const framePrefix = `/__made-solid/workspace-frame/${directory}/`;
+    if (
+      url.protocol !== 'https:' ||
+      url.origin !== previewOrigin ||
+      !url.pathname.startsWith(framePrefix) ||
+      url.username ||
+      url.password ||
+      url.hash
+    ) {
+      return undefined;
+    }
+    return url.href;
+  } catch {
+    return undefined;
+  }
+}
+
+function ClientDevelopmentEditor({
+  directory,
+  refreshKey,
+  clientName,
+}: {
+  directory: string;
+  refreshKey: number;
+  clientName: string;
+}) {
+  const [previewUrl, setPreviewUrl] = useState('');
+  const [loadKey, setLoadKey] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [frameLoading, setFrameLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setError('');
+    setPreviewUrl('');
+    const access = new URL('/__made-solid/workspace-preview-access', window.location.origin);
+    access.searchParams.set('directory', directory);
+    void studioRuntimeFetch(`${access.pathname}${access.search}`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => undefined)) as
+          ClientDevelopmentAccessResponse | undefined;
+        if (!response.ok || !payload) {
+          throw new Error(
+            typeof payload?.detail === 'string'
+              ? payload.detail
+              : 'The live client preview is not available yet.',
+          );
+        }
+        if (payload.directory !== directory) {
+          throw new Error('The live preview did not match this client workspace.');
+        }
+        const source = validClientPreviewUrl(payload.clientPreviewUrl, directory);
+        if (!source) throw new Error('The runtime did not return a secure client preview.');
+        setPreviewUrl(source);
+        setFrameLoading(true);
+      })
+      .catch((cause: unknown) => {
+        if (controller.signal.aborted) return;
+        setError(
+          cause instanceof Error ? cause.message : 'The live client preview could not be opened.',
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [directory, loadKey, refreshKey]);
+
+  return (
+    <section
+      aria-labelledby="client-development-editor-title"
+      className="client-development-editor"
+      data-testid="client-development-editor"
+    >
+      <header className="client-development-editor__header">
+        <div>
+          <Eyebrow>Development Workspace</Eyebrow>
+          <h2 id="client-development-editor-title">{clientName} live website editor</h2>
+          <p>
+            Changes appear here immediately while Studio navigation and client context stay open.
+          </p>
+        </div>
+        <div className="client-development-editor__actions">
+          <span className="client-development-editor__live">
+            <span aria-hidden="true" /> Live source
+          </span>
+          <IconButton
+            disabled={loading}
+            label="Reload client preview"
+            onClick={() => setLoadKey((current) => current + 1)}
+            variant="quiet"
+          >
+            <RotateCcw aria-hidden="true" size={17} />
+          </IconButton>
+          <Button onClick={openCodexPanel} variant="secondary">
+            <Bot aria-hidden="true" size={17} />
+            Open client Codex
+          </Button>
+        </div>
+      </header>
+      <div className="client-development-editor__scope" role="status">
+        <Laptop aria-hidden="true" size={17} />
+        <span>
+          <strong>Editing only {clientName}</strong>
+          <small>
+            Client chats can edit this website only. Universal Studio chats remain available.
+          </small>
+        </span>
+      </div>
+      <div className="client-development-editor__surface">
+        {loading || frameLoading ? (
+          <div className="client-development-editor__loading" role="status">
+            <LoaderCircle aria-hidden="true" className="spin" size={18} />
+            {loading ? 'Connecting to the live client preview…' : 'Rendering the latest website…'}
+          </div>
+        ) : null}
+        {error ? (
+          <div className="client-development-editor__error" role="alert">
+            <CircleAlert aria-hidden="true" size={20} />
+            <div>
+              <strong>Live preview unavailable</strong>
+              <p>{error}</p>
+              <Button
+                onClick={() => setLoadKey((current) => current + 1)}
+                size="small"
+                variant="secondary"
+              >
+                Try again
+              </Button>
+            </div>
+          </div>
+        ) : previewUrl ? (
+          <iframe
+            key={`${previewUrl}:${loadKey}`}
+            onError={() => {
+              setFrameLoading(false);
+              setError('The secured client preview stopped responding.');
+            }}
+            onLoad={() => setFrameLoading(false)}
+            sandbox="allow-modals allow-popups allow-scripts"
+            src={previewUrl}
+            title={`${clientName} live website preview`}
+          />
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function WebsiteEditingPage({
   workspace,
   onPublish,
@@ -17065,6 +17265,7 @@ function WebsiteEditingPage({
     detail: '',
   });
   const [error, setError] = useState('');
+  const [editorRefreshKey, setEditorRefreshKey] = useState(0);
   const isRunning = progress.status === 'running';
   const canFinalise = state.status === 'changes_pending' || state.status === 'ready';
 
@@ -17158,9 +17359,35 @@ function WebsiteEditingPage({
           </li>
         </ol>
       </section>
+      {isDevelopmentStudio() ? (
+        <ClientDevelopmentEditor
+          clientName={workspace.business.name}
+          directory={editableWorkspaceDirectoryName(workspace)}
+          refreshKey={editorRefreshKey}
+        />
+      ) : (
+        <section
+          className="development-workspace-handoff"
+          aria-labelledby="development-workspace-title"
+        >
+          <div>
+            <Eyebrow>Development Workspace</Eyebrow>
+            <h2 id="development-workspace-title">Edit this website in the live Studio</h2>
+            <p>
+              Production Studio stays on this reviewed release. Open the same client route in
+              Workspace to see source changes immediately.
+            </p>
+          </div>
+          <ButtonLink href={workspaceEditorUrl(window.location.hash)} variant="primary">
+            <Laptop aria-hidden="true" size={17} />
+            Open in Development Workspace
+          </ButtonLink>
+        </section>
+      )}
       <LocalDevelopmentPublicationPanel
         onCancel={onCancel}
         onPublish={onPublish}
+        onWorkspaceReady={() => setEditorRefreshKey((current) => current + 1)}
         workspace={workspace}
       />
       <Card className="workspace-panel final-edit" data-testid="final-edit-checkpoint">
@@ -21172,7 +21399,10 @@ function WorkspaceApp({
     navigate({ page: 'prospects' });
   }
 
-  const activePage: AppPage = route.page === 'prospects' ? 'prospects' : route.page;
+  const activePage: AppPage =
+    route.page === 'prospects' || route.page === 'workspace-development-access'
+      ? 'prospects'
+      : route.page;
 
   if (!loadingPresentation && storageError) {
     return (
@@ -21214,9 +21444,12 @@ function WorkspaceApp({
           )
         }
         onSignOut={onSignOut}
+        surface={studioSurface()}
         userEmail={userEmail}
       >
-        {loadingPresentation ? null : route.page === 'today' ? (
+        {loadingPresentation ? null : route.page === 'workspace-development-access' ? (
+          <WorkspaceDevelopmentAccess returnPath={route.returnPath} />
+        ) : route.page === 'today' ? (
           <TodayPage
             businesses={businesses}
             openWorkspace={openWorkspace}
@@ -21381,6 +21614,24 @@ function WorkspaceApp({
           />
         )}
       </AppShell>
+      <AuthenticatedCodexFeedbackPanel
+        key={
+          isDevelopmentStudio() &&
+          route.page === 'prospects' &&
+          route.tab === 'editing' &&
+          workspace
+            ? editableWorkspaceDirectoryName(workspace)
+            : 'universal'
+        }
+        workspaceDirectory={
+          isDevelopmentStudio() &&
+          route.page === 'prospects' &&
+          route.tab === 'editing' &&
+          workspace
+            ? editableWorkspaceDirectoryName(workspace)
+            : undefined
+        }
+      />
       {loadingPresentation ? (
         <WorkspaceLoadingOverlay
           loading={loading}
