@@ -3742,7 +3742,10 @@ test('displays the newest test package above retained package versions', async (
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const packagePicker = page.getByLabel('Test agent package');
-  await expect(packagePicker).toHaveValue('agent-package-local-v20-2-workspace-development-studio');
+  await expect(packagePicker).toHaveValue(
+    'agent-package-local-v20-3-restored-codex-voice-experience',
+  );
+  await expect(packagePicker).toContainText('v20.3 · Approved test');
   await expect(packagePicker).toContainText('v20.2 · Approved test');
   await expect(packagePicker).toContainText('v20.1 · Approved test');
   await expect(packagePicker).toContainText('v20.0 · Approved test');
@@ -3891,6 +3894,7 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v20.3', 'Restored Codex voice experience'],
     ['v20.2', 'Workspace development Studio'],
     ['v20.1', 'Canonical Workspace entry'],
     ['v20.0', 'Deployed Studio shell'],

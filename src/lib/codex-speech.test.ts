@@ -3,7 +3,12 @@ import {
   codexCloudSpeechChunks,
   codexSpeechChunks,
   codexSpeechLanguage,
+  codexSpeechRate,
   codexSpeechText,
+  codexSpeechTextFromWord,
+  codexSpeechTimeAtWord,
+  codexSpeechWordAtTime,
+  codexSpeechWords,
   estimatedCodexSpeechSeconds,
   formatCodexSpeechTime,
   preferredEnglishSpeechVoice,
@@ -74,6 +79,29 @@ See https://www.example.com/checks/.
   it('returns an empty string for empty or formatting-only input', () => {
     expect(codexSpeechText(' \n---\n')).toBe('');
   });
+
+  it('offers a faithful Literal style while Natural keeps structural markup quiet', () => {
+    const markdown = `# Ready
+
+- First check
+
+[Review docs](https://example.com/docs)
+
+\`\`\`ts
+const value = 1;
+\`\`\``;
+
+    const natural = codexSpeechText(markdown, 'natural');
+    const literal = codexSpeechText(markdown, 'literal');
+
+    expect(natural).toContain('Ready.');
+    expect(natural).toContain('Code example omitted.');
+    expect(natural).not.toContain('Heading.');
+    expect(literal).toContain('Heading. Ready.');
+    expect(literal).toContain('Bullet. First check.');
+    expect(literal).toContain('Review docs, link to example.com/docs.');
+    expect(literal).toContain('Code block starts. const value = 1; Code block ends.');
+  });
 });
 
 describe('codexSpeechChunks', () => {
@@ -107,6 +135,22 @@ describe('codexSpeechChunks', () => {
 
   it('returns no chunks when there is nothing to speak', () => {
     expect(codexSpeechChunks('')).toEqual([]);
+  });
+});
+
+describe('progressive speech text', () => {
+  it('keeps word tracking and resume text aligned', () => {
+    const markdown = '# Update\n\n- Review the report carefully';
+    expect(codexSpeechWords(markdown)).toEqual(codexSpeechText(markdown).match(/\S+/g));
+    expect(codexSpeechTextFromWord(markdown, 2)).toBe('the report carefully.');
+  });
+
+  it('calibrates word positions against a measured audio duration', () => {
+    const text = 'Short considerably-longer final.';
+
+    expect(codexSpeechWordAtTime(text, 10, 0)).toBe(0);
+    expect(codexSpeechWordAtTime(text, 10, 9.99)).toBe(2);
+    expect(codexSpeechTimeAtWord(text, 10, 2)).toBeGreaterThan(codexSpeechTimeAtWord(text, 10, 1));
   });
 });
 
@@ -158,6 +202,24 @@ describe('preferredEnglishSpeechVoice', () => {
     expect(preferredEnglishSpeechVoice([localFrench, remoteEnglish])).toBe(remoteEnglish);
     expect(preferredEnglishSpeechVoice([localFrench])).toBeUndefined();
     expect(codexSpeechLanguage).toBe('en-AU');
+    expect(codexSpeechRate).toBe(0.94);
+  });
+
+  it('prefers an explicitly requested English locale before another local accent', () => {
+    const remoteAmerican = speechVoice('Remote American', 'en-US');
+    const localAustralian = speechVoice('Local Australian', 'en-AU', { local: true });
+    const localBritish = speechVoice('Local British', 'en-GB', { local: true });
+
+    expect(
+      preferredEnglishSpeechVoice([localAustralian, localBritish, remoteAmerican], 'en_US'),
+    ).toBe(remoteAmerican);
+  });
+
+  it('prefers a local voice when several voices match the requested locale', () => {
+    const remoteBritish = speechVoice('Remote British', 'en-GB', { defaultVoice: true });
+    const localBritish = speechVoice('Local British', 'en_GB', { local: true });
+
+    expect(preferredEnglishSpeechVoice([remoteBritish, localBritish], 'en-GB')).toBe(localBritish);
   });
 });
 

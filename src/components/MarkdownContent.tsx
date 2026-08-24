@@ -1,4 +1,17 @@
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, type KeyboardEvent, type ReactNode } from 'react';
+
+type SpeechWords = {
+  activeWordIndex?: number;
+  onWordSelect: (wordIndex: number) => void;
+  words: string[];
+};
+
+type InlineContext = {
+  keyPrefix: string;
+  speech?: SpeechWords;
+  wordIndex: { current: number };
+  wordsInteractive?: boolean;
+};
 
 type MarkdownBlock =
   | { type: 'code'; language: string; content: string }
@@ -18,21 +31,94 @@ function safeHref(value: string) {
   return undefined;
 }
 
-function inlineMarkdown(value: string, keyPrefix: string): ReactNode[] {
+function inlineText(value: string, context: InlineContext): ReactNode[] {
+  if (!context.speech) return [value];
+  const speech = context.speech;
+  return value.split(/(\s+)/).map((part, partIndex) => {
+    if (!part || /^\s+$/.test(part)) return part;
+    const normalizedPart = part
+      .replace(/^https?:\/\//i, '')
+      .replace(/^www\./i, '')
+      .replace(/[^\p{L}\p{N}]+/gu, '')
+      .toLocaleLowerCase();
+    let wordIndex = context.wordIndex.current;
+    while (wordIndex < speech.words.length) {
+      const candidate = speech.words[wordIndex]
+        .replace(/^https?:\/\//i, '')
+        .replace(/^www\./i, '')
+        .replace(/[^\p{L}\p{N}]+/gu, '')
+        .toLocaleLowerCase();
+      if (candidate === normalizedPart) break;
+      wordIndex += 1;
+    }
+    if (!normalizedPart || wordIndex >= speech.words.length) return part;
+    context.wordIndex.current = wordIndex + 1;
+    const active = wordIndex === context.speech?.activeWordIndex;
+    const activate = () => context.speech?.onWordSelect(wordIndex);
+    const handleKeyDown = (event: KeyboardEvent<HTMLSpanElement>) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        activate();
+        return;
+      }
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      event.preventDefault();
+      const targetIndex = wordIndex + (event.key === 'ArrowRight' ? 1 : -1);
+      event.currentTarget
+        .closest('.markdown-content')
+        ?.querySelector<HTMLElement>(`[data-speech-word-index="${targetIndex}"]`)
+        ?.focus();
+    };
+    return (
+      <span
+        aria-current={active ? 'true' : undefined}
+        aria-label={context.wordsInteractive ? `Start reading from “${part}”` : undefined}
+        className={`codex-chat-message__speech-word${active ? ' is-active' : ''}`}
+        data-speech-word-index={wordIndex}
+        key={`${context.keyPrefix}-word-${wordIndex}-${partIndex}`}
+        onClick={context.wordsInteractive ? activate : undefined}
+        onKeyDown={context.wordsInteractive ? handleKeyDown : undefined}
+        role={context.wordsInteractive ? 'button' : undefined}
+        tabIndex={context.wordsInteractive && (active || wordIndex === 0) ? 0 : -1}
+      >
+        {part}
+      </span>
+    );
+  });
+}
+
+function inlineMarkdown(value: string, context: InlineContext): ReactNode[] {
   const nodes: ReactNode[] = [];
   let cursor = 0;
   let tokenIndex = 0;
   for (const match of value.matchAll(inlineTokenPattern)) {
     const index = match.index ?? 0;
-    if (index > cursor) nodes.push(value.slice(cursor, index));
+    if (index > cursor) {
+      nodes.push(
+        ...inlineText(value.slice(cursor, index), {
+          ...context,
+          keyPrefix: `${context.keyPrefix}-${tokenIndex}-text`,
+        }),
+      );
+    }
     const token = match[0];
-    const key = `${keyPrefix}-${tokenIndex++}`;
+    const key = `${context.keyPrefix}-${tokenIndex++}`;
     if (token.startsWith('`')) {
-      nodes.push(<code key={key}>{token.slice(1, -1)}</code>);
+      nodes.push(
+        <code key={key}>{inlineText(token.slice(1, -1), { ...context, keyPrefix: key })}</code>,
+      );
     } else if (token.startsWith('**') || token.startsWith('__')) {
-      nodes.push(<strong key={key}>{inlineMarkdown(token.slice(2, -2), `${key}-strong`)}</strong>);
+      nodes.push(
+        <strong key={key}>
+          {inlineMarkdown(token.slice(2, -2), { ...context, keyPrefix: `${key}-strong` })}
+        </strong>,
+      );
     } else if (token.startsWith('~~')) {
-      nodes.push(<del key={key}>{inlineMarkdown(token.slice(2, -2), `${key}-del`)}</del>);
+      nodes.push(
+        <del key={key}>
+          {inlineMarkdown(token.slice(2, -2), { ...context, keyPrefix: `${key}-del` })}
+        </del>,
+      );
     } else if (token.startsWith('[')) {
       const link = /^\[([^\]]+)\]\(([^\s)]+)(?:\s+"([^"]*)")?\)$/.exec(token);
       const href = link ? safeHref(link[2]) : undefined;
@@ -45,18 +131,33 @@ function inlineMarkdown(value: string, keyPrefix: string): ReactNode[] {
             target={/^https?:/i.test(href) ? '_blank' : undefined}
             title={link?.[3]}
           >
-            {inlineMarkdown(link?.[1] ?? token, `${key}-link`)}
+            {inlineMarkdown(link?.[1] ?? token, {
+              ...context,
+              keyPrefix: `${key}-link`,
+              wordsInteractive: false,
+            })}
           </a>
         ) : (
           token
         ),
       );
     } else {
-      nodes.push(<em key={key}>{inlineMarkdown(token.slice(1, -1), `${key}-em`)}</em>);
+      nodes.push(
+        <em key={key}>
+          {inlineMarkdown(token.slice(1, -1), { ...context, keyPrefix: `${key}-em` })}
+        </em>,
+      );
     }
     cursor = index + token.length;
   }
-  if (cursor < value.length) nodes.push(value.slice(cursor));
+  if (cursor < value.length) {
+    nodes.push(
+      ...inlineText(value.slice(cursor), {
+        ...context,
+        keyPrefix: `${context.keyPrefix}-tail`,
+      }),
+    );
+  }
   return nodes;
 }
 
@@ -167,24 +268,28 @@ function markdownBlocks(source: string): MarkdownBlock[] {
 function MarkdownHeading({
   block,
   index,
+  context,
 }: {
   block: Extract<MarkdownBlock, { type: 'heading' }>;
   index: number;
+  context: InlineContext;
 }) {
-  const content = inlineMarkdown(block.content, `heading-${index}`);
+  const content = inlineMarkdown(block.content, { ...context, keyPrefix: `heading-${index}` });
   if (block.level <= 2) return <h3>{content}</h3>;
   if (block.level === 3) return <h4>{content}</h4>;
   if (block.level === 4) return <h5>{content}</h5>;
   return <h6>{content}</h6>;
 }
 
-export function MarkdownContent({ children }: { children: string }) {
+export function MarkdownContent({ children, speech }: { children: string; speech?: SpeechWords }) {
+  const wordIndex = { current: 0 };
+  const inlineContext: InlineContext = { keyPrefix: '', speech, wordIndex, wordsInteractive: true };
   return (
     <div className="markdown-content">
       {markdownBlocks(children).map((block, index) => {
         const key = `${block.type}-${index}`;
         if (block.type === 'heading')
-          return <MarkdownHeading block={block} index={index} key={key} />;
+          return <MarkdownHeading block={block} context={inlineContext} index={index} key={key} />;
         if (block.type === 'code') {
           return (
             <div className="markdown-content__code" key={key}>
@@ -201,7 +306,7 @@ export function MarkdownContent({ children }: { children: string }) {
               {block.lines.map((line, lineIndex) => (
                 <Fragment key={`${key}-${lineIndex}`}>
                   {lineIndex ? <br /> : null}
-                  {inlineMarkdown(line, `${key}-${lineIndex}`)}
+                  {inlineMarkdown(line, { ...inlineContext, keyPrefix: `${key}-${lineIndex}` })}
                 </Fragment>
               ))}
             </blockquote>
@@ -213,7 +318,10 @@ export function MarkdownContent({ children }: { children: string }) {
             <List key={key}>
               {block.items.map((item, itemIndex) => (
                 <li key={`${key}-${itemIndex}`}>
-                  {inlineMarkdown(item.replace(/^\[[ xX]\]\s*/, ''), `${key}-${itemIndex}`)}
+                  {inlineMarkdown(item.replace(/^\[[ xX]\]\s*/, ''), {
+                    ...inlineContext,
+                    keyPrefix: `${key}-${itemIndex}`,
+                  })}
                 </li>
               ))}
             </List>
@@ -227,7 +335,10 @@ export function MarkdownContent({ children }: { children: string }) {
                   <tr>
                     {block.headers.map((header, cellIndex) => (
                       <th key={`${key}-header-${cellIndex}`} scope="col">
-                        {inlineMarkdown(header, `${key}-header-${cellIndex}`)}
+                        {inlineMarkdown(header, {
+                          ...inlineContext,
+                          keyPrefix: `${key}-header-${cellIndex}`,
+                        })}
                       </th>
                     ))}
                   </tr>
@@ -237,7 +348,10 @@ export function MarkdownContent({ children }: { children: string }) {
                     <tr key={`${key}-row-${rowIndex}`}>
                       {block.headers.map((_, cellIndex) => (
                         <td key={`${key}-cell-${rowIndex}-${cellIndex}`}>
-                          {inlineMarkdown(row[cellIndex] ?? '', `${key}-${rowIndex}-${cellIndex}`)}
+                          {inlineMarkdown(row[cellIndex] ?? '', {
+                            ...inlineContext,
+                            keyPrefix: `${key}-${rowIndex}-${cellIndex}`,
+                          })}
                         </td>
                       ))}
                     </tr>
@@ -253,7 +367,7 @@ export function MarkdownContent({ children }: { children: string }) {
             {block.lines.map((line, lineIndex) => (
               <Fragment key={`${key}-${lineIndex}`}>
                 {lineIndex ? ' ' : null}
-                {inlineMarkdown(line, `${key}-${lineIndex}`)}
+                {inlineMarkdown(line, { ...inlineContext, keyPrefix: `${key}-${lineIndex}` })}
               </Fragment>
             ))}
           </p>

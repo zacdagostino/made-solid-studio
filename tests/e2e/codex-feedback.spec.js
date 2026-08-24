@@ -93,6 +93,83 @@ async function enableGoogleSpeech(page, onSpeechRequest = () => {}) {
   });
 }
 
+async function showCompletedSpeechReply(page, text, id = 'speech-feature-reply') {
+  await page.route('**/__made-solid/codex-status*', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'ready',
+        detail: 'Connected to the local Codex conversation.',
+        thread: { id: 'thread-speech-feature', name: 'Speech feature review', status: 'idle' },
+        threads: [{ id: 'thread-speech-feature', name: 'Speech feature review', status: 'idle' }],
+        messages: [{ id, role: 'assistant', phase: 'final_answer', text }],
+        agents: [],
+        queuedCount: 0,
+        queuedMessages: [],
+        models: [
+          {
+            id: 'gpt-5.6-sol',
+            label: 'GPT-5.6-Sol',
+            defaultEffort: 'medium',
+            isDefault: true,
+            supportsImages: true,
+            efforts: [{ id: 'medium', description: 'Balanced reasoning' }],
+            serviceTiers: [],
+          },
+        ],
+      }),
+    });
+  });
+}
+
+function speechFeatureStatus(messages, { working = true } = {}) {
+  return {
+    status: 'ready',
+    detail: 'Connected to the local Codex conversation.',
+    thread: {
+      id: 'thread-auto-speech',
+      name: 'Automatic speech review',
+      status: working ? 'active' : 'idle',
+      working,
+      activeTurnId: working ? 'turn-auto-speech' : undefined,
+      activeFlags: working ? ['turn'] : [],
+    },
+    threads: [
+      {
+        id: 'thread-auto-speech',
+        name: 'Automatic speech review',
+        status: working ? 'active' : 'idle',
+        working,
+        activeFlags: working ? ['turn'] : [],
+      },
+    ],
+    messages,
+    agents: [],
+    queuedCount: 0,
+    queuedMessages: [],
+    models: [
+      {
+        id: 'gpt-5.6-sol',
+        label: 'GPT-5.6-Sol',
+        defaultEffort: 'medium',
+        isDefault: true,
+        supportsImages: true,
+        efforts: [{ id: 'medium', description: 'Balanced reasoning' }],
+        serviceTiers: [],
+      },
+    ],
+  };
+}
+
+async function showMutableSpeechConversation(page, currentStatus) {
+  await page.route('**/__made-solid/codex-status*', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(currentStatus()),
+    });
+  });
+}
+
 test.beforeEach(async ({ page }) => {
   let statusRequestCount = 0;
   let billingMode = 'chatgpt_subscription';
@@ -147,6 +224,7 @@ test.beforeEach(async ({ page }) => {
             lang: utterance.lang,
             voiceLang: utterance.voice?.lang ?? '',
             voiceName: utterance.voice?.name ?? '',
+            rate: utterance.rate,
             utteranceIndex: utterances.length - 1,
           });
         },
@@ -1205,10 +1283,12 @@ test('filters, previews, and remembers a voice from the global Google catalogue'
   const voiceSettings = composer.getByRole('region', { name: 'Read aloud voice' });
   await expect(voiceSettings).toContainText('5 Google voices');
   await expect(voiceSettings).toContainText('Recommended · most natural');
-  await expect(voiceSettings.getByRole('combobox', { name: 'Language' })).toContainText(
+  await expect(voiceSettings.getByRole('combobox', { name: 'Language & accent' })).toContainText(
     /American English|English \(United States\)/,
   );
-  await voiceSettings.getByRole('combobox', { name: 'Language' }).selectOption({ value: 'en-US' });
+  await voiceSettings
+    .getByRole('combobox', { name: 'Language & accent' })
+    .selectOption({ value: 'en-US' });
   await expect(voiceSettings.getByRole('combobox', { name: 'Model quality' })).toContainText(
     'Standard — Basic · lowest cost',
   );
@@ -1218,7 +1298,9 @@ test('filters, previews, and remembers a voice from the global Google catalogue'
   await expect(voiceSettings.getByRole('combobox', { name: 'Voice', exact: true })).toHaveValue(
     'en-US-Standard-A',
   );
-  await voiceSettings.getByRole('combobox', { name: 'Language' }).selectOption({ value: 'en-AU' });
+  await voiceSettings
+    .getByRole('combobox', { name: 'Language & accent' })
+    .selectOption({ value: 'en-AU' });
   await expect(voiceSettings.getByRole('combobox', { name: 'Voice', exact: true })).toHaveValue(
     'en-AU-Chirp3-HD-Aoede',
   );
@@ -1252,6 +1334,213 @@ test('filters, previews, and remembers a voice from the global Google catalogue'
   );
 });
 
+test('configures and remembers natural read-aloud preferences', async ({ page }) => {
+  await enableGoogleSpeech(page);
+  await showCompletedSpeechReply(page, 'These read-aloud settings should stay on this device.');
+  await page.goto('/');
+  await page.getByRole('button', { name: /Codex/ }).click();
+  let composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openChatSettings(composer);
+
+  const readAloudSettings = composer.getByRole('region', { name: /Read aloud/ });
+  await expect(readAloudSettings).toContainText(
+    'Reads progress updates and the final reply automatically while this chat is open.',
+  );
+  await readAloudSettings
+    .getByRole('combobox', { name: 'Language & accent' })
+    .selectOption('en-US');
+  await readAloudSettings
+    .getByRole('combobox', { name: 'Voice', exact: true })
+    .selectOption('en-US-Chirp3-HD-Charon');
+  await readAloudSettings.getByRole('combobox', { name: 'Reading style' }).selectOption('literal');
+  await readAloudSettings.getByRole('combobox', { name: 'Speed' }).selectOption('1.15');
+  await readAloudSettings.getByRole('checkbox', { name: 'Auto-read Codex' }).check();
+
+  await composer.getByRole('button', { name: 'Close Codex chat' }).click();
+  await page.reload();
+  await page.getByRole('button', { name: /Codex/ }).click();
+  composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openChatSettings(composer);
+
+  await expect(composer.getByRole('combobox', { name: 'Language & accent' })).toHaveValue('en-US');
+  await expect(composer.getByRole('combobox', { name: 'Voice', exact: true })).toHaveValue(
+    'en-US-Chirp3-HD-Charon',
+  );
+  await expect(composer.getByRole('combobox', { name: 'Reading style' })).toHaveValue('literal');
+  await expect(composer.getByRole('combobox', { name: 'Speed' })).toHaveValue('1.15');
+  await expect(composer.getByRole('checkbox', { name: 'Auto-read Codex' })).toBeChecked();
+});
+
+test('automatically reads one stable progress update and then the final reply', async ({
+  page,
+}) => {
+  const speechRequests = [];
+  let status = speechFeatureStatus([
+    { id: 'auto-user', role: 'user', text: 'Please check the responsive layout.' },
+  ]);
+  await page.clock.install();
+  await enableGoogleSpeech(page, (request) => speechRequests.push(request));
+  await showMutableSpeechConversation(page, () => status);
+  await page.goto('/');
+  await page.getByRole('button', { name: /Codex/ }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openChatSettings(composer);
+  await composer.getByRole('checkbox', { name: 'Auto-read Codex' }).check();
+  await composer.getByRole('button', { name: 'Chat settings' }).click();
+
+  status = speechFeatureStatus([
+    { id: 'auto-user', role: 'user', text: 'Please check the responsive layout.' },
+    {
+      id: 'auto-progress',
+      role: 'assistant',
+      phase: 'commentary',
+      text: 'I have checked mobile and I am moving on to the tablet layout.',
+    },
+  ]);
+  await page.clock.fastForward(5_500);
+  await expect
+    .poll(() => speechRequests.map(({ text }) => text))
+    .toEqual(['I have checked mobile and I am moving on to the tablet layout.']);
+
+  await page.clock.fastForward(5_500);
+  expect(speechRequests).toHaveLength(1);
+  await page.evaluate(() => window.__audioHarness.finish());
+
+  status = speechFeatureStatus(
+    [
+      { id: 'auto-user', role: 'user', text: 'Please check the responsive layout.' },
+      {
+        id: 'auto-progress',
+        role: 'assistant',
+        phase: 'commentary',
+        text: 'I have checked mobile and I am moving on to the tablet layout.',
+      },
+      {
+        id: 'auto-final',
+        role: 'assistant',
+        phase: 'final_answer',
+        text: 'The mobile, tablet, and desktop layouts are all ready.',
+      },
+    ],
+    { working: false },
+  );
+  await page.clock.fastForward(5_500);
+  await expect
+    .poll(() => speechRequests.map(({ text }) => text))
+    .toEqual([
+      'I have checked mobile and I am moving on to the tablet layout.',
+      'The mobile, tablet, and desktop layouts are all ready.',
+    ]);
+});
+
+test('coalesces queued progress so automatic reading speaks only the latest update', async ({
+  page,
+}) => {
+  const speechRequests = [];
+  const userMessage = { id: 'coalesce-user', role: 'user', text: 'Keep me updated.' };
+  const firstProgress = {
+    id: 'coalesce-progress-1',
+    role: 'assistant',
+    phase: 'commentary',
+    text: 'I am checking the project structure now.',
+  };
+  const supersededProgress = {
+    id: 'coalesce-progress-2',
+    role: 'assistant',
+    phase: 'commentary',
+    text: 'I found the chat component and I am inspecting its speech state.',
+  };
+  const latestProgress = {
+    id: 'coalesce-progress-3',
+    role: 'assistant',
+    phase: 'commentary',
+    text: 'The speech state is understood and I am checking the tests next.',
+  };
+  let status = speechFeatureStatus([userMessage]);
+  await page.clock.install();
+  await enableGoogleSpeech(page, (request) => speechRequests.push(request));
+  await showMutableSpeechConversation(page, () => status);
+  await page.goto('/');
+  await page.getByRole('button', { name: /Codex/ }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openChatSettings(composer);
+  await composer.getByRole('checkbox', { name: 'Auto-read Codex' }).check();
+
+  status = speechFeatureStatus([userMessage, firstProgress]);
+  await page.clock.fastForward(5_500);
+  await expect.poll(() => speechRequests).toHaveLength(1);
+
+  status = speechFeatureStatus([userMessage, firstProgress, supersededProgress]);
+  await page.clock.fastForward(5_500);
+  status = speechFeatureStatus([userMessage, firstProgress, supersededProgress, latestProgress]);
+  await page.clock.fastForward(5_500);
+  expect(speechRequests).toHaveLength(1);
+
+  await page.evaluate(() => window.__audioHarness.finish());
+  await expect.poll(() => speechRequests).toHaveLength(2);
+  expect(speechRequests.map(({ text }) => text)).toEqual([firstProgress.text, latestProgress.text]);
+});
+
+test('gives manual Read priority and stops future automatic speech when switched off', async ({
+  page,
+}) => {
+  const speechRequests = [];
+  const userMessage = { id: 'priority-user', role: 'user', text: 'Explain the decision.' };
+  const earlierFinal = {
+    id: 'priority-earlier-final',
+    role: 'assistant',
+    phase: 'final_answer',
+    text: 'This earlier answer is available for manual reading.',
+  };
+  const progress = {
+    id: 'priority-progress',
+    role: 'assistant',
+    phase: 'commentary',
+    text: 'I am comparing the available voice options.',
+  };
+  let status = speechFeatureStatus([userMessage, earlierFinal]);
+  await page.clock.install();
+  await enableGoogleSpeech(page, (request) => speechRequests.push(request));
+  await showMutableSpeechConversation(page, () => status);
+  await page.goto('/');
+  await page.getByRole('button', { name: /Codex/ }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openChatSettings(composer);
+  await composer.getByRole('checkbox', { name: 'Auto-read Codex' }).check();
+  await composer.getByRole('button', { name: 'Chat settings' }).click();
+
+  status = speechFeatureStatus([userMessage, earlierFinal, progress]);
+  await page.clock.fastForward(5_500);
+  await expect.poll(() => speechRequests.map(({ text }) => text)).toEqual([progress.text]);
+
+  const earlierReply = composer.locator('.codex-chat-message--assistant', {
+    hasText: earlierFinal.text,
+  });
+  await earlierReply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
+  await expect
+    .poll(() => speechRequests.map(({ text }) => text))
+    .toEqual([progress.text, earlierFinal.text]);
+  const playback = composer.getByRole('region', { name: 'Read aloud controls' });
+  await expect(playback.getByRole('button', { name: 'Pause reading', exact: true })).toBeVisible();
+
+  await playback.getByRole('button', { name: 'Stop reading', exact: true }).click();
+  await openChatSettings(composer);
+  await composer.getByRole('checkbox', { name: 'Auto-read Codex' }).uncheck();
+  status = speechFeatureStatus([
+    userMessage,
+    earlierFinal,
+    progress,
+    {
+      id: 'priority-later-progress',
+      role: 'assistant',
+      phase: 'commentary',
+      text: 'This later progress update must remain silent.',
+    },
+  ]);
+  await page.clock.fastForward(5_500);
+  expect(speechRequests).toHaveLength(2);
+});
+
 test('keeps Google voice settings usable at the compact 320px viewport', async ({
   page,
 }, testInfo) => {
@@ -1263,7 +1552,7 @@ test('keeps Google voice settings usable at the compact 320px viewport', async (
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
   await openChatSettings(composer);
   const voiceSettings = composer.getByRole('region', { name: 'Read aloud voice' });
-  await expect(voiceSettings.getByRole('combobox', { name: 'Language' })).toBeVisible();
+  await expect(voiceSettings.getByRole('combobox', { name: 'Language & accent' })).toBeVisible();
   await expect(voiceSettings.getByRole('combobox', { name: 'Model quality' })).toBeVisible();
   await expect(voiceSettings.getByRole('combobox', { name: 'Voice', exact: true })).toBeVisible();
   await expect(voiceSettings.getByRole('button', { name: /Preview Aoede voice/ })).toBeVisible();
@@ -1286,7 +1575,8 @@ test('plays Google speech with exact seekable seconds and no device utterance', 
     hasText: 'Studio chat is connected.',
   });
   await reply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
-  await expect(reply.getByRole('button', { name: 'Pause reading', exact: true })).toBeVisible();
+  const playback = page.getByRole('region', { name: 'Read aloud controls' });
+  await expect(playback.getByRole('button', { name: 'Pause reading', exact: true })).toBeVisible();
   expect(speechRequests).toEqual([
     { text: 'Studio chat is connected.', voice: 'en-AU-Chirp3-HD-Aoede' },
   ]);
@@ -1296,22 +1586,253 @@ test('plays Google speech with exact seekable seconds and no device utterance', 
     ),
   ).toBe(0);
 
-  const timeline = reply.getByLabel('Speech playback position');
+  const timeline = playback.getByLabel('Speech playback position');
   await expect(timeline).toHaveAttribute('max', '12');
-  await expect(reply.getByText('0:00 / 0:12', { exact: true })).toBeVisible();
+  await expect(playback.getByText('0:00 / 0:12', { exact: true })).toBeVisible();
   await page.evaluate(() => window.__audioHarness.advance(5));
   await expect(timeline).toHaveValue('5');
-  await expect(reply.getByText('0:05 / 0:12', { exact: true })).toBeVisible();
+  await expect(playback.getByText('0:05 / 0:12', { exact: true })).toBeVisible();
   await timeline.fill('8');
   await expect.poll(() => page.evaluate(() => window.__audioHarness.currentTime())).toBe(8);
 
-  await reply.getByRole('button', { name: 'Pause reading', exact: true }).click();
-  await expect(reply.getByRole('button', { name: 'Resume reading', exact: true })).toBeVisible();
-  await reply.getByRole('button', { name: 'Resume reading', exact: true }).click();
-  await expect(reply.getByRole('button', { name: 'Pause reading', exact: true })).toBeVisible();
-  await reply.getByRole('button', { name: 'Stop reading', exact: true }).click();
-  await expect(reply.getByLabel('Speech playback position')).toHaveCount(0);
+  await playback.getByRole('button', { name: 'Pause reading', exact: true }).click();
+  await expect(playback.getByRole('button', { name: 'Resume reading', exact: true })).toBeVisible();
+  await playback.getByRole('button', { name: 'Resume reading', exact: true }).click();
+  await expect(playback.getByRole('button', { name: 'Pause reading', exact: true })).toBeVisible();
+  await playback.getByRole('button', { name: 'Stop reading', exact: true }).click();
+  await expect(playback).toHaveCount(0);
   await expect(reply.getByRole('button', { name: 'Read Codex reply', exact: true })).toBeVisible();
+});
+
+test('starts the first Google speech chunk while later chunks are still buffering', async ({
+  page,
+}) => {
+  const sentence =
+    'This sentence gives the listener a clear, useful update before the remaining audio is ready.';
+  const longReply = Array.from({ length: 58 }, (_, index) => `${index + 1}. ${sentence}`).join(
+    '\n\n',
+  );
+  await showCompletedSpeechReply(page, longReply, 'speech-progressive');
+
+  let releaseLaterChunks;
+  const laterChunks = new Promise((resolve) => {
+    releaseLaterChunks = resolve;
+  });
+  const speechRequests = [];
+  await page.route('**/__made-solid/codex-speech', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          available: true,
+          defaultVoice: 'en-AU-Chirp3-HD-Aoede',
+          provider: 'Google Cloud Text-to-Speech',
+          voices: [
+            {
+              id: 'en-AU-Chirp3-HD-Aoede',
+              gender: 'Female',
+              languageCode: 'en-AU',
+              model: 'chirp3-hd',
+              modelLabel: 'Chirp 3 HD',
+              name: 'Aoede',
+              qualityLabel: 'Recommended · most natural',
+              qualityRank: 1,
+            },
+          ],
+        }),
+      });
+      return;
+    }
+    speechRequests.push(route.request().postDataJSON());
+    if (speechRequests.length > 1) await laterChunks;
+    await route.fulfill({
+      contentType: 'audio/mpeg',
+      body: Buffer.from(`mocked speech chunk ${speechRequests.length}`),
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const reply = page.locator('.codex-chat-message--assistant', { hasText: sentence });
+  await reply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
+
+  await expect.poll(() => speechRequests.length).toBeGreaterThan(1);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.__audioHarness.events.filter((event) => event.type === 'play').length,
+      ),
+    )
+    .toBe(1);
+  const playback = page.getByRole('region', { name: 'Read aloud controls' });
+  await expect(playback.getByRole('button', { name: 'Pause reading', exact: true })).toBeVisible();
+
+  releaseLaterChunks();
+  await expect(playback.getByRole('button', { name: 'Pause reading', exact: true })).toBeVisible();
+  await playback.getByRole('button', { name: 'Stop reading', exact: true }).click();
+});
+
+test('highlights spoken words, starts from a selected word, and skips five seconds', async ({
+  page,
+}, testInfo) => {
+  const replyText =
+    'Start with a clear summary. Continue with the practical implementation details. Finish with the next action.';
+  await showCompletedSpeechReply(page, replyText, 'speech-word-controls');
+  const speechRequests = [];
+  await enableGoogleSpeech(page, (request) => speechRequests.push(request));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const reply = page.locator('.codex-chat-message--assistant', { hasText: replyText });
+  await reply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
+
+  const playback = page.getByRole('region', { name: 'Read aloud controls' });
+  const back = playback.getByRole('button', { name: 'Skip back 5 seconds', exact: true });
+  const forward = playback.getByRole('button', { name: 'Skip forward 5 seconds', exact: true });
+  await expect(back).toBeVisible();
+  await expect(forward).toBeVisible();
+  expect((await back.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  expect((await forward.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  await expect(reply.locator('.codex-chat-message__speech-word[aria-current="true"]')).toHaveText(
+    'Start',
+  );
+  await expect(reply.locator('.codex-chat-message__speech-word[tabindex="0"]')).toHaveCount(1);
+  await expect(reply.locator('.codex-chat-message__speech-word:not([tabindex="-1"])')).toHaveCount(
+    1,
+  );
+  await expect
+    .poll(() => reply.locator('.codex-chat-message__speech-word[tabindex="-1"]').count())
+    .toBeGreaterThan(0);
+
+  await page.evaluate(() => window.__audioHarness.advance(6));
+  await expect(
+    reply.locator('.codex-chat-message__speech-word[aria-current="true"]'),
+  ).not.toHaveText('Start');
+  await forward.click();
+  await expect.poll(() => page.evaluate(() => window.__audioHarness.currentTime())).toBe(11);
+  await back.click();
+  await expect.poll(() => page.evaluate(() => window.__audioHarness.currentTime())).toBe(6);
+
+  const selectedWord = reply.getByRole('button', {
+    name: 'Start reading from “implementation”',
+    exact: true,
+  });
+  const playCountBeforeWordSelection = await page.evaluate(
+    () => window.__audioHarness.events.filter((event) => event.type === 'play').length,
+  );
+  if (testInfo.project.use.hasTouch) await selectedWord.tap();
+  else await selectedWord.click();
+  await expect(selectedWord).toHaveAttribute('aria-current', 'true');
+  await expect.poll(() => speechRequests.at(-1)?.text).toMatch(/^implementation details\./);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.__audioHarness.events.filter((event) => event.type === 'play').length,
+      ),
+    )
+    .toBeGreaterThan(playCountBeforeWordSelection);
+  await expect(playback.getByRole('button', { name: 'Pause reading', exact: true })).toBeVisible();
+
+  const accessibility = await new AxeBuilder({ page }).include('.codex-chat-dialog').analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+test('keeps the spoken-word highlight static when reduced motion is preferred', async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await showCompletedSpeechReply(
+    page,
+    'Spoken words remain clear without animated emphasis.',
+    'speech-reduced-motion',
+  );
+  await enableGoogleSpeech(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const reply = page.locator('.codex-chat-message--assistant', {
+    hasText: 'Spoken words remain clear',
+  });
+  await reply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
+  const activeWord = reply.locator('.codex-chat-message__speech-word[aria-current="true"]');
+  await expect(activeWord).toBeVisible();
+  await expect(activeWord).toHaveCSS('animation-name', 'none');
+  await expect(activeWord).toHaveCSS('transition-duration', '0s');
+  await expect(reply).toHaveScreenshot('codex-speech-read-along.png');
+});
+
+test('ignores late buffered Google audio after the Codex panel closes', async ({ page }) => {
+  const sentence =
+    'This private audio segment must never start after its Codex panel has been closed.';
+  await showCompletedSpeechReply(
+    page,
+    Array.from({ length: 58 }, (_, index) => `${index + 1}. ${sentence}`).join('\n\n'),
+    'speech-buffer-cleanup',
+  );
+  let releaseBufferedAudio;
+  const bufferedAudio = new Promise((resolve) => {
+    releaseBufferedAudio = resolve;
+  });
+  let speechRequestCount = 0;
+  await page.route('**/__made-solid/codex-speech', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          available: true,
+          defaultVoice: 'en-AU-Chirp3-HD-Aoede',
+          provider: 'Google Cloud Text-to-Speech',
+          voices: [
+            {
+              id: 'en-AU-Chirp3-HD-Aoede',
+              gender: 'Female',
+              languageCode: 'en-AU',
+              model: 'chirp3-hd',
+              modelLabel: 'Chirp 3 HD',
+              name: 'Aoede',
+              qualityLabel: 'Recommended · most natural',
+              qualityRank: 1,
+            },
+          ],
+        }),
+      });
+      return;
+    }
+    speechRequestCount += 1;
+    if (speechRequestCount > 1) await bufferedAudio;
+    await route
+      .fulfill({
+        contentType: 'audio/mpeg',
+        body: Buffer.from(`buffered speech ${speechRequestCount}`),
+      })
+      .catch(() => undefined);
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await composer
+    .locator('.codex-chat-message--assistant', { hasText: sentence })
+    .getByRole('button', { name: 'Read Codex reply', exact: true })
+    .click();
+  await expect.poll(() => speechRequestCount).toBeGreaterThan(1);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.__audioHarness.events.filter((event) => event.type === 'play').length,
+      ),
+    )
+    .toBe(1);
+
+  await composer.getByRole('button', { name: 'Close Codex chat' }).click();
+  const playCountAfterClose = await page.evaluate(
+    () => window.__audioHarness.events.filter((event) => event.type === 'play').length,
+  );
+  releaseBufferedAudio();
+  await page.waitForTimeout(100);
+  expect(
+    await page.evaluate(
+      () => window.__audioHarness.events.filter((event) => event.type === 'play').length,
+    ),
+  ).toBe(playCountAfterClose);
 });
 
 test('falls back to the English device voice when Google synthesis fails', async ({ page }) => {
@@ -1357,7 +1878,9 @@ test('falls back to the English device voice when Google synthesis fails', async
   expect(spoken.voiceName).toBe('Playwright device voice');
 });
 
-test('offers device-voice reading only for completed Codex replies', async ({ page }) => {
+test('offers device-voice reading for progress updates and completed Codex replies', async ({
+  page,
+}) => {
   await page.route('**/__made-solid/codex-status*', async (route) => {
     await route.fulfill({
       contentType: 'application/json',
@@ -1414,9 +1937,11 @@ test('offers device-voice reading only for completed Codex replies', async ({ pa
   await expect(
     userMessage.getByRole('button', { name: 'Read Codex reply', exact: true }),
   ).toHaveCount(0);
-  await expect(
-    progressMessage.getByRole('button', { name: 'Read Codex reply', exact: true }),
-  ).toHaveCount(0);
+  const progressReadButton = progressMessage.getByRole('button', {
+    name: 'Read progress update',
+    exact: true,
+  });
+  await expect(progressReadButton).toBeVisible();
   await expect(
     finalMessage.getByRole('button', { name: 'Read Codex reply', exact: true }),
   ).toBeVisible();
@@ -1429,11 +1954,83 @@ test('offers device-voice reading only for completed Codex replies', async ({ pa
     .poll(async () => (await readButton.boundingBox())?.height ?? 0)
     .toBeGreaterThanOrEqual(44);
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await progressReadButton.click();
+  const playback = composer.getByRole('region', { name: 'Read aloud controls' });
+  await expect(playback).toContainText('Progress update');
+  await expect
+    .poll(() => page.evaluate(() => window.__speechHarness.currentText()))
+    .toContain('I am still checking the workspace.');
+  await expect(
+    progressMessage.locator('.codex-chat-message__speech-word[aria-current="true"]'),
+  ).toHaveText('I');
+  await playback.getByRole('button', { name: 'Stop reading', exact: true }).click();
+  await expect(progressReadButton).toBeVisible();
   await expect
     .poll(() => composer.evaluate((element) => element.scrollWidth - element.clientWidth))
     .toBeLessThanOrEqual(1);
   const accessibility = await new AxeBuilder({ page }).include('.codex-chat-dialog').analyze();
   expect(accessibility.violations).toEqual([]);
+});
+
+test('keeps the initial Read action visible and active playback docked across viewports', async ({
+  page,
+}) => {
+  const longReply = Array.from(
+    { length: 36 },
+    (_, index) =>
+      `Review note ${index + 1}. This completed Codex reply is deliberately long enough to scroll while its compact reading controls remain available.`,
+  ).join('\n\n');
+  await showCompletedSpeechReply(page, longReply, 'speech-dock-reply');
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  const transcript = composer.locator('.codex-chat-transcript');
+  const log = composer.getByRole('log', { name: 'Codex chat log' });
+  const reply = composer.locator('.codex-chat-message--assistant', {
+    hasText: 'Review note 1.',
+  });
+  const readButton = reply.getByRole('button', {
+    name: 'Read Codex reply',
+    exact: true,
+  });
+
+  await expect(readButton).toBeVisible();
+  await expect
+    .poll(async () => (await readButton.boundingBox())?.height ?? 0)
+    .toBeGreaterThanOrEqual(44);
+  await readButton.click();
+
+  const dock = transcript.locator('.codex-speech-dock');
+  await expect(dock).toBeVisible();
+  await log.evaluate((element) => {
+    element.scrollTop = Math.max(1, (element.scrollHeight - element.clientHeight) / 2);
+  });
+  await expect.poll(() => log.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect(dock).toBeVisible();
+
+  const [transcriptBox, dockBox] = await Promise.all([
+    transcript.boundingBox(),
+    dock.boundingBox(),
+  ]);
+  expect(transcriptBox).not.toBeNull();
+  expect(dockBox).not.toBeNull();
+  expect(dockBox.y).toBeGreaterThanOrEqual(transcriptBox.y - 1);
+  expect(dockBox.y).toBeLessThanOrEqual(transcriptBox.y + 12);
+  expect(dockBox.x).toBeGreaterThanOrEqual(transcriptBox.x - 1);
+  expect(dockBox.x + dockBox.width).toBeLessThanOrEqual(transcriptBox.x + transcriptBox.width + 1);
+
+  const controlHeights = await dock
+    .getByRole('button')
+    .evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().height));
+  expect(controlHeights.length).toBeGreaterThan(0);
+  expect(controlHeights.every((height) => height >= 44)).toBe(true);
+  await expect
+    .poll(() => transcript.evaluate((element) => element.scrollWidth - element.clientWidth))
+    .toBeLessThanOrEqual(1);
+  await expect
+    .poll(() => dock.evaluate((element) => element.scrollWidth - element.clientWidth))
+    .toBeLessThanOrEqual(1);
 });
 
 test('keeps device-voice controls usable at the compact 320px viewport', async ({
@@ -1449,20 +2046,19 @@ test('keeps device-voice controls usable at the compact 320px viewport', async (
   });
 
   await reply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
-  const pauseButton = reply.getByRole('button', { name: 'Pause reading', exact: true });
+  const playback = composer.getByRole('region', { name: 'Read aloud controls' });
+  const pauseButton = playback.getByRole('button', { name: 'Pause reading', exact: true });
   await expect(pauseButton).toBeVisible();
   expect((await pauseButton.boundingBox())?.height).toBeGreaterThanOrEqual(44);
-  await expect(reply.getByRole('button', { name: 'Stop reading', exact: true })).toBeVisible();
+  await expect(playback.getByRole('button', { name: 'Stop reading', exact: true })).toBeVisible();
   await expect(
-    reply.getByRole('progressbar', { name: 'Estimated reading progress' }),
+    playback.getByRole('progressbar', { name: 'Estimated reading progress' }),
   ).toBeVisible();
-  await expect(reply.getByText(/^\d+:\d{2} \/ about \d+:\d{2}$/)).toBeVisible();
+  await expect(playback.getByText(/^\d+:\d{2} \/ about \d+:\d{2}$/)).toBeVisible();
   await expect
     .poll(() => composer.evaluate((element) => element.scrollWidth - element.clientWidth))
     .toBeLessThanOrEqual(1);
-  await expect(reply.locator('.codex-chat-message__speech')).toHaveScreenshot(
-    'codex-device-voice-reading-320-controls.png',
-  );
+  await expect(playback).toHaveScreenshot('codex-device-voice-reading-320-controls.png');
   await expect(composer).toHaveScreenshot('codex-device-voice-reading-320.png');
 
   const accessibility = await new AxeBuilder({ page }).include('.codex-chat-dialog').analyze();
@@ -1477,18 +2073,19 @@ test('starts, pauses, resumes, and stops device-voice reading', async ({ page })
   });
 
   await reply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
-  await expect(reply.getByRole('button', { name: 'Pause reading', exact: true })).toBeVisible();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  const playback = composer.getByRole('region', { name: 'Read aloud controls' });
+  await expect(playback.getByRole('button', { name: 'Pause reading', exact: true })).toBeVisible();
   await expect(
-    reply.getByRole('progressbar', { name: 'Estimated reading progress' }),
+    playback.getByRole('progressbar', { name: 'Estimated reading progress' }),
   ).toBeVisible();
   await expect
     .poll(() => page.evaluate(() => window.__speechHarness.currentText()))
     .toContain('Studio chat is connected.');
-  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
   await expect
     .poll(() => composer.evaluate((element) => element.scrollWidth - element.clientWidth))
     .toBeLessThanOrEqual(1);
-  await expect(reply).toHaveScreenshot('codex-device-voice-reading.png');
+  await expect(playback).toHaveScreenshot('codex-device-voice-reading.png');
   const playingAccessibility = await new AxeBuilder({ page })
     .include('.codex-chat-dialog')
     .analyze();
@@ -1497,8 +2094,8 @@ test('starts, pauses, resumes, and stops device-voice reading', async ({ page })
   const cancelCountBeforePause = await page.evaluate(
     () => window.__speechHarness.events.filter((event) => event.type === 'cancel').length,
   );
-  await reply.getByRole('button', { name: 'Pause reading', exact: true }).click();
-  await expect(reply.getByRole('button', { name: 'Resume reading', exact: true })).toBeVisible();
+  await playback.getByRole('button', { name: 'Pause reading', exact: true }).click();
+  await expect(playback.getByRole('button', { name: 'Resume reading', exact: true })).toBeVisible();
   await expect
     .poll(() =>
       page.evaluate(
@@ -1510,8 +2107,8 @@ test('starts, pauses, resumes, and stops device-voice reading', async ({ page })
   const speakCountBeforeResume = await page.evaluate(
     () => window.__speechHarness.events.filter((event) => event.type === 'speak').length,
   );
-  await reply.getByRole('button', { name: 'Resume reading', exact: true }).click();
-  await expect(reply.getByRole('button', { name: 'Pause reading', exact: true })).toBeVisible();
+  await playback.getByRole('button', { name: 'Resume reading', exact: true }).click();
+  await expect(playback.getByRole('button', { name: 'Pause reading', exact: true })).toBeVisible();
   await expect
     .poll(() =>
       page.evaluate(
@@ -1523,9 +2120,9 @@ test('starts, pauses, resumes, and stops device-voice reading', async ({ page })
   const cancelCountBeforeStop = await page.evaluate(
     () => window.__speechHarness.events.filter((event) => event.type === 'cancel').length,
   );
-  await reply.getByRole('button', { name: 'Stop reading', exact: true }).click();
+  await playback.getByRole('button', { name: 'Stop reading', exact: true }).click();
   await expect(reply.getByRole('button', { name: 'Read Codex reply', exact: true })).toBeVisible();
-  await expect(reply.getByRole('button', { name: 'Stop reading', exact: true })).toHaveCount(0);
+  await expect(playback).toHaveCount(0);
   await expect
     .poll(() =>
       page.evaluate(
@@ -1575,8 +2172,9 @@ test('tracks estimated reading seconds, freezes while paused, and resets after s
   const reply = page.locator('.codex-chat-message--assistant', { hasText: timelineReply });
   await reply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
 
-  const progress = reply.getByRole('progressbar', { name: 'Estimated reading progress' });
-  const visibleTimeline = reply.getByText(/^\d+:\d{2} \/ about \d+:\d{2}$/);
+  let playback = page.getByRole('region', { name: 'Read aloud controls' });
+  const progress = playback.getByRole('progressbar', { name: 'Estimated reading progress' });
+  const visibleTimeline = playback.getByText(/^\d+:\d{2} \/ about \d+:\d{2}$/);
   await expect(progress).toHaveAttribute('aria-valuemin', '0');
   await expect(progress).toHaveAttribute('aria-valuetext', /^\d+:\d{2} of about \d+:\d{2}$/);
   await expect(visibleTimeline).toBeVisible();
@@ -1586,23 +2184,24 @@ test('tracks estimated reading seconds, freezes while paused, and resets after s
     .poll(async () => Number(await progress.getAttribute('aria-valuenow')))
     .toBeGreaterThan(0);
 
-  await reply.getByRole('button', { name: 'Pause reading', exact: true }).click();
+  await playback.getByRole('button', { name: 'Pause reading', exact: true }).click();
   const pausedElapsed = await progress.getAttribute('aria-valuenow');
   const pausedTimeline = await visibleTimeline.textContent();
   await page.waitForTimeout(1_200);
   await expect(progress).toHaveAttribute('aria-valuenow', pausedElapsed);
   await expect(visibleTimeline).toHaveText(pausedTimeline);
 
-  await reply.getByRole('button', { name: 'Resume reading', exact: true }).click();
+  await playback.getByRole('button', { name: 'Resume reading', exact: true }).click();
   await expect
     .poll(async () => Number(await progress.getAttribute('aria-valuenow')))
     .toBeGreaterThan(Number(pausedElapsed));
 
-  await reply.getByRole('button', { name: 'Stop reading', exact: true }).click();
+  await playback.getByRole('button', { name: 'Stop reading', exact: true }).click();
   await expect(progress).toHaveCount(0);
   await expect(visibleTimeline).toHaveCount(0);
   await reply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
-  const restartedProgress = reply.getByRole('progressbar', {
+  playback = page.getByRole('region', { name: 'Read aloud controls' });
+  const restartedProgress = playback.getByRole('progressbar', {
     name: 'Estimated reading progress',
   });
   await expect(restartedProgress).toHaveAttribute('aria-valuenow', '0');
@@ -1626,6 +2225,7 @@ test('selects an English device voice even when the browser default voice is not
   expect(spoken.lang).toMatch(/^en(?:-|$)/i);
   expect(spoken.voiceLang).toMatch(/^en(?:-|$)/i);
   expect(spoken.voiceName).toBe('Playwright device voice');
+  expect(spoken.rate).toBe(0.94);
 });
 
 test('speaks every chunk before completing and ignores stale utterance end events', async ({
@@ -1680,7 +2280,8 @@ test('speaks every chunk before completing and ignores stale utterance end event
     () => window.__speechHarness.utteranceCount() - 1,
   );
   await longReplyMessage.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
-  const activeProgress = longReplyMessage.getByRole('progressbar', {
+  const playback = page.getByRole('region', { name: 'Read aloud controls' });
+  const activeProgress = playback.getByRole('progressbar', {
     name: 'Estimated reading progress',
   });
   await expect(activeProgress).toBeVisible();
@@ -1694,9 +2295,7 @@ test('speaks every chunk before completing and ignores stale utterance end event
     staleUtteranceIndex,
   );
 
-  await expect(
-    longReplyMessage.getByRole('button', { name: 'Pause reading', exact: true }),
-  ).toBeVisible();
+  await expect(playback.getByRole('button', { name: 'Pause reading', exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.__speechHarness.currentText())).toBe(
     activeTextBeforeStaleEnd,
   );
@@ -1793,7 +2392,9 @@ test('replaces the active reply when another completed reply starts reading', as
     firstReply.getByRole('button', { name: 'Read Codex reply', exact: true }),
   ).toBeVisible();
   await expect(
-    secondReply.getByRole('button', { name: 'Pause reading', exact: true }),
+    page
+      .getByRole('region', { name: 'Read aloud controls' })
+      .getByRole('button', { name: 'Pause reading', exact: true }),
   ).toBeVisible();
   await expect
     .poll(() =>

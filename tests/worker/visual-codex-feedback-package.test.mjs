@@ -230,6 +230,10 @@ const workspaceDevelopmentStudioMigrationUrl = new URL(
   '../../supabase/migrations/20260824110000_workspace_development_studio_test_package.sql',
   import.meta.url,
 );
+const restoredCodexVoiceExperienceMigrationUrl = new URL(
+  '../../supabase/migrations/20260824120000_restored_codex_voice_experience_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -298,10 +302,39 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 74);
+  assert.equal(Number(revision[1]), 75);
   assert.match(app, /shows chats for that client plus clearly labelled universal Studio chats/);
   assert.match(app, /gives only the authenticated Studio owner a disclosed, reversible switch/);
-  assert.match(app, /Workspace now runs the authenticated live-development Studio/);
+  assert.match(app, /saved Natural or Literal reading and three speeds/);
+  assert.match(app, /opt-in chat-scoped auto-read/);
+  assert.match(app, /progressive private audio/);
+  assert.match(app, /persistent interactive read-along dock/);
+});
+
+test('registers the restored Codex voice experience above immutable v20.2', async () => {
+  const [migration, repository] = await Promise.all([
+    readFile(restoredCodexVoiceExperienceMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+  ]);
+  assert.match(migration, /Restored Codex voice experience test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v20\.3/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v20\.2'/,
+  );
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /not exists/i);
+  assert.match(migration, /Natural or Literal reading style/);
+  assert.match(migration, /coalesce queued progress to its newest update/);
+  assert.match(migration, /keep at most 24 private in-memory MP3 blobs/);
+  assert.match(migration, /keyboard or pointer restart from a rendered word/);
+  assert.match(repository, /version: 20\.3,/);
+  assert.match(repository, /basePackageId: localWorkspaceDevelopmentStudioPackage\.id/);
+  const ledger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    ledger.indexOf('localRestoredCodexVoiceExperiencePackage,') <
+      ledger.indexOf('localWorkspaceDevelopmentStudioPackage,'),
+  );
 });
 
 test('registers the Workspace development Studio above immutable v20.1', async () => {

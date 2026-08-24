@@ -29,6 +29,7 @@ import {
   Play,
   Plus,
   RotateCcw,
+  RotateCw,
   Save,
   Send,
   Search,
@@ -46,9 +47,14 @@ import {
   codexCloudSpeechChunks,
   codexSpeechChunks,
   codexSpeechLanguage,
+  codexSpeechRate,
+  codexSpeechTextFromWord,
+  codexSpeechWordAtTime,
+  codexSpeechWords,
   estimatedCodexSpeechSeconds,
   formatCodexSpeechTime,
   preferredEnglishSpeechVoice,
+  type CodexSpeechStyle,
 } from '../lib/codex-speech';
 import { studioRuntimeFetch } from '../lib/studio-runtime';
 import { openCodexPanelEvent } from '../lib/codex-panel-events';
@@ -198,6 +204,12 @@ type PanelPhase =
   'closed' | 'compose' | 'sending-chat' | 'capturing' | 'capturing-tab' | 'selecting';
 type SpeechPlaybackState = 'idle' | 'loading' | 'playing' | 'paused';
 type SpeechProgress = { elapsedSeconds: number; totalSeconds: number };
+type AutoReadMessage = {
+  id: string;
+  phase: 'progress' | 'final';
+  text: string;
+  turnId?: string;
+};
 type CloudSpeechVoice = {
   id: string;
   gender: 'Female' | 'Male' | 'Neutral' | 'Unspecified';
@@ -237,6 +249,18 @@ const codexChatSessionKey = 'made-solid-codex-chat-session-v1';
 const maximumPhotoBytes = 15 * 1024 * 1024;
 const maximumDraftAttachments = 5;
 const supportedPhotoTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const cloudSpeechBlobCache = new Map<string, Blob>();
+const maximumCloudSpeechCacheEntries = 24;
+
+function cacheCloudSpeechBlob(key: string, blob: Blob) {
+  cloudSpeechBlobCache.delete(key);
+  cloudSpeechBlobCache.set(key, blob);
+  while (cloudSpeechBlobCache.size > maximumCloudSpeechCacheEntries) {
+    const oldestKey = cloudSpeechBlobCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    cloudSpeechBlobCache.delete(oldestKey);
+  }
+}
 
 function RuntimeAttachmentImage({ attachmentId, alt }: { attachmentId: string; alt: string }) {
   const directSource = `${codexAttachmentPrefix}${attachmentId}`;
@@ -292,6 +316,10 @@ type CodexPreferences = {
   effortByModel: Record<string, string>;
   workMode: 'direct' | 'team';
   fastMode: boolean;
+  autoReadCodex: boolean;
+  speechLanguage: string;
+  speechRate: number;
+  speechStyle: CodexSpeechStyle;
   speechVoice: string;
 };
 
@@ -357,6 +385,10 @@ function readCodexPreferences(): CodexPreferences {
       effortByModel: {},
       workMode: 'team',
       fastMode: false,
+      autoReadCodex: false,
+      speechLanguage: 'en-AU',
+      speechRate: 1,
+      speechStyle: 'natural',
       speechVoice: 'Aoede',
     };
   try {
@@ -371,6 +403,15 @@ function readCodexPreferences(): CodexPreferences {
           : {},
       workMode: stored.workMode === 'direct' ? 'direct' : 'team',
       fastMode: stored.fastMode === true,
+      autoReadCodex: stored.autoReadCodex === true,
+      speechLanguage:
+        typeof stored.speechLanguage === 'string' && stored.speechLanguage.trim()
+          ? stored.speechLanguage
+          : 'en-AU',
+      speechRate: [0.85, 1, 1.15].includes(Number(stored.speechRate))
+        ? Number(stored.speechRate)
+        : 1,
+      speechStyle: stored.speechStyle === 'literal' ? 'literal' : 'natural',
       speechVoice:
         typeof stored.speechVoice === 'string' && stored.speechVoice.trim()
           ? stored.speechVoice
@@ -382,6 +423,10 @@ function readCodexPreferences(): CodexPreferences {
       effortByModel: {},
       workMode: 'team',
       fastMode: false,
+      autoReadCodex: false,
+      speechLanguage: 'en-AU',
+      speechRate: 1,
+      speechStyle: 'natural',
       speechVoice: 'Aoede',
     };
   }
@@ -1030,12 +1075,21 @@ export function CodexFeedbackPanel({
   const speechStartedAtRef = useRef(0);
   const speechEstimatedTotalRef = useRef(0);
   const speechSourceRef = useRef<'device' | 'google'>('device');
-  const cloudSpeechSegmentsRef = useRef<CloudSpeechSegment[]>([]);
+  const speechInitiatorRef = useRef<'auto' | 'manual'>('manual');
+  const speechAutoPhaseRef = useRef<'progress' | 'final'>('final');
+  const autoReadSeenMessageIdsRef = useRef(new Set<string>());
+  const autoReadThreadIdRef = useRef('');
+  const cloudSpeechSegmentsRef = useRef<Array<CloudSpeechSegment | undefined>>([]);
+  const cloudSpeechSegmentPromisesRef = useRef<Array<Promise<CloudSpeechSegment>>>([]);
+  const cloudSpeechChunkTextsRef = useRef<string[]>([]);
+  const cloudSpeechWordStartsRef = useRef<number[]>([]);
   const cloudSpeechSegmentIndexRef = useRef(0);
   const cloudSpeechAbortRef = useRef<AbortController>();
   const voicePreviewAudioRef = useRef<HTMLAudioElement>();
   const voicePreviewUrlRef = useRef('');
   const voicePreviewAbortRef = useRef<AbortController>();
+  const speechMarkdownRef = useRef('');
+  const speechWordOffsetRef = useRef(0);
   const [isSupported, setIsSupported] = useState<boolean>();
   const [mountedChatLog, setMountedChatLog] = useState<HTMLDivElement | null>(null);
   const [phase, setPhase] = useState<PanelPhase>(() =>
@@ -1101,12 +1155,23 @@ export function CodexFeedbackPanel({
   const [speechPlaybackState, setSpeechPlaybackState] = useState<SpeechPlaybackState>('idle');
   const [speechStatus, setSpeechStatus] = useState('');
   const [speechProgress, setSpeechProgress] = useState<SpeechProgress>();
+  const [autoReadPending, setAutoReadPending] = useState<AutoReadMessage>();
+  const [speechActiveWordIndex, setSpeechActiveWordIndex] = useState<number>();
   const [cloudSpeechConfiguration, setCloudSpeechConfiguration] =
     useState<CloudSpeechConfiguration>();
   const [selectedSpeechVoice, setSelectedSpeechVoice] = useState(
     () => readCodexPreferences().speechVoice,
   );
-  const [selectedSpeechLanguage, setSelectedSpeechLanguage] = useState('en-AU');
+  const [selectedSpeechLanguage, setSelectedSpeechLanguage] = useState(
+    () => readCodexPreferences().speechLanguage,
+  );
+  const [selectedSpeechStyle, setSelectedSpeechStyle] = useState<CodexSpeechStyle>(
+    () => readCodexPreferences().speechStyle,
+  );
+  const [selectedSpeechRate, setSelectedSpeechRate] = useState(
+    () => readCodexPreferences().speechRate,
+  );
+  const [autoReadCodex, setAutoReadCodex] = useState(() => readCodexPreferences().autoReadCodex);
   const [selectedSpeechModel, setSelectedSpeechModel] = useState('chirp3-hd');
   const [voicePreviewState, setVoicePreviewState] = useState<'idle' | 'loading' | 'playing'>(
     'idle',
@@ -1156,6 +1221,9 @@ export function CodexFeedbackPanel({
       ),
     [cloudSpeechConfiguration?.voices, selectedSpeechLanguage, selectedSpeechModel],
   );
+  const selectedSpeechLanguageLabel =
+    speechLanguages.find(({ code }) => code === selectedSpeechLanguage)?.label ??
+    selectedSpeechLanguage;
 
   const stopVoicePreview = useCallback(() => {
     voicePreviewAbortRef.current?.abort();
@@ -1176,6 +1244,7 @@ export function CodexFeedbackPanel({
     cloudSpeechAbortRef.current?.abort();
     cloudSpeechAbortRef.current = undefined;
     for (const segment of cloudSpeechSegmentsRef.current) {
+      if (!segment) continue;
       segment.audio.pause();
       segment.audio.onended = null;
       segment.audio.ontimeupdate = null;
@@ -1183,6 +1252,9 @@ export function CodexFeedbackPanel({
       URL.revokeObjectURL(segment.url);
     }
     cloudSpeechSegmentsRef.current = [];
+    cloudSpeechSegmentPromisesRef.current = [];
+    cloudSpeechChunkTextsRef.current = [];
+    cloudSpeechWordStartsRef.current = [];
     cloudSpeechSegmentIndexRef.current = 0;
   }, []);
 
@@ -1232,9 +1304,12 @@ export function CodexFeedbackPanel({
       speechStartedAtRef.current = 0;
       speechEstimatedTotalRef.current = 0;
       speechSourceRef.current = 'device';
+      speechMarkdownRef.current = '';
+      speechWordOffsetRef.current = 0;
       setSpeechMessageId('');
       setSpeechPlaybackState('idle');
       setSpeechProgress(undefined);
+      setSpeechActiveWordIndex(undefined);
       if (announce && wasActive) setSpeechStatus('Reading stopped.');
     },
     [clearCloudSpeech, clearSpeechTimers, stopVoicePreview],
@@ -1273,6 +1348,7 @@ export function CodexFeedbackPanel({
         setSpeechMessageId('');
         setSpeechPlaybackState('idle');
         setSpeechProgress(undefined);
+        setSpeechActiveWordIndex(undefined);
         setSpeechStatus('Finished reading Codex reply.');
       };
 
@@ -1287,6 +1363,7 @@ export function CodexFeedbackPanel({
         setSpeechMessageId('');
         setSpeechPlaybackState('idle');
         setSpeechProgress(undefined);
+        setSpeechActiveWordIndex(undefined);
         setSpeechStatus('Your device voice could not read this reply. Try Read again.');
       };
 
@@ -1300,10 +1377,11 @@ export function CodexFeedbackPanel({
         }
 
         const utterance = new window.SpeechSynthesisUtterance(chunk);
-        const voice = preferredEnglishSpeechVoice(synthesis.getVoices());
-        utterance.lang = voice?.lang || codexSpeechLanguage;
+        const voice = preferredEnglishSpeechVoice(synthesis.getVoices(), selectedSpeechLanguage);
+        utterance.lang = voice?.lang || selectedSpeechLanguage || codexSpeechLanguage;
         if (voice) utterance.voice = voice;
-        utterance.rate = 1;
+        utterance.rate = codexSpeechRate * selectedSpeechRate;
+        utterance.pitch = 1;
         speechUtteranceRef.current = utterance;
         let settled = false;
         let started = false;
@@ -1328,7 +1406,7 @@ export function CodexFeedbackPanel({
           speechNextChunkTimerRef.current = window.setTimeout(() => {
             speechNextChunkTimerRef.current = undefined;
             speakNextChunk();
-          }, 40);
+          }, 80);
         };
 
         const watchForSilentCompletion = () => {
@@ -1344,6 +1422,18 @@ export function CodexFeedbackPanel({
 
         utterance.onstart = () => {
           started = true;
+          const precedingWords = speechChunksRef.current
+            .slice(0, chunkIndex)
+            .reduce((total, previousChunk) => total + codexSpeechWords(previousChunk).length, 0);
+          setSpeechActiveWordIndex(speechWordOffsetRef.current + precedingWords);
+        };
+        utterance.onboundary = (event) => {
+          if (speechRunRef.current !== runId || event.name !== 'word') return;
+          const precedingWords = speechChunksRef.current
+            .slice(0, chunkIndex)
+            .reduce((total, previousChunk) => total + codexSpeechWords(previousChunk).length, 0);
+          const localWordIndex = codexSpeechWords(chunk.slice(0, event.charIndex)).length;
+          setSpeechActiveWordIndex(speechWordOffsetRef.current + precedingWords + localWordIndex);
         };
         utterance.onend = advance;
         utterance.onerror = (event) => {
@@ -1361,18 +1451,29 @@ export function CodexFeedbackPanel({
 
       speakNextChunk();
     },
-    [clearSpeechTimers, updateSpeechProgress],
+    [clearSpeechTimers, selectedSpeechLanguage, selectedSpeechRate, updateSpeechProgress],
   );
 
   const readDeviceCodexReply = useCallback(
-    (messageId: string, markdown: string) => {
+    (
+      messageId: string,
+      markdown: string,
+      startWord = 0,
+      initiator: 'auto' | 'manual' = 'manual',
+      autoPhase: 'progress' | 'final' = 'final',
+    ) => {
       stopCodexSpeech(false);
-      const chunks = codexSpeechChunks(markdown, 140);
+      speechInitiatorRef.current = initiator;
+      speechAutoPhaseRef.current = autoPhase;
+      const speechText = codexSpeechTextFromWord(markdown, startWord, selectedSpeechStyle);
+      const chunks = codexSpeechChunks(speechText, 260, selectedSpeechStyle);
       if (!chunks.length) {
         setSpeechStatus('This Codex reply has no readable text.');
         return;
       }
       speechChunksRef.current = chunks;
+      speechMarkdownRef.current = markdown;
+      speechWordOffsetRef.current = startWord;
       speechChunkIndexRef.current = 0;
       speechElapsedBeforePlayRef.current = 0;
       speechStartedAtRef.current = 0;
@@ -1381,9 +1482,10 @@ export function CodexFeedbackPanel({
         elapsedSeconds: 0,
         totalSeconds: speechEstimatedTotalRef.current,
       });
+      setSpeechActiveWordIndex(startWord);
       playStoredCodexSpeech(messageId);
     },
-    [playStoredCodexSpeech, stopCodexSpeech],
+    [playStoredCodexSpeech, selectedSpeechStyle, stopCodexSpeech],
   );
 
   const playCloudSpeechSegments = useCallback(
@@ -1398,34 +1500,70 @@ export function CodexFeedbackPanel({
         shouldPlay ? `Reading Codex reply with Google ${selectedSpeechVoice}.` : 'Reading paused.',
       );
 
-      const totalSeconds = segments.reduce((total, segment) => total + segment.duration, 0);
-      const playSegment = (index: number, autoplay = true) => {
+      const totalSeconds = () =>
+        segments.reduce(
+          (total, segment, index) =>
+            total +
+            (segment?.duration ??
+              estimatedCodexSpeechSeconds([cloudSpeechChunkTextsRef.current[index]])),
+          0,
+        );
+      const playSegment = async (index: number, autoplay = true) => {
         if (speechRunRef.current !== runId || speechMessageIdRef.current !== messageId) return;
-        const segment = segments[index];
-        if (!segment) {
+        if (index >= segments.length) {
           stopCodexSpeech(false);
           setSpeechStatus('Finished reading Codex reply.');
           return;
         }
+        let segment = segments[index];
+        if (!segment) {
+          setSpeechPlaybackState('loading');
+          setSpeechStatus(`Buffering Google ${selectedSpeechVoice}…`);
+          try {
+            segment = await cloudSpeechSegmentPromisesRef.current[index];
+          } catch {
+            if (speechRunRef.current !== runId) return;
+            stopCodexSpeech(false);
+            setSpeechStatus('Google speech stopped unexpectedly. Try Read again.');
+            return;
+          }
+        }
+        if (speechRunRef.current !== runId || speechMessageIdRef.current !== messageId) return;
         cloudSpeechSegmentIndexRef.current = index;
         const elapsedBefore = segments
           .slice(0, index)
-          .reduce((total, previous) => total + previous.duration, 0);
+          .reduce(
+            (total, previous, previousIndex) =>
+              total +
+              (previous?.duration ??
+                estimatedCodexSpeechSeconds([cloudSpeechChunkTextsRef.current[previousIndex]])),
+            0,
+          );
         const updateProgress = () => {
           if (speechRunRef.current !== runId) return;
+          const localWordIndex = codexSpeechWordAtTime(
+            cloudSpeechChunkTextsRef.current[index],
+            segment.duration,
+            segment.audio.currentTime,
+          );
+          setSpeechActiveWordIndex(
+            speechWordOffsetRef.current + cloudSpeechWordStartsRef.current[index] + localWordIndex,
+          );
           setSpeechProgress({
             elapsedSeconds: Math.floor(elapsedBefore + segment.audio.currentTime),
-            totalSeconds: Math.ceil(totalSeconds),
+            totalSeconds: Math.ceil(totalSeconds()),
           });
         };
         segment.audio.ontimeupdate = updateProgress;
-        segment.audio.onended = () => playSegment(index + 1);
+        segment.audio.onended = () => void playSegment(index + 1);
         segment.audio.onerror = () => {
           stopCodexSpeech(false);
           setSpeechStatus('Google speech stopped unexpectedly. Try Read again.');
         };
         updateProgress();
         if (!autoplay) return;
+        setSpeechPlaybackState('playing');
+        setSpeechStatus(`Reading Codex reply with Google ${selectedSpeechVoice}.`);
         void segment.audio.play().catch(() => {
           if (speechRunRef.current !== runId) return;
           setSpeechPlaybackState('paused');
@@ -1433,15 +1571,30 @@ export function CodexFeedbackPanel({
         });
       };
 
-      playSegment(cloudSpeechSegmentIndexRef.current, shouldPlay);
+      void playSegment(cloudSpeechSegmentIndexRef.current, shouldPlay);
     },
     [selectedSpeechVoice, stopCodexSpeech],
   );
 
   const readCloudCodexReply = useCallback(
-    async (messageId: string, markdown: string) => {
+    async (
+      messageId: string,
+      markdown: string,
+      startWord = 0,
+      initiator: 'auto' | 'manual' = 'manual',
+      autoPhase: 'progress' | 'final' = 'final',
+    ) => {
       stopCodexSpeech(false);
-      const chunks = codexCloudSpeechChunks(markdown);
+      speechInitiatorRef.current = initiator;
+      speechAutoPhaseRef.current = autoPhase;
+      const speechText = codexSpeechTextFromWord(markdown, startWord, selectedSpeechStyle);
+      const broadChunks = codexCloudSpeechChunks(speechText, 900, selectedSpeechStyle);
+      const chunks = broadChunks.length
+        ? [
+            ...codexCloudSpeechChunks(broadChunks[0], 220, selectedSpeechStyle),
+            ...broadChunks.slice(1),
+          ]
+        : [];
       if (!chunks.length) {
         setSpeechStatus('This Codex reply has no readable text.');
         return;
@@ -1450,48 +1603,81 @@ export function CodexFeedbackPanel({
       speechRunRef.current = runId;
       speechSourceRef.current = 'google';
       speechMessageIdRef.current = messageId;
+      speechMarkdownRef.current = markdown;
+      speechWordOffsetRef.current = startWord;
       setSpeechMessageId(messageId);
       setSpeechPlaybackState('loading');
       setSpeechStatus(`Preparing Google ${selectedSpeechVoice}…`);
       setSpeechProgress({ elapsedSeconds: 0, totalSeconds: estimatedCodexSpeechSeconds(chunks) });
       const controller = new AbortController();
       cloudSpeechAbortRef.current = controller;
-      const loadedSegments: CloudSpeechSegment[] = [];
-      try {
-        for (const text of chunks) {
-          const response = await studioRuntimeFetch(codexSpeechEndpoint, {
-            body: JSON.stringify({ text, voice: selectedSpeechVoice }),
-            headers: { Accept: 'audio/mpeg', 'Content-Type': 'application/json' },
-            method: 'POST',
-            signal: controller.signal,
-          });
-          if (!response.ok) throw new Error('Google speech is unavailable.');
-          loadedSegments.push(
-            await loadCloudSpeechSegment(await response.blob(), controller.signal),
-          );
+      cloudSpeechSegmentsRef.current = Array.from({ length: chunks.length });
+      cloudSpeechChunkTextsRef.current = chunks;
+      let wordStart = 0;
+      cloudSpeechWordStartsRef.current = chunks.map((chunk) => {
+        const start = wordStart;
+        wordStart += codexSpeechWords(chunk).length;
+        return start;
+      });
+      setSpeechActiveWordIndex(startWord);
+      const deferred = chunks.map(() => {
+        let resolve!: (segment: CloudSpeechSegment) => void;
+        let reject!: (error: unknown) => void;
+        const promise = new Promise<CloudSpeechSegment>((resolveSegment, rejectSegment) => {
+          resolve = resolveSegment;
+          reject = rejectSegment;
+        });
+        void promise.catch(() => undefined);
+        return { promise, reject, resolve };
+      });
+      cloudSpeechSegmentPromisesRef.current = deferred.map(({ promise }) => promise);
+      let nextIndex = 0;
+      const loadNext = async (): Promise<void> => {
+        const index = nextIndex++;
+        if (index >= chunks.length || controller.signal.aborted) return;
+        try {
+          const cacheKey = `${selectedSpeechVoice}\u0000${chunks[index]}`;
+          let blob = cloudSpeechBlobCache.get(cacheKey);
+          if (!blob) {
+            const response = await studioRuntimeFetch(codexSpeechEndpoint, {
+              body: JSON.stringify({ text: chunks[index], voice: selectedSpeechVoice }),
+              headers: { Accept: 'audio/mpeg', 'Content-Type': 'application/json' },
+              method: 'POST',
+              signal: controller.signal,
+            });
+            if (!response.ok) throw new Error('Google speech is unavailable.');
+            blob = await response.blob();
+            cacheCloudSpeechBlob(cacheKey, blob);
+          }
+          const segment = await loadCloudSpeechSegment(blob, controller.signal);
+          segment.audio.playbackRate = selectedSpeechRate;
+          if (controller.signal.aborted || speechRunRef.current !== runId) {
+            segment.audio.pause();
+            URL.revokeObjectURL(segment.url);
+            return;
+          }
+          cloudSpeechSegmentsRef.current[index] = segment;
+          deferred[index].resolve(segment);
+        } catch (error) {
+          deferred[index].reject(error);
         }
+        await loadNext();
+      };
+      try {
+        void loadNext();
+        void loadNext();
+        await deferred[0].promise;
         if (speechRunRef.current !== runId || controller.signal.aborted) {
-          for (const segment of loadedSegments) URL.revokeObjectURL(segment.url);
           return;
         }
-        cloudSpeechAbortRef.current = undefined;
-        cloudSpeechSegmentsRef.current = loadedSegments;
         cloudSpeechSegmentIndexRef.current = 0;
-        const totalSeconds = Math.ceil(
-          loadedSegments.reduce((total, segment) => total + segment.duration, 0),
-        );
-        setSpeechProgress({ elapsedSeconds: 0, totalSeconds });
         playCloudSpeechSegments(messageId, runId);
       } catch (error) {
-        for (const segment of loadedSegments) {
-          segment.audio.pause();
-          URL.revokeObjectURL(segment.url);
-        }
         if (controller.signal.aborted || speechRunRef.current !== runId) return;
         if (deviceSpeechSupported) {
-          readDeviceCodexReply(messageId, markdown);
+          readDeviceCodexReply(messageId, markdown, startWord, initiator, autoPhase);
           setSpeechStatus(
-            'Google speech is unavailable. Reading in English with your device voice.',
+            `Google speech is unavailable. Reading in ${selectedSpeechLanguageLabel} with your device voice.`,
           );
           return;
         }
@@ -1507,17 +1693,26 @@ export function CodexFeedbackPanel({
       deviceSpeechSupported,
       playCloudSpeechSegments,
       readDeviceCodexReply,
+      selectedSpeechLanguageLabel,
+      selectedSpeechRate,
+      selectedSpeechStyle,
       selectedSpeechVoice,
       stopCodexSpeech,
     ],
   );
 
   const readCodexReply = useCallback(
-    (messageId: string, markdown: string) => {
+    (
+      messageId: string,
+      markdown: string,
+      startWord = 0,
+      initiator: 'auto' | 'manual' = 'manual',
+      autoPhase: 'progress' | 'final' = 'final',
+    ) => {
       if (cloudSpeechConfiguration?.available) {
-        void readCloudCodexReply(messageId, markdown);
+        void readCloudCodexReply(messageId, markdown, startWord, initiator, autoPhase);
       } else {
-        readDeviceCodexReply(messageId, markdown);
+        readDeviceCodexReply(messageId, markdown, startWord, initiator, autoPhase);
       }
     },
     [cloudSpeechConfiguration?.available, readCloudCodexReply, readDeviceCodexReply],
@@ -1567,28 +1762,57 @@ export function CodexFeedbackPanel({
     (requestedSeconds: number) => {
       if (speechSourceRef.current !== 'google' || !speechMessageIdRef.current) return;
       const segments = cloudSpeechSegmentsRef.current;
-      const total = segments.reduce((sum, segment) => sum + segment.duration, 0);
+      const durations = segments.map(
+        (segment, index) =>
+          segment?.duration ??
+          estimatedCodexSpeechSeconds([cloudSpeechChunkTextsRef.current[index]]),
+      );
+      const total = durations.reduce((sum, duration) => sum + duration, 0);
       const seconds = Math.max(0, Math.min(requestedSeconds, total));
       let elapsed = 0;
       let targetIndex = Math.max(0, segments.length - 1);
       for (let index = 0; index < segments.length; index += 1) {
-        if (seconds <= elapsed + segments[index].duration) {
+        if (seconds <= elapsed + durations[index]) {
           targetIndex = index;
           break;
         }
-        elapsed += segments[index].duration;
+        elapsed += durations[index];
       }
       const wasPlaying = speechPlaybackState === 'playing';
       segments[cloudSpeechSegmentIndexRef.current]?.audio.pause();
       cloudSpeechSegmentIndexRef.current = targetIndex;
-      segments[targetIndex].audio.currentTime = Math.max(
-        0,
-        Math.min(seconds - elapsed, segments[targetIndex].duration),
-      );
       setSpeechProgress({ elapsedSeconds: Math.floor(seconds), totalSeconds: Math.ceil(total) });
-      playCloudSpeechSegments(speechMessageIdRef.current, speechRunRef.current, wasPlaying);
+      const messageId = speechMessageIdRef.current;
+      const runId = speechRunRef.current;
+      void cloudSpeechSegmentPromisesRef.current[targetIndex]
+        .then((segment) => {
+          if (speechRunRef.current !== runId) return;
+          segment.audio.currentTime = Math.max(0, Math.min(seconds - elapsed, segment.duration));
+          playCloudSpeechSegments(messageId, runId, wasPlaying);
+        })
+        .catch(() => undefined);
     },
     [playCloudSpeechSegments, speechPlaybackState],
+  );
+
+  const skipCodexSpeech = useCallback(
+    (seconds: number) => {
+      if (!speechMessageIdRef.current) return;
+      if (speechSourceRef.current === 'google') {
+        seekCodexSpeech((speechProgress?.elapsedSeconds ?? 0) + seconds);
+        return;
+      }
+      const markdown = speechMarkdownRef.current;
+      const wordCount = codexSpeechWords(markdown).length;
+      if (!markdown || !wordCount) return;
+      const currentWord = speechActiveWordIndex ?? speechWordOffsetRef.current;
+      const targetWord = Math.max(
+        0,
+        Math.min(wordCount - 1, currentWord + Math.round((seconds * 150) / 60)),
+      );
+      readCodexReply(speechMessageIdRef.current, markdown, targetWord);
+    },
+    [readCodexReply, seekCodexSpeech, speechActiveWordIndex, speechProgress?.elapsedSeconds],
   );
 
   const previewSpeechVoice = useCallback(async () => {
@@ -1913,6 +2137,97 @@ export function CodexFeedbackPanel({
   useEffect(() => () => window.clearTimeout(timelineAnimationTimerRef.current), []);
 
   useEffect(() => {
+    const threadId = status?.thread?.id ?? '';
+    const messages = status?.messages ?? [];
+    if (!threadId) return;
+    if (autoReadThreadIdRef.current !== threadId) {
+      autoReadThreadIdRef.current = threadId;
+      autoReadSeenMessageIdsRef.current = new Set(messages.map(({ id }) => id));
+      setAutoReadPending(undefined);
+      return;
+    }
+    const unseen = messages.filter((message) => !autoReadSeenMessageIdsRef.current.has(message.id));
+    for (const message of unseen) autoReadSeenMessageIdsRef.current.add(message.id);
+    if (
+      !autoReadCodex ||
+      phase === 'closed' ||
+      document.visibilityState !== 'visible' ||
+      !unseen.length
+    )
+      return;
+    const activeTurnId = status?.thread?.activeTurnId;
+    const candidates = unseen.flatMap((message): AutoReadMessage[] => {
+      if (message.role !== 'assistant' || !message.text.trim()) return [];
+      if (message.phase === 'commentary') {
+        if (activeTurnId && message.turnId && message.turnId !== activeTurnId) return [];
+        return [{ id: message.id, phase: 'progress', text: message.text, turnId: message.turnId }];
+      }
+      const belongsToWorkingTurn = Boolean(
+        status?.thread?.working &&
+        activeTurnId &&
+        message.turnId &&
+        message.turnId === activeTurnId,
+      );
+      return belongsToWorkingTurn
+        ? []
+        : [{ id: message.id, phase: 'final', text: message.text, turnId: message.turnId }];
+    });
+    const candidate =
+      [...candidates].reverse().find(({ phase: messagePhase }) => messagePhase === 'final') ??
+      candidates.at(-1);
+    if (!candidate) return;
+    setAutoReadPending((current) =>
+      current?.phase === 'final' && candidate.phase === 'progress' ? current : candidate,
+    );
+  }, [autoReadCodex, phase, status?.messages, status?.thread]);
+
+  useEffect(() => {
+    if (!autoReadCodex || !autoReadPending) return;
+    if (phase === 'closed' || document.visibilityState !== 'visible') {
+      setAutoReadPending(undefined);
+      return;
+    }
+    if (speechMessageIdRef.current && speechInitiatorRef.current === 'manual') {
+      setAutoReadPending(undefined);
+      return;
+    }
+    if (speechMessageIdRef.current) {
+      if (autoReadPending.phase === 'final' && speechAutoPhaseRef.current === 'progress') {
+        stopCodexSpeech(false);
+      }
+      return;
+    }
+    const pending = autoReadPending;
+    const timer = window.setTimeout(
+      () => {
+        if (document.visibilityState !== 'visible') return;
+        setAutoReadPending((current) => (current?.id === pending.id ? undefined : current));
+        readCodexReply(pending.id, pending.text, 0, 'auto', pending.phase);
+      },
+      pending.phase === 'progress' ? 750 : 0,
+    );
+    return () => window.clearTimeout(timer);
+  }, [
+    autoReadCodex,
+    autoReadPending,
+    phase,
+    readCodexReply,
+    speechMessageId,
+    speechPlaybackState,
+    stopCodexSpeech,
+  ]);
+
+  useEffect(() => {
+    const stopForHiddenPage = () => {
+      if (document.visibilityState === 'visible') return;
+      setAutoReadPending(undefined);
+      if (speechInitiatorRef.current === 'auto') stopCodexSpeech(false);
+    };
+    document.addEventListener('visibilitychange', stopForHiddenPage);
+    return () => document.removeEventListener('visibilitychange', stopForHiddenPage);
+  }, [stopCodexSpeech]);
+
+  useEffect(() => {
     const stopForNavigation = () => stopCodexSpeech(false);
     window.addEventListener('hashchange', stopForNavigation);
     window.addEventListener('pagehide', stopForNavigation);
@@ -2049,6 +2364,19 @@ export function CodexFeedbackPanel({
       return first.id.localeCompare(second.id);
     });
   }, [status?.activities, status?.messages]);
+  const activeSpeechMessage = status?.messages.find(
+    (message) => message.id === speechMessageId && message.role === 'assistant',
+  );
+  const activeSpeechProgress = activeSpeechMessage ? speechProgress : undefined;
+  const activeSpeechHasExactProgress = Boolean(
+    activeSpeechMessage &&
+    speechSourceRef.current === 'google' &&
+    cloudSpeechSegmentsRef.current.length > 0 &&
+    cloudSpeechSegmentsRef.current.every(Boolean),
+  );
+  const activeSpeechProgressPercent = activeSpeechProgress
+    ? Math.min(100, (activeSpeechProgress.elapsedSeconds / activeSpeechProgress.totalSeconds) * 100)
+    : 0;
   const firstTranscriptActivityId = transcriptEntries.find(
     (entry) => entry.kind === 'activity',
   )?.id;
@@ -2269,10 +2597,25 @@ export function CodexFeedbackPanel({
         effortByModel: { ...effortPreferences, [selectedModelId]: selectedEffort },
         workMode,
         fastMode,
+        autoReadCodex,
+        speechLanguage: selectedSpeechLanguage,
+        speechRate: selectedSpeechRate,
+        speechStyle: selectedSpeechStyle,
         speechVoice: selectedSpeechVoice,
       } satisfies CodexPreferences),
     );
-  }, [effortPreferences, fastMode, selectedEffort, selectedModelId, selectedSpeechVoice, workMode]);
+  }, [
+    autoReadCodex,
+    effortPreferences,
+    fastMode,
+    selectedEffort,
+    selectedModelId,
+    selectedSpeechLanguage,
+    selectedSpeechRate,
+    selectedSpeechStyle,
+    selectedSpeechVoice,
+    workMode,
+  ]);
 
   useEffect(() => {
     if (phase === 'closed' || cloudSpeechConfiguration) return;
@@ -2290,6 +2633,9 @@ export function CodexFeedbackPanel({
         setCloudSpeechConfiguration(configuration);
         const chosen =
           configuration.voices.find(({ id }) => id === selectedSpeechVoice) ??
+          configuration.voices
+            .filter(({ languageCode }) => languageCode === selectedSpeechLanguage)
+            .sort((left, right) => left.qualityRank - right.qualityRank)[0] ??
           configuration.voices.find(({ id }) => id === configuration.defaultVoice) ??
           configuration.voices[0];
         setSelectedSpeechVoice(chosen.id);
@@ -2298,7 +2644,7 @@ export function CodexFeedbackPanel({
       })
       .catch(() => undefined);
     return () => controller.abort();
-  }, [cloudSpeechConfiguration, phase, selectedSpeechVoice]);
+  }, [cloudSpeechConfiguration, phase, selectedSpeechLanguage, selectedSpeechVoice]);
 
   const discardEmptyConversation = async (threadId: string) => {
     const candidate = status?.threads.find((thread) => thread.id === threadId);
@@ -3189,7 +3535,128 @@ export function CodexFeedbackPanel({
               </div>
             </div>
 
-            <div className="codex-chat-transcript">
+            <div
+              className={`codex-chat-transcript${activeSpeechMessage ? ' has-speech-dock' : ''}`}
+            >
+              {activeSpeechMessage ? (
+                <section aria-label="Read aloud controls" className="codex-speech-dock">
+                  <div className="codex-speech-dock__topline">
+                    <span className="codex-speech-dock__identity">
+                      <Volume2 aria-hidden="true" size={16} />
+                      <strong>
+                        {activeSpeechMessage.phase === 'commentary'
+                          ? 'Progress update'
+                          : 'Codex reply'}
+                      </strong>
+                    </span>
+                    <ButtonGroup className="codex-speech-dock__controls">
+                      <Button
+                        aria-label={
+                          speechPlaybackState === 'loading'
+                            ? 'Preparing reading'
+                            : speechPlaybackState === 'playing'
+                              ? 'Pause reading'
+                              : 'Resume reading'
+                        }
+                        disabled={speechPlaybackState === 'loading'}
+                        onClick={() => {
+                          if (speechPlaybackState === 'playing') pauseCodexSpeech();
+                          else if (speechPlaybackState === 'paused') resumeCodexSpeech();
+                        }}
+                        size="small"
+                        variant="quiet"
+                      >
+                        {speechPlaybackState === 'loading' ? (
+                          <LoaderCircle aria-hidden="true" className="is-spinning" size={15} />
+                        ) : speechPlaybackState === 'playing' ? (
+                          <Pause aria-hidden="true" size={15} />
+                        ) : (
+                          <Play aria-hidden="true" size={15} />
+                        )}
+                        {speechPlaybackState === 'loading'
+                          ? 'Preparing'
+                          : speechPlaybackState === 'playing'
+                            ? 'Pause'
+                            : 'Resume'}
+                      </Button>
+                      <IconButton
+                        label="Skip back 5 seconds"
+                        onClick={() => skipCodexSpeech(-5)}
+                        variant="quiet"
+                      >
+                        <RotateCcw aria-hidden="true" size={14} />
+                      </IconButton>
+                      <IconButton
+                        label="Skip forward 5 seconds"
+                        onClick={() => skipCodexSpeech(5)}
+                        variant="quiet"
+                      >
+                        <RotateCw aria-hidden="true" size={14} />
+                      </IconButton>
+                      <IconButton
+                        label="Stop reading"
+                        onClick={() => stopCodexSpeech()}
+                        variant="quiet"
+                      >
+                        <Square aria-hidden="true" size={14} />
+                      </IconButton>
+                    </ButtonGroup>
+                  </div>
+                  {activeSpeechProgress && activeSpeechHasExactProgress ? (
+                    <label className="codex-speech-dock__progress codex-chat-message__speech-progress--seekable">
+                      <span className="sr-only">Speech playback position</span>
+                      <input
+                        aria-label="Speech playback position"
+                        aria-valuetext={`${formatCodexSpeechTime(
+                          activeSpeechProgress.elapsedSeconds,
+                        )} of ${formatCodexSpeechTime(activeSpeechProgress.totalSeconds)}`}
+                        max={activeSpeechProgress.totalSeconds}
+                        min={0}
+                        onChange={(event) => seekCodexSpeech(Number(event.target.value))}
+                        step={1}
+                        type="range"
+                        value={Math.min(
+                          activeSpeechProgress.elapsedSeconds,
+                          activeSpeechProgress.totalSeconds,
+                        )}
+                      />
+                      <span className="codex-chat-message__speech-progress-time">
+                        {formatCodexSpeechTime(activeSpeechProgress.elapsedSeconds)} /{' '}
+                        {formatCodexSpeechTime(activeSpeechProgress.totalSeconds)}
+                      </span>
+                    </label>
+                  ) : activeSpeechProgress ? (
+                    <div
+                      aria-label="Estimated reading progress"
+                      aria-valuemax={activeSpeechProgress.totalSeconds}
+                      aria-valuemin={0}
+                      aria-valuenow={Math.min(
+                        activeSpeechProgress.elapsedSeconds,
+                        activeSpeechProgress.totalSeconds,
+                      )}
+                      aria-valuetext={`${formatCodexSpeechTime(
+                        activeSpeechProgress.elapsedSeconds,
+                      )} of about ${formatCodexSpeechTime(activeSpeechProgress.totalSeconds)}`}
+                      className="codex-speech-dock__progress"
+                      role="progressbar"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="codex-chat-message__speech-progress-track"
+                      >
+                        <span
+                          className="codex-chat-message__speech-progress-value"
+                          style={{ inlineSize: `${activeSpeechProgressPercent}%` }}
+                        />
+                      </span>
+                      <span className="codex-chat-message__speech-progress-time">
+                        {formatCodexSpeechTime(activeSpeechProgress.elapsedSeconds)} / about{' '}
+                        {formatCodexSpeechTime(activeSpeechProgress.totalSeconds)}
+                      </span>
+                    </div>
+                  ) : null}
+                </section>
+              ) : null}
               <div
                 aria-busy={Boolean(conversationTransition)}
                 aria-label="Codex chat log"
@@ -3229,28 +3696,11 @@ export function CodexFeedbackPanel({
                             );
                           }
                           const message = entry.message;
-                          const isCompletedCodexReply =
-                            message.role === 'assistant' &&
-                            message.phase !== 'commentary' &&
-                            !(
-                              status?.thread?.working &&
-                              message.turnId &&
-                              message.turnId === status.thread.activeTurnId
-                            );
+                          const isReadableCodexMessage =
+                            message.role === 'assistant' && Boolean(message.text.trim());
+                          const supportsSpeechReadAlong = isReadableCodexMessage;
                           const isReadingThisReply = speechMessageId === message.id;
                           const activityContext = activityContextByMessageId.get(message.id);
-                          const readingProgress = isReadingThisReply ? speechProgress : undefined;
-                          const hasExactSpeechProgress =
-                            isReadingThisReply &&
-                            speechSourceRef.current === 'google' &&
-                            cloudSpeechSegmentsRef.current.length > 0;
-                          const readingProgressPercent = readingProgress
-                            ? Math.min(
-                                100,
-                                (readingProgress.elapsedSeconds / readingProgress.totalSeconds) *
-                                  100,
-                              )
-                            : 0;
                           return (
                             <Fragment key={`message:${message.id}`}>
                               <article
@@ -3265,21 +3715,49 @@ export function CodexFeedbackPanel({
                                 data-phase={message.phase}
                                 data-message-id={message.id}
                               >
-                                <strong>
-                                  {message.role === 'user' ? (
-                                    'You'
-                                  ) : message.phase === 'commentary' ? (
-                                    <>
-                                      <span
-                                        aria-hidden="true"
-                                        className="codex-chat-message__pulse"
-                                      />
-                                      Progress update
-                                    </>
-                                  ) : (
-                                    'Codex'
-                                  )}
-                                </strong>
+                                <header className="codex-chat-message__header">
+                                  <strong>
+                                    {message.role === 'user' ? (
+                                      'You'
+                                    ) : message.phase === 'commentary' ? (
+                                      <>
+                                        <span
+                                          aria-hidden="true"
+                                          className="codex-chat-message__pulse"
+                                        />
+                                        Progress update
+                                      </>
+                                    ) : (
+                                      'Codex'
+                                    )}
+                                  </strong>
+                                  {speechSupported && isReadableCodexMessage ? (
+                                    isReadingThisReply ? (
+                                      <span className="codex-chat-message__reading-state">
+                                        <Volume2 aria-hidden="true" size={14} />
+                                        Playing above
+                                      </span>
+                                    ) : (
+                                      <Button
+                                        aria-label={
+                                          message.phase === 'commentary'
+                                            ? 'Read progress update'
+                                            : 'Read Codex reply'
+                                        }
+                                        className="codex-chat-message__read"
+                                        onClick={() => {
+                                          setAutoReadPending(undefined);
+                                          readCodexReply(message.id, message.text);
+                                        }}
+                                        size="small"
+                                        variant="quiet"
+                                      >
+                                        <Volume2 aria-hidden="true" size={15} />
+                                        Read
+                                      </Button>
+                                    )
+                                  ) : null}
+                                </header>
                                 {activityContext ? (
                                   <span
                                     className="codex-chat-message__activity-context"
@@ -3295,7 +3773,27 @@ export function CodexFeedbackPanel({
                                     </span>
                                   </span>
                                 ) : null}
-                                <MarkdownContent>{message.text}</MarkdownContent>
+                                <MarkdownContent
+                                  speech={
+                                    supportsSpeechReadAlong
+                                      ? {
+                                          activeWordIndex: isReadingThisReply
+                                            ? speechActiveWordIndex
+                                            : undefined,
+                                          onWordSelect: (wordIndex) => {
+                                            setAutoReadPending(undefined);
+                                            readCodexReply(message.id, message.text, wordIndex);
+                                          },
+                                          words: codexSpeechWords(
+                                            message.text,
+                                            selectedSpeechStyle,
+                                          ),
+                                        }
+                                      : undefined
+                                  }
+                                >
+                                  {message.text}
+                                </MarkdownContent>
                                 <RuntimeAttachmentGallery
                                   attachmentIds={
                                     message.attachmentIds ??
@@ -3303,137 +3801,6 @@ export function CodexFeedbackPanel({
                                   }
                                   altPrefix="Image attached to your message"
                                 />
-                                {speechSupported && isCompletedCodexReply ? (
-                                  <div
-                                    className="codex-chat-message__speech"
-                                    data-speech-state={
-                                      isReadingThisReply ? speechPlaybackState : 'idle'
-                                    }
-                                  >
-                                    <Button
-                                      aria-label={
-                                        isReadingThisReply && speechPlaybackState === 'loading'
-                                          ? 'Preparing reading'
-                                          : isReadingThisReply && speechPlaybackState === 'playing'
-                                            ? 'Pause reading'
-                                            : isReadingThisReply && speechPlaybackState === 'paused'
-                                              ? 'Resume reading'
-                                              : 'Read Codex reply'
-                                      }
-                                      onClick={() => {
-                                        if (
-                                          isReadingThisReply &&
-                                          speechPlaybackState === 'playing'
-                                        ) {
-                                          pauseCodexSpeech();
-                                        } else if (
-                                          isReadingThisReply &&
-                                          speechPlaybackState === 'paused'
-                                        ) {
-                                          resumeCodexSpeech();
-                                        } else {
-                                          readCodexReply(message.id, message.text);
-                                        }
-                                      }}
-                                      disabled={
-                                        isReadingThisReply && speechPlaybackState === 'loading'
-                                      }
-                                      size="small"
-                                      variant="quiet"
-                                    >
-                                      {isReadingThisReply && speechPlaybackState === 'loading' ? (
-                                        <LoaderCircle
-                                          aria-hidden="true"
-                                          className="is-spinning"
-                                          size={15}
-                                        />
-                                      ) : isReadingThisReply &&
-                                        speechPlaybackState === 'playing' ? (
-                                        <Pause aria-hidden="true" size={15} />
-                                      ) : isReadingThisReply && speechPlaybackState === 'paused' ? (
-                                        <Play aria-hidden="true" size={15} />
-                                      ) : (
-                                        <Volume2 aria-hidden="true" size={15} />
-                                      )}
-                                      {isReadingThisReply && speechPlaybackState === 'loading'
-                                        ? 'Preparing'
-                                        : isReadingThisReply && speechPlaybackState === 'playing'
-                                          ? 'Pause'
-                                          : isReadingThisReply && speechPlaybackState === 'paused'
-                                            ? 'Resume'
-                                            : 'Read'}
-                                    </Button>
-                                    {isReadingThisReply ? (
-                                      <IconButton
-                                        label="Stop reading"
-                                        onClick={() => stopCodexSpeech()}
-                                        variant="quiet"
-                                      >
-                                        <Square aria-hidden="true" size={14} />
-                                      </IconButton>
-                                    ) : null}
-                                    {readingProgress && hasExactSpeechProgress ? (
-                                      <label className="codex-chat-message__speech-progress codex-chat-message__speech-progress--seekable">
-                                        <span className="sr-only">Speech playback position</span>
-                                        <input
-                                          aria-label="Speech playback position"
-                                          aria-valuetext={`${formatCodexSpeechTime(
-                                            readingProgress.elapsedSeconds,
-                                          )} of ${formatCodexSpeechTime(
-                                            readingProgress.totalSeconds,
-                                          )}`}
-                                          max={readingProgress.totalSeconds}
-                                          min={0}
-                                          onChange={(event) =>
-                                            seekCodexSpeech(Number(event.target.value))
-                                          }
-                                          step={1}
-                                          type="range"
-                                          value={Math.min(
-                                            readingProgress.elapsedSeconds,
-                                            readingProgress.totalSeconds,
-                                          )}
-                                        />
-                                        <span className="codex-chat-message__speech-progress-time">
-                                          {formatCodexSpeechTime(readingProgress.elapsedSeconds)} /{' '}
-                                          {formatCodexSpeechTime(readingProgress.totalSeconds)}
-                                        </span>
-                                      </label>
-                                    ) : readingProgress ? (
-                                      <div
-                                        aria-label="Estimated reading progress"
-                                        aria-valuemax={readingProgress.totalSeconds}
-                                        aria-valuemin={0}
-                                        aria-valuenow={Math.min(
-                                          readingProgress.elapsedSeconds,
-                                          readingProgress.totalSeconds,
-                                        )}
-                                        aria-valuetext={`${formatCodexSpeechTime(
-                                          readingProgress.elapsedSeconds,
-                                        )} of about ${formatCodexSpeechTime(
-                                          readingProgress.totalSeconds,
-                                        )}`}
-                                        className="codex-chat-message__speech-progress"
-                                        role="progressbar"
-                                      >
-                                        <span
-                                          aria-hidden="true"
-                                          className="codex-chat-message__speech-progress-track"
-                                        >
-                                          <span
-                                            className="codex-chat-message__speech-progress-value"
-                                            style={{ inlineSize: `${readingProgressPercent}%` }}
-                                          />
-                                        </span>
-                                        <span className="codex-chat-message__speech-progress-time">
-                                          {formatCodexSpeechTime(readingProgress.elapsedSeconds)} /{' '}
-                                          about{' '}
-                                          {formatCodexSpeechTime(readingProgress.totalSeconds)}
-                                        </span>
-                                      </div>
-                                    ) : null}
-                                  </div>
-                                ) : null}
                               </article>
                               {(agentTeamsAfterMessage.get(message.id) ?? []).map((team) => (
                                 <AgentTeamPanel
@@ -4014,7 +4381,7 @@ export function CodexFeedbackPanel({
                     </header>
                     <div className="codex-speech-settings__controls">
                       <label>
-                        <span>Language</span>
+                        <span>Language &amp; accent</span>
                         <select
                           disabled={!cloudSpeechConfiguration?.available}
                           onChange={(event) => {
@@ -4091,10 +4458,71 @@ export function CodexFeedbackPanel({
                           ))}
                         </select>
                       </label>
+                      <label>
+                        <span>Reading style</span>
+                        <select
+                          onChange={(event) => {
+                            stopCodexSpeech(false);
+                            setSelectedSpeechStyle(event.target.value as CodexSpeechStyle);
+                          }}
+                          value={selectedSpeechStyle}
+                        >
+                          <option value="natural">Natural</option>
+                          <option value="literal">Literal</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span>Speed</span>
+                        <select
+                          onChange={(event) => {
+                            stopCodexSpeech(false);
+                            setSelectedSpeechRate(Number(event.target.value));
+                          }}
+                          value={selectedSpeechRate}
+                        >
+                          <option value="0.85">0.85× · relaxed</option>
+                          <option value="1">1× · conversational</option>
+                          <option value="1.15">1.15× · brisk</option>
+                        </select>
+                      </label>
+                      <label className="codex-speech-settings__toggle">
+                        <span>
+                          <strong>Auto-read Codex</strong>
+                          <small>
+                            Reads progress updates and the final reply automatically while this chat
+                            is open.
+                          </small>
+                        </span>
+                        <input
+                          checked={autoReadCodex}
+                          onChange={(event) => {
+                            const enabled = event.target.checked;
+                            setAutoReadCodex(enabled);
+                            setAutoReadPending(undefined);
+                            if (!enabled && speechInitiatorRef.current === 'auto') {
+                              stopCodexSpeech(false);
+                            }
+                            setSpeechStatus(
+                              enabled
+                                ? 'Auto-read is on for new progress and final replies in this chat.'
+                                : 'Auto-read is off.',
+                            );
+                          }}
+                          type="checkbox"
+                        />
+                      </label>
                       {selectedCloudSpeechVoice ? (
                         <p className="codex-speech-settings__selection">
-                          <strong>{selectedCloudSpeechVoice.modelLabel}</strong>
-                          <span>{selectedCloudSpeechVoice.qualityLabel}</span>
+                          <strong>
+                            {selectedSpeechLanguageLabel} ·{' '}
+                            {selectedSpeechStyle === 'natural' ? 'Natural' : 'Literal'} ·{' '}
+                            {selectedSpeechRate}×
+                          </strong>
+                          <span>
+                            {selectedCloudSpeechVoice.modelLabel} ·{' '}
+                            {selectedCloudSpeechVoice.qualityLabel} ·{' '}
+                            {autoReadCodex ? 'Auto-read on' : 'Auto-read off'}
+                          </span>
                         </p>
                       ) : null}
                       <Button

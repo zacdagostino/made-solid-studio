@@ -399,6 +399,8 @@ const localDeployedStudioShellPackageId = 'agent-package-local-v20-0-deployed-st
 const localCanonicalWorkspaceEntryPackageId = 'agent-package-local-v20-1-canonical-workspace-entry';
 const localWorkspaceDevelopmentStudioPackageId =
   'agent-package-local-v20-2-workspace-development-studio';
+const localRestoredCodexVoiceExperiencePackageId =
+  'agent-package-local-v20-3-restored-codex-voice-experience';
 
 type StoreName =
   | 'activities'
@@ -3118,10 +3120,28 @@ export class SiteforgeRepository {
         'Restores Workspace as the instant-development Studio environment without replacing it with a client website or weakening production, owner, repository, or exact-client boundaries.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localRestoredCodexVoiceExperiencePackage: AgentPackage = {
+      ...localWorkspaceDevelopmentStudioPackage,
+      id: localRestoredCodexVoiceExperiencePackageId,
+      version: 20.3,
+      basePackageId: localWorkspaceDevelopmentStudioPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v20.3',
+      contractAddendum:
+        'Studio Codex read aloud restores the complete reviewer-controlled voice experience: natural or literal reading, three saved speeds, opt-in chat-scoped automatic reading, progressive cloud playback, and an interactive read-along dock that remains usable while the transcript scrolls.',
+      instructionsAddendum:
+        'Keep speech user-initiated unless the reviewer explicitly enables Auto-read for the open chat. Persist Natural or Literal reading style, 0.85x, 1x, or 1.15x speed, language, model, and voice preferences locally; apply the same effective rate and locale-aware selection to Google and device fallback speech. Auto-read only stable new Codex commentary and the final reply, de-duplicate messages, coalesce queued progress to its newest update, and let manual Read pre-empt automatic speech. Fetch bounded Google chunks concurrently, start the first ready chunk without waiting for the rest, keep at most 24 private in-memory MP3 blobs, and abort or ignore late audio after conversation, panel, or navigation changes. Keep the active word visible in a persistent accessible dock with pause, resume, stop, five-second skip, exact Google seeking, and keyboard or pointer restart from a rendered word. Revoke every object URL, preserve device fallback, and use a static active-word treatment when reduced motion is requested.',
+      summary:
+        'Restored Codex voice experience test package: brings back saved listening preferences, opt-in auto-read, progressive private audio, and interactive read-along controls.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Restores the four developed Codex listening features in the Workspace development Studio without weakening speech privacy, cancellation, accessibility, or client-chat isolation.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localRestoredCodexVoiceExperiencePackage,
           localWorkspaceDevelopmentStudioPackage,
           localCanonicalWorkspaceEntryPackage,
           localDeployedStudioShellPackage,

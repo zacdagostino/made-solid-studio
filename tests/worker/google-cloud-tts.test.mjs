@@ -175,6 +175,7 @@ test('uses the selected catalogue voice and its own language for MP3 audio', asy
   const speechBody = JSON.parse(requests[2].init.body);
   assert.deepEqual(speechBody.voice, { languageCode: 'fr-FR', name: 'fr-FR-Neural2-A' });
   assert.equal(speechBody.audioConfig.audioEncoding, 'MP3');
+  assert.equal(speechBody.audioConfig.speakingRate, 0.94);
 });
 
 test('reuses the token and catalogue without caching generated audio', async () => {

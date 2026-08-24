@@ -822,10 +822,17 @@ html[data-codex-panel='embedded'] body #root {
 }
 .codex-chat-transcript {
   position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
 }
+.codex-chat-transcript.has-speech-dock {
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: var(--space-1);
+}
 .codex-chat-dialog .codex-chat-log {
+  min-height: 0;
   height: 100%;
   align-content: start;
   max-height: none;
@@ -1055,10 +1062,37 @@ html[data-codex-panel='embedded'] body #root {
     transform: translate3d(0, 0, 0) scale(1);
   }
 }
-.codex-chat-dialog .codex-chat-message > strong {
+.codex-chat-message__header {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+}
+.codex-chat-dialog .codex-chat-message__header > strong {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
   color: var(--codex-muted);
   font-size: 0.68rem;
   font-weight: 600;
+}
+.codex-chat-dialog .codex-chat-message__read {
+  min-height: 44px;
+  justify-self: end;
+  padding-inline: var(--space-2);
+  color: #dce99a;
+}
+.codex-chat-message__reading-state {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 5px;
+  justify-self: end;
+  color: #cdd6a5;
+  font-size: 0.68rem;
+  font-weight: 650;
 }
 .codex-chat-dialog .codex-chat-message--progress {
   max-width: 94%;
@@ -1068,7 +1102,7 @@ html[data-codex-panel='embedded'] body #root {
   color: #e7e7e2;
   background: #22241e;
 }
-.codex-chat-dialog .codex-chat-message--progress > strong {
+.codex-chat-dialog .codex-chat-message--progress .codex-chat-message__header > strong {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1106,6 +1140,35 @@ html[data-codex-panel='embedded'] body #root {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-1);
+}
+.codex-chat-message__speech-word {
+  border-radius: 3px;
+  transition:
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    color 160ms ease;
+}
+.codex-chat-message__speech-word[role='button'] {
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.codex-chat-message__speech-word[role='button']:hover {
+  background: rgb(205 214 165 / 0.12);
+}
+.codex-chat-message__speech-word[role='button']:focus-visible {
+  outline: 2px solid #e7ff1f;
+  outline-offset: 2px;
+}
+.codex-chat-message__speech-word.is-active {
+  background: #d8ef24;
+  box-shadow: 0 0 0 3px rgb(216 239 36 / 0.16);
+  color: #161811;
+  animation: codex-speech-word-highlight 900ms ease-in-out infinite alternate;
+}
+@keyframes codex-speech-word-highlight {
+  to {
+    box-shadow: 0 0 0 5px rgb(216 239 36 / 0.08);
+  }
 }
 .codex-chat-message__speech .button {
   color: var(--codex-muted);
@@ -1156,6 +1219,68 @@ html[data-codex-panel='embedded'] body #root {
   outline: 2px solid #e7ff1f;
   outline-offset: 2px;
 }
+.codex-speech-dock {
+  position: sticky;
+  z-index: 3;
+  inset-block-start: 0;
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid #59612d;
+  border-radius: 10px;
+  background: #25281d;
+  box-shadow: 0 8px 22px rgb(0 0 0 / 0.28);
+}
+.codex-speech-dock__topline {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-1);
+}
+.codex-speech-dock__identity {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: #dce99a;
+}
+.codex-speech-dock__identity svg {
+  flex: none;
+}
+.codex-speech-dock__identity strong {
+  overflow: hidden;
+  font-size: 0.72rem;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.codex-speech-dock__controls {
+  flex-wrap: nowrap;
+  gap: 2px;
+}
+.codex-speech-dock__controls .button {
+  min-height: 44px;
+}
+.codex-speech-dock__controls .button:not(.button--icon) {
+  padding-inline: var(--space-2);
+}
+.codex-speech-dock__progress {
+  display: grid;
+  min-width: 0;
+  min-height: 36px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--codex-muted);
+}
+.codex-speech-dock__progress.codex-chat-message__speech-progress--seekable input[type='range'] {
+  min-height: 36px;
+}
+.codex-speech-dock__progress .codex-chat-message__speech-progress-time {
+  white-space: nowrap;
+}
 .codex-chat-message__pulse {
   width: 7px;
   height: 7px;
@@ -1195,6 +1320,15 @@ html[data-codex-panel='embedded'] body #root {
 }
 .markdown-content > :last-child {
   margin-bottom: 0;
+}
+.codex-chat-dialog .codex-chat-message--assistant .markdown-content {
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+.codex-chat-dialog .codex-chat-message--assistant .markdown-content::selection,
+.codex-chat-dialog .codex-chat-message--assistant .markdown-content *::selection {
+  color: #11140a;
+  background: #d8ef24;
 }
 .markdown-content :is(p, ul, ol, blockquote, h3, h4, h5, h6) {
   margin-block: 0;
@@ -2251,6 +2385,34 @@ html[data-codex-panel='embedded'] body #root {
   justify-self: start;
   white-space: nowrap;
 }
+.codex-speech-settings__controls .codex-speech-settings__toggle {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 44px;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid #595d4c;
+  border-radius: 8px;
+  background: var(--codex-surface-hover);
+}
+.codex-speech-settings__toggle > span {
+  display: grid;
+  gap: 2px;
+}
+.codex-speech-settings__toggle strong {
+  color: var(--codex-text);
+  font-size: 0.76rem;
+}
+.codex-speech-settings__toggle small {
+  color: #b8bea4;
+  font-size: 0.64rem;
+  line-height: 1.35;
+}
+.codex-speech-settings__toggle input {
+  width: 22px;
+  height: 22px;
+  accent-color: var(--codex-accent);
+}
 .codex-speech-settings__selection {
   display: flex;
   min-width: 0;
@@ -2433,6 +2595,7 @@ html[data-codex-panel='embedded'] body #root {
   .codex-chat-activity.is-entering,
   .codex-chat-activity--running .codex-chat-activity__marker,
   .codex-chat-message__speech-progress-value,
+  .codex-chat-message__speech-word,
   .codex-conversation-loading__status,
   .codex-conversation-loading__icon,
   .codex-conversation-loading__dots > span,
@@ -2445,6 +2608,10 @@ html[data-codex-panel='embedded'] body #root {
   }
   .codex-chat-message__speech-progress-value {
     transition: none;
+  }
+  .codex-chat-message__speech-word {
+    animation: none !important;
+    transition: none !important;
   }
 }
 

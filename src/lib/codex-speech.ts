@@ -1,7 +1,10 @@
 const DEFAULT_MAXIMUM_CHUNK_LENGTH = 320;
-const ESTIMATED_WORDS_PER_MINUTE = 160;
+const ESTIMATED_WORDS_PER_MINUTE = 150;
 
 export const codexSpeechLanguage = 'en-AU';
+export const codexSpeechRate = 0.94;
+export const codexSpeechReadingStyles = ['natural', 'literal'] as const;
+export type CodexSpeechStyle = (typeof codexSpeechReadingStyles)[number];
 
 const spokenEntities: Record<string, string> = {
   amp: '&',
@@ -61,23 +64,33 @@ function punctuate(value: string) {
  * for a SpeechSynthesisUtterance. Fenced code is announced but intentionally
  * omitted because reading source punctuation aloud is rarely useful.
  */
-export function codexSpeechText(markdown: string): string {
+export function codexSpeechText(markdown: string, style: CodexSpeechStyle = 'natural'): string {
   let text = markdown.replace(/\r\n?/g, '\n');
 
   text = text
-    .replace(/```[\s\S]*?```/g, '\n\nCode example omitted.\n\n')
-    .replace(/~~~[\s\S]*?~~~/g, '\n\nCode example omitted.\n\n')
+    .replace(/```(?:[^\n]*)\n?([\s\S]*?)```/g, (_match, code: string) =>
+      style === 'literal'
+        ? `\n\nCode block starts. ${code.replace(/\s+/g, ' ').trim()} Code block ends.\n\n`
+        : '\n\nCode example omitted.\n\n',
+    )
+    .replace(/~~~(?:[^\n]*)\n?([\s\S]*?)~~~/g, (_match, code: string) =>
+      style === 'literal'
+        ? `\n\nCode block starts. ${code.replace(/\s+/g, ' ').trim()} Code block ends.\n\n`
+        : '\n\nCode example omitted.\n\n',
+    )
     .replace(/<!--([\s\S]*?)-->/g, '')
     .replace(/^\s*\[[^\]]+\]:\s+\S+.*$/gm, '')
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, (_match, alt: string) =>
       alt.trim() ? `Image: ${alt.trim()}` : 'Image',
     )
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\(([^)]*)\)/g, (_match, label: string, url: string) =>
+      style === 'literal' ? `${label}, link to ${spokenUrl(url)}` : label,
+    )
     .replace(/<(https?:\/\/[^>]+)>/gi, (_match, url: string) => spokenUrl(url))
     .replace(/<br\s*\/?\s*>/gi, '\n')
     .replace(/<[^>]+>/g, '')
     .replace(/https?:\/\/[^\s)\]}>,]+/gi, (url) => spokenUrl(url))
-    .replace(/`([^`]+)`/g, '$1')
+    .replace(/`([^`]+)`/g, (_match, code: string) => (style === 'literal' ? `code ${code}` : code))
     .replace(/(\*\*|__|~~)(.*?)\1/g, '$2')
     .replace(/([*_])([^\n]*?\S)\1/g, '$2')
     .replace(/\\([\\`*_[\]{}()#+\-.!>|])/g, '$1');
@@ -105,7 +118,25 @@ export function codexSpeechText(markdown: string): string {
     const isStandalone = /^(?:#{1,6}\s+|>\s*|[-+*]\s+|\d+[.)]\s+|[-+*]\s+\[[ xX]\]\s+|\|)/.test(
       trimmedLine,
     );
-    const line = trimmedLine
+    const literalPrefix =
+      style !== 'literal'
+        ? ''
+        : /^#{1,6}\s+/.test(trimmedLine)
+          ? 'Heading. '
+          : /^>\s*/.test(trimmedLine)
+            ? 'Quote. '
+            : /^[-+*]\s+\[[xX]\]\s+/.test(trimmedLine)
+              ? 'Completed task. '
+              : /^[-+*]\s+\[ \]\s+/.test(trimmedLine)
+                ? 'Open task. '
+                : /^[-+*]\s+/.test(trimmedLine)
+                  ? 'Bullet. '
+                  : /^\d+[.)]\s+/.test(trimmedLine)
+                    ? `Item ${trimmedLine.match(/^\d+/)?.[0]}. `
+                    : /^\|/.test(trimmedLine)
+                      ? 'Table row. '
+                      : '';
+    const line = `${literalPrefix}${trimmedLine
       .replace(/^#{1,6}\s+/, '')
       .replace(/^>\s*/, '')
       .replace(/^[-+*]\s+\[[ xX]\]\s+/, '')
@@ -114,8 +145,7 @@ export function codexSpeechText(markdown: string): string {
       .replace(/^\|\s*|\s*\|$/g, '')
       .replace(/\s*\|\s*/g, '. ')
       .replace(/\s+/g, ' ')
-      .trim();
-
+      .trim()}`;
     if (!line || /^[-*_]{3,}$/.test(line)) continue;
 
     if (isStandalone || line === 'Code example omitted.') {
@@ -175,8 +205,9 @@ function splitLongSegment(segment: string, maximumLength: number) {
 export function codexSpeechChunks(
   markdown: string,
   maximumLength = DEFAULT_MAXIMUM_CHUNK_LENGTH,
+  style: CodexSpeechStyle = 'natural',
 ): string[] {
-  const text = codexSpeechText(markdown);
+  const text = codexSpeechText(markdown, style);
   if (!text) return [];
 
   const safeMaximumLength =
@@ -214,11 +245,15 @@ export function codexSpeechChunks(
  * Produces speech chunks that remain inside a UTF-8 byte limit used by cloud
  * synthesis APIs. Natural word boundaries are preserved whenever possible.
  */
-export function codexCloudSpeechChunks(markdown: string, maximumBytes = 4_200): string[] {
+export function codexCloudSpeechChunks(
+  markdown: string,
+  maximumBytes = 4_200,
+  style: CodexSpeechStyle = 'natural',
+): string[] {
   const safeMaximumBytes =
     Number.isFinite(maximumBytes) && maximumBytes > 0 ? Math.floor(maximumBytes) : 4_200;
   const encoder = new TextEncoder();
-  const sourceChunks = codexSpeechChunks(markdown, safeMaximumBytes);
+  const sourceChunks = codexSpeechChunks(markdown, safeMaximumBytes, style);
   const chunks: string[] = [];
 
   for (const source of sourceChunks) {
@@ -253,6 +288,61 @@ export function codexCloudSpeechChunks(markdown: string, maximumBytes = 4_200): 
   return chunks;
 }
 
+export function codexSpeechWords(markdown: string, style: CodexSpeechStyle = 'natural'): string[] {
+  return codexSpeechText(markdown, style).match(/\S+/g) ?? [];
+}
+
+export function codexSpeechTextFromWord(
+  markdown: string,
+  wordIndex: number,
+  style: CodexSpeechStyle = 'natural',
+): string {
+  const text = codexSpeechText(markdown, style);
+  if (!text) return '';
+  const words = [...text.matchAll(/\S+/g)];
+  const safeIndex = Math.max(0, Math.min(Math.floor(wordIndex), words.length));
+  return safeIndex < words.length ? text.slice(words[safeIndex].index).trimStart() : '';
+}
+
+function speechWordWeights(text: string) {
+  return (text.match(/\S+/g) ?? []).map((word) => {
+    const spokenCharacters = word.replace(/[^\p{L}\p{N}]/gu, '').length;
+    const punctuationPause = /[.!?…]["'’”)\]]*$/.test(word)
+      ? 5
+      : /[,;:]["'’”)\]]*$/.test(word)
+        ? 2
+        : 0;
+    return Math.max(1, spokenCharacters) + punctuationPause;
+  });
+}
+
+/**
+ * Maps cloud audio time to a word using the segment's measured duration. Cloud
+ * HD voices do not return word timepoints, so longer words and punctuation are
+ * given proportionally more of the timeline.
+ */
+export function codexSpeechWordAtTime(text: string, duration: number, seconds: number): number {
+  const weights = speechWordWeights(text);
+  if (!weights.length) return 0;
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+  const progress = Math.max(0, Math.min(seconds / Math.max(duration, 0.001), 0.999999));
+  const targetWeight = progress * totalWeight;
+  let elapsedWeight = 0;
+  for (let index = 0; index < weights.length; index += 1) {
+    elapsedWeight += weights[index];
+    if (targetWeight < elapsedWeight) return index;
+  }
+  return weights.length - 1;
+}
+
+export function codexSpeechTimeAtWord(text: string, duration: number, wordIndex: number): number {
+  const weights = speechWordWeights(text);
+  if (!weights.length) return 0;
+  const safeIndex = Math.max(0, Math.min(Math.floor(wordIndex), weights.length));
+  const elapsedWeight = weights.slice(0, safeIndex).reduce((sum, weight) => sum + weight, 0);
+  return (elapsedWeight / weights.reduce((sum, weight) => sum + weight, 0)) * duration;
+}
+
 function normalizedSpeechLanguage(language: string) {
   return language.trim().toLowerCase().replaceAll('_', '-');
 }
@@ -266,8 +356,27 @@ function isEnglishSpeechLanguage(language: string) {
  * Chooses only English voices. An Australian local voice wins, followed by
  * another local English voice and finally any browser-provided English voice.
  */
-export function preferredEnglishSpeechVoice(voices: SpeechSynthesisVoice[]) {
+export function preferredEnglishSpeechVoice(
+  voices: SpeechSynthesisVoice[],
+  preferredLanguage?: string,
+) {
   const englishVoices = voices.filter((voice) => isEnglishSpeechLanguage(voice.lang));
+  const normalizedPreferredLanguage = preferredLanguage
+    ? normalizedSpeechLanguage(preferredLanguage)
+    : undefined;
+  if (normalizedPreferredLanguage && isEnglishSpeechLanguage(normalizedPreferredLanguage)) {
+    const exactLocaleVoices = englishVoices.filter(
+      (voice) => normalizedSpeechLanguage(voice.lang) === normalizedPreferredLanguage,
+    );
+    if (exactLocaleVoices.length) {
+      return [...exactLocaleVoices].sort(
+        (first, second) =>
+          Number(second.localService) - Number(first.localService) ||
+          Number(second.default) - Number(first.default) ||
+          first.name.localeCompare(second.name),
+      )[0];
+    }
+  }
   const localAustralianVoices = englishVoices.filter(
     (voice) => voice.localService && normalizedSpeechLanguage(voice.lang) === 'en-au',
   );

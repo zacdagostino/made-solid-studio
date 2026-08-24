@@ -51,6 +51,7 @@ const googleTokenEndpoint = 'https://oauth2.googleapis.com/token';
 const googleVoicesEndpoint = 'https://texttospeech.googleapis.com/v1/voices';
 const googleSpeechEndpoint = 'https://texttospeech.googleapis.com/v1/text:synthesize';
 const maximumSpeechBytes = 4_500;
+export const googleSpeechConversationalRate = 0.94;
 const voiceCatalogLifetime = 6 * 60 * 60 * 1_000;
 let cachedAccessToken;
 let cachedVoiceCatalog;
@@ -301,7 +302,7 @@ export async function synthesizeGoogleSpeech(
   const accessToken = await googleAccessToken(account, fetchImplementation, now);
   const response = await fetchImplementation(googleSpeechEndpoint, {
     body: JSON.stringify({
-      audioConfig: { audioEncoding: 'MP3', speakingRate: 1 },
+      audioConfig: { audioEncoding: 'MP3', speakingRate: googleSpeechConversationalRate },
       input: { text },
       voice: { languageCode: voice.languageCode, name: voice.voiceName },
     }),
