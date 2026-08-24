@@ -80,7 +80,7 @@ test('requires distinct exact HTTPS Studio, Workspace, and Preview origins', () 
   );
 });
 
-test('returns expired workspace documents through the stable authenticated Studio route', async () => {
+test('sends unscoped Workspace documents to canonical Studio without reading active preview state', async () => {
   assert.equal(
     workspacePreviewReentryUrl('https://studio.madesolid.com.au', '/services?viewport=mobile'),
     'https://studio.madesolid.com.au/#/workspace-preview-access?path=%2Fservices%3Fviewport%3Dmobile',
@@ -109,7 +109,11 @@ test('returns expired workspace documents through the stable authenticated Studi
     assert.equal(documentResponse.status, 303);
     assert.equal(
       documentResponse.headers.get('location'),
-      'https://studio.madesolid.com.au/#/workspace-preview-access?path=%2Fservices%3Fviewport%3Dmobile',
+      'https://studio.madesolid.com.au/#/prospects',
+    );
+    assert.match(
+      documentResponse.headers.get('set-cookie') || '',
+      /__Host-made-solid-workspace-last=; Path=\/; Max-Age=0/,
     );
 
     const malformedCookieResponse = await fetch(`${origin}/services`, {
@@ -122,6 +126,25 @@ test('returns expired workspace documents through the stable authenticated Studi
       redirect: 'manual',
     });
     assert.equal(malformedCookieResponse.status, 303);
+    assert.equal(
+      malformedCookieResponse.headers.get('location'),
+      'https://studio.madesolid.com.au/#/prospects',
+    );
+
+    const validCookieResponse = await fetch(`${origin}/`, {
+      headers: {
+        Accept: 'text/html',
+        Cookie: `__Host-made-solid-workspace=${encodeURIComponent(createWorkspacePreviewToken('prospect-site', secret))}; __Host-made-solid-workspace-last=prospect-site`,
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+      },
+      redirect: 'manual',
+    });
+    assert.equal(validCookieResponse.status, 303);
+    assert.equal(
+      validCookieResponse.headers.get('location'),
+      'https://studio.madesolid.com.au/#/prospects',
+    );
     const healthAfterMalformedCookie = await fetch(`${origin}/health`);
     assert.equal(healthAfterMalformedCookie.status, 200);
 
@@ -249,10 +272,42 @@ test('keeps an authenticated top-level workspace visit in an isolated workspace 
     );
     assert.doesNotMatch(tokenEntry.headers.get('location') || '', /access=/);
     assert.match(tokenEntry.headers.get('set-cookie') || '', /HttpOnly; Secure; SameSite=Strict/);
-    assert.match(
-      tokenEntry.headers.get('set-cookie') || '',
-      /__Host-made-solid-workspace-last=prospect-site; Path=\/; Max-Age=2592000; HttpOnly; Secure; SameSite=Strict/,
+    assert.doesNotMatch(tokenEntry.headers.get('set-cookie') || '', /workspace-last/);
+
+    const missingCapability = await fetch(
+      `http://127.0.0.1:${address.port}/services?__made_solid_workspace=prospect-site`,
+      {
+        headers: {
+          Accept: 'text/html',
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+        },
+        redirect: 'manual',
+      },
     );
+    assert.equal(missingCapability.status, 303);
+    assert.equal(
+      missingCapability.headers.get('location'),
+      'https://studio.madesolid.com.au/#/workspace-preview-access?path=%2Fservices&workspace=prospect-site',
+    );
+
+    const mismatchedTokenEntry = await fetch(
+      `http://127.0.0.1:${address.port}/services?access=${encodeURIComponent(token)}&__made_solid_workspace=another-client`,
+      {
+        headers: {
+          Accept: 'text/html',
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+        },
+        redirect: 'manual',
+      },
+    );
+    assert.equal(mismatchedTokenEntry.status, 303);
+    assert.equal(
+      mismatchedTokenEntry.headers.get('location'),
+      'https://studio.madesolid.com.au/#/workspace-preview-access?path=%2Fservices&workspace=another-client',
+    );
+    assert.doesNotMatch(mismatchedTokenEntry.headers.get('location') || '', /access=/);
 
     const wrongClient = await fetch(
       `http://127.0.0.1:${address.port}/services?__made_solid_workspace=another-client`,
@@ -307,9 +362,13 @@ test('keeps an authenticated top-level workspace visit in an isolated workspace 
     assert.equal(expiredBareVisit.status, 303);
     assert.equal(
       expiredBareVisit.headers.get('location'),
-      'https://studio.madesolid.com.au/#/workspace-preview-access?path=%2F&workspace=prospect-site',
+      'https://studio.madesolid.com.au/#/prospects',
     );
     assert.doesNotMatch(expiredBareVisit.headers.get('location') || '', /access=/);
+    assert.match(
+      expiredBareVisit.headers.get('set-cookie') || '',
+      /__Host-made-solid-workspace-last=; Path=\/; Max-Age=0/,
+    );
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await new Promise((resolve) => preview.close(resolve));

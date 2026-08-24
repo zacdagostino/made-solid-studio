@@ -874,24 +874,14 @@ export function localWorkspacePlugin() {
   };
   const readyWorkspacePreview = async (request, requestedDirectory) => {
     const active = await activeWorkspacePreview().catch(() => undefined);
-    if (
-      active &&
-      (!requestedDirectory || active.directory === requestedDirectory) &&
-      (await websiteIsReady(active.port))
-    )
+    if (active && active.directory === requestedDirectory && (await websiteIsReady(active.port)))
       return active;
-    const recoveryDirectory = requestedDirectory || active?.directory;
-    if (!recoveryDirectory) {
-      throw new Error(
-        'The saved workspace no longer exists in an approved persistent workspace root.',
-      );
-    }
     if (workspacePreviewRecoveryPromise) {
       await workspacePreviewRecoveryPromise.catch(() => undefined);
       return readyWorkspacePreview(request, requestedDirectory);
     }
     const recovery = (async () => {
-      const directory = recoveryDirectory;
+      const directory = requestedDirectory;
       const destination = workspacePreviewWorkspace(directory);
       if (!destination) {
         throw new Error(
@@ -1028,8 +1018,8 @@ export function localWorkspacePlugin() {
           return;
         }
         try {
-          const requestedDirectory = requestUrl.searchParams.get('directory') || undefined;
-          if (requestedDirectory && !directoryPattern.test(requestedDirectory)) {
+          const requestedDirectory = requestUrl.searchParams.get('directory') || '';
+          if (!directoryPattern.test(requestedDirectory)) {
             sendJson(response, 400, {
               status: 'invalid',
               detail: 'Choose a valid client workspace before opening the preview.',

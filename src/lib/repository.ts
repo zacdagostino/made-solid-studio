@@ -396,6 +396,7 @@ const localExecutableNextWorkspaceRuntimePackageId =
   'agent-package-local-v19-8-executable-next-workspace-runtime';
 const localOwnerApiCreditsSwitchPackageId = 'agent-package-local-v19-9-owner-api-credits-switch';
 const localDeployedStudioShellPackageId = 'agent-package-local-v20-0-deployed-studio-shell';
+const localCanonicalWorkspaceEntryPackageId = 'agent-package-local-v20-1-canonical-workspace-entry';
 
 type StoreName =
   | 'activities'
@@ -3081,10 +3082,28 @@ export class SiteforgeRepository {
         'Makes every successful Railway deployment visible immediately without deleting or weakening either persistent editable repository.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localCanonicalWorkspaceEntryPackage: AgentPackage = {
+      ...localDeployedStudioShellPackage,
+      id: localCanonicalWorkspaceEntryPackageId,
+      version: 20.1,
+      basePackageId: localDeployedStudioShellPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v20.1',
+      contractAddendum:
+        'The bare Workspace hostname is a canonical entry to Made Solid Studio, while only an explicit exact-client launch opens the isolated live website development shell.',
+      instructionsAddendum:
+        'Redirect every top-level Workspace request without an exact client directory or valid fresh query capability to the Studio prospects UI, regardless of active, expired, or remembered Workspace cookies. Never infer a client from the active preview process or a last-client cookie. Require the authenticated Studio access endpoint to receive and return the same validated client directory. Preserve explicit client launch, clean scoped refresh, authenticated exact-client recovery, opaque Preview-origin capability paths, and client-bound Codex authorization.',
+      summary:
+        'Canonical Workspace entry test package: makes a direct Workspace visit open Studio instead of silently selecting the active or previously viewed client.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Separates Studio entry from explicit website editing so the Workspace hostname cannot surprise the reviewer with an unrelated client preview.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localCanonicalWorkspaceEntryPackage,
           localDeployedStudioShellPackage,
           localOwnerApiCreditsSwitchPackage,
           localExecutableNextWorkspaceRuntimePackage,
@@ -3233,6 +3252,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localCanonicalWorkspaceEntryPackage,
           localDeployedStudioShellPackage,
           localOwnerApiCreditsSwitchPackage,
           localExecutableNextWorkspaceRuntimePackage,
@@ -3384,6 +3404,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localCanonicalWorkspaceEntryPackage,
             localDeployedStudioShellPackage,
             localOwnerApiCreditsSwitchPackage,
             localExecutableNextWorkspaceRuntimePackage,

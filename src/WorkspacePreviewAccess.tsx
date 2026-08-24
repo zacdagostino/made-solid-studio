@@ -64,8 +64,14 @@ export function WorkspacePreviewAccess() {
   useEffect(() => {
     let active = true;
     const requestedDirectory = workspacePreviewDirectory();
+    if (!requestedDirectory) {
+      window.location.replace('/#/prospects');
+      return () => {
+        active = false;
+      };
+    }
     const accessUrl = new URL('/__made-solid/workspace-preview-access', window.location.origin);
-    if (requestedDirectory) accessUrl.searchParams.set('directory', requestedDirectory);
+    accessUrl.searchParams.set('directory', requestedDirectory);
     void studioRuntimeFetch(`${accessUrl.pathname}${accessUrl.search}`)
       .then(async (response) => {
         const payload = (await response.json()) as WorkspacePreviewAccessResponse;
@@ -81,7 +87,7 @@ export function WorkspacePreviewAccess() {
           /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(payload.directory)
             ? payload.directory
             : undefined;
-        if (requestedDirectory && directory !== requestedDirectory) {
+        if (directory !== requestedDirectory) {
           throw new Error('The workspace access response did not match the requested client.');
         }
         if (active) {

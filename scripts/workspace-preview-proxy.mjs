@@ -130,10 +130,7 @@ function cleanAccessRedirect(response, requestUrl, token, directory) {
   response.writeHead(303, {
     'Cache-Control': 'no-store',
     Location: location || '/',
-    'Set-Cookie': [
-      `${cookieName}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Strict`,
-      `${lastWorkspaceCookieName}=${encodeURIComponent(directory)}; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=Strict`,
-    ],
+    'Set-Cookie': `${cookieName}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Strict`,
     'X-Content-Type-Options': 'nosniff',
   });
   response.end();
@@ -341,7 +338,6 @@ function serveWorkspaceShell(request, response, configuration, directory, token)
     'Referrer-Policy': 'no-referrer',
     'X-Content-Type-Options': 'nosniff',
     'X-Robots-Tag': 'noindex, nofollow, noarchive',
-    'Set-Cookie': `${lastWorkspaceCookieName}=${encodeURIComponent(directory)}; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=Strict`,
   });
   if (request.method === 'HEAD') response.end();
   else response.end(document);
@@ -357,11 +353,21 @@ function requestStudioReentry(request, response, configuration, workspaceDirecto
     Location: workspacePreviewReentryUrl(
       configuration.studioOrigin,
       request.url,
-      directoryPattern.test(workspaceDirectory || '')
-        ? workspaceDirectory
-        : requestCookie(request, lastWorkspaceCookieName),
+      workspaceDirectory,
     ),
     'Referrer-Policy': 'no-referrer',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Robots-Tag': 'noindex, nofollow, noarchive',
+  });
+  response.end();
+}
+
+function requestStudioHome(response, configuration) {
+  response.writeHead(303, {
+    'Cache-Control': 'no-store',
+    Location: `${configuration.studioOrigin}/#/prospects`,
+    'Referrer-Policy': 'no-referrer',
+    'Set-Cookie': `${lastWorkspaceCookieName}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict`,
     'X-Content-Type-Options': 'nosniff',
     'X-Robots-Tag': 'noindex, nofollow, noarchive',
   });
@@ -382,8 +388,17 @@ export function startWorkspacePreviewProxy(configuration = workspacePreviewProxy
         return;
       }
       const { access, queryToken, requestUrl, token } = accessForRequest(request, configuration);
+      const requestDetails = workspaceRequestDetails(request.url);
+      if (!requestDetails.directory && !(queryToken && access)) {
+        requestStudioHome(response, configuration);
+        return;
+      }
       if (!access) {
-        requestStudioReentry(request, response, configuration);
+        requestStudioReentry(request, response, configuration, requestDetails.directory);
+        return;
+      }
+      if (requestDetails.directory && requestDetails.directory !== access.directory) {
+        requestStudioReentry(request, response, configuration, requestDetails.directory);
         return;
       }
       if (queryToken) {
@@ -393,15 +408,6 @@ export function startWorkspacePreviewProxy(configuration = workspacePreviewProxy
       const active = await activePreview(configuration);
       if (active.directory !== access.directory) {
         requestStudioReentry(request, response, configuration, access.directory);
-        return;
-      }
-      const requestedDirectory = workspaceRequestDetails(request.url).directory;
-      if (requestedDirectory && requestedDirectory !== access.directory) {
-        requestStudioReentry(request, response, configuration, requestedDirectory);
-        return;
-      }
-      if (!requestedDirectory) {
-        cleanAccessRedirect(response, requestUrl, token, access.directory);
         return;
       }
       serveWorkspaceShell(request, response, configuration, access.directory, token);

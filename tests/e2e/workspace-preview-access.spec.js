@@ -7,6 +7,21 @@ const capability = 'workspace-capability-for-browser-test';
 const directory = 'lece-client';
 const studioReturn = '/prospects/client-id/editing';
 
+test('returns an unscoped Workspace bootstrap to Studio without requesting an active client', async ({
+  page,
+}) => {
+  let accessRequests = 0;
+  await page.route('**/__made-solid/workspace-preview-access?*', async (route) => {
+    accessRequests += 1;
+    await route.fulfill({ status: 500, body: 'This endpoint must not be called.' });
+  });
+
+  await page.goto('/#/workspace-preview-access');
+
+  await expect(page).toHaveURL(/\/#\/prospects$/);
+  expect(accessRequests).toBe(0);
+});
+
 test('keeps Workspace top-level, isolated, clean, and bound to the requested client', async ({
   context,
   page,
@@ -56,6 +71,13 @@ test('keeps Workspace top-level, isolated, clean, and bound to the requested cli
           'content-security-policy':
             "default-src 'none'; script-src 'nonce-browser-test-nonce'; style-src 'unsafe-inline'; frame-src https://preview.madesolid.com.au https://studio.madesolid.com.au; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
         },
+      });
+      return;
+    }
+    if (!url.searchParams.has('__made_solid_workspace')) {
+      await route.fulfill({
+        status: 303,
+        headers: { location: 'http://127.0.0.1:4175/#/prospects' },
       });
       return;
     }
@@ -254,4 +276,8 @@ test('keeps Workspace top-level, isolated, clean, and bound to the requested cli
 
   await page.getByRole('link', { name: 'Exit to Studio' }).click();
   await expect(page).toHaveURL(new RegExp(`#${studioReturn}$`));
+
+  await page.goto(workspaceOrigin);
+  await expect(page).toHaveURL(/\/#\/prospects$/);
+  await expect(page.getByText('LECE live website')).toHaveCount(0);
 });

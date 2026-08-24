@@ -222,6 +222,10 @@ const deployedStudioShellMigrationUrl = new URL(
   '../../supabase/migrations/20260823110000_deployed_studio_shell_test_package.sql',
   import.meta.url,
 );
+const canonicalWorkspaceEntryMigrationUrl = new URL(
+  '../../supabase/migrations/20260824100000_canonical_workspace_entry_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -290,10 +294,41 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 72);
+  assert.equal(Number(revision[1]), 73);
   assert.match(app, /shows chats for that client plus clearly labelled universal Studio chats/);
   assert.match(app, /gives only the authenticated Studio owner a disclosed, reversible switch/);
-  assert.match(app, /every successful Railway release now serves its reviewed Studio shell/);
+  assert.match(app, /a direct Workspace visit now opens Studio/);
+});
+
+test('registers canonical Workspace entry above immutable v20.0', async () => {
+  const [migration, repository, proxy, access, vitePlugin] = await Promise.all([
+    readFile(canonicalWorkspaceEntryMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(new URL('../../scripts/workspace-preview-proxy.mjs', import.meta.url), 'utf8'),
+    readFile(new URL('../../src/WorkspacePreviewAccess.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../../scripts/local-workspace-vite-plugin.mjs', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /Canonical Workspace entry test package:/);
+  assert.match(migration, /made-solid-studio-builder-agent-v20\.1/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v20\.0'/,
+  );
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 20\.1,/);
+  assert.match(repository, /basePackageId: localDeployedStudioShellPackage\.id/);
+  const ledger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    ledger.indexOf('localCanonicalWorkspaceEntryPackage,') <
+      ledger.indexOf('localDeployedStudioShellPackage,'),
+  );
+  assert.match(proxy, /Location: `\$\{configuration\.studioOrigin\}\/#\/prospects`/);
+  assert.doesNotMatch(proxy, /requestCookie\(request, lastWorkspaceCookieName\)/);
+  assert.match(access, /if \(!requestedDirectory\)/);
+  assert.match(access, /window\.location\.replace\('\/#\/prospects'\)/);
+  assert.match(vitePlugin, /if \(!directoryPattern\.test\(requestedDirectory\)\)/);
+  assert.doesNotMatch(vitePlugin, /requestedDirectory \|\| active\?\.directory/);
 });
 
 test('registers the deployed Studio shell above immutable v19.9', async () => {

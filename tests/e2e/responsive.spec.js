@@ -3742,7 +3742,8 @@ test('displays the newest test package above retained package versions', async (
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const packagePicker = page.getByLabel('Test agent package');
-  await expect(packagePicker).toHaveValue('agent-package-local-v20-0-deployed-studio-shell');
+  await expect(packagePicker).toHaveValue('agent-package-local-v20-1-canonical-workspace-entry');
+  await expect(packagePicker).toContainText('v20.1 · Approved test');
   await expect(packagePicker).toContainText('v20.0 · Approved test');
   await expect(packagePicker).toContainText('v19.9 · Approved test');
   await expect(packagePicker).toContainText('v19.8 · Approved test');
@@ -3889,6 +3890,7 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v20.1', 'Canonical Workspace entry'],
     ['v20.0', 'Deployed Studio shell'],
     ['v19.9', 'Owner API credits switch'],
     ['v19.8', 'Executable Next Workspace runtime'],

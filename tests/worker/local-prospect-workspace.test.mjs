@@ -86,6 +86,9 @@ test('exposes same-origin one-click workspace setup through the local Studio ser
   assert.match(source, /\/__made-solid\/workspace-preview-access/);
   assert.match(source, /activeWorkspacePreview\(\)/);
   assert.match(source, /readyWorkspacePreview\(request, requestedDirectory\)/);
+  assert.match(source, /requestUrl\.searchParams\.get\('directory'\) \|\| ''/);
+  assert.match(source, /if \(!directoryPattern\.test\(requestedDirectory\)\)/);
+  assert.doesNotMatch(source, /requestedDirectory \|\| active\?\.directory/);
   assert.match(source, /workspacePreviewRecoveryPromise/);
   assert.match(source, /websiteIsReady\(active\.port\)/);
   assert.match(source, /workspacePreviewUrl\(origin, active\.directory, secret\)/);
