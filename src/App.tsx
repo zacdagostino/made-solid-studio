@@ -9261,15 +9261,12 @@ function BuilderRunPanel({
     'Private preview screenshots could not be loaded. Refresh and check storage access.',
   );
   const active = run?.status === 'queued' || run?.status === 'running' || run?.status === 'paused';
-  const failedQualityChecks = run?.qualitySummary.checks.filter(
-    (check) => check.status === 'failed',
-  ) ?? [];
-  const reviewQualityChecks = run?.qualitySummary.checks.filter(
-    (check) => check.status === 'needs_review',
-  ) ?? [];
-  const passedQualityChecks = run?.qualitySummary.checks.filter(
-    (check) => check.status === 'passed',
-  ) ?? [];
+  const failedQualityChecks =
+    run?.qualitySummary.checks.filter((check) => check.status === 'failed') ?? [];
+  const reviewQualityChecks =
+    run?.qualitySummary.checks.filter((check) => check.status === 'needs_review') ?? [];
+  const passedQualityChecks =
+    run?.qualitySummary.checks.filter((check) => check.status === 'passed') ?? [];
   const orderedQualityChecks = [
     ...failedQualityChecks,
     ...reviewQualityChecks,
@@ -10469,64 +10466,60 @@ function BuilderRunPanel({
               <ChevronDown aria-hidden="true" size={18} />
             </summary>
             <div className="builder-run__tests">
-            <p className="builder-run__action-label">Prospect build</p>
-            <div className="builder-page-test">
-              <p>
-                Build the complete private website for this prospect from its approved Build
-                Manifest. This is separate from Agent Studio test runs.
-              </p>
-              {publishedPackage ? (
-                <p className="builder-page-test__production-version">
-                  <span>Production version</span>
-                  <strong className="agent-production-version-value">
-                    {agentPackageVersionLabel(publishedPackage.version)}
-                    <AgentProductionNotification count={pendingProductionFeatureCount} />
-                  </strong>
-                  <small>This exact published version will be pinned to the build.</small>
+              <p className="builder-run__action-label">Prospect build</p>
+              <div className="builder-page-test">
+                <p>
+                  Build the complete private website for this prospect from its approved Build
+                  Manifest. This is separate from Agent Studio test runs.
                 </p>
-              ) : (
-                <p className="form-message form-message--error" role="alert">
-                  No production builder version is available. Publish a production package before
-                  starting this build.
-                </p>
-              )}
-              <WebsiteToneControl
-                disabled={isRequesting}
-                helpId="website-tone-help"
-                name="website-tone"
-                onChange={setWebsiteTone}
-                tone={websiteTone}
-              />
-              <ButtonGroup>
-                <Button
-                  disabled={isRequesting || !homepageTestReady || !publishedPackage}
-                  onClick={() => void requestBuild('full_site')}
-                  type="button"
-                  variant={
-                    run?.status === 'failed' && savedSourceAvailable ? 'secondary' : 'primary'
-                  }
-                >
-                  <Play aria-hidden="true" size={16} />
-                  {isRequesting
-                    ? 'Queueing prospect build'
-                    : run?.status === 'failed' && savedSourceAvailable
-                      ? 'Start clean website build'
-                      : 'Build complete prospect website'}
-                </Button>
-              </ButtonGroup>
-              <small>{homepageRequirementDetail}</small>
-            </div>
+                {publishedPackage ? (
+                  <p className="builder-page-test__production-version">
+                    <span>Production version</span>
+                    <strong className="agent-production-version-value">
+                      {agentPackageVersionLabel(publishedPackage.version)}
+                      <AgentProductionNotification count={pendingProductionFeatureCount} />
+                    </strong>
+                    <small>This exact published version will be pinned to the build.</small>
+                  </p>
+                ) : (
+                  <p className="form-message form-message--error" role="alert">
+                    No production builder version is available. Publish a production package before
+                    starting this build.
+                  </p>
+                )}
+                <WebsiteToneControl
+                  disabled={isRequesting}
+                  helpId="website-tone-help"
+                  name="website-tone"
+                  onChange={setWebsiteTone}
+                  tone={websiteTone}
+                />
+                <ButtonGroup>
+                  <Button
+                    disabled={isRequesting || !homepageTestReady || !publishedPackage}
+                    onClick={() => void requestBuild('full_site')}
+                    type="button"
+                    variant={
+                      run?.status === 'failed' && savedSourceAvailable ? 'secondary' : 'primary'
+                    }
+                  >
+                    <Play aria-hidden="true" size={16} />
+                    {isRequesting
+                      ? 'Queueing prospect build'
+                      : run?.status === 'failed' && savedSourceAvailable
+                        ? 'Start clean website build'
+                        : 'Build complete prospect website'}
+                  </Button>
+                </ButtonGroup>
+                <small>{homepageRequirementDetail}</small>
+              </div>
             </div>
           </details>
         ) : null}
 
         <div className="builder-run__primary-actions">
           {!isTestBuild && run?.status === 'failed' && savedSourceAvailable && onResumeBuild ? (
-            <Button
-              disabled={isResuming}
-              onClick={() => void resumeBuild(run.id)}
-              type="button"
-            >
+            <Button disabled={isResuming} onClick={() => void resumeBuild(run.id)} type="button">
               <RotateCcw aria-hidden="true" size={16} />
               {isResuming ? 'Resuming saved website' : 'Resume saved website build'}
             </Button>
@@ -11178,29 +11171,30 @@ function BuilderRunPanel({
               <ul>
                 {orderedQualityChecks.map((check) => {
                   const detailPreview = qualityCheckDetailPreview(check.detail, 320);
-                  const hasTechnicalDetail = detailPreview !== check.detail.replace(/\s+/g, ' ').trim();
+                  const hasTechnicalDetail =
+                    detailPreview !== check.detail.replace(/\s+/g, ' ').trim();
                   return (
-                  <li key={check.id}>
-                    <strong>{check.label}</strong>
-                    <span>{detailPreview}</span>
-                    <StatusBadge
-                      tone={
-                        check.status === 'passed'
-                          ? 'success'
-                          : check.status === 'failed'
-                            ? 'danger'
-                            : 'warning'
-                      }
-                    >
-                      {check.status.replaceAll('_', ' ')}
-                    </StatusBadge>
-                    {hasTechnicalDetail ? (
-                      <details className="builder-quality__technical">
-                        <summary>Technical details</summary>
-                        <p>{check.detail}</p>
-                      </details>
-                    ) : null}
-                  </li>
+                    <li key={check.id}>
+                      <strong>{check.label}</strong>
+                      <span>{detailPreview}</span>
+                      <StatusBadge
+                        tone={
+                          check.status === 'passed'
+                            ? 'success'
+                            : check.status === 'failed'
+                              ? 'danger'
+                              : 'warning'
+                        }
+                      >
+                        {check.status.replaceAll('_', ' ')}
+                      </StatusBadge>
+                      {hasTechnicalDetail ? (
+                        <details className="builder-quality__technical">
+                          <summary>Technical details</summary>
+                          <p>{check.detail}</p>
+                        </details>
+                      ) : null}
+                    </li>
                   );
                 })}
               </ul>
