@@ -1360,8 +1360,9 @@ html[data-codex-panel='embedded'] body #root {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.codex-chat-excerpt-actions__buttons {
+.codex-chat-dialog .codex-chat-excerpt-actions__buttons {
   display: grid;
+  width: 100%;
   grid-column: 1 / -1;
   grid-row: 2;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -14848,7 +14849,11 @@ a:focus-visible {
   border-radius: var(--radius);
   color: var(--color-muted);
   background: var(--color-panel);
-  font: 0.76rem/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    0.76rem/1.5 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

@@ -951,8 +951,24 @@ test('adds selected Codex output to the draft or sends the excerpt immediately',
   page,
 }) => {
   const delivered = [];
+  const temporaryRequests = [];
   await page.route('**/__made-solid/codex-feedback', async (route) => {
-    delivered.push(route.request().postDataJSON());
+    const request = route.request().postDataJSON();
+    if (request.action === 'temporary-question') {
+      temporaryRequests.push(request);
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          status: 'complete',
+          answer: 'It confirms that the Studio connection is currently available.',
+          model: 'GPT-5.6-Luna',
+          detail: 'Temporary answer complete.',
+        }),
+      });
+      return;
+    }
+    delivered.push(request);
     await route.fulfill({
       status: 202,
       contentType: 'application/json',
@@ -972,7 +988,17 @@ test('adds selected Codex output to the draft or sends the excerpt immediately',
   await expect(excerptActions).toBeVisible();
   await expect(excerptActions.getByText('Studio chat', { exact: true })).toBeVisible();
   expect(await chat.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  for (const actionName of ['Add to prompt', 'Send now', 'Dismiss selected excerpt']) {
+  const [excerptBounds, actionButtonBounds] = await Promise.all([
+    excerptActions.boundingBox(),
+    excerptActions.locator('.codex-chat-excerpt-actions__buttons').boundingBox(),
+  ]);
+  expect(actionButtonBounds?.width).toBeGreaterThanOrEqual((excerptBounds?.width ?? 24) - 24);
+  for (const actionName of [
+    'Quick question',
+    'Add to prompt',
+    'Send now',
+    'Dismiss selected excerpt',
+  ]) {
     const bounds = await excerptActions.getByRole('button', { name: actionName }).boundingBox();
     expect(bounds?.height).toBeGreaterThanOrEqual(44);
   }
@@ -980,8 +1006,44 @@ test('adds selected Codex output to the draft or sends the excerpt immediately',
     .include('.codex-chat-excerpt-actions')
     .analyze();
   expect(accessibility.violations).toEqual([]);
+  await expect(chat).toHaveScreenshot('codex-selected-excerpt.png', { animations: 'disabled' });
 
-  await excerptActions.getByRole('button', { name: 'Add to prompt' }).click();
+  await excerptActions.getByRole('button', { name: 'Quick question' }).click();
+  const quickQuestion = page.getByRole('dialog', { name: 'Quick question' });
+  await expect(quickQuestion.getByLabel('What do you want to know?')).toBeFocused();
+  await quickQuestion.getByLabel('What do you want to know?').fill('What does this confirm?');
+  await quickQuestion.getByRole('button', { name: 'Ask quickly' }).press('Enter');
+  await expect(quickQuestion.getByText('Quick answer')).toBeVisible();
+  await expect(
+    quickQuestion.getByText('It confirms that the Studio connection is currently available.'),
+  ).toBeVisible();
+  expect(
+    await quickQuestion.evaluate((element) => element.scrollWidth <= element.clientWidth),
+  ).toBe(true);
+  const quickQuestionAccessibility = await new AxeBuilder({ page })
+    .include('.codex-quick-question-dialog')
+    .analyze();
+  expect(quickQuestionAccessibility.violations).toEqual([]);
+  await expect(quickQuestion).toHaveScreenshot('codex-quick-question-answer.png', {
+    animations: 'disabled',
+  });
+  expect(temporaryRequests).toHaveLength(1);
+  expect(temporaryRequests[0]).toMatchObject({
+    action: 'temporary-question',
+    excerpt: 'Studio chat',
+    model: 'gpt-5.6-luna',
+    question: 'What does this confirm?',
+  });
+  await quickQuestion.getByRole('button', { name: 'Done' }).press('Enter');
+  await expect(quickQuestion).toBeHidden();
+  await expect(chat.getByRole('log', { name: 'Codex chat log' })).not.toContainText(
+    'What does this confirm?',
+  );
+
+  await selectRenderedText(reply.locator('.markdown-content'), 'Studio chat');
+  const appendedExcerptActions = chat.getByLabel('Selected Codex excerpt');
+  await appendedExcerptActions.getByRole('button', { name: 'Add to prompt' }).focus();
+  await page.keyboard.press('Enter');
   await expect(chat.getByLabel('Message to Codex')).toHaveValue(
     'Quoted from Codex:\n\n> Studio chat\n\n',
   );
@@ -995,6 +1057,60 @@ test('adds selected Codex output to the draft or sends the excerpt immediately',
   await expect(chat.getByLabel('Message to Codex')).toHaveValue(
     'Quoted from Codex:\n\n> Studio chat\n\n',
   );
+});
+
+test('offers selected excerpt actions on the dedicated Codex page', async ({ page }, testInfo) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/#/codex');
+  const chat = page.getByRole('dialog', { name: 'Codex', exact: true });
+  const reply = chat.locator('.codex-chat-message--assistant', {
+    hasText: 'Studio chat is connected.',
+  });
+
+  await selectRenderedText(reply.locator('.markdown-content'), 'Studio chat');
+  const actions = chat.getByLabel('Selected Codex excerpt');
+  await expect(actions).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  const accessibility = await new AxeBuilder({ page })
+    .include('.codex-chat-excerpt-actions')
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect(page).toHaveScreenshot('codex-selected-excerpt-page.png', {
+    animations: 'disabled',
+  });
+
+  const quickQuestionButton = actions.getByRole('button', { name: 'Quick question' });
+  await quickQuestionButton.focus();
+  await page.keyboard.press('Enter');
+  const quickQuestion = page.getByRole('dialog', { name: 'Quick question' });
+  await expect(quickQuestion.getByLabel('What do you want to know?')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(quickQuestion).toBeHidden();
+
+  await selectRenderedText(reply.locator('.markdown-content'), 'Studio chat');
+  const dismiss = chat
+    .getByLabel('Selected Codex excerpt')
+    .getByRole('button', { name: 'Dismiss selected excerpt' });
+  await dismiss.focus();
+  await page.keyboard.press('Enter');
+  await expect(actions).toBeHidden();
+
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await selectRenderedText(reply.locator('.markdown-content'), 'is connected');
+    const compactActions = chat.getByLabel('Selected Codex excerpt');
+    await expect(compactActions).toBeVisible();
+    await compactActions.scrollIntoViewIfNeeded();
+    await expect(chat.locator('.codex-chat-transcript__latest')).toBeHidden();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    await expect(page).toHaveScreenshot('codex-selected-excerpt-page-compact-mobile.png', {
+      animations: 'disabled',
+    });
+  }
 });
 
 test('restores a message to the composer when optimistic delivery fails', async ({ page }) => {

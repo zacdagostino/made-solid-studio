@@ -4361,7 +4361,7 @@ export function CodexFeedbackPanel({
                   </>
                 )}
               </div>
-              {!conversationTransition && !isChatFollowingLatest ? (
+              {!conversationTransition && !isChatFollowingLatest && !selectedExcerpt ? (
                 <Button
                   className="codex-chat-transcript__latest"
                   onClick={scrollChatToLatest}

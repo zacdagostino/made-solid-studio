@@ -403,6 +403,8 @@ const localRestoredCodexVoiceExperiencePackageId =
   'agent-package-local-v20-3-restored-codex-voice-experience';
 const localPersistentCodexChatSurfacesPackageId =
   'agent-package-local-v20-4-persistent-codex-chat-surfaces';
+const localSelectedCodexExcerptActionsPackageId =
+  'agent-package-local-v20-5-selected-codex-excerpt-actions';
 
 type StoreName =
   | 'activities'
@@ -3156,10 +3158,28 @@ export class SiteforgeRepository {
         'Makes Codex continuously reachable during Studio work while preserving the same authenticated conversation state across page and popup presentations.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localSelectedCodexExcerptActionsPackage: AgentPackage = {
+      ...localPersistentCodexChatSurfacesPackage,
+      id: localSelectedCodexExcerptActionsPackageId,
+      version: 20.5,
+      basePackageId: localPersistentCodexChatSurfacesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v20.5',
+      contractAddendum:
+        'A reviewer can select text within one Codex assistant reply and use that exact excerpt in a temporary question, append it to the current draft, or send it immediately without losing the existing draft.',
+      instructionsAddendum:
+        'Capture selections only inside a single rendered assistant reply. Offer Quick question, Add to prompt, Send now, and Dismiss with keyboard-accessible 44-pixel controls on popup and page chat surfaces. Quote excerpts with a clear Codex attribution and retain any existing composer draft when sending immediately. Run quick questions outside conversation history in a server-created empty temporary directory with no workspace roots, an ephemeral thread, read-only thread and turn sandboxes, bounded inputs, and guaranteed thread and directory cleanup.',
+      summary:
+        'Selected Codex excerpt actions test package: restores quick read-only questions, draft quoting, immediate sending, and dismissal across popup and page chat.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Lets reviewers act on precise Codex output without copying text manually or granting a temporary question access to Studio or client files.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localSelectedCodexExcerptActionsPackage,
           localPersistentCodexChatSurfacesPackage,
           localRestoredCodexVoiceExperiencePackage,
           localWorkspaceDevelopmentStudioPackage,
@@ -3312,6 +3332,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localSelectedCodexExcerptActionsPackage,
           localPersistentCodexChatSurfacesPackage,
           localRestoredCodexVoiceExperiencePackage,
           localWorkspaceDevelopmentStudioPackage,
@@ -3467,6 +3488,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localSelectedCodexExcerptActionsPackage,
             localPersistentCodexChatSurfacesPackage,
             localRestoredCodexVoiceExperiencePackage,
             localWorkspaceDevelopmentStudioPackage,

@@ -238,6 +238,10 @@ const persistentCodexChatSurfacesMigrationUrl = new URL(
   '../../supabase/migrations/20260824130000_persistent_codex_chat_surfaces_test_package.sql',
   import.meta.url,
 );
+const selectedCodexExcerptActionsMigrationUrl = new URL(
+  '../../supabase/migrations/20260825000000_selected_codex_excerpt_actions_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -306,7 +310,7 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 76);
+  assert.equal(Number(revision[1]), 77);
   assert.match(app, /shows chats for that client plus clearly labelled universal Studio chats/);
   assert.match(app, /gives only the authenticated Studio owner a disclosed, reversible switch/);
   assert.match(app, /saved Natural or Literal interpretation and three speeds/);
@@ -314,7 +318,9 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   assert.match(app, /progressive private Google audio/);
   assert.match(app, /persistent read-along dock/);
   assert.match(app, /dedicated Studio page/);
-  assert.match(app, /popup launcher remains visible while reconnecting/);
+  assert.match(app, /launcher is present during startup checks/);
+  assert.match(app, /temporary read-only quick question/);
+  assert.match(app, /appending the quote to the draft/);
 });
 
 test('registers the restored Codex voice experience above immutable v20.2', async () => {
@@ -2071,6 +2077,46 @@ test('registers persistent Codex page and popup surfaces as the newest immutable
   assert.match(corruptLedgerFallback, /localPersistentCodexChatSurfacesPackage,/);
   assert.match(corruptLedgerFallback, /localRestoredCodexVoiceExperiencePackage,/);
   assert.match(corruptLedgerFallback, /localWorkspaceDevelopmentStudioPackage,/);
+});
+
+test('registers selected Codex excerpt actions above immutable v20.4 in every local ledger path', async () => {
+  const [migration, repository, app, component, service] = await Promise.all([
+    readFile(selectedCodexExcerptActionsMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+    readFile(componentUrl, 'utf8'),
+    readFile(localServiceUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /made-solid-studio-builder-agent-v20\.5/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v20\.4'/,
+  );
+  assert.match(repository, /version: 20\.5,/);
+  assert.match(repository, /basePackageId: localPersistentCodexChatSurfacesPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localSelectedCodexExcerptActionsPackage,') <
+      packageLedger.indexOf('localPersistentCodexChatSurfacesPackage,'),
+  );
+  const existingLedgerUpgrade = repository.slice(repository.indexOf('const missingPackages = ['));
+  assert.ok(
+    existingLedgerUpgrade.indexOf('localSelectedCodexExcerptActionsPackage,') <
+      existingLedgerUpgrade.indexOf('localPersistentCodexChatSurfacesPackage,'),
+  );
+  const corruptLedgerFallback = repository.slice(
+    repository.indexOf("} catch {\n        await this.put('meta'"),
+  );
+  assert.match(corruptLedgerFallback, /localSelectedCodexExcerptActionsPackage,/);
+  assert.match(component, /aria-label="Selected Codex excerpt"/);
+  assert.match(component, />Quick question</);
+  assert.match(component, /Add to prompt/);
+  assert.match(component, /Send now/);
+  assert.match(service, /input\.action === 'temporary-question'/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.77`/);
 });
 
 test('ships one locally scoped Manifest V3 capture helper for Chrome and Brave', async () => {
