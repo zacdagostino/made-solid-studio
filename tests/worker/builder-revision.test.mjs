@@ -593,6 +593,49 @@ test('resolves clean preview links without changing the preview capability root'
   assert.match(previewFrame, /message\.type === 'siteforge-preview:navigated'/);
 });
 
+test('accepts only exact private build capability roots from the configured preview origin', async () => {
+  const previewFrame = await readFile(previewFrameUrl, 'utf8');
+  const capabilityRoot = compiledPreviewFunction(previewFrame, 'privateBuildCapabilityRoot');
+  const origin = 'https://preview.madesolid.com.au';
+  const runId = '12345678-1234-1234-1234-123456789abc';
+  const token = 'a'.repeat(64);
+
+  for (const route of ['test', 'build', 'site']) {
+    assert.equal(
+      capabilityRoot(
+        new URL(`${origin}/${route}/${runId}/${token}/services/?view=full#contact`),
+        origin,
+      ),
+      `/${route}/${runId}/${token}/`,
+    );
+  }
+
+  for (const invalidUrl of [
+    `http://preview.madesolid.com.au/test/${runId}/${token}/`,
+    `https://preview.madesolid.com.au.evil.example/test/${runId}/${token}/`,
+    `https://preview.madesolid.com.au/review/${runId}/${token}/`,
+    `https://preview.madesolid.com.au/test/not-a-uuid/${token}/`,
+    `https://preview.madesolid.com.au/test/${runId}/${'a'.repeat(63)}/`,
+    `https://preview.madesolid.com.au/test/${runId}/${'a'.repeat(65)}/`,
+    `https://preview.madesolid.com.au/test/${runId}/${'a'.repeat(63)}z/`,
+    `https://preview.madesolid.com.au/test//${runId}/${token}/`,
+  ]) {
+    assert.equal(capabilityRoot(new URL(invalidUrl), origin), undefined);
+  }
+
+  assert.equal(
+    capabilityRoot(
+      new URL(`https://user:password@preview.madesolid.com.au/test/${runId}/${token}/`),
+      origin,
+    ),
+    undefined,
+  );
+  assert.equal(
+    capabilityRoot(new URL(`${origin}/test/${runId}/${token}/`), `${origin}/unexpected-path`),
+    undefined,
+  );
+});
+
 test('keeps HTML, CSS, and Next hydration assets inside the private preview capability', async () => {
   const previewFunction = await readFile(previewFunctionUrl, 'utf8');
   const rewrite = compiledPreviewFunction(previewFunction, 'rewritePreviewRootReferences');

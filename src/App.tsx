@@ -8896,6 +8896,15 @@ function BuilderRunPanel({
               'Latest edit: Agent Studio page tests and whole-site revisions now expose the same Agent decides, Light, and Dark direction used by complete prospect builds.',
           },
           {
+            id: 'client-url-release-contract',
+            title: 'Client URL and release contract',
+            detail:
+              'Generated tests use private /test links, complete builds use private /build links, and approved Clientspace review uses an expiring /review capability. Live website editing stays in the selected client route on dev.studio.madesolid.com.au. Every committed edit preview remains bound to its exact Git revision. A Made Solid source handoff creates review material only: it never deploys production or attaches a client domain. Production remains a separate confirmed release action.',
+            revision: `v${selectedAgentPackage.version}.1`,
+            change:
+              'Latest edit: client review now uses a seven-day revocable capability, concurrent working and committed previews remain isolated by exact revision, and source handoff can no longer run a production deploy or assign a Made Solid hostname.',
+          },
+          {
             id: 'visual-codex-feedback',
             title: 'Codex Workspace Agent and visual feedback',
             detail:
@@ -18201,15 +18210,22 @@ function AgentLearningHandoff({
 
 function MadeSolidHandoffPage({
   agentPackages,
+  onCancelClientReview,
   onCancelHandoff,
   onOpenLearningInbox,
+  onPublishClientReview,
   onPushHandoff,
   onSendLearning,
   workspace,
 }: {
   agentPackages: AgentPackage[];
+  onCancelClientReview: (publicationId: string) => Promise<void>;
   onCancelHandoff: (handoffId: string) => Promise<void>;
   onOpenLearningInbox: () => void;
+  onPublishClientReview: (
+    builderRunId: string,
+    input: ClientPreviewPublicationInput,
+  ) => Promise<void>;
   onPushHandoff: (builderRunId: string, input: MadeSolidHandoffInput) => Promise<void>;
   onSendLearning: (basePackageId: string, direction: string) => Promise<void>;
   workspace: ProspectWorkspace;
@@ -18337,6 +18353,11 @@ function MadeSolidHandoffPage({
           </div>
         ) : null}
       </section>
+      <ClientPreviewPublicationPanel
+        onCancel={onCancelClientReview}
+        onPublish={onPublishClientReview}
+        workspace={workspace}
+      />
       <Card className="workspace-panel handoff-readiness">
         <div className="handoff-readiness__header">
           <div>
@@ -18425,8 +18446,8 @@ function MadeSolidHandoffPage({
         </div>
         <p className="muted-copy">
           Send the exact committed repository revision into the private Made Solid admin workspace.
-          This deploys the exact editing version to its Made Solid prospect subdomain and records
-          its source lineage. It does not create a client account or send an email.
+          This creates an isolated review deployment and records its source lineage. It never
+          assigns a production domain, creates a client account, or sends an email.
         </p>
         {handoff?.status === 'ready' && handoff.websiteAdminUrl ? (
           <section className="handoff-submit__ready" aria-labelledby="made-solid-handoff-ready">
@@ -18448,8 +18469,7 @@ function MadeSolidHandoffPage({
             <ol className="handoff-submit__steps" aria-label="Made Solid handoff progress">
               {[
                 'Verify exact committed source',
-                'Deploy the exact committed website',
-                'Assign and check Made Solid subdomain',
+                'Create isolated review deployment',
                 'Send source lineage to Made Solid',
                 'Save and verify admin revision',
                 'Unlock Clientspace creation',
@@ -18661,10 +18681,10 @@ export function ClientPreviewPublicationPanel({
       <div className="client-publication__header">
         <div>
           <Eyebrow>Client delivery</Eyebrow>
-          <h2>Publish for client review</h2>
+          <h2>Private client review</h2>
           <p className="muted-copy">
-            Deploy the latest quality-approved full website to Vercel, then place a pending handoff
-            in Clientspace admin. This does not email the client.
+            Create a seven-day private review link for the latest quality-approved full website,
+            then place it in Clientspace admin. This does not email the client.
           </p>
         </div>
         <StatusBadge
@@ -18678,7 +18698,7 @@ export function ClientPreviewPublicationPanel({
                   : 'neutral'
           }
         >
-          {publication?.status.replaceAll('_', ' ') ?? 'Not published'}
+          {publication?.status.replaceAll('_', ' ') ?? 'No review link'}
         </StatusBadge>
       </div>
 
@@ -18686,15 +18706,15 @@ export function ClientPreviewPublicationPanel({
         <section className="client-publication__result" aria-labelledby="client-publication-ready">
           <Globe2 aria-hidden="true" size={24} />
           <div>
-            <h3 id="client-publication-ready">Waiting in Clientspace admin</h3>
+            <h3 id="client-publication-ready">Private review waiting in Clientspace admin</h3>
             <p>
-              The Vercel preview and client details were transferred. Review them in admin, create
-              Clientspace, then edit and send the invitation.
+              The expiring review capability and client details were transferred. Review them in
+              admin, create Clientspace, then edit and send the invitation.
             </p>
             {publication.deploymentUrl ? (
               <ButtonLink href={publication.deploymentUrl} target="_blank" variant="secondary">
                 <ExternalLink aria-hidden="true" size={16} />
-                Open hosted preview
+                Open private review
               </ButtonLink>
             ) : null}
           </div>
@@ -18778,9 +18798,9 @@ export function ClientPreviewPublicationPanel({
             <p className="form-message form-message--error" role="alert">
               {completedBuild
                 ? completedBuild.status === 'review_required'
-                  ? 'Resolve the build’s quality-review findings before publishing it to a client.'
-                  : 'Complete a full-site build with passed quality checks before publishing.'
-                : 'Build the complete prospect website before publishing it to a client.'}
+                  ? 'Resolve the build’s quality-review findings before creating a client review.'
+                  : 'Complete a full-site build with passed quality checks before creating a review.'
+                : 'Build the complete prospect website before creating a client review.'}
             </p>
           ) : null}
           {publication?.status === 'failed' && publication.errorSummary ? (
@@ -18795,19 +18815,19 @@ export function ClientPreviewPublicationPanel({
           ) : null}
           {!approvedQuote ? (
             <p className="form-message" role="status">
-              Approve the calculated quote before publishing this project to Clientspace.
+              Approve the calculated quote before creating this review in Clientspace.
             </p>
           ) : null}
           <Button disabled={!canPublish || !approvedQuote || submitting} type="submit">
             <Globe2 aria-hidden="true" size={16} />
             {submitting
-              ? 'Queueing client preview'
+              ? 'Creating private review'
               : publication?.status === 'failed'
-                ? 'Retry client preview'
-                : 'Publish to Vercel and Clientspace'}
+                ? 'Retry private review'
+                : 'Create private review link'}
           </Button>
           <small>
-            The protected worker receives deployment credentials. No Vercel or Clientspace secret is
+            The protected worker creates a revocable capability. No preview or Clientspace secret is
             exposed to this browser.
           </small>
         </form>
@@ -19544,6 +19564,8 @@ function WorkspaceContent({
   loadBuilderRunEvidence,
   publishGithubWorkspace,
   cancelGithubWorkspacePublication,
+  publishClientReview,
+  cancelClientReview,
   pushMadeSolidHandoff,
   cancelMadeSolidHandoff,
   approveAllAuditFindings,
@@ -19640,6 +19662,11 @@ function WorkspaceContent({
     input: GithubWorkspacePublicationInput,
   ) => Promise<void>;
   cancelGithubWorkspacePublication: (publicationId: string) => Promise<void>;
+  publishClientReview: (
+    builderRunId: string,
+    input: ClientPreviewPublicationInput,
+  ) => Promise<void>;
+  cancelClientReview: (publicationId: string) => Promise<void>;
   pushMadeSolidHandoff: (builderRunId: string, input: MadeSolidHandoffInput) => Promise<void>;
   cancelMadeSolidHandoff: (handoffId: string) => Promise<void>;
   approveAllAuditFindings: () => Promise<void>;
@@ -19864,8 +19891,10 @@ function WorkspaceContent({
     return (
       <MadeSolidHandoffPage
         agentPackages={agentPackages}
+        onCancelClientReview={cancelClientReview}
         onCancelHandoff={cancelMadeSolidHandoff}
         onOpenLearningInbox={openAgentLearningInbox}
+        onPublishClientReview={publishClientReview}
         onPushHandoff={pushMadeSolidHandoff}
         onSendLearning={requestAgentLearningProposal}
         workspace={workspace}
@@ -19968,6 +19997,8 @@ function WorkspacePage({
   onLoadBuilderRunEvidence,
   onPublishGithubWorkspace,
   onCancelGithubWorkspacePublication,
+  onPublishClientReview,
+  onCancelClientReview,
   onPushMadeSolidHandoff,
   onCancelMadeSolidHandoff,
   onApproveAllAuditFindings,
@@ -20069,6 +20100,11 @@ function WorkspacePage({
     input: GithubWorkspacePublicationInput,
   ) => Promise<void>;
   onCancelGithubWorkspacePublication: (publicationId: string) => Promise<void>;
+  onPublishClientReview: (
+    builderRunId: string,
+    input: ClientPreviewPublicationInput,
+  ) => Promise<void>;
+  onCancelClientReview: (publicationId: string) => Promise<void>;
   onPushMadeSolidHandoff: (builderRunId: string, input: MadeSolidHandoffInput) => Promise<void>;
   onCancelMadeSolidHandoff: (handoffId: string) => Promise<void>;
   onApproveAllAuditFindings: () => Promise<void>;
@@ -20250,6 +20286,8 @@ function WorkspacePage({
           loadBuilderRunEvidence={onLoadBuilderRunEvidence}
           publishGithubWorkspace={onPublishGithubWorkspace}
           cancelGithubWorkspacePublication={onCancelGithubWorkspacePublication}
+          publishClientReview={onPublishClientReview}
+          cancelClientReview={onCancelClientReview}
           pushMadeSolidHandoff={onPushMadeSolidHandoff}
           cancelMadeSolidHandoff={onCancelMadeSolidHandoff}
           requestAssetAnalysis={onRequestAssetAnalysis}
@@ -21719,6 +21757,30 @@ function WorkspaceApp({
     });
   }
 
+  async function publishClientReview(builderRunId: string, input: ClientPreviewPublicationInput) {
+    const publication = await repository.requestClientPreviewPublication(builderRunId, input);
+    if (!publication) throw new Error('The private client review could not be queued.');
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Private client review queued',
+      detail:
+        'The protected worker will create an expiring review capability and place it in Clientspace admin.',
+      tone: 'success',
+    });
+  }
+
+  async function cancelClientReview(publicationId: string) {
+    await repository.cancelClientPreviewPublication(publicationId);
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Client review cancellation requested',
+      detail: 'The protected worker will revoke the review capability at its next safe checkpoint.',
+      tone: 'warning',
+    });
+  }
+
   async function pushMadeSolidHandoff(builderRunId: string, input: MadeSolidHandoffInput) {
     const handoff = await repository.requestMadeSolidHandoff(builderRunId, input);
     if (!handoff) throw new Error('The committed edit could not be queued for Made Solid.');
@@ -21957,6 +22019,8 @@ function WorkspaceApp({
             onOpenBuilderPreview={createBuilderPreviewUrl}
             onPublishGithubWorkspace={publishGithubWorkspace}
             onCancelGithubWorkspacePublication={cancelGithubWorkspacePublication}
+            onPublishClientReview={publishClientReview}
+            onCancelClientReview={cancelClientReview}
             onPushMadeSolidHandoff={pushMadeSolidHandoff}
             onCancelMadeSolidHandoff={cancelMadeSolidHandoff}
             onLoadBuilderRunEvidence={(builderRunId) =>

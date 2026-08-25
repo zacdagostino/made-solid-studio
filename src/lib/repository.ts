@@ -419,6 +419,8 @@ const localDevelopmentReleaseUrlsPackageId = 'agent-package-local-v21-3-developm
 const localResilientLiveCodexBranchingPackageId =
   'agent-package-local-v21-4-resilient-live-codex-branching';
 const localStoppableCodexTurnsPackageId = 'agent-package-local-v21-5-stoppable-codex-turns';
+const localClientUrlReleaseContractPackageId =
+  'agent-package-local-v21-6-client-url-release-contract';
 
 type StoreName =
   | 'activities'
@@ -3359,10 +3361,28 @@ export class SiteforgeRepository {
         'Gives reviewers the familiar immediate stop control they expect in chat while keeping cancellation scoped, observable, and safe from automatic recovery.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localClientUrlReleaseContractPackage: AgentPackage = {
+      ...localStoppableCodexTurnsPackage,
+      id: localClientUrlReleaseContractPackageId,
+      version: 21.6,
+      basePackageId: localStoppableCodexTurnsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v21.6',
+      contractAddendum:
+        'Test builds, complete builds, client review links, live editing workspaces, committed edit previews, source handoffs, and production releases remain distinct versioned surfaces. Private review links expire and can be revoked; committed previews stay bound to one exact Git revision; a source handoff never deploys production or assigns a client domain.',
+      instructionsAddendum:
+        'Open canonical /test and /build capabilities only after exact preview-origin, run, and token validation. Create /review capabilities only for quality-approved full-site builds, scope their frame policy to the configured Clientspace origin, expire them after seven days, and revoke them when publishing is cancelled. Key live preview routing by client directory plus working or exact 40-character Git revision so concurrent clients and historical edits cannot replace each other. Never restore a committed preview as the working editor after restart. A Made Solid source handoff may create an isolated Vercel preview for internal review, but must never pass --prod, attach a Made Solid domain, accept a reserved hostname, or treat handoff completion as production promotion.',
+      summary:
+        'Client URL release contract test package: separates test, build, private review, exact edit, handoff, and production surfaces without changing production automatically.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes every client-facing URL state explicit and recoverable while closing public-preview, cross-client, historical-version, and accidental-production paths.',
+      stagedBehaviourIds: ['client-url-release-contract'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localClientUrlReleaseContractPackage,
           localStoppableCodexTurnsPackage,
           localResilientLiveCodexBranchingPackage,
           localDevelopmentReleaseUrlsPackage,
@@ -3526,6 +3546,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localClientUrlReleaseContractPackage,
           localStoppableCodexTurnsPackage,
           localResilientLiveCodexBranchingPackage,
           localDevelopmentReleaseUrlsPackage,
@@ -3692,6 +3713,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localClientUrlReleaseContractPackage,
             localStoppableCodexTurnsPackage,
             localResilientLiveCodexBranchingPackage,
             localDevelopmentReleaseUrlsPackage,

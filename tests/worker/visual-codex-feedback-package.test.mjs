@@ -282,6 +282,10 @@ const stoppableCodexTurnsMigrationUrl = new URL(
   '../../supabase/migrations/20260825210000_stoppable_codex_turns_test_package.sql',
   import.meta.url,
 );
+const clientUrlReleaseContractMigrationUrl = new URL(
+  '../../supabase/migrations/20260825230000_client_url_release_contract_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -2499,6 +2503,43 @@ test('registers stoppable Codex turns above immutable v21.4', async () => {
   assert.match(bridge, /async stopActiveTurn/);
   assert.match(bridge, /manuallyStopped: true/);
   assert.match(service, /input\.action === 'stop-active-turn'/);
+});
+
+test('registers the client URL release contract above immutable v21.5', async () => {
+  const [migration, repository, app] = await Promise.all([
+    readFile(clientUrlReleaseContractMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+  ]);
+  assert.match(migration, /made-solid-studio-builder-agent-v21\.6/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v21\.5'/,
+  );
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /not exists/i);
+  assert.match(migration, /"client-url-release-contract"/);
+  assert.match(migration, /Client URL release contract test package:/);
+  assert.match(repository, /version: 21\.6,/);
+  assert.match(repository, /basePackageId: localStoppableCodexTurnsPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localClientUrlReleaseContractPackage,') <
+      packageLedger.indexOf('localStoppableCodexTurnsPackage,'),
+  );
+  const existingLedgerUpgrade = repository.slice(repository.indexOf('const missingPackages = ['));
+  assert.ok(
+    existingLedgerUpgrade.indexOf('localClientUrlReleaseContractPackage,') <
+      existingLedgerUpgrade.indexOf('localStoppableCodexTurnsPackage,'),
+  );
+  const fallbackLedger = repository.slice(repository.indexOf('} catch {'));
+  assert.ok(
+    fallbackLedger.indexOf('localClientUrlReleaseContractPackage,') <
+      fallbackLedger.indexOf('localStoppableCodexTurnsPackage,'),
+  );
+  assert.match(app, /id: 'client-url-release-contract'/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.1`/);
+  assert.match(app, /seven-day revocable capability/);
 });
 
 test('ships one locally scoped Manifest V3 capture helper for Chrome and Brave', async () => {

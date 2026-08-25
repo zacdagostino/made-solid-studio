@@ -7,6 +7,16 @@ import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const directoryPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+const exactRevisionPattern = /^[0-9a-f]{40}$/i;
+
+function restorableActivePreview(value) {
+  const candidates = Array.isArray(value?.previews) ? value.previews : [value];
+  return candidates.find((candidate) =>
+    candidate?.revision !== undefined
+      ? candidate.revision === 'working'
+      : !exactRevisionPattern.test(candidate?.revision || ''),
+  );
+}
 
 function run(command, arguments_, options = {}) {
   return new Promise((resolveRun, reject) => {
@@ -72,10 +82,13 @@ export async function restoreActiveWorkspacePreview({
   if (!activePreviewPath || !pathExists(activePreviewPath)) return { status: 'none' };
   let active;
   try {
-    active = JSON.parse(await readFileImplementation(activePreviewPath, 'utf8'));
+    active = restorableActivePreview(
+      JSON.parse(await readFileImplementation(activePreviewPath, 'utf8')),
+    );
   } catch {
     return { status: 'invalid' };
   }
+  if (!active) return { status: 'none' };
   if (
     !directoryPattern.test(active.directory || '') ||
     !Number.isInteger(active.port) ||

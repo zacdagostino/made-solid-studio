@@ -47,6 +47,7 @@ const captureAssetEndpoint = '/__made-solid/capture-asset';
 const repositoryPattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
 const buildIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const directoryPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+const workspaceRevisionPattern = /^(?:working|[0-9a-f]{40})$/i;
 const maximumCaptureAssetBytes = 5 * 1024 * 1024;
 const captureAssetCache = new Map();
 
@@ -127,19 +128,53 @@ function sendJson(response, statusCode, value) {
   response.end(JSON.stringify(value));
 }
 
-async function activeWorkspacePreview() {
+function normalizeActiveWorkspacePreviews(value) {
+  const candidates = Array.isArray(value?.previews) ? value.previews : [value];
+  return candidates
+    .map((candidate) => ({ ...candidate, revision: candidate?.revision || 'working' }))
+    .filter(
+      (candidate) =>
+        directoryPattern.test(candidate.directory || '') &&
+        workspaceRevisionPattern.test(candidate.revision || '') &&
+        Number.isInteger(candidate.port) &&
+        candidate.port > 0 &&
+        candidate.port <= 65_535,
+    );
+}
+
+async function activeWorkspacePreview(directory, revision = 'working') {
   const activePreviewPath = process.env.SITEFORGE_ACTIVE_PREVIEW_PATH?.trim();
   if (!activePreviewPath) throw new Error('The active workspace preview is not configured.');
   const value = JSON.parse(await readFile(activePreviewPath, 'utf8'));
-  if (
-    !directoryPattern.test(value.directory) ||
-    !Number.isInteger(value.port) ||
-    value.port < 1 ||
-    value.port > 65_535
-  ) {
+  const previews = normalizeActiveWorkspacePreviews(value);
+  const active = previews.find(
+    (candidate) => candidate.directory === directory && candidate.revision === revision,
+  );
+  if (!active) {
     throw new Error('The active workspace preview record is invalid.');
   }
-  return value;
+  return active;
+}
+
+let activeWorkspacePreviewWrite = Promise.resolve();
+
+function recordActiveWorkspacePreview(activePreviewPath, preview) {
+  const update = activeWorkspacePreviewWrite.then(async () => {
+    const current = await readFile(activePreviewPath, 'utf8')
+      .then((source) => normalizeActiveWorkspacePreviews(JSON.parse(source)))
+      .catch(() => []);
+    const retained = current.filter(
+      (candidate) =>
+        candidate.directory !== preview.directory || candidate.revision !== preview.revision,
+    );
+    const previews = [preview, ...retained].slice(0, 50);
+    await mkdir(resolve(activePreviewPath, '..'), { recursive: true });
+    await writeFile(activePreviewPath, `${JSON.stringify({ version: 2, previews })}\n`, {
+      mode: 0o600,
+    });
+  });
+  activeWorkspacePreviewWrite = update.catch(() => undefined);
+  return update;
 }
 
 export function workspacePreviewWorkspace(
@@ -669,15 +704,17 @@ async function waitForWebsite(port) {
   throw new Error('The website server did not become ready within 30 seconds.');
 }
 
-export function previewUrl(request, port, environment = process.env) {
+export function previewUrl(request, port, environment = process.env, preview = {}) {
   const configuredOrigin =
     environment.PREVIEW_PUBLIC_ORIGIN?.trim() ||
     environment.VITE_SITEFORGE_PREVIEW_ORIGIN?.trim() ||
     'https://preview.madesolid.com.au';
   const previewSecret = environment.SITEFORGE_WORKSPACE_PREVIEW_SECRET?.trim();
-  const previewDirectory = environment.SITEFORGE_ACTIVE_PREVIEW_DIRECTORY?.trim();
+  const previewDirectory =
+    preview.directory || environment.SITEFORGE_ACTIVE_PREVIEW_DIRECTORY?.trim();
+  const revision = preview.revision || 'working';
   if (configuredOrigin && previewSecret && previewDirectory) {
-    return workspaceFrameUrl(configuredOrigin, previewDirectory, previewSecret);
+    return workspaceFrameUrl(configuredOrigin, previewDirectory, previewSecret, { revision });
   }
   const codespaceName = String(environment.CODESPACE_NAME || '').trim();
   const forwardingDomain = String(
@@ -858,6 +895,7 @@ async function launchWebsite({
   finish,
   sessionName: providedSessionName,
   readyDetail,
+  revision = 'working',
 }) {
   writeEvent({
     status: 'running',
@@ -900,12 +938,12 @@ async function launchWebsite({
   await waitForWebsite(port);
   const activePreviewPath = process.env.SITEFORGE_ACTIVE_PREVIEW_PATH?.trim();
   if (activePreviewPath) {
-    await mkdir(resolve(activePreviewPath, '..'), { recursive: true });
-    await writeFile(
-      activePreviewPath,
-      `${JSON.stringify({ directory, port, startedAt: new Date().toISOString() })}\n`,
-      { mode: 0o600 },
-    );
+    await recordActiveWorkspacePreview(activePreviewPath, {
+      directory,
+      port,
+      revision,
+      startedAt: new Date().toISOString(),
+    });
     process.env.SITEFORGE_ACTIVE_PREVIEW_DIRECTORY = directory;
   }
   if (nextEnvironmentSource) {
@@ -922,7 +960,7 @@ async function launchWebsite({
     status: 'complete',
     phase: 'ready',
     detail: readyDetail ?? `The website is running from prospect-workspaces/${directory}.`,
-    previewUrl: previewUrl(request, port),
+    previewUrl: previewUrl(request, port, process.env, { directory, revision }),
     terminalSession: sessionName,
   });
 }
@@ -961,6 +999,7 @@ async function launchCommittedPreview({ directory, commit, request, writeEvent, 
     finish,
     sessionName: `made-solid-${directory}-v${version.version}-${shortCommit}`.slice(0, 80),
     readyDetail: `Committed edit v${version.version} is running from its immutable Git snapshot.`,
+    revision: commit.toLowerCase(),
   });
 }
 
@@ -1021,9 +1060,10 @@ export function localWorkspacePlugin() {
     return captureBrowserPromise;
   };
   const readyWorkspacePreview = async (request, requestedDirectory) => {
-    const active = await activeWorkspacePreview().catch(() => undefined);
-    if (active && active.directory === requestedDirectory && (await websiteIsReady(active.port)))
-      return active;
+    const active = await activeWorkspacePreview(requestedDirectory, 'working').catch(
+      () => undefined,
+    );
+    if (active && (await websiteIsReady(active.port))) return active;
     if (workspacePreviewRecoveryPromise) {
       await workspacePreviewRecoveryPromise.catch(() => undefined);
       return readyWorkspacePreview(request, requestedDirectory);
@@ -1044,7 +1084,7 @@ export function localWorkspacePlugin() {
         finish: () => undefined,
         readyDetail: 'The private workspace preview has restarted.',
       });
-      return activeWorkspacePreview();
+      return activeWorkspacePreview(directory, 'working');
     })();
     workspacePreviewRecoveryPromise = recovery;
     try {
@@ -1280,7 +1320,9 @@ export function localWorkspacePlugin() {
           const secret = process.env.SITEFORGE_WORKSPACE_PREVIEW_SECRET?.trim();
           if (!origin || !secret) throw new Error('The workspace preview is not configured.');
           sendJson(response, 200, {
-            clientPreviewUrl: workspaceFrameUrl(origin, active.directory, secret),
+            clientPreviewUrl: workspaceFrameUrl(origin, active.directory, secret, {
+              revision: active.revision,
+            }),
             directory: active.directory,
             status: 'ready',
           });

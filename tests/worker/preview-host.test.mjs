@@ -43,6 +43,15 @@ test('requires HTTPS for a deployed preview origin', () => {
       }),
     /must use HTTPS/,
   );
+  assert.equal(
+    previewHostConfiguration({
+      CLIENTSPACE_HANDOFF_URL: 'https://madesolid.com.au/api/integrations/studio/handoffs',
+      PREVIEW_PUBLIC_ORIGIN: 'https://preview.example.com',
+      SUPABASE_SERVICE_ROLE_KEY: 'secret',
+      SUPABASE_URL: 'https://project.supabase.co',
+    }).clientspaceReviewOrigin,
+    'https://madesolid.com.au',
+  );
 });
 
 test('parses visitor and working-draft capability routes without path traversal', () => {
@@ -74,6 +83,13 @@ test('parses visitor and working-draft capability routes without path traversal'
     runId,
     token,
   });
+  assert.deepEqual(parsePreviewPath(`/review/${runId}/${token}/services/`), {
+    filePath: 'services',
+    previewMode: 'review',
+    routePrefix: '/review/',
+    runId,
+    token,
+  });
   assert.equal(parsePreviewPath(`/site/${runId}/${token}/../private.txt`), undefined);
   assert.equal(parsePreviewPath(`/site/not-a-run/${token}/`), undefined);
 });
@@ -84,6 +100,8 @@ test('keeps test and complete-build capability routes tied to their build modes'
     assert.equal(previewRouteMatchesBuildMode('/build/', mode), false);
   }
   assert.equal(previewRouteMatchesBuildMode('/build/', 'full_site'), true);
+  assert.equal(previewRouteMatchesBuildMode('/review/', 'full_site'), true);
+  assert.equal(previewRouteMatchesBuildMode('/review/', 'site_test'), false);
   assert.equal(previewRouteMatchesBuildMode('/test/', 'full_site'), false);
   assert.equal(previewRouteMatchesBuildMode('/site/', 'full_site'), true);
   assert.equal(previewRouteMatchesBuildMode('/site/', 'page_test'), true);
@@ -350,6 +368,78 @@ test('proxies a live frame through an exact preview-origin capability', async ()
   }
 });
 
+test('keeps two committed client previews bound to their exact Git revisions', async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'siteforge-revision-previews-'));
+  const activeWorkspacePreviewPath = join(fixtureRoot, 'active-preview.json');
+  const revisions = [
+    '1111111111111111111111111111111111111111',
+    '2222222222222222222222222222222222222222',
+  ];
+  const upstreams = revisions.map((revision) =>
+    createServer((_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      response.end(`<main data-revision="${revision}">${revision}</main>`);
+    }),
+  );
+  for (const upstream of upstreams) {
+    upstream.listen(0, '127.0.0.1');
+    await once(upstream, 'listening');
+  }
+  await writeFile(
+    activeWorkspacePreviewPath,
+    JSON.stringify({
+      version: 2,
+      previews: upstreams.map((upstream, index) => ({
+        directory: 'prospect-site',
+        port: upstream.address().port,
+        revision: revisions[index],
+      })),
+    }),
+  );
+  const proxy = createServer(
+    previewHostRequestListener({
+      activeWorkspacePreviewPath,
+      publicOrigin: 'https://preview.madesolid.com.au',
+      serviceRoleKey: 'not-used',
+      supabaseUrl: 'https://project.supabase.co',
+      workspaceOrigin: 'https://dev.studio.madesolid.com.au',
+      workspaceOrigins: ['https://dev.studio.madesolid.com.au'],
+      workspacePreviewSecret: workspaceSecret,
+    }),
+  );
+  proxy.listen(0, '127.0.0.1');
+  await once(proxy, 'listening');
+  const localOrigin = `http://127.0.0.1:${proxy.address().port}`;
+  try {
+    for (const revision of revisions) {
+      const revisionToken = createWorkspacePreviewToken('prospect-site', workspaceSecret, {
+        revision,
+      });
+      const response = await fetch(
+        `${localOrigin}/__made-solid/workspace-frame/prospect-site/${revisionToken}/`,
+      );
+      assert.equal(response.status, 200);
+      assert.match(await response.text(), new RegExp(`data-revision="${revision}"`));
+    }
+    const unavailableRevision = '3333333333333333333333333333333333333333';
+    const unavailableToken = createWorkspacePreviewToken('prospect-site', workspaceSecret, {
+      revision: unavailableRevision,
+    });
+    const unavailable = await fetch(
+      `${localOrigin}/__made-solid/workspace-frame/prospect-site/${unavailableToken}/`,
+    );
+    assert.equal(unavailable.status, 503);
+  } finally {
+    proxy.closeAllConnections();
+    for (const upstream of upstreams) upstream.closeAllConnections();
+    await Promise.all([
+      new Promise((resolve) => proxy.close(resolve)),
+      ...upstreams.map((upstream) => new Promise((resolve) => upstream.close(resolve))),
+    ]);
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
 test('serves a complete hydrated HTML artifact with private visitor protections', async () => {
   const originalFetch = globalThis.fetch;
   const calls = [];
@@ -399,6 +489,54 @@ test('serves a complete hydrated HTML artifact with private visitor protections'
     assert.equal(runtimeResponse.headers.get('content-type'), 'text/javascript; charset=utf-8');
     assert.match(runtime, new RegExp(`s\\.p="${previewRoot}_next/"`));
     assert.equal(calls.length, 8);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('serves an expiring full-site review capability only inside Clientspace', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const target = String(url);
+    if (target.includes('/rest/v1/builder_preview_access')) {
+      return Response.json([{ expires_at: '2999-01-01T00:00:00.000Z', preview_mode: 'review' }]);
+    }
+    if (target.includes('/rest/v1/builder_runs')) {
+      return Response.json([
+        { build_mode: 'full_site', organization_id: 'organisation', status: 'ready' },
+      ]);
+    }
+    if (target.includes('/rest/v1/builder_artifacts')) return Response.json([{ id: 'artifact' }]);
+    if (target.includes('/storage/v1/object/authenticated/')) {
+      return new Response('<!doctype html><html><head></head><body>Reviewed site</body></html>');
+    }
+    return new Response('Not found', { status: 404 });
+  };
+  try {
+    const reviewOrigin = 'https://madesolid.com.au';
+    const response = await handlePreviewRequest(
+      new Request(`${previewOrigin}/review/${runId}/${token}/`),
+      { ...configuration, clientspaceReviewOrigin: reviewOrigin },
+    );
+    const html = await response.text();
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('x-frame-options'), null);
+    assert.match(
+      response.headers.get('content-security-policy') || '',
+      /frame-ancestors https:\/\/madesolid\.com\.au/,
+    );
+    assert.match(
+      response.headers.get('content-security-policy') || '',
+      /script-src[^;]+https:\/\/madesolid\.com\.au/,
+    );
+    assert.match(html, /data-made-solid-review-bridge/);
+    assert.match(html, /https:\/\/madesolid\.com\.au\/review-bridge\.js/);
+
+    const unconfigured = await handlePreviewRequest(
+      new Request(`${previewOrigin}/review/${runId}/${token}/`),
+      configuration,
+    );
+    assert.equal(unconfigured.status, 404);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -5,9 +5,41 @@ function codespaceName(hostname: string) {
   return /^(.+)-\d+\.app\.github\.dev$/.exec(hostname)?.[1];
 }
 
+function configuredPreviewOrigin() {
+  return (
+    import.meta.env.VITE_SITEFORGE_PREVIEW_ORIGIN?.trim() || 'https://preview.madesolid.com.au'
+  );
+}
+
+function privateBuildCapabilityRoot(source: URL, configuredOrigin: string) {
+  try {
+    const expectedOrigin = new URL(configuredOrigin);
+    const capability =
+      /^\/(test|build|site)\/([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\/([0-9A-Fa-f]{64})(?:\/|$)/.exec(
+        source.pathname,
+      );
+    if (
+      expectedOrigin.protocol !== 'https:' ||
+      expectedOrigin.href !== `${expectedOrigin.origin}/` ||
+      source.origin !== expectedOrigin.origin ||
+      source.username ||
+      source.password ||
+      !capability
+    ) {
+      return undefined;
+    }
+    return `/${capability[1]}/${capability[2]}/${capability[3]}/`;
+  } catch {
+    return undefined;
+  }
+}
+
+function isPrivateBuildCapability(url: URL) {
+  return Boolean(privateBuildCapabilityRoot(url, configuredPreviewOrigin()));
+}
+
 function isWorkspaceCapabilityPreview(url: URL) {
-  const configuredOrigin =
-    import.meta.env.VITE_SITEFORGE_PREVIEW_ORIGIN?.trim() || 'https://preview.madesolid.com.au';
+  const configuredOrigin = configuredPreviewOrigin();
   try {
     const expectedOrigin = new URL(configuredOrigin);
     const parts = url.pathname.split('/').filter(Boolean);
@@ -55,7 +87,11 @@ function previewSourceUrl() {
   if (!source) return undefined;
   try {
     const url = new URL(source);
-    if (!isSavedPreview(url) && !isAllowedDevelopmentPreview(url)) {
+    if (
+      !isSavedPreview(url) &&
+      !isPrivateBuildCapability(url) &&
+      !isAllowedDevelopmentPreview(url)
+    ) {
       return undefined;
     }
     return url;
@@ -133,6 +169,8 @@ export function preparePreviewFrameDocument(html: string, source: URL) {
 }
 
 function previewCapabilityRoot(source: URL) {
+  const privateBuildRoot = privateBuildCapabilityRoot(source, configuredPreviewOrigin());
+  if (privateBuildRoot) return privateBuildRoot;
   const parts = source.pathname.split('/').filter(Boolean);
   const previewIndex = parts.indexOf('siteforge-preview');
   if (previewIndex === -1 || !parts[previewIndex + 1] || !parts[previewIndex + 2]) return undefined;
@@ -172,6 +210,12 @@ export function PreviewFrame() {
 
   useEffect(() => {
     if (!source) return;
+    if (isPrivateBuildCapability(source)) {
+      // Visitor previews deliberately disallow framing. Keep the capability out
+      // of the DOM and replace only after its exact origin and credentials pass.
+      window.location.replace(source.href);
+      return;
+    }
     if (isAllowedDevelopmentPreview(source)) {
       setDocument(undefined);
       setIsLoading(true);

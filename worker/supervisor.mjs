@@ -28,7 +28,7 @@ if (
   workerScripts.push(['report-previews', 'report-preview-worker.mjs']);
 }
 if (
-  process.env.VERCEL_ACCESS_TOKEN &&
+  process.env.PREVIEW_PUBLIC_ORIGIN &&
   process.env.CLIENTSPACE_HANDOFF_URL &&
   process.env.CLIENTSPACE_HANDOFF_SECRET
 ) {

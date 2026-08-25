@@ -30,6 +30,7 @@ test('creates expiring private workspace preview capabilities', () => {
   assert.deepEqual(verifyWorkspacePreviewToken(token, secret, { now: () => 2_000 }), {
     directory: 'prospect-site',
     expiresAt: 61_000,
+    revision: 'working',
   });
   assert.equal(
     verifyWorkspacePreviewToken(token, `${secret}-wrong`, { now: () => 2_000 }),
@@ -40,6 +41,18 @@ test('creates expiring private workspace preview capabilities', () => {
     verifyWorkspacePreviewToken(createWorkspacePreviewToken('prospect-site', secret), secret)
       ?.directory,
     'prospect-site',
+  );
+  const exactRevision = '1234567890abcdef1234567890abcdef12345678';
+  assert.equal(
+    verifyWorkspacePreviewToken(
+      createWorkspacePreviewToken('prospect-site', secret, { revision: exactRevision }),
+      secret,
+    )?.revision,
+    exactRevision,
+  );
+  assert.throws(
+    () => createWorkspacePreviewToken('prospect-site', secret, { revision: 'main' }),
+    /working or exact Git revision/,
   );
   const url = new URL(
     workspacePreviewUrl('https://workspace.example.com', 'prospect-site', secret),

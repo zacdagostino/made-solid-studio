@@ -7,9 +7,10 @@ import { verifyWorkspacePreviewToken } from '../scripts/workspace-preview-access
 import { studioDevelopmentOrigins } from '../scripts/studio-development-origins.mjs';
 
 const defaultPort = 8787;
-const previewRoutePrefixes = ['/test/', '/build/', '/site/'];
+const previewRoutePrefixes = ['/test/', '/build/', '/review/', '/site/'];
 const workspaceFrameRoutePrefix = '/__made-solid/workspace-frame/';
 const directoryPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+const workspaceRevisionPattern = /^(?:working|[0-9a-f]{40})$/i;
 const workspaceTokenPattern = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
 function requiredEnvironment(name, environment = process.env) {
@@ -32,8 +33,25 @@ export function previewHostConfiguration(environment = process.env) {
     throw new Error('PREVIEW_PUBLIC_ORIGIN must use HTTPS outside local development.');
   }
   const developmentOrigins = studioDevelopmentOrigins(environment);
+  const configuredClientspaceOrigin = environment.CLIENTSPACE_PUBLIC_ORIGIN?.trim();
+  const configuredClientspaceHandoff = environment.CLIENTSPACE_HANDOFF_URL?.trim();
+  let clientspaceReviewOrigin;
+  if (configuredClientspaceOrigin || configuredClientspaceHandoff) {
+    const parsedClientspaceOrigin = new URL(
+      configuredClientspaceOrigin || configuredClientspaceHandoff,
+    );
+    if (
+      parsedClientspaceOrigin.protocol !== 'https:' ||
+      (configuredClientspaceOrigin &&
+        parsedClientspaceOrigin.href !== `${parsedClientspaceOrigin.origin}/`)
+    ) {
+      throw new Error('CLIENTSPACE_PUBLIC_ORIGIN must be an exact HTTPS origin.');
+    }
+    clientspaceReviewOrigin = parsedClientspaceOrigin.origin;
+  }
   return {
     activeWorkspacePreviewPath: environment.SITEFORGE_ACTIVE_PREVIEW_PATH?.trim(),
+    clientspaceReviewOrigin,
     port: Number(environment.SITEFORGE_PREVIEW_PORT) || defaultPort,
     publicOrigin: configuredOrigin,
     serviceRoleKey,
@@ -77,7 +95,8 @@ export function parsePreviewPath(pathname) {
   const runId = parts[0];
   const token = parts[1];
   const requestedPath = parts.slice(2);
-  const previewMode = requestedPath[0] === '__draft__' ? 'draft' : 'ready';
+  const previewMode =
+    routePrefix === '/review/' ? 'review' : requestedPath[0] === '__draft__' ? 'draft' : 'ready';
   const filePath =
     (previewMode === 'draft' ? requestedPath.slice(1) : requestedPath).join('/') || 'index.html';
   if (!runId || !/^[0-9a-f-]{36}$/i.test(runId) || !token || !/^[a-f0-9]{64}$/i.test(token)) {
@@ -102,6 +121,7 @@ export function previewFileCandidates(filePath) {
 
 export function previewRouteMatchesBuildMode(routePrefix, buildMode) {
   if (routePrefix === '/site/') return true;
+  if (routePrefix === '/review/') return buildMode === 'full_site';
   if (routePrefix === '/build/') return buildMode === 'full_site';
   if (routePrefix === '/test/') {
     return ['homepage_test', 'page_test', 'site_test'].includes(buildMode);
@@ -241,15 +261,18 @@ const previewNavigationScript = `
   })();
 `;
 
-export function preparePreviewHtml(source, base) {
+export function preparePreviewHtml(source, base, clientspaceReviewOrigin) {
   const rootedSource = rewritePreviewRootReferences(source, base);
   const baseElement = `<base href="${base}">`;
   const navigation = `<script data-siteforge-preview-navigation>${previewNavigationScript}</script>`;
+  const reviewBridge = clientspaceReviewOrigin
+    ? `<script src="${clientspaceReviewOrigin}/review-bridge.js?v=20260825-private-review" data-made-solid-parent-origin="${clientspaceReviewOrigin}" data-made-solid-review-bridge></script>`
+    : '';
   const withBase = rootedSource.replace(/<head(\s[^>]*)?>/i, (match) => `${match}${baseElement}`);
   if (/<\/body>/i.test(withBase)) {
-    return withBase.replace(/<\/body>/i, `${navigation}</body>`);
+    return withBase.replace(/<\/body>/i, `${navigation}${reviewBridge}</body>`);
   }
-  return `${baseElement}${withBase}${navigation}`;
+  return `${baseElement}${withBase}${navigation}${reviewBridge}`;
 }
 
 export function prepareWorkspaceFrameHtml(source, base) {
@@ -304,31 +327,33 @@ function tokenHash(token) {
   return createHash('sha256').update(token).digest('hex');
 }
 
-function previewCsp() {
+function previewCsp(previewMode, clientspaceReviewOrigin) {
+  const reviewOrigin = previewMode === 'review' ? clientspaceReviewOrigin : undefined;
   return [
     "default-src 'self' data: blob:",
     "img-src 'self' data: blob:",
     "style-src 'self' 'unsafe-inline'",
-    "script-src 'self' 'unsafe-inline'",
+    `script-src 'self' 'unsafe-inline'${reviewOrigin ? ` ${reviewOrigin}` : ''}`,
     "font-src 'self' data:",
-    "connect-src 'self'",
+    `connect-src 'self'${reviewOrigin ? ` ${reviewOrigin}` : ''}`,
     "form-action 'none'",
     "base-uri 'self'",
-    "frame-ancestors 'none'",
+    reviewOrigin ? `frame-ancestors ${reviewOrigin}` : "frame-ancestors 'none'",
   ].join('; ');
 }
 
-function responseHeaders(contentType) {
-  return {
+function responseHeaders(contentType, previewMode = 'ready', clientspaceReviewOrigin) {
+  const headers = {
     'cache-control': 'no-store, private',
-    'content-security-policy': previewCsp(),
+    'content-security-policy': previewCsp(previewMode, clientspaceReviewOrigin),
     'content-type': contentType,
     'cross-origin-opener-policy': 'same-origin',
     'referrer-policy': 'no-referrer',
     'x-content-type-options': 'nosniff',
-    'x-frame-options': 'DENY',
     'x-robots-tag': 'noindex, nofollow, noarchive',
   };
+  if (previewMode !== 'review') headers['x-frame-options'] = 'DENY';
+  return headers;
 }
 
 function apiHeaders(serviceRoleKey) {
@@ -369,7 +394,7 @@ async function resolvePreviewArtifact(configuration, parsed) {
   });
   const run = runRows[0];
   const allowed =
-    parsed.previewMode === 'ready'
+    parsed.previewMode === 'ready' || parsed.previewMode === 'review'
       ? run?.status === 'ready' || run?.status === 'review_required'
       : ['running', 'paused', 'failed', 'cancelled'].includes(run?.status);
   if (!run || !allowed || !previewRouteMatchesBuildMode(parsed.routePrefix, run.build_mode)) {
@@ -417,7 +442,14 @@ export async function handlePreviewRequest(request, configuration = previewHostC
   try {
     const artifact = await resolvePreviewArtifact(configuration, parsed);
     if (!artifact) return new Response('Not found', { status: 404 });
-    const headers = responseHeaders(contentTypeFor(artifact.filePath));
+    if (parsed.previewMode === 'review' && !configuration.clientspaceReviewOrigin) {
+      return new Response('Not found', { status: 404 });
+    }
+    const headers = responseHeaders(
+      contentTypeFor(artifact.filePath),
+      parsed.previewMode,
+      configuration.clientspaceReviewOrigin,
+    );
     if (request.method === 'HEAD') return new Response(null, { headers });
 
     const storedFile = await fetch(storageObjectUrl(configuration, artifact.storagePath), {
@@ -433,10 +465,24 @@ export async function handlePreviewRequest(request, configuration = previewHostC
       if (isLockedStarterDocument(source)) {
         return new Response(
           'This build contains the locked starter rather than generated website output.',
-          { status: 409, headers: responseHeaders('text/plain; charset=utf-8') },
+          {
+            status: 409,
+            headers: responseHeaders(
+              'text/plain; charset=utf-8',
+              parsed.previewMode,
+              configuration.clientspaceReviewOrigin,
+            ),
+          },
         );
       }
-      return new Response(preparePreviewHtml(source, base), { headers });
+      return new Response(
+        preparePreviewHtml(
+          source,
+          base,
+          parsed.previewMode === 'review' ? configuration.clientspaceReviewOrigin : undefined,
+        ),
+        { headers },
+      );
     }
     if (extension === '.js') {
       return new Response(rewritePreviewRuntimeReferences(await storedFile.text(), base), {
@@ -498,18 +544,30 @@ function workspaceFrameConfiguration(configuration) {
   };
 }
 
-async function activeWorkspacePreview(configuration) {
+function normalizeActiveWorkspacePreviews(value) {
+  const candidates = Array.isArray(value?.previews) ? value.previews : [value];
+  return candidates
+    .map((candidate) => ({ ...candidate, revision: candidate?.revision || 'working' }))
+    .filter(
+      (candidate) =>
+        Number.isInteger(candidate.port) &&
+        candidate.port > 0 &&
+        candidate.port <= 65_535 &&
+        directoryPattern.test(candidate.directory || '') &&
+        workspaceRevisionPattern.test(candidate.revision || ''),
+    );
+}
+
+async function activeWorkspacePreview(configuration, directory, revision) {
   const source = await readFile(configuration.activeWorkspacePreviewPath, 'utf8');
   const value = JSON.parse(source);
-  if (
-    !Number.isInteger(value.port) ||
-    value.port < 1 ||
-    value.port > 65_535 ||
-    !directoryPattern.test(value.directory || '')
-  ) {
+  const active = normalizeActiveWorkspacePreviews(value).find(
+    (candidate) => candidate.directory === directory && candidate.revision === revision,
+  );
+  if (!active) {
     throw new Error('The active workspace preview record is invalid.');
   }
-  return value;
+  return active;
 }
 
 function workspaceFrameRootPath(parsed) {
@@ -686,11 +744,11 @@ export async function handleWorkspaceFrameRequest(request, response, configurati
       workspaceFrameUnavailable(response);
       return true;
     }
-    const active = await activeWorkspacePreview(frameConfiguration);
-    if (active.directory !== access.directory) {
-      workspaceFrameUnavailable(response);
-      return true;
-    }
+    const active = await activeWorkspacePreview(
+      frameConfiguration,
+      access.directory,
+      access.revision,
+    );
     proxyWorkspaceFrameHttp(request, response, requestUrl, parsed, active, frameConfiguration);
   } catch {
     workspaceFrameUnavailable(response, 503);
@@ -736,8 +794,10 @@ export async function handleWorkspaceFrameUpgrade(request, socket, head, configu
   }
   try {
     const access = workspaceFrameAccess(parsed, frameConfiguration);
-    const active = access ? await activeWorkspacePreview(frameConfiguration) : undefined;
-    if (!access || active?.directory !== access.directory) {
+    const active = access
+      ? await activeWorkspacePreview(frameConfiguration, access.directory, access.revision)
+      : undefined;
+    if (!access || !active) {
       socket.destroy();
       return true;
     }

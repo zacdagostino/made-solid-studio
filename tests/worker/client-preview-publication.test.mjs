@@ -7,22 +7,25 @@ const migrationUrl = new URL(
   '../../supabase/migrations/20260806160000_client_preview_publication.sql',
   import.meta.url,
 );
+const privateReviewMigrationUrl = new URL(
+  '../../supabase/migrations/20260825220000_private_client_review_capabilities.sql',
+  import.meta.url,
+);
 
-test('publishes only through the protected Vercel and Clientspace worker path', async () => {
+test('publishes only an expiring private review capability through the Clientspace worker path', async () => {
   const source = await readFile(workerUrl, 'utf8');
-  assert.match(source, /requiredEnvironment\('VERCEL_ACCESS_TOKEN'\)/);
+  assert.match(source, /requiredEnvironment\('PREVIEW_PUBLIC_ORIGIN'\)/);
   assert.match(source, /requiredEnvironment\('CLIENTSPACE_HANDOFF_SECRET'\)/);
-  assert.match(source, /Authorization: `Bearer \$\{vercelToken\}`/);
-  assert.match(source, /X-Robots-Tag/);
-  assert.match(source, /noindex, nofollow, noarchive/);
-  assert.match(source, /frame-ancestors/);
-  assert.match(source, /form-action 'none'/);
-  assert.match(source, /\/review-bridge\.js/);
-  assert.match(source, /homepage-ready/);
-  assert.match(source, /data-made-solid-parent-origin/);
+  assert.match(source, /randomBytes\(32\)\.toString\('hex'\)/);
+  assert.match(source, /createHash\('sha256'\)\.update\(token\)\.digest\('hex'\)/);
+  assert.match(source, /preview_mode: 'review'/);
+  assert.match(source, /7 \* 24 \* 60 \* 60_000/);
+  assert.match(source, /\/review\/\$\{job\.builder_run_id\}\/\$\{token\}\//);
+  assert.match(source, /revoked_at: new Date\(\)\.toISOString\(\)/);
+  assert.doesNotMatch(source, /api\.vercel\.com/);
+  assert.doesNotMatch(source, /VERCEL_ACCESS_TOKEN/);
+  assert.doesNotMatch(source, /vercelRequest/);
   assert.doesNotMatch(source, /cdn\.jsdelivr\.net/);
-  assert.doesNotMatch(source, /target: 'production'/);
-  assert.match(source, /data-made-solid-review-bridge/);
   assert.match(source, /sourceProjectId: job\.business_id/);
   assert.match(source, /pricingSnapshot: job\.pricing_snapshot/);
   assert.match(source, /\.from\('decision_report_versions'\)/);
@@ -37,7 +40,10 @@ test('publishes only through the protected Vercel and Clientspace worker path', 
 });
 
 test('queues only quality-passed full-site builds and keeps the worker service-role-only', async () => {
-  const source = await readFile(migrationUrl, 'utf8');
+  const [source, privateReviewSource] = await Promise.all([
+    readFile(migrationUrl, 'utf8'),
+    readFile(privateReviewMigrationUrl, 'utf8'),
+  ]);
   assert.match(source, /target_run\.build_mode <> 'full_site'/);
   assert.match(source, /target_run\.status <> 'ready'/);
   assert.match(source, /quality_summary->>'status'.*<> 'passed'/);
@@ -47,4 +53,6 @@ test('queues only quality-passed full-site builds and keeps the worker service-r
     source,
     /grant execute on function public\.claim_next_client_preview_publication\(text\) to service_role/,
   );
+  assert.match(privateReviewSource, /preview_mode in \('ready', 'draft', 'review'\)/);
+  assert.match(privateReviewSource, /expiring, revocable Clientspace-only links/);
 });

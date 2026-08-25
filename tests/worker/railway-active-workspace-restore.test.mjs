@@ -117,3 +117,36 @@ test('does not launch a missing, dependency-free, or traversal workspace record'
     await rm(fixtureRoot, { recursive: true, force: true });
   }
 });
+
+test('never restores a committed historical preview as the working website after restart', async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'siteforge-committed-preview-'));
+  const activePreviewPath = join(fixtureRoot, 'active-preview.json');
+  const commands = [];
+  try {
+    await writeFile(
+      activePreviewPath,
+      JSON.stringify({
+        version: 2,
+        previews: [
+          {
+            directory: 'lecegroup',
+            port: 3002,
+            revision: '1234567890abcdef1234567890abcdef12345678',
+          },
+        ],
+      }),
+    );
+    const result = await restoreActiveWorkspacePreview({
+      environment: {
+        SITEFORGE_ACTIVE_PREVIEW_PATH: activePreviewPath,
+        SITEFORGE_PROSPECT_WORKSPACES_DIR: fixtureRoot,
+      },
+      ready: async () => true,
+      runCommand: async (...command) => commands.push(command),
+    });
+    assert.deepEqual(result, { status: 'none' });
+    assert.deepEqual(commands, []);
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});

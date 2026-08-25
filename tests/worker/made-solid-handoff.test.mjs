@@ -46,13 +46,48 @@ test('moves only an exact committed edit through a protected persisted handoff',
   assert.match(worker, /pricingSnapshot: job\.pricing_snapshot/);
   assert.match(worker, /verifyExactSourceWorkspace/);
   assert.match(worker, /deployExactSource/);
-  assert.match(worker, /assignProspectDomain/);
-  assert.match(worker, /MADE_SOLID_PROSPECT_DOMAIN/);
-  assert.match(worker, /domains', 'add', hostname, deployment\.projectName/);
-  assert.match(worker, /its HTTPS check did not become ready in time/);
-  assert.match(worker, /previewUrl,/);
+  assert.doesNotMatch(worker, /'deploy',\s*'--prod'/);
+  assert.doesNotMatch(worker, /assignProspectDomain/);
+  assert.doesNotMatch(worker, /MADE_SOLID_PROSPECT_DOMAIN/);
+  assert.doesNotMatch(worker, /domains', 'add'/);
+  assert.match(worker, /previewDeploymentUrl\(payload\.deployment\.url\)/);
+  assert.match(worker, /previewUrl\.protocol !== 'https:'/);
+  assert.match(worker, /labels\.length >= 3/);
+  assert.match(worker, /endsWith\('\.vercel\.app'\)/);
+  assert.match(worker, /labels\.some\(\(label\) => !dnsLabelPattern\.test\(label\)\)/);
+  assert.match(worker, /reservedHostnameLabels\.has\(firstLabel\)/);
+  assert.match(worker, /reservedHostnameLabels\.has\(projectName\)/);
+  for (const label of [
+    'www',
+    'dev',
+    'studio',
+    'workspace',
+    'preview',
+    'app',
+    'api',
+    'admin',
+    'portal',
+    'client',
+    'clients',
+    'mail',
+    'email',
+    'status',
+    'support',
+    'docs',
+    'assets',
+    'static',
+    'cdn',
+    'auth',
+    'dashboard',
+    'test',
+    'build',
+  ]) {
+    assert.match(worker, new RegExp(`'${label}'`));
+  }
+  assert.match(worker, /previewUrl: deployment\.previewUrl/);
   assert.match(worker, /Vercel did not return a ready exact-commit deployment/);
   assert.match(worker, /did not accept this revision/);
+  assert.match(worker, /adminUrl\.origin !== handoffEndpoint\.origin/);
   assert.match(worker, /AbortSignal\.timeout\(60_000\)/);
   assert.match(worker, /final workspace verification was cancelled/);
   assert.match(worker, /heartbeat_made_solid_handoff_worker/);

@@ -1316,6 +1316,7 @@ test('renders without unintended horizontal overflow', async ({ page }) => {
 test('keeps generation, website editing, and Made Solid handoff in separate routed pages', async ({
   page,
 }) => {
+  test.setTimeout(60_000);
   const businessId = 'business-demo-local-services';
   const commit = 'd5e37351969f9503a8e0d9bde323f23f547483b6';
   const committedPreviewUrl =
@@ -1450,6 +1451,17 @@ test('keeps generation, website editing, and Made Solid handoff in separate rout
   await page.goto(`/#/prospects/${businessId}/handoff`);
   await expectWorkspaceSectionSelected(page, 'Made Solid handoff');
   await expect(page.getByTestId('made-solid-handoff-page')).toBeVisible();
+  const clientReview = page.getByTestId('client-preview-publication');
+  await expect(clientReview).toBeVisible();
+  await expect(clientReview).toContainText('Create a seven-day private review link');
+  const createReviewButton = clientReview.getByRole('button', {
+    name: 'Create private review link',
+  });
+  await createReviewButton.scrollIntoViewIfNeeded();
+  await expect(createReviewButton).toBeVisible();
+  await expect(createReviewButton).toBeDisabled();
+  await clientReview.scrollIntoViewIfNeeded();
+  await expect(clientReview).toHaveScreenshot('private-client-review.png');
   await expect(page.getByText('v1 · d5e37351')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Open website' })).toBeVisible();
   await expect(
@@ -1460,7 +1472,9 @@ test('keeps generation, website editing, and Made Solid handoff in separate rout
   ).toBeVisible();
   await expect(page.getByLabel('Client email (review before Clientspace)')).toBeVisible();
   await expect(
-    page.getByText(/it does not create a client account or send an email/i),
+    page.getByText(
+      /never assigns a production domain, creates a client account, or sends an email/i,
+    ),
   ).toBeVisible();
   const sourceTransfer = page.locator('.handoff-submit');
   await sourceTransfer.scrollIntoViewIfNeeded();
@@ -3798,9 +3812,8 @@ test('displays the newest test package above retained package versions', async (
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const packagePicker = page.getByLabel('Test agent package');
-  await expect(packagePicker).toHaveValue(
-    'agent-package-local-v21-5-stoppable-codex-turns',
-  );
+  await expect(packagePicker).toHaveValue('agent-package-local-v21-6-client-url-release-contract');
+  await expect(packagePicker).toContainText('v21.6 · Approved test');
   await expect(packagePicker).toContainText('v21.5 · Approved test');
   await expect(packagePicker).toContainText('v21.4 · Approved test');
   await expect(packagePicker).toContainText('v21.3 · Approved test');
@@ -3962,6 +3975,7 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v21.6', 'Client URL release contract'],
     ['v21.5', 'Stoppable Codex turns'],
     ['v21.4', 'Resilient live Codex branching'],
     ['v21.3', 'Development release URLs'],

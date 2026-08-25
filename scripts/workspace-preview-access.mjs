@@ -4,6 +4,7 @@ const defaultLifetimeMs = 60 * 60 * 1_000;
 const workspaceStudioExchangePurpose = 'studio-development-exchange';
 const workspaceStudioSessionPurpose = 'studio-development-session';
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const workspaceRevisionPattern = /^(?:working|[0-9a-f]{40})$/i;
 
 function base64Url(value) {
   return Buffer.from(value).toString('base64url');
@@ -16,7 +17,7 @@ function signature(payload, secret) {
 export function createWorkspacePreviewToken(
   directory,
   secret,
-  { now = Date.now(), lifetimeMs = defaultLifetimeMs } = {},
+  { now = Date.now(), lifetimeMs = defaultLifetimeMs, revision = 'working' } = {},
 ) {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(directory)) {
     throw new Error('A valid workspace directory is required for preview access.');
@@ -24,8 +25,15 @@ export function createWorkspacePreviewToken(
   if (typeof secret !== 'string' || secret.length < 32) {
     throw new Error('SITEFORGE_WORKSPACE_PREVIEW_SECRET must contain at least 32 characters.');
   }
+  if (!workspaceRevisionPattern.test(revision)) {
+    throw new Error('A working or exact Git revision is required for preview access.');
+  }
   const payload = base64Url(
-    JSON.stringify({ directory, expiresAt: now + Math.max(60_000, lifetimeMs) }),
+    JSON.stringify({
+      directory,
+      expiresAt: now + Math.max(60_000, lifetimeMs),
+      revision: revision.toLowerCase(),
+    }),
   );
   return `${payload}.${signature(payload, secret)}`;
 }
@@ -44,12 +52,17 @@ export function verifyWorkspacePreviewToken(token, secret, { now = Date.now } = 
     const value = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
     if (
       !/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(value.directory) ||
+      (value.revision !== undefined && !workspaceRevisionPattern.test(value.revision)) ||
       !Number.isFinite(value.expiresAt) ||
       value.expiresAt <= now()
     ) {
       return undefined;
     }
-    return { directory: value.directory, expiresAt: value.expiresAt };
+    return {
+      directory: value.directory,
+      expiresAt: value.expiresAt,
+      revision: String(value.revision || 'working').toLowerCase(),
+    };
   } catch {
     return undefined;
   }

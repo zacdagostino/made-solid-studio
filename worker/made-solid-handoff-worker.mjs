@@ -11,11 +11,32 @@ const workerId =
 const execFileAsync = promisify(execFile);
 const vercelTeamSlug = process.env.VERCEL_TEAM_SLUG?.trim() || 'made-solid';
 const vercelCliVersion = process.env.VERCEL_CLI_VERSION?.trim() || '58.9.2';
-const madeSolidProspectDomain =
-  process.env.MADE_SOLID_PROSPECT_DOMAIN?.trim().toLowerCase() || 'madesolid.com.au';
-if (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(madeSolidProspectDomain)) {
-  throw new Error('MADE_SOLID_PROSPECT_DOMAIN must be a valid DNS domain.');
-}
+const reservedHostnameLabels = new Set([
+  'www',
+  'dev',
+  'studio',
+  'workspace',
+  'preview',
+  'app',
+  'api',
+  'admin',
+  'portal',
+  'client',
+  'clients',
+  'mail',
+  'email',
+  'status',
+  'support',
+  'docs',
+  'assets',
+  'static',
+  'cdn',
+  'auth',
+  'dashboard',
+  'test',
+  'build',
+]);
+const dnsLabelPattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
 function requiredEnvironment(name) {
   const value = process.env[name]?.trim();
@@ -30,7 +51,8 @@ const supabase = createClient(
 );
 const handoffUrl = requiredEnvironment('MADE_SOLID_HANDOFF_URL');
 const handoffSecret = requiredEnvironment('MADE_SOLID_HANDOFF_SECRET');
-if (new URL(handoffUrl).protocol !== 'https:') {
+const handoffEndpoint = new URL(handoffUrl);
+if (handoffEndpoint.protocol !== 'https:' || handoffEndpoint.username || handoffEndpoint.password) {
   throw new Error('MADE_SOLID_HANDOFF_URL must use HTTPS.');
 }
 
@@ -48,17 +70,46 @@ function sourceRepositorySlug(repositoryUrl) {
 }
 
 function deploymentProjectName(job) {
-  return sourceRepositorySlug(job.source_repository_url)
+  const projectName = sourceRepositorySlug(job.source_repository_url)
     .replace(/[^a-z0-9-]+/g, '-')
     .replace(/-{2,}/g, '-')
     .replace(/^-|-$/g, '')
     .slice(0, 100);
+  if (!dnsLabelPattern.test(projectName) || reservedHostnameLabels.has(projectName)) {
+    throw new Error('The source repository resolves to a reserved or invalid deployment hostname.');
+  }
+  return projectName;
 }
 
-function prospectHostname(job) {
-  const label = deploymentProjectName(job).slice(0, 63).replace(/-$/g, '');
-  if (!label) throw new Error('The source repository has no safe prospect subdomain.');
-  return `${label}.${madeSolidProspectDomain}`;
+function previewDeploymentUrl(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error('Vercel did not return a preview deployment URL.');
+  }
+  let previewUrl;
+  try {
+    previewUrl = new URL(value.includes('://') ? value : `https://${value}`);
+  } catch {
+    throw new Error('Vercel returned an invalid preview deployment URL.');
+  }
+  const labels = previewUrl.hostname.toLowerCase().split('.');
+  const firstLabel = labels[0] || '';
+  const isVercelPreview =
+    labels.length >= 3 && previewUrl.hostname.toLowerCase().endsWith('.vercel.app');
+  if (
+    previewUrl.protocol !== 'https:' ||
+    previewUrl.username ||
+    previewUrl.password ||
+    previewUrl.port ||
+    previewUrl.pathname !== '/' ||
+    previewUrl.search ||
+    previewUrl.hash ||
+    !isVercelPreview ||
+    labels.some((label) => !dnsLabelPattern.test(label)) ||
+    reservedHostnameLabels.has(firstLabel)
+  ) {
+    throw new Error('Vercel returned an unsafe preview deployment URL.');
+  }
+  return previewUrl.toString();
 }
 
 function deploymentWorkspace(job) {
@@ -127,7 +178,6 @@ async function deployExactSource(job) {
     'npx',
     vercelArgs(
       'deploy',
-      '--prod',
       '--yes',
       '--project',
       projectName,
@@ -142,37 +192,7 @@ async function deployExactSource(job) {
   if (payload?.status !== 'ok' || payload?.deployment?.readyState !== 'READY') {
     throw new Error('Vercel did not return a ready exact-commit deployment.');
   }
-  return { cwd, projectName };
-}
-
-async function assignProspectDomain(job, deployment) {
-  const hostname = prospectHostname(job);
-  try {
-    await runWorkspaceCommand(
-      'npx',
-      vercelArgs('domains', 'add', hostname, deployment.projectName, '--no-color'),
-      deployment.cwd,
-      2 * 60_000,
-    );
-  } catch (error) {
-    throw new Error(`Vercel could not assign ${hostname} to the prospect deployment.`, {
-      cause: error,
-    });
-  }
-  const previewUrl = `https://${hostname}`;
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    try {
-      const response = await fetch(previewUrl, {
-        redirect: 'follow',
-        signal: AbortSignal.timeout(15_000),
-      });
-      if (response.ok) return previewUrl;
-    } catch {
-      // DNS and TLS may still be converging after Vercel assigns the hostname.
-    }
-    await wait(10_000);
-  }
-  throw new Error(`${hostname} was assigned, but its HTTPS check did not become ready in time.`);
+  return { previewUrl: previewDeploymentUrl(payload.deployment.url) };
 }
 
 async function updateJob(job, patch) {
@@ -208,7 +228,7 @@ async function processJob(job) {
   try {
     if (await cancelled(job)) return;
     await updateJob(job, {
-      total_items: 6,
+      total_items: 5,
       progress_phase: 'verifying_source',
       progress_detail: 'Verifying the clean local repository against the exact handed-off commit.',
       completed_items: 0,
@@ -216,23 +236,17 @@ async function processJob(job) {
     });
     const deployment = await deployExactSource(job);
     await updateJob(job, {
-      progress_phase: 'configuring_domain',
-      progress_detail: `Vercel built the exact commit. Assigning ${prospectHostname(job)} and checking HTTPS.`,
-      completed_items: 2,
-      lease_expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
-    });
-    const previewUrl = await assignProspectDomain(job, deployment);
-    await updateJob(job, {
       progress_phase: 'preview_ready',
-      progress_detail: `${prospectHostname(job)} is serving the exact committed website over HTTPS.`,
-      completed_items: 3,
+      progress_detail:
+        'Vercel built the exact commit as an isolated preview deployment. No production domain was assigned.',
+      completed_items: 2,
       lease_expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
     });
     if (await cancelled(job)) return;
     await updateJob(job, {
       progress_phase: 'sending',
       progress_detail: 'Sending the exact source lineage and verified preview to Made Solid.',
-      completed_items: 4,
+      completed_items: 3,
       lease_expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
     });
     const response = await fetch(handoffUrl, {
@@ -256,7 +270,7 @@ async function processJob(job) {
         contactName: job.contact_name,
         clientEmail: job.client_email,
         projectName: job.project_name,
-        previewUrl,
+        previewUrl: deployment.previewUrl,
         currency: 'AUD',
         pricingSnapshot: job.pricing_snapshot,
         handoffNotes: job.handoff_notes,
@@ -267,14 +281,14 @@ async function processJob(job) {
       throw new Error(payload?.message || 'The Made Solid website did not accept this revision.');
     }
     const adminUrl = new URL(payload.adminUrl);
-    if (adminUrl.protocol !== 'https:' || !adminUrl.pathname.startsWith('/admin')) {
+    if (adminUrl.origin !== handoffEndpoint.origin || !adminUrl.pathname.startsWith('/admin')) {
       throw new Error('Made Solid returned an invalid private admin location.');
     }
     await updateJob(job, {
       progress_phase: 'verifying',
       progress_detail:
         'Made Solid saved the revision. Verifying the returned private admin record.',
-      completed_items: 5,
+      completed_items: 4,
       website_handoff_id: payload.handoff.id,
       website_admin_url: adminUrl.toString(),
       lease_expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
@@ -285,7 +299,7 @@ async function processJob(job) {
       progress_phase: 'ready',
       progress_detail:
         'The committed edit is recorded in Made Solid admin and ready for client setup.',
-      completed_items: 6,
+      completed_items: 5,
       website_handoff_id: payload.handoff.id,
       website_admin_url: adminUrl.toString(),
       lease_expires_at: null,
