@@ -290,6 +290,21 @@ const maximumDraftAttachments = 5;
 const supportedPhotoTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const cloudSpeechBlobCache = new Map<string, Blob>();
 const maximumCloudSpeechCacheEntries = 24;
+const interruptedBranchMessage =
+  'Branching was interrupted before Studio returned a result. Check Conversations for the new branch, then retry if it is not listed.';
+
+async function readBranchResponse(response: Response) {
+  const body = await response.text();
+  if (!body.trim()) throw new Error(interruptedBranchMessage);
+  try {
+    return JSON.parse(body) as { thread?: CodexThread; detail?: string };
+  } catch {
+    if (!response.ok && !body.trimStart().startsWith('<')) {
+      throw new Error(body.trim().slice(0, 240));
+    }
+    throw new Error(interruptedBranchMessage);
+  }
+}
 
 function cacheCloudSpeechBlob(key: string, blob: Blob) {
   cloudSpeechBlobCache.delete(key);
@@ -2882,7 +2897,7 @@ export function CodexFeedbackPanel({
           workspace: workspaceDirectory,
         }),
       });
-      const result = (await response.json()) as { thread?: CodexThread; detail?: string };
+      const result = await readBranchResponse(response);
       if (!response.ok || !result.thread?.id) {
         throw new Error(result.detail || 'The Codex conversation could not be branched.');
       }

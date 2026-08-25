@@ -416,6 +416,8 @@ const localNaturalCodexReadingPackageId = 'agent-package-local-v21-0-natural-cod
 const localFocusedCodexSettingsPackageId = 'agent-package-local-v21-1-focused-codex-settings';
 const localConciseCodexReadingPackageId = 'agent-package-local-v21-2-concise-codex-reading';
 const localDevelopmentReleaseUrlsPackageId = 'agent-package-local-v21-3-development-release-urls';
+const localResilientLiveCodexBranchingPackageId =
+  'agent-package-local-v21-4-resilient-live-codex-branching';
 
 type StoreName =
   | 'activities'
@@ -3322,10 +3324,28 @@ export class SiteforgeRepository {
         'Makes development and production destinations understandable while keeping every current production route untouched during rollout.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localResilientLiveCodexBranchingPackage: AgentPackage = {
+      ...localDevelopmentReleaseUrlsPackage,
+      id: localResilientLiveCodexBranchingPackageId,
+      version: 21.4,
+      basePackageId: localDevelopmentReleaseUrlsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v21.4',
+      contractAddendum:
+        'Authenticated live Studio branching allows enough time for a long Codex thread fork to complete, while an interrupted upstream response provides clear recovery guidance without claiming whether the fork completed.',
+      instructionsAddendum:
+        'Keep live Codex branch requests bound to the authenticated owner, exact conversation, and current workspace while allowing the protected fork operation to run through its longer bounded response window. Never claim success without a returned branch result. When the upstream response is interrupted, explain: Branching was interrupted before Studio returned a result. Check Conversations for the new branch, then retry if it is not listed.',
+      summary:
+        'Resilient live Codex branching test package: supports longer authenticated branch operations and gives interrupted responses clear check-before-retry guidance.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents valid long-running branches from timing out early and makes an uncertain interrupted response safe to verify before retrying.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localResilientLiveCodexBranchingPackage,
           localDevelopmentReleaseUrlsPackage,
           localConciseCodexReadingPackage,
           localFocusedCodexSettingsPackage,
@@ -3487,6 +3507,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localResilientLiveCodexBranchingPackage,
           localDevelopmentReleaseUrlsPackage,
           localConciseCodexReadingPackage,
           localFocusedCodexSettingsPackage,
@@ -3651,6 +3672,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localResilientLiveCodexBranchingPackage,
             localDevelopmentReleaseUrlsPackage,
             localConciseCodexReadingPackage,
             localFocusedCodexSettingsPackage,

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import test from 'node:test';
+import { createServer as createViteServer } from 'vite';
 import {
   createWorkspaceStudioToken,
   verifyWorkspaceStudioToken,
@@ -32,12 +33,13 @@ function close(server) {
   });
 }
 
-function httpRequest(port, path, headers = {}) {
+function httpRequest(port, path, headers = {}, { body = '', method = 'GET' } = {}) {
   return new Promise((resolve, reject) => {
     const pending = request(
       {
         headers,
         hostname: '127.0.0.1',
+        method,
         path,
         port,
       },
@@ -54,7 +56,7 @@ function httpRequest(port, path, headers = {}) {
       },
     );
     pending.once('error', reject);
-    pending.end();
+    pending.end(body);
   });
 }
 
@@ -204,6 +206,58 @@ test('Workspace Studio owns live Codex branch and phone-notification requests', 
   assert.match(JSON.parse(notificationResponse.body).publicKey, /^[A-Za-z0-9_-]{80,100}$/);
 });
 
+test('Workspace Vite intercepts Codex branches before the runtime fallback proxy', async () => {
+  let fallbackRequests = 0;
+  const fallback = createServer((_request, response) => {
+    fallbackRequests += 1;
+    response.writeHead(404, { 'Content-Length': '0' });
+    response.end();
+  });
+  const fallbackPort = await listen(fallback);
+  const runtimeDataDirectory = await mkdtemp(join(tmpdir(), 'made-solid-workspace-vite-'));
+  const previousEnvironment = {
+    SITEFORGE_RUNTIME_API_PROXY_ORIGIN: process.env.SITEFORGE_RUNTIME_API_PROXY_ORIGIN,
+    SITEFORGE_RUNTIME_DATA_DIR: process.env.SITEFORGE_RUNTIME_DATA_DIR,
+    SITEFORGE_STUDIO_WORKSPACE_DIR: process.env.SITEFORGE_STUDIO_WORKSPACE_DIR,
+    SITEFORGE_WORKSPACE_DEVELOPMENT: process.env.SITEFORGE_WORKSPACE_DEVELOPMENT,
+  };
+  process.env.SITEFORGE_RUNTIME_API_PROXY_ORIGIN = `http://127.0.0.1:${fallbackPort}`;
+  process.env.SITEFORGE_RUNTIME_DATA_DIR = runtimeDataDirectory;
+  process.env.SITEFORGE_STUDIO_WORKSPACE_DIR = new URL('../..', import.meta.url).pathname;
+  process.env.SITEFORGE_WORKSPACE_DEVELOPMENT = '1';
+  const vite = await createViteServer({
+    configFile: new URL('../../vite.config.ts', import.meta.url).pathname,
+    logLevel: 'silent',
+    mode: 'development',
+    server: { host: '127.0.0.1', port: 0, strictPort: false },
+  });
+
+  try {
+    await vite.listen();
+    const address = vite.httpServer?.address();
+    assert.ok(address && typeof address !== 'string');
+    const response = await fetch(`http://127.0.0.1:${address.port}/__made-solid/codex-branch`, {
+      body: JSON.stringify({ action: 'not-a-branch' }),
+      headers: {
+        'Content-Type': 'application/json',
+        'Sec-Fetch-Site': 'same-origin',
+      },
+      method: 'POST',
+    });
+    assert.equal(response.status, 400);
+    assert.match(response.headers.get('content-type') || '', /application\/json/);
+    assert.match((await response.json()).detail, /valid branch action/);
+    assert.equal(fallbackRequests, 0);
+  } finally {
+    await vite.close();
+    await close(fallback);
+    for (const [name, value] of Object.entries(previousEnvironment)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
 test('Workspace Studio gateway authenticates documents, assets, and the live-update transport', async () => {
   let upstreamHeaders;
   const upstream = createServer((incoming, response) => {
@@ -283,6 +337,62 @@ test('Workspace Studio gateway authenticates documents, assets, and the live-upd
   }
 });
 
+test('Workspace Studio gives native Codex branches time to preserve a long conversation', async () => {
+  const upstream = createServer((incoming, response) => {
+    if (incoming.url !== '/__made-solid/codex-branch') {
+      response.writeHead(404).end();
+      return;
+    }
+    setTimeout(() => {
+      response.writeHead(202, { 'Content-Type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({ status: 'ready', thread: { id: 'thread-fork-1' } }));
+    }, 80);
+  });
+  const upstreamPort = await listen(upstream);
+  const gateway = startWorkspaceStudioGateway({
+    codexBranchTimeoutMs: 500,
+    ownerUserId,
+    port: 0,
+    secret,
+    studioOrigin: 'https://studio.madesolid.com.au',
+    upstreamPort,
+    upstreamTimeoutMs: 20,
+    workspaceOrigin: 'https://workspace.madesolid.com.au',
+    workspaceOrigins: ['https://workspace.madesolid.com.au'],
+  });
+  await new Promise((resolve) => gateway.once('listening', resolve));
+  const gatewayPort = gateway.address().port;
+
+  try {
+    const token = createWorkspaceStudioToken(secret, ownerUserId, {
+      purpose: 'studio-development-session',
+    });
+    const branch = await httpRequest(
+      gatewayPort,
+      '/__made-solid/codex-branch',
+      {
+        accept: 'application/json',
+        cookie: `__Host-made-solid-studio-workspace=${encodeURIComponent(token)}`,
+        'content-type': 'application/json',
+        origin: 'https://workspace.madesolid.com.au',
+        'sec-fetch-site': 'same-origin',
+      },
+      {
+        body: JSON.stringify({
+          action: 'branch-thread',
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+        }),
+        method: 'POST',
+      },
+    );
+    assert.equal(branch.status, 202);
+    assert.equal(JSON.parse(branch.body).thread.id, 'thread-fork-1');
+  } finally {
+    await Promise.all([close(gateway), close(upstream)]);
+  }
+});
+
 test('Railway keeps production release serving separate from the restartable live checkout', async () => {
   const [launcher, viteConfiguration] = await Promise.all([
     readFile(new URL('../../scripts/start-railway-runtime', import.meta.url), 'utf8'),
@@ -308,6 +418,11 @@ test('Railway keeps production release serving separate from the restartable liv
   assert.match(developmentSupervisor, /SITEFORGE_PROSPECT_WORKSPACES_DIR=/);
   assert.match(developmentSupervisor, /MADE_SOLID_WEBSITE_DIRECTORY=/);
   assert.match(developmentSupervisor, /SITEFORGE_WORKSPACE_DEVELOPMENT=1/);
+  assert.match(developmentSupervisor, /--config "\$studio_workspace_directory\/vite\.config\.ts"/);
+  assert.doesNotMatch(
+    developmentSupervisor,
+    /--config "\$application_directory\/vite\.config\.ts"/,
+  );
   assert.match(developmentSupervisor, /--host 127\.0\.0\.1/);
   assert.match(developmentSupervisor, /--mode development/);
   assert.match(developmentSupervisor, /--force/);

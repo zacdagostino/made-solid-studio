@@ -274,6 +274,10 @@ const developmentReleaseUrlsMigrationUrl = new URL(
   '../../supabase/migrations/20260825190000_development_release_urls_test_package.sql',
   import.meta.url,
 );
+const resilientLiveCodexBranchingMigrationUrl = new URL(
+  '../../supabase/migrations/20260825200000_resilient_live_codex_branching_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -346,7 +350,7 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 85);
+  assert.equal(Number(revision[1]), 86);
   assert.match(app, /shows chats for that client plus clearly labelled universal Studio chats/);
   assert.match(app, /gives only the authenticated Studio owner a disclosed, reversible switch/);
   assert.match(app, /saved Natural or Literal interpretation and three speeds/);
@@ -358,7 +362,8 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   assert.match(app, /temporary read-only quick question/);
   assert.match(app, /appending the quote to the draft/);
   assert.match(app, /per-phone Web Push opt-in/);
-  assert.match(app, /without automatic promotion/);
+  assert.match(app, /longer fork operations/);
+  assert.match(app, /check Conversations and retry only when the new branch is absent/);
 });
 
 test('registers the restored Codex voice experience above immutable v20.2', async () => {
@@ -2219,7 +2224,7 @@ test('registers branchable Codex conversations above immutable v20.6', async () 
     existingLedgerUpgrade.indexOf('localBranchableCodexConversationsPackage,') <
       existingLedgerUpgrade.indexOf('localCodexPhoneNotificationsPackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.85`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.86`/);
   assert.match(service, /input\.action === 'branch-thread'/);
   assert.match(service, /codexBranchEndpoint/);
   assert.match(bridge, /client\.request\('thread\/fork'/);
@@ -2362,8 +2367,8 @@ test('registers concise Codex reading above immutable v21.1', async () => {
     existingLedgerUpgrade.indexOf('localConciseCodexReadingPackage,') <
       existingLedgerUpgrade.indexOf('localFocusedCodexSettingsPackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.85`/);
-  assert.match(app, /without automatic promotion/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.86`/);
+  assert.match(app, /check Conversations and retry only when the new branch is absent/);
   assert.match(speech, /condenseNaturalTechnicalHandoff/);
 });
 
@@ -2400,13 +2405,52 @@ test('registers development release URLs above immutable v21.2', async () => {
     fallbackLedger.indexOf('localDevelopmentReleaseUrlsPackage,') <
       fallbackLedger.indexOf('localConciseCodexReadingPackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.85`/);
-  assert.match(app, /Latest edit: Websites now separates Studio and Made Solid development/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.86`/);
+  assert.match(app, /longer fork operations/);
   assert.match(developmentPage, /Unreleased changes/);
   assert.match(developmentPage, /Saved feature versions/);
   assert.match(developmentPage, /Promote exact version/);
   assert.match(previewHost, /'\/test\/'/);
   assert.match(previewHost, /'\/build\/'/);
+});
+
+test('registers resilient live Codex branching above immutable v21.3', async () => {
+  const [migration, repository, app] = await Promise.all([
+    readFile(resilientLiveCodexBranchingMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+  ]);
+  assert.match(migration, /made-solid-studio-builder-agent-v21\.4/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v21\.3'/,
+  );
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /not exists/i);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(migration, /Resilient live Codex branching test package:/);
+  assert.match(migration, /Never claim success without a returned branch result/);
+  assert.match(migration, /Check Conversations for the new branch, then retry if it is not listed/);
+  assert.match(repository, /version: 21\.4,/);
+  assert.match(repository, /basePackageId: localDevelopmentReleaseUrlsPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localResilientLiveCodexBranchingPackage,') <
+      packageLedger.indexOf('localDevelopmentReleaseUrlsPackage,'),
+  );
+  const existingLedgerUpgrade = repository.slice(repository.indexOf('const missingPackages = ['));
+  assert.ok(
+    existingLedgerUpgrade.indexOf('localResilientLiveCodexBranchingPackage,') <
+      existingLedgerUpgrade.indexOf('localDevelopmentReleaseUrlsPackage,'),
+  );
+  const fallbackLedger = repository.slice(repository.indexOf('} catch {'));
+  assert.ok(
+    fallbackLedger.indexOf('localResilientLiveCodexBranchingPackage,') <
+      fallbackLedger.indexOf('localDevelopmentReleaseUrlsPackage,'),
+  );
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.86`/);
+  assert.match(app, /longer fork operations/);
+  assert.match(app, /check Conversations and retry only when the new branch is absent/);
 });
 
 test('ships one locally scoped Manifest V3 capture helper for Chrome and Brave', async () => {

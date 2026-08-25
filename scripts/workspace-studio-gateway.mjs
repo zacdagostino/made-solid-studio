@@ -12,6 +12,8 @@ import {
 
 const cookieName = '__Host-made-solid-studio-workspace';
 const sessionLifetimeMs = 8 * 60 * 60 * 1_000;
+const codexBranchPath = '/__made-solid/codex-branch';
+const codexBranchTimeoutMs = 120_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function requiredEnvironment(name, environment = process.env) {
@@ -207,6 +209,7 @@ function upstreamHeaders(request, configuration, requestOrigin = configuration.w
 }
 
 function proxyHttp(request, response, configuration, requestOrigin) {
+  const requestPath = new URL(request.url || '/', requestOrigin).pathname;
   const upstream = createProxyRequest(
     {
       headers: upstreamHeaders(request, configuration, requestOrigin),
@@ -231,7 +234,11 @@ function proxyHttp(request, response, configuration, requestOrigin) {
       upstreamResponse.pipe(response);
     },
   );
-  upstream.setTimeout(configuration.upstreamTimeoutMs ?? 8_000, () => {
+  const timeoutMs =
+    requestPath === codexBranchPath
+      ? (configuration.codexBranchTimeoutMs ?? codexBranchTimeoutMs)
+      : (configuration.upstreamTimeoutMs ?? 8_000);
+  upstream.setTimeout(timeoutMs, () => {
     upstream.destroy(new Error('Workspace Studio upstream timed out.'));
   });
   upstream.on('error', () => {

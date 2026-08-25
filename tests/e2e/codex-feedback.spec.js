@@ -4215,6 +4215,28 @@ test('keeps the original Codex chat selected when branching fails', async ({ pag
   );
 });
 
+test('explains an interrupted empty branch response without exposing a JSON parser error', async ({
+  page,
+}) => {
+  await page.route('**/__made-solid/codex-branch', async (route) => {
+    const request = route.request().postDataJSON();
+    if (request.action !== 'branch-thread') return route.fallback();
+    await route.fulfill({ status: 502, contentType: 'application/json', body: '' });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await composer.getByRole('button', { name: 'Branch chat from this reply' }).click();
+
+  await expect(composer.getByRole('alert')).toContainText(
+    'Branching was interrupted before Studio returned a result.',
+  );
+  await expect(composer.getByRole('alert')).not.toContainText('JSON');
+  await expect(composer.getByRole('button', { name: 'Conversation' })).toContainText(
+    'Open the Studio chat.',
+  );
+});
+
 test('keeps the model control usable at the compact 320px viewport', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop');
   await page.setViewportSize({ width: 320, height: 568 });

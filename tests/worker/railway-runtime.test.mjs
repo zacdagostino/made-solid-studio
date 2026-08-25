@@ -463,10 +463,10 @@ test('registers a single-volume Singapore Railway runtime with a health check', 
   assert.match(launcher, /exec env -i/);
   assert.match(launcher, /SITEFORGE_WORKSPACE_DEVELOPMENT=1/);
   assert.match(launcher, /SITEFORGE_RUNTIME_API_PROXY_ORIGIN="http:\/\/127\.0\.0\.1:\$port"/);
-  assert.doesNotMatch(launcher, /--config "\$studio_workspace_directory\/vite\.config\.ts"/);
+  assert.match(launcher, /--config "\$studio_workspace_directory\/vite\.config\.ts"/);
   assert.equal(
     (launcher.match(/--config "\$application_directory\/vite\.config\.ts"/g) || []).length,
-    2,
+    1,
   );
   assert.match(launcher, /--mode development/);
   assert.match(launcher, /--host 127\.0\.0\.1/);
