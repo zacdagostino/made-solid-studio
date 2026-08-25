@@ -44,6 +44,7 @@ test('restarts only the persisted approved active workspace on its recorded port
       port: 3002,
       sessionName: 'made-solid-lecegroup',
       status: 'restarted',
+      workspace: destination,
     });
     assert.deepEqual(commands, [
       ['tmux', ['kill-session', '-t', 'made-solid-lecegroup']],

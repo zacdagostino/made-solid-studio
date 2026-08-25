@@ -191,6 +191,7 @@ type Route =
   | { page: 'settings' }
   | { page: 'development' }
   | { page: 'codex' }
+  | { page: 'website-editor'; businessId: string }
   | { page: 'workspace-development-access'; returnPath: string }
   | { page: 'agent-studio'; section?: AgentStudioSection; businessId?: string }
   | { page: 'prospects'; businessId?: string; versionId?: string; tab?: WorkspaceTab };
@@ -248,6 +249,9 @@ function routeFromHash(hash: string): Route {
     };
   }
   const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+  if (parts[0] === 'website-editor' && parts[1]) {
+    return { page: 'website-editor', businessId: parts[1] };
+  }
   if (parts[0] === 'prospects') {
     return {
       page: 'prospects',
@@ -281,6 +285,7 @@ function hrefForRoute(route: Route) {
   if (route.page === 'settings') return '#/settings';
   if (route.page === 'development') return '#/development';
   if (route.page === 'codex') return '#/codex';
+  if (route.page === 'website-editor') return `#/website-editor/${route.businessId}`;
   if (route.page === 'data') return '#/data';
   if (route.page === 'usage') return `#/usage${route.builderRunId ? `/${route.builderRunId}` : ''}`;
   if (route.page === 'tax') return '#/tax';
@@ -319,7 +324,8 @@ function initialRoute() {
   const safeStoredHash =
     stored?.page === 'workspace-development-access'
       ? undefined
-      : isDevelopmentStudio() && stored?.page === 'prospects' && stored.businessId
+      : isDevelopmentStudio() &&
+          ((stored?.page === 'prospects' && stored.businessId) || stored?.page === 'website-editor')
         ? '#/prospects'
         : storedHash;
   const hash = window.location.hash || safeStoredHash || '#/today';
@@ -8909,9 +8915,9 @@ function BuilderRunPanel({
             title: 'Codex Workspace Agent and visual feedback',
             detail:
               'The Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy, available as both a persistent popup and a dedicated Studio page. It defaults to included ChatGPT subscription access and gives only the authenticated Studio owner a disclosed, reversible switch to separately billed OpenAI API credits for all Studio AI work when subscription allowance is exhausted. Production Studio stays on its exact reviewed release, while an authenticated dev.studio.madesolid.com.au visit opens the full Studio UI from the persistent editable checkout with immediate source updates; workspace.madesolid.com.au remains a compatibility entry during the staged migration. A client website editor remains a clean route inside that development Studio and shows chats for that client plus clearly labelled universal Studio chats, hides every other client, and starts new client chats with only that website repository available to edit. Reviewers can send text, images, or both, choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. While Codex is working, the primary Send control becomes a Stop Codex control that interrupts the selected supervisor and active attached agents without clearing the unsent draft. Stop follows the exact selected turn, disappears promptly on completion, and is a separate control from Send so a completion or server-version race cannot submit a stop click as a message. Model, Reasoning, and Agent team stay together in compact Run setup, while usage, billing, Fast, and voice preferences sit behind a separate Chat settings cog. A completed final Codex reply can branch into a separately selected conversation that preserves native context, clean prompts, image evidence, and the same client or universal workspace boundary while leaving the original chat unchanged. Voice reading offers saved Natural or Literal interpretation and three speeds, explicit preview and manual Read, opt-in chat-scoped auto-read, progressive private Google audio with device fallback, and a persistent read-along dock with active-word restart, exact seeking where available, five-second skipping, pause, resume, and stop. Natural reading says “then” for right-arrow icons and keeps a verification introduction while it skips its long technical results list. Selecting text inside one Codex reply offers a temporary read-only quick question, appending the quote to the draft, immediate sending without replacing that draft, or dismissal on both popup and page chat. An explicit per-phone Web Push opt-in sends generic private alerts only after a tracked Studio Codex supervisor turn completes successfully, including while Studio is closed. Studio source edits apply in place without restarting the workspace, and a compact top status announces the brief update while the current route, popup, draft, and conversation remain mounted. The launcher is present during startup checks, and a refresh restores the open selected conversation and its exact transcript reading position without changing the active prospect route. Exact-client preview capabilities stay private and out of the clean development URL. Observable activity and queue state appears without invented progress.',
-            revision: `v${selectedAgentPackage.version}.89`,
+            revision: `v${selectedAgentPackage.version}.90`,
             change:
-              'Latest edit: Stop now follows the exact active turn without send races, and one malformed saved conversation can no longer prevent another or new chat from opening.',
+              'Latest edit: website editing now opens a dedicated new-tab client editor with the live preview and client-scoped Codex together, while preview recovery accepts only the canonical checkout identity.',
           },
           {
             id: 'inbound-client-email-review',
@@ -17522,10 +17528,12 @@ function ClientDevelopmentEditor({
   directory,
   refreshKey,
   clientName,
+  focused = false,
 }: {
   directory: string;
   refreshKey: number;
   clientName: string;
+  focused?: boolean;
 }) {
   const [previewUrl, setPreviewUrl] = useState('');
   const [loadKey, setLoadKey] = useState(0);
@@ -17577,7 +17585,7 @@ function ClientDevelopmentEditor({
   return (
     <section
       aria-labelledby="client-development-editor-title"
-      className="client-development-editor"
+      className={`client-development-editor${focused ? ' client-development-editor--focused' : ''}`}
       data-testid="client-development-editor"
     >
       <header className="client-development-editor__header">
@@ -17600,10 +17608,12 @@ function ClientDevelopmentEditor({
           >
             <RotateCcw aria-hidden="true" size={17} />
           </IconButton>
-          <Button onClick={openCodexPanel} variant="secondary">
-            <Bot aria-hidden="true" size={17} />
-            Open client Codex
-          </Button>
+          {!focused ? (
+            <Button onClick={openCodexPanel} variant="secondary">
+              <Bot aria-hidden="true" size={17} />
+              Open client Codex
+            </Button>
+          ) : null}
         </div>
       </header>
       <div className="client-development-editor__scope" role="status">
@@ -17655,6 +17665,105 @@ function ClientDevelopmentEditor({
   );
 }
 
+function FocusedWebsiteEditor({ workspace }: { workspace: ProspectWorkspace }) {
+  const [mobileSurface, setMobileSurface] = useState<'preview' | 'codex'>('preview');
+  const [codexContainer, setCodexContainer] = useState<HTMLElement | null>(null);
+  const directory = editableWorkspaceDirectoryName(workspace);
+  const editingRoute = hrefForRoute({
+    page: 'prospects',
+    businessId: workspace.business.id,
+    tab: 'editing',
+  });
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    const previousScrollRestoration = window.history.scrollRestoration;
+    document.body.style.overflow = 'hidden';
+    window.history.scrollRestoration = 'manual';
+    const resetScroll = () => {
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+      window.scrollTo({ left: 0, top: 0 });
+    };
+    resetScroll();
+    const frame = window.requestAnimationFrame(resetScroll);
+    window.addEventListener('pageshow', resetScroll);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('pageshow', resetScroll);
+      document.body.style.overflow = previousOverflow;
+      window.history.scrollRestoration = previousScrollRestoration;
+    };
+  }, []);
+
+  return (
+    <main className="focused-website-editor" data-testid="focused-website-editor">
+      <header className="focused-website-editor__toolbar">
+        <div className="focused-website-editor__identity">
+          <ButtonLink href={editingRoute} size="small" variant="quiet">
+            <ArrowLeft aria-hidden="true" size={17} />
+            Back to Studio
+          </ButtonLink>
+          <span aria-hidden="true" className="focused-website-editor__divider" />
+          <div>
+            <h1>{workspace.business.name}</h1>
+            <small>Live website editor · client-scoped Codex</small>
+          </div>
+        </div>
+        <ButtonGroup
+          aria-label="Choose editor surface"
+          className="focused-website-editor__switcher"
+        >
+          <Button
+            aria-pressed={mobileSurface === 'preview'}
+            onClick={() => setMobileSurface('preview')}
+            size="small"
+            variant={mobileSurface === 'preview' ? 'primary' : 'secondary'}
+          >
+            <Laptop aria-hidden="true" size={17} />
+            Preview
+          </Button>
+          <Button
+            aria-pressed={mobileSurface === 'codex'}
+            onClick={() => setMobileSurface('codex')}
+            size="small"
+            variant={mobileSurface === 'codex' ? 'primary' : 'secondary'}
+          >
+            <Bot aria-hidden="true" size={17} />
+            Codex
+          </Button>
+        </ButtonGroup>
+      </header>
+      <div className="focused-website-editor__workspace">
+        <section
+          aria-label={`${workspace.business.name} website preview`}
+          className={`focused-website-editor__preview${mobileSurface === 'preview' ? ' is-active' : ''}`}
+        >
+          <ClientDevelopmentEditor
+            clientName={workspace.business.name}
+            directory={directory}
+            focused
+            refreshKey={0}
+          />
+        </section>
+        <section
+          aria-label={`${workspace.business.name} Codex chat`}
+          className={`focused-website-editor__codex${mobileSurface === 'codex' ? ' is-active' : ''}`}
+          ref={setCodexContainer}
+        >
+          {codexContainer ? (
+            <CodexFeedbackPanel
+              page
+              portalContainer={codexContainer}
+              workspaceDirectory={directory}
+            />
+          ) : null}
+        </section>
+      </div>
+    </main>
+  );
+}
+
 function WebsiteEditingPage({
   workspace,
   onPublish,
@@ -17672,7 +17781,6 @@ function WebsiteEditingPage({
     detail: '',
   });
   const [error, setError] = useState('');
-  const [editorRefreshKey, setEditorRefreshKey] = useState(0);
   const isRunning = progress.status === 'running';
   const canFinalise = state.status === 'changes_pending' || state.status === 'ready';
 
@@ -17767,11 +17875,25 @@ function WebsiteEditingPage({
         </ol>
       </section>
       {isDevelopmentStudio() ? (
-        <ClientDevelopmentEditor
-          clientName={workspace.business.name}
-          directory={editableWorkspaceDirectoryName(workspace)}
-          refreshKey={editorRefreshKey}
-        />
+        <section className="development-workspace-handoff" aria-labelledby="website-editor-title">
+          <div>
+            <Eyebrow>Development Workspace</Eyebrow>
+            <h2 id="website-editor-title">Open the full website editor</h2>
+            <p>
+              Work in a dedicated tab with the latest live website and this client’s Codex chat
+              together. Studio’s review and checkpoint controls stay here.
+            </p>
+          </div>
+          <ButtonLink
+            href={hrefForRoute({ page: 'website-editor', businessId: workspace.business.id })}
+            rel="noopener noreferrer"
+            target="_blank"
+            variant="primary"
+          >
+            <ExternalLink aria-hidden="true" size={17} />
+            Open website editor
+          </ButtonLink>
+        </section>
       ) : (
         <section
           className="development-workspace-handoff"
@@ -17785,7 +17907,14 @@ function WebsiteEditingPage({
               Workspace to see source changes immediately.
             </p>
           </div>
-          <ButtonLink href={workspaceEditorUrl(window.location.hash)} variant="primary">
+          <ButtonLink
+            href={workspaceEditorUrl(
+              hrefForRoute({ page: 'website-editor', businessId: workspace.business.id }),
+            )}
+            rel="noopener noreferrer"
+            target="_blank"
+            variant="primary"
+          >
             <Laptop aria-hidden="true" size={17} />
             Open in Development Workspace
           </ButtonLink>
@@ -17794,7 +17923,6 @@ function WebsiteEditingPage({
       <LocalDevelopmentPublicationPanel
         onCancel={onCancel}
         onPublish={onPublish}
-        onWorkspaceReady={() => setEditorRefreshKey((current) => current + 1)}
         workspace={workspace}
       />
       <Card className="workspace-panel final-edit" data-testid="final-edit-checkpoint">
@@ -20820,7 +20948,7 @@ function WorkspaceApp({
   }, [hasActiveAgentStudioBuild, refreshData, route.page]);
 
   const baseWorkspace =
-    route.page === 'prospects' && route.businessId
+    (route.page === 'prospects' || route.page === 'website-editor') && route.businessId
       ? workspaces.find((candidate) => candidate.business.id === route.businessId)
       : undefined;
   const workspace =
@@ -21897,7 +22025,9 @@ function WorkspaceApp({
   }
 
   const activePage: AppPage =
-    route.page === 'prospects' || route.page === 'workspace-development-access'
+    route.page === 'prospects' ||
+    route.page === 'website-editor' ||
+    route.page === 'workspace-development-access'
       ? 'prospects'
       : route.page;
 
@@ -21914,6 +22044,15 @@ function WorkspaceApp({
         onSignOut={onSignOut}
       />
     );
+  }
+
+  if (
+    !loadingPresentation &&
+    route.page === 'website-editor' &&
+    workspace &&
+    isDevelopmentStudio()
+  ) {
+    return <FocusedWebsiteEditor workspace={workspace} />;
   }
 
   return (
@@ -21983,6 +22122,8 @@ function WorkspaceApp({
           <BuilderSettingsPage />
         ) : route.page === 'development' ? (
           <DevelopmentPage />
+        ) : route.page === 'website-editor' ? (
+          <WorkspaceDevelopmentAccess returnPath={hrefForRoute(route)} />
         ) : route.page === 'codex' ? (
           <section aria-label="Codex chat page" className="codex-chat-page">
             <CodexFeedbackPanel page />
@@ -22123,7 +22264,7 @@ function WorkspaceApp({
           />
         )}
       </AppShell>
-      {route.page !== 'codex' ? (
+      {route.page !== 'codex' && route.page !== 'website-editor' ? (
         <CodexFeedbackPanel
           key={
             isDevelopmentStudio() &&

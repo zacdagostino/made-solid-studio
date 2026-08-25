@@ -294,6 +294,10 @@ const reliableCodexStopStateMigrationUrl = new URL(
   '../../supabase/migrations/20260825260000_reliable_codex_stop_state_test_package.sql',
   import.meta.url,
 );
+const dedicatedClientWebsiteEditorMigrationUrl = new URL(
+  '../../supabase/migrations/20260825270000_dedicated_client_website_editor_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -366,7 +370,9 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 89);
+  assert.equal(Number(revision[1]), 90);
+  assert.match(app, /dedicated new-tab client editor/);
+  assert.match(app, /canonical checkout identity/);
   assert.match(app, /shows chats for that client plus clearly labelled universal Studio chats/);
   assert.match(app, /gives only the authenticated Studio owner a disclosed, reversible switch/);
   assert.match(app, /saved Natural or Literal interpretation and three speeds/);
@@ -2240,7 +2246,7 @@ test('registers branchable Codex conversations above immutable v20.6', async () 
     existingLedgerUpgrade.indexOf('localBranchableCodexConversationsPackage,') <
       existingLedgerUpgrade.indexOf('localCodexPhoneNotificationsPackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.89`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.90`/);
   assert.match(service, /case 'branch-thread':/);
   assert.match(service, /codexBranchEndpoint/);
   assert.match(bridge, /client\.request\('thread\/fork'/);
@@ -2383,7 +2389,7 @@ test('registers concise Codex reading above immutable v21.1', async () => {
     existingLedgerUpgrade.indexOf('localConciseCodexReadingPackage,') <
       existingLedgerUpgrade.indexOf('localFocusedCodexSettingsPackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.89`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.90`/);
   assert.match(app, /Send control becomes a Stop Codex control/);
   assert.match(speech, /condenseNaturalTechnicalHandoff/);
 });
@@ -2421,7 +2427,7 @@ test('registers development release URLs above immutable v21.2', async () => {
     fallbackLedger.indexOf('localDevelopmentReleaseUrlsPackage,') <
       fallbackLedger.indexOf('localConciseCodexReadingPackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.89`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.90`/);
   assert.match(app, /Send control becomes a Stop Codex control/);
   assert.match(developmentPage, /Unreleased changes/);
   assert.match(developmentPage, /Saved feature versions/);
@@ -2464,7 +2470,7 @@ test('registers resilient live Codex branching above immutable v21.3', async () 
     fallbackLedger.indexOf('localResilientLiveCodexBranchingPackage,') <
       fallbackLedger.indexOf('localDevelopmentReleaseUrlsPackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.89`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.90`/);
   assert.match(app, /Send control becomes a Stop Codex control/);
   assert.match(app, /active attached agents/);
 });
@@ -2504,7 +2510,7 @@ test('registers stoppable Codex turns above immutable v21.4', async () => {
     fallbackLedger.indexOf('localStoppableCodexTurnsPackage,') <
       fallbackLedger.indexOf('localResilientLiveCodexBranchingPackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.89`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.90`/);
   assert.match(app, /Send control becomes a Stop Codex control/);
   assert.match(component, /action: 'stop-active-turn'/);
   assert.match(component, /label=.*[\s\S]*'Stop Codex'/);
@@ -2622,8 +2628,8 @@ test('registers reliable Codex Stop state above immutable v21.7', async () => {
     fallbackLedger.indexOf('localReliableCodexStopStatePackage,') <
       fallbackLedger.indexOf('localRevocableReadyClientReviewsPackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.89`/);
-  assert.match(app, /one malformed saved conversation can no longer prevent another or new chat/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.90`/);
+  assert.match(app, /dedicated new-tab client editor/);
   assert.match(component, /statusRequestSequenceRef/);
   assert.match(component, /key="stop-codex"/);
   assert.match(component, /key="send-codex"/);
@@ -2633,6 +2639,45 @@ test('registers reliable Codex Stop state above immutable v21.7', async () => {
   assert.match(bridge, /readThreadForStatus/);
   assert.match(service, /capabilities: \{ stopActiveTurn: true \}/);
   assert.match(service, /default:[\s\S]*Choose a valid Codex chat action/);
+});
+
+test('registers the dedicated client website editor above immutable v21.8', async () => {
+  const [migration, repository, app] = await Promise.all([
+    readFile(dedicatedClientWebsiteEditorMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+  ]);
+  assert.match(migration, /base\.organization_id,\s*21\.9,/);
+  assert.match(migration, /made-solid-studio-builder-agent-v21\.9/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v21\.8'/,
+  );
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /not exists/i);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.doesNotMatch(migration, /"visual-codex-feedback",/);
+  assert.match(migration, /Dedicated client website editor test package:/);
+  assert.match(repository, /version: 21\.9,/);
+  assert.match(repository, /basePackageId: localReliableCodexStopStatePackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localDedicatedClientWebsiteEditorPackage,') <
+      packageLedger.indexOf('localReliableCodexStopStatePackage,'),
+  );
+  const existingLedgerUpgrade = repository.slice(repository.indexOf('const missingPackages = ['));
+  assert.ok(
+    existingLedgerUpgrade.indexOf('localDedicatedClientWebsiteEditorPackage,') <
+      existingLedgerUpgrade.indexOf('localReliableCodexStopStatePackage,'),
+  );
+  const fallbackLedger = repository.slice(repository.indexOf('} catch {'));
+  assert.ok(
+    fallbackLedger.indexOf('localDedicatedClientWebsiteEditorPackage,') <
+      fallbackLedger.indexOf('localReliableCodexStopStatePackage,'),
+  );
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.90`/);
+  assert.match(app, /dedicated new-tab client editor/);
+  assert.match(app, /canonical checkout identity/);
 });
 
 test('ships one locally scoped Manifest V3 capture helper for Chrome and Brave', async () => {

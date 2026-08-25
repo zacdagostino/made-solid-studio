@@ -1123,10 +1123,12 @@ function loadCloudSpeechSegment(blob: Blob, signal: AbortSignal): Promise<CloudS
 export function CodexFeedbackPanel({
   embedded = false,
   page = false,
+  portalContainer,
   workspaceDirectory,
 }: {
   embedded?: boolean;
   page?: boolean;
+  portalContainer?: HTMLElement | null;
   workspaceDirectory?: string;
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -3655,7 +3657,7 @@ export function CodexFeedbackPanel({
         onOpenChange={(open) => !page && !open && closePanel()}
         open={page || phase === 'compose' || phase === 'sending-chat'}
       >
-        <Dialog.Portal>
+        <Dialog.Portal container={portalContainer}>
           {!page ? <Dialog.Overlay className="codex-feedback-overlay" /> : null}
           <Dialog.Content
             aria-describedby="codex-feedback-description"

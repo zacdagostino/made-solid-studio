@@ -39,7 +39,14 @@ async function openDevelopmentEditor(page) {
   await page.goto(`/${editingHash}`);
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
   await expect(page.locator('.development-surface-badge:visible')).toBeVisible();
-  await expect(page.getByTestId('client-development-editor')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open website editor' })).toBeVisible();
+}
+
+async function openFocusedEditor(page) {
+  await mockDevelopmentWorkspace(page);
+  await page.goto(`/#/website-editor/${businessId}`);
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+  await expect(page.getByTestId('focused-website-editor')).toBeVisible();
   await expect(
     page
       .frameLocator(`iframe[title="Demo Local Services live website preview"]`)
@@ -74,17 +81,15 @@ test('bare Workspace opens Studio without restoring a selected client', async ({
   }
 });
 
-test('keeps the exact client preview and Codex scope inside routed Workspace Studio', async ({
+test('opens the exact client preview and scoped Codex in a dedicated editor tab', async ({
   page,
 }, testInfo) => {
   await openDevelopmentEditor(page);
 
   await expect(page).toHaveURL(new RegExp(`${editingHash.replaceAll('/', '\\/')}$`));
-  await expect(
-    page.getByRole('heading', { name: 'Demo Local Services live website editor' }),
-  ).toBeVisible();
-  await expect(page.getByText('Editing only Demo Local Services')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Open client Codex' })).toBeVisible();
+  const editorLink = page.getByRole('link', { name: 'Open website editor' });
+  await expect(editorLink).toHaveAttribute('href', `#/website-editor/${businessId}`);
+  await expect(editorLink).toHaveAttribute('target', '_blank');
   await expect(page.getByRole('button', { name: 'All prospects' })).toBeVisible();
   if (testInfo.project.name === 'mobile') {
     await expect(
@@ -97,6 +102,17 @@ test('keeps the exact client preview and Codex scope inside routed Workspace Stu
     );
   }
 
+  await openFocusedEditor(page);
+  await expect(page).toHaveURL(new RegExp(`/#/website-editor/${businessId}$`));
+  await expect(
+    page.getByTestId('client-development-editor').getByText('Editing only Demo Local Services'),
+  ).toBeVisible();
+  if (testInfo.project.name === 'mobile') {
+    await expect(page.getByLabel('Demo Local Services Codex chat')).toBeHidden();
+  } else {
+    await expect(page.getByLabel('Demo Local Services Codex chat')).toBeVisible();
+  }
+
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   );
@@ -107,14 +123,16 @@ test('keeps the exact client preview and Codex scope inside routed Workspace Stu
   ).toEqual([]);
 
   await page.reload();
-  await expect(page).toHaveURL(new RegExp(`${editingHash.replaceAll('/', '\\/')}$`));
+  await expect(page).toHaveURL(new RegExp(`/#/website-editor/${businessId}$`));
   await expect(page.getByTestId('client-development-editor')).toBeVisible();
 
-  const editor = page.getByTestId('client-development-editor');
-  await editor.scrollIntoViewIfNeeded();
-  await expect(editor).toHaveScreenshot('workspace-development-client-editor.png');
+  const editor = page.getByTestId('focused-website-editor');
+  await expect(editor).toHaveScreenshot('workspace-development-focused-editor.png');
 
   if (testInfo.project.name === 'mobile') {
+    await page.getByRole('button', { name: 'Codex' }).click();
+    await expect(page.getByLabel('Demo Local Services Codex chat')).toBeVisible();
+    await page.getByRole('button', { name: 'Preview' }).click();
     await page.setViewportSize({ width: 320, height: 568 });
     await expect(editor).toBeVisible();
     expect(
@@ -122,7 +140,7 @@ test('keeps the exact client preview and Codex scope inside routed Workspace Stu
         () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
       ),
     ).toBe(true);
-    await expect(editor).toHaveScreenshot('workspace-development-client-editor-320.png');
+    await expect(editor).toHaveScreenshot('workspace-development-focused-editor-320.png');
   }
 });
 
@@ -133,8 +151,9 @@ test('production links the exact client route into Development Workspace', async
   const developmentLink = page.getByRole('link', { name: 'Open in Development Workspace' }).first();
   await expect(developmentLink).toHaveAttribute(
     'href',
-    `https://dev.studio.madesolid.com.au/?__made_solid_route=${encodeURIComponent(editingHash)}${editingHash}`,
+    `https://dev.studio.madesolid.com.au/?__made_solid_route=${encodeURIComponent(`#/website-editor/${businessId}`)}#/website-editor/${businessId}`,
   );
+  await expect(developmentLink).toHaveAttribute('target', '_blank');
   await expect(page.getByText('Development · Live source')).toHaveCount(0);
   await expect(page.getByTestId('client-development-editor')).toHaveCount(0);
 });

@@ -2,7 +2,7 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -36,6 +36,8 @@ export function activeWorkspaceDirectory(
 ) {
   if (!directoryPattern.test(directory || '')) return undefined;
   const candidates = [];
+  const studioWorkspace = environment.SITEFORGE_STUDIO_WORKSPACE_DIR?.trim();
+  if (studioWorkspace) candidates.push(resolve(studioWorkspace, 'prospect-workspaces', directory));
   for (const configuredPath of [
     environment.SITEFORGE_STUDIO_WORKSPACE_DIR,
     environment.MADE_SOLID_WEBSITE_DIRECTORY,
@@ -106,7 +108,9 @@ export async function restoreActiveWorkspacePreview({
   if (reservedPorts.has(active.port)) return { ...active, status: 'invalid' };
   const destination = activeWorkspaceDirectory(active.directory, environment, pathExists);
   if (!destination) return { ...active, status: 'rejected' };
-  if (await ready(active.port)) return { ...active, status: 'ready' };
+  if (active.workspace === destination && (await ready(active.port))) {
+    return { ...active, status: 'ready' };
+  }
   let packageDocument;
   try {
     packageDocument = JSON.parse(
@@ -141,7 +145,18 @@ export async function restoreActiveWorkspacePreview({
   await runCommand('tmux', ['set-option', '-t', sessionName, 'remain-on-exit', 'on']);
   for (let attempt = 0; attempt < 60; attempt += 1) {
     if (await ready(active.port)) {
-      return { ...active, sessionName, status: 'restarted' };
+      const source = JSON.parse(await readFileImplementation(activePreviewPath, 'utf8'));
+      const candidates = Array.isArray(source?.previews) ? source.previews : [source];
+      const previews = candidates.map((candidate) =>
+        candidate?.directory === active.directory &&
+        (candidate?.revision || 'working') === (active.revision || 'working')
+          ? { ...candidate, revision: active.revision || 'working', workspace: destination }
+          : candidate,
+      );
+      await writeFile(activePreviewPath, `${JSON.stringify({ version: 2, previews })}\n`, {
+        mode: 0o600,
+      });
+      return { ...active, workspace: destination, sessionName, status: 'restarted' };
     }
     await wait(500);
   }

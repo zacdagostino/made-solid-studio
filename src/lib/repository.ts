@@ -424,6 +424,8 @@ const localClientUrlReleaseContractPackageId =
 const localRevocableReadyClientReviewsPackageId =
   'agent-package-local-v21-7-revocable-ready-client-reviews';
 const localReliableCodexStopStatePackageId = 'agent-package-local-v21-8-reliable-codex-stop-state';
+const localDedicatedClientWebsiteEditorPackageId =
+  'agent-package-local-v21-9-dedicated-client-website-editor';
 
 type StoreName =
   | 'activities'
@@ -3415,10 +3417,28 @@ export class SiteforgeRepository {
         'Makes the familiar chat surface trustworthy across completion timing, agent-team history, overlapping polling, live Studio server updates, and one malformed saved conversation.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localDedicatedClientWebsiteEditorPackage: AgentPackage = {
+      ...localReliableCodexStopStatePackage,
+      id: localDedicatedClientWebsiteEditorPackageId,
+      version: 21.9,
+      basePackageId: localReliableCodexStopStatePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v21.9',
+      contractAddendum:
+        'Website editing opens a dedicated new-tab client editor scoped to one prospect, with the latest live website and that client’s Codex workspace visible together while review and checkpoint controls remain in Studio. A working preview is reusable only when its persisted workspace identity matches the canonical editable checkout selected by Studio; an older healthy process from another checkout must be replaced without deleting either source tree.',
+      instructionsAddendum:
+        'Open the client website editor in a separate tab and keep its preview, client identity, return route, and client-scoped Codex context together. Resolve refinement history, final-edit state, live launch, recovery, committed snapshots, and Codex against one canonical prospect checkout. Persist the resolved workspace identity with every active working preview, reject a healthy registry entry whose workspace identity does not match, and restart from the canonical checkout. Preserve dirty or alternate checkouts for human recovery; never reset, overwrite, delete, or silently promote them. Keep committed edit previews bound to their exact Git revision and require the normal verified checkpoint workflow before a later HEAD becomes a new committed edit version.',
+      summary:
+        'Dedicated client website editor test package: opens each client website with scoped Codex in a new tab and binds live preview recovery to the canonical checkout.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps focused client editing easy to understand while preventing a healthy but stale Railway process from serving a different checkout than Studio’s ledger and checkpoint controls.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localDedicatedClientWebsiteEditorPackage,
           localReliableCodexStopStatePackage,
           localRevocableReadyClientReviewsPackage,
           localClientUrlReleaseContractPackage,
@@ -3585,6 +3605,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localDedicatedClientWebsiteEditorPackage,
           localReliableCodexStopStatePackage,
           localRevocableReadyClientReviewsPackage,
           localClientUrlReleaseContractPackage,
@@ -3754,6 +3775,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localDedicatedClientWebsiteEditorPackage,
             localReliableCodexStopStatePackage,
             localRevocableReadyClientReviewsPackage,
             localClientUrlReleaseContractPackage,

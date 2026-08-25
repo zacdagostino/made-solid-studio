@@ -184,6 +184,8 @@ export function workspacePreviewWorkspace(
 ) {
   if (!directoryPattern.test(directory)) return undefined;
   const candidates = [];
+  const studioWorkspace = environment.SITEFORGE_STUDIO_WORKSPACE_DIR?.trim();
+  if (studioWorkspace) candidates.push(resolve(studioWorkspace, 'prospect-workspaces', directory));
   for (const configuredPath of [
     environment.SITEFORGE_STUDIO_WORKSPACE_DIR,
     environment.MADE_SOLID_WEBSITE_DIRECTORY,
@@ -198,6 +200,14 @@ export function workspacePreviewWorkspace(
     (candidate) =>
       pathExists(resolve(candidate, '.git')) && pathExists(resolve(candidate, 'package.json')),
   );
+}
+
+export function prospectWorkspacePath(directory, environment = process.env) {
+  if (!directoryPattern.test(directory)) return undefined;
+  const studioWorkspace = environment.SITEFORGE_STUDIO_WORKSPACE_DIR?.trim();
+  if (studioWorkspace) return resolve(studioWorkspace, 'prospect-workspaces', directory);
+  const prospectRoot = environment.SITEFORGE_PROSPECT_WORKSPACES_DIR?.trim();
+  return resolve(prospectRoot || 'prospect-workspaces', directory);
 }
 
 export function prospectCodexWorkspace(
@@ -294,7 +304,7 @@ export async function readRefinementLedger(directory) {
       entries: [],
     };
   }
-  const workspace = resolve('prospect-workspaces', directory);
+  const workspace = prospectWorkspacePath(directory);
   if (!existsSync(workspace)) {
     return {
       status: 'unavailable',
@@ -568,7 +578,7 @@ export async function readFinalEditState(directory) {
       detail: 'A valid local prospect workspace directory is required.',
     };
   }
-  const workspace = resolve('prospect-workspaces', directory);
+  const workspace = prospectWorkspacePath(directory);
   if (!existsSync(resolve(workspace, '.git'))) {
     return {
       status: 'unavailable',
@@ -943,6 +953,7 @@ async function launchWebsite({
       port,
       revision,
       startedAt: new Date().toISOString(),
+      workspace: resolve(destination),
     });
     process.env.SITEFORGE_ACTIVE_PREVIEW_DIRECTORY = directory;
   }
@@ -966,11 +977,11 @@ async function launchWebsite({
 }
 
 async function launchCommittedPreview({ directory, commit, request, writeEvent, finish }) {
-  const workspace = resolve('prospect-workspaces', directory);
+  const workspace = prospectWorkspacePath(directory);
   const version = editVersionHistory(workspace).find((candidate) => candidate.commit === commit);
   if (!version) throw new Error('Choose a committed Made Solid edit version from this workspace.');
   const shortCommit = commit.slice(0, 8);
-  const previewRoot = resolve('prospect-workspaces', '.made-solid-previews');
+  const previewRoot = resolve(workspace, '..', '.made-solid-previews');
   const destination = resolve(previewRoot, `${directory}-v${version.version}-${shortCommit}`);
   await mkdir(previewRoot, { recursive: true });
   if (!existsSync(destination)) {
@@ -1063,7 +1074,14 @@ export function localWorkspacePlugin() {
     const active = await activeWorkspacePreview(requestedDirectory, 'working').catch(
       () => undefined,
     );
-    if (active && (await websiteIsReady(active.port))) return active;
+    const canonicalWorkspace = workspacePreviewWorkspace(requestedDirectory);
+    if (
+      active &&
+      canonicalWorkspace &&
+      active.workspace === canonicalWorkspace &&
+      (await websiteIsReady(active.port))
+    )
+      return active;
     if (workspacePreviewRecoveryPromise) {
       await workspacePreviewRecoveryPromise.catch(() => undefined);
       return readyWorkspacePreview(request, requestedDirectory);
@@ -1813,9 +1831,8 @@ export function localWorkspacePlugin() {
       }
       const hasRepository = repositoryPattern.test(repository);
       const hasBuild = buildIdPattern.test(buildId) && directoryPattern.test(directory);
-      const hasLocalRepository =
-        directoryPattern.test(directory) &&
-        existsSync(resolve('prospect-workspaces', directory, '.git'));
+      const localRepository = workspacePreviewWorkspace(directory);
+      const hasLocalRepository = Boolean(localRepository);
       const opensRepository = hasRepository && (repositoryReady || hasLocalRepository);
       const exportsBuild = hasBuild && !opensRepository;
       if (!opensRepository && !exportsBuild) {
@@ -1848,7 +1865,7 @@ export function localWorkspacePlugin() {
       });
 
       const workspaceDirectory = directory || repository.split('/')[1];
-      const destination = resolve('prospect-workspaces', workspaceDirectory);
+      const destination = localRepository || prospectWorkspacePath(workspaceDirectory);
       const launch = () =>
         launchWebsite({
           destination,

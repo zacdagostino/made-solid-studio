@@ -10,6 +10,7 @@ import {
   ownedWebsiteDevelopmentEnvironment,
   previewUrl,
   prospectCodexWorkspace,
+  prospectWorkspacePath,
   readFinalEditState,
   readLearningBundle,
   readRefinementLedger,
@@ -108,7 +109,9 @@ test('exposes same-origin one-click workspace setup through the local Studio ser
   assert.match(source, /export-local-build\.mjs/);
   assert.match(source, /buildIdPattern\.test\(buildId\)/);
   assert.match(source, /directoryPattern\.test\(directory\)/);
-  assert.match(source, /existsSync\(resolve\('prospect-workspaces', directory, '\.git'\)\)/);
+  assert.match(source, /const localRepository = workspacePreviewWorkspace\(directory\)/);
+  assert.match(source, /active\.workspace === canonicalWorkspace/);
+  assert.match(source, /workspace: resolve\(destination\)/);
   assert.match(source, /'npm'/);
   assert.equal((source.match(/'--include=dev'/g) ?? []).length, 2);
   assert.match(source, /await run\('npm', \['ci', '--include=dev', '--no-audit', '--no-fund'\]/);
@@ -138,6 +141,8 @@ test('recovers workspace previews only from configured persistent repository roo
   const existing = new Set([
     '/data/workspaces/siteforge-os/.git',
     '/data/workspaces/siteforge-os/package.json',
+    '/data/workspaces/siteforge-os/prospect-workspaces/customer-site/.git',
+    '/data/workspaces/siteforge-os/prospect-workspaces/customer-site/package.json',
     '/data/prospect-workspaces/customer-site/.git',
     '/data/prospect-workspaces/customer-site/package.json',
   ]);
@@ -154,7 +159,11 @@ test('recovers workspace previews only from configured persistent repository roo
   );
   assert.equal(
     workspacePreviewWorkspace('customer-site', environment, pathExists),
-    '/data/prospect-workspaces/customer-site',
+    '/data/workspaces/siteforge-os/prospect-workspaces/customer-site',
+  );
+  assert.equal(
+    prospectWorkspacePath('customer-site', environment),
+    '/data/workspaces/siteforge-os/prospect-workspaces/customer-site',
   );
   assert.equal(workspacePreviewWorkspace('../siteforge-os', environment, pathExists), undefined);
   assert.equal(workspacePreviewWorkspace('missing-site', environment, pathExists), undefined);
