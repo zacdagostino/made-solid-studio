@@ -41,6 +41,7 @@ import {
   Volume2,
   Wrench,
   X,
+  Zap,
 } from 'lucide-react';
 import { captureVisiblePage, warmMobileScreenCapture } from '../lib/mobile-screen-capture';
 import {
@@ -232,6 +233,15 @@ type ConversationTransition = {
   kind: 'create' | 'switch';
   label: string;
 };
+type CodexExcerpt = { messageId: string; text: string };
+type TemporaryQuestion = {
+  answer?: string;
+  error?: string;
+  excerpt: string;
+  model?: string;
+  phase: 'compose' | 'loading' | 'answer';
+  question: string;
+};
 type Point = { x: number; y: number };
 type Selection = { start: Point; end: Point };
 type DraftAttachment = { id: string; name: string; source: string };
@@ -376,6 +386,20 @@ function writeCodexChatSession(session: CodexChatSession, workspaceDirectory?: s
   } catch {
     // Chat remains usable when browser storage is unavailable or full.
   }
+}
+
+function selectedNodeElement(node: Node | null) {
+  if (node instanceof Element) return node;
+  return node?.parentElement ?? null;
+}
+
+function quotedCodexExcerpt(text: string, instruction = 'Quoted from Codex:') {
+  const quote = text
+    .trim()
+    .split('\n')
+    .map((line) => `> ${line}`)
+    .join('\n');
+  return `${instruction}\n\n${quote}`;
 }
 
 function readCodexPreferences(): CodexPreferences {
@@ -1061,6 +1085,8 @@ export function CodexFeedbackPanel({
   const restoredChatThreadRef = useRef('');
   const chatSessionRef = useRef(initialChatSessionRef.current);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const temporaryQuestionTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const temporaryQuestionAbortRef = useRef<AbortController>();
   const photoInputRef = useRef<HTMLInputElement>(null);
   const chatFollowingLatestRef = useRef(true);
   const selectionImageRef = useRef<HTMLImageElement>(null);
@@ -1121,6 +1147,8 @@ export function CodexFeedbackPanel({
   const [selection, setSelection] = useState<Selection>();
   const [draftAttachments, setDraftAttachments] = useState<DraftAttachment[]>([]);
   const [prompt, setPrompt] = useState(() => readCodexDraft(workspaceDirectory));
+  const [selectedExcerpt, setSelectedExcerpt] = useState<CodexExcerpt>();
+  const [temporaryQuestion, setTemporaryQuestion] = useState<TemporaryQuestion>();
   const [error, setError] = useState<string>();
   const [browserCaptureAvailable, setBrowserCaptureAvailable] = useState(false);
   const [clock, setClock] = useState(() => Date.now());
@@ -2305,6 +2333,49 @@ export function CodexFeedbackPanel({
     else window.localStorage.removeItem(key);
   }, [prompt, workspaceDirectory]);
 
+  useEffect(() => {
+    if (!mountedChatLog || phase === 'closed') return;
+    const captureSelectedExcerpt = () => {
+      const browserSelection = window.getSelection();
+      const text = browserSelection?.toString().trim() ?? '';
+      if (!browserSelection || browserSelection.isCollapsed || !text) {
+        if (!document.activeElement?.closest('.codex-chat-excerpt-actions')) {
+          setSelectedExcerpt(undefined);
+        }
+        return;
+      }
+      const anchor = selectedNodeElement(browserSelection.anchorNode)?.closest<HTMLElement>(
+        '.codex-chat-message--assistant .markdown-content',
+      );
+      const focus = selectedNodeElement(browserSelection.focusNode)?.closest<HTMLElement>(
+        '.codex-chat-message--assistant .markdown-content',
+      );
+      if (!anchor || !focus) {
+        setSelectedExcerpt(undefined);
+        return;
+      }
+      const anchorMessage = anchor.closest<HTMLElement>('[data-message-id]');
+      const focusMessage = focus.closest<HTMLElement>('[data-message-id]');
+      if (
+        !anchorMessage ||
+        anchorMessage !== focusMessage ||
+        !mountedChatLog.contains(anchorMessage)
+      ) {
+        setSelectedExcerpt(undefined);
+        return;
+      }
+      const messageId = anchorMessage.dataset.messageId;
+      if (!messageId) return;
+      setSelectedExcerpt((current) =>
+        current?.messageId === messageId && current.text === text ? current : { messageId, text },
+      );
+    };
+    document.addEventListener('selectionchange', captureSelectedExcerpt);
+    return () => document.removeEventListener('selectionchange', captureSelectedExcerpt);
+  }, [mountedChatLog, phase]);
+
+  useEffect(() => setSelectedExcerpt(undefined), [selectedThreadId]);
+
   const displayedThreadId = selectedThreadId || status?.thread?.id || '';
   const pendingChatAccepted = Boolean(
     pendingChatMessage &&
@@ -2562,6 +2633,11 @@ export function CodexFeedbackPanel({
   const clientThreads = (status?.threads ?? []).filter((thread) => thread.scope === 'client');
   const universalThreads = (status?.threads ?? []).filter((thread) => thread.scope !== 'client');
   const selectedModel = availableModels.find((model) => model.id === selectedModelId);
+  const temporaryQuestionModel =
+    availableModels.find((model) => /(?:^|[-_.])luna(?:$|[-_.])/i.test(model.id)) ??
+    selectedModel ??
+    availableModels.find((model) => model.isDefault) ??
+    availableModels[0];
   const fastModeAvailable =
     selectedModel?.serviceTiers?.some((tier) => tier.id === 'priority') === true;
   const selectedServiceTier = fastMode && fastModeAvailable ? 'priority' : 'default';
@@ -3151,8 +3227,15 @@ export function CodexFeedbackPanel({
     }
   };
 
-  const sendFeedback = async () => {
-    if (!prompt.trim() && draftAttachments.length === 0) {
+  const sendFeedback = async (submission?: {
+    prompt: string;
+    attachments?: DraftAttachment[];
+    preserveDraft?: boolean;
+  }) => {
+    const submittedPrompt = (submission?.prompt ?? prompt).trim();
+    const submittedAttachments = submission?.attachments ?? [...draftAttachments];
+    const preserveDraft = submission?.preserveDraft === true;
+    if (!submittedPrompt && submittedAttachments.length === 0) {
       setError('Describe what Codex should change or investigate, or attach an image.');
       return;
     }
@@ -3160,8 +3243,6 @@ export function CodexFeedbackPanel({
       setError('Choose an available Codex model and reasoning level.');
       return;
     }
-    const submittedPrompt = prompt.trim();
-    const submittedAttachments = [...draftAttachments];
     const submittedThreadId = selectedThreadId || status?.thread?.id || '';
     const optimisticMessageId = crypto.randomUUID();
     if (!submittedAttachments.length) {
@@ -3178,9 +3259,11 @@ export function CodexFeedbackPanel({
         threadId: submittedThreadId,
       });
     }
-    setPrompt('');
-    setDraftAttachments([]);
-    setIsComposerExpanded(false);
+    if (!preserveDraft) {
+      setPrompt('');
+      setDraftAttachments([]);
+      setIsComposerExpanded(false);
+    }
     setPhase('sending-chat');
     setError(undefined);
     window.requestAnimationFrame(scrollChatToLatest);
@@ -3218,12 +3301,138 @@ export function CodexFeedbackPanel({
     } catch (cause) {
       setPendingChatMessage(undefined);
       setPendingVisualMessage(undefined);
-      setPrompt(submittedPrompt);
-      setDraftAttachments(submittedAttachments);
-      setIsComposerExpanded(true);
+      if (!preserveDraft) {
+        setPrompt(submittedPrompt);
+        setDraftAttachments(submittedAttachments);
+        setIsComposerExpanded(true);
+      }
       setPhase('compose');
       setError(cause instanceof Error ? cause.message : 'Codex could not accept this feedback.');
-      window.requestAnimationFrame(() => composerTextareaRef.current?.focus());
+      if (!preserveDraft) window.requestAnimationFrame(() => composerTextareaRef.current?.focus());
+    }
+  };
+
+  const clearSelectedExcerpt = () => {
+    setSelectedExcerpt(undefined);
+    window.getSelection()?.removeAllRanges();
+  };
+
+  const appendSelectedExcerpt = () => {
+    if (!selectedExcerpt) return;
+    const excerpt = quotedCodexExcerpt(selectedExcerpt.text);
+    const nextPrompt = prompt.trimEnd()
+      ? `${prompt.trimEnd()}\n\n${excerpt}\n\n`
+      : `${excerpt}\n\n`;
+    if (nextPrompt.length > 4_000) {
+      setError('That excerpt will not fit in this draft. Shorten the selection and try again.');
+      return;
+    }
+    setPrompt(nextPrompt);
+    setError(undefined);
+    setIsComposerExpanded(true);
+    clearSelectedExcerpt();
+    window.requestAnimationFrame(() => {
+      const textarea = composerTextareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(nextPrompt.length, nextPrompt.length);
+    });
+  };
+
+  const sendSelectedExcerpt = () => {
+    if (!selectedExcerpt) return;
+    const excerpt = quotedCodexExcerpt(
+      selectedExcerpt.text,
+      'Please respond to this Codex excerpt:',
+    );
+    if (excerpt.length > 4_000) {
+      setError('That excerpt is too long to send. Shorten the selection and try again.');
+      return;
+    }
+    clearSelectedExcerpt();
+    void sendFeedback({ prompt: excerpt, attachments: [], preserveDraft: true });
+  };
+
+  const openTemporaryQuestion = () => {
+    if (!selectedExcerpt) return;
+    if (selectedExcerpt.text.length > 3_000) {
+      setError('Select a shorter excerpt for a quick question.');
+      return;
+    }
+    setTemporaryQuestion({
+      excerpt: selectedExcerpt.text,
+      phase: 'compose',
+      question: '',
+    });
+    clearSelectedExcerpt();
+    window.requestAnimationFrame(() => temporaryQuestionTextareaRef.current?.focus());
+  };
+
+  const closeTemporaryQuestion = () => {
+    temporaryQuestionAbortRef.current?.abort();
+    temporaryQuestionAbortRef.current = undefined;
+    setTemporaryQuestion(undefined);
+  };
+
+  const askTemporaryQuestion = async () => {
+    if (!temporaryQuestion?.question.trim() || !temporaryQuestionModel) return;
+    const controller = new AbortController();
+    temporaryQuestionAbortRef.current?.abort();
+    temporaryQuestionAbortRef.current = controller;
+    setTemporaryQuestion((current) =>
+      current ? { ...current, error: undefined, phase: 'loading' } : current,
+    );
+    try {
+      const response = await studioRuntimeFetch(feedbackEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          action: 'temporary-question',
+          excerpt: temporaryQuestion.excerpt,
+          question: temporaryQuestion.question.trim(),
+          model: temporaryQuestionModel.id,
+          threadScope: selectedThread?.scope || (workspaceDirectory ? 'client' : 'universal'),
+          workspace: workspaceDirectory,
+        }),
+        signal: controller.signal,
+      });
+      const result = (await response.json()) as {
+        answer?: string;
+        detail?: string;
+        model?: string;
+      };
+      if (!response.ok || !result.answer) {
+        throw new Error(result.detail || 'Codex could not answer that temporary question.');
+      }
+      setTemporaryQuestion((current) =>
+        current
+          ? {
+              ...current,
+              answer: result.answer,
+              error: undefined,
+              model: result.model,
+              phase: 'answer',
+            }
+          : current,
+      );
+    } catch (cause) {
+      if (controller.signal.aborted) return;
+      setTemporaryQuestion((current) =>
+        current
+          ? {
+              ...current,
+              error:
+                cause instanceof Error
+                  ? cause.message
+                  : 'Codex could not answer that temporary question.',
+              phase: 'compose',
+            }
+          : current,
+      );
+    } finally {
+      if (temporaryQuestionAbortRef.current === controller) {
+        temporaryQuestionAbortRef.current = undefined;
+      }
     }
   };
 
@@ -3807,6 +4016,68 @@ export function CodexFeedbackPanel({
                                 >
                                   {message.text}
                                 </MarkdownContent>
+                                {message.role === 'assistant' &&
+                                selectedExcerpt?.messageId === message.id ? (
+                                  <aside
+                                    aria-label="Selected Codex excerpt"
+                                    className="codex-chat-excerpt-actions"
+                                  >
+                                    <span className="codex-chat-excerpt-actions__copy">
+                                      <strong>Use selected text</strong>
+                                      <small title={selectedExcerpt.text}>
+                                        {selectedExcerpt.text}
+                                      </small>
+                                    </span>
+                                    <ButtonGroup className="codex-chat-excerpt-actions__buttons">
+                                      <Button
+                                        disabled={
+                                          phase === 'sending-chat' ||
+                                          Boolean(conversationTransition) ||
+                                          !temporaryQuestionModel
+                                        }
+                                        onClick={openTemporaryQuestion}
+                                        size="small"
+                                        variant="quiet"
+                                      >
+                                        <Zap aria-hidden="true" size={15} />
+                                        Quick question
+                                      </Button>
+                                      <Button
+                                        disabled={
+                                          phase === 'sending-chat' ||
+                                          Boolean(conversationTransition)
+                                        }
+                                        onClick={appendSelectedExcerpt}
+                                        size="small"
+                                        variant="secondary"
+                                      >
+                                        <Plus aria-hidden="true" size={15} />
+                                        Add to prompt
+                                      </Button>
+                                      <Button
+                                        disabled={
+                                          phase === 'sending-chat' ||
+                                          Boolean(conversationTransition) ||
+                                          !status?.thread ||
+                                          !selectedModel
+                                        }
+                                        onClick={sendSelectedExcerpt}
+                                        size="small"
+                                        variant="primary"
+                                      >
+                                        <Send aria-hidden="true" size={15} />
+                                        Send now
+                                      </Button>
+                                    </ButtonGroup>
+                                    <IconButton
+                                      label="Dismiss selected excerpt"
+                                      onClick={clearSelectedExcerpt}
+                                      variant="quiet"
+                                    >
+                                      <X aria-hidden="true" size={16} />
+                                    </IconButton>
+                                  </aside>
+                                ) : null}
                                 <RuntimeAttachmentGallery
                                   attachmentIds={
                                     message.attachmentIds ??
@@ -4699,6 +4970,167 @@ export function CodexFeedbackPanel({
                 Add selection to message
               </Button>
             </ButtonGroup>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root
+        onOpenChange={(open) => {
+          if (!open) closeTemporaryQuestion();
+        }}
+        open={Boolean(temporaryQuestion)}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="codex-quick-question-overlay" />
+          <Dialog.Content
+            aria-describedby="codex-quick-question-description"
+            className="codex-quick-question-dialog"
+            onOpenAutoFocus={(event) => {
+              event.preventDefault();
+              window.requestAnimationFrame(() => temporaryQuestionTextareaRef.current?.focus());
+            }}
+          >
+            <header className="codex-quick-question-dialog__header">
+              <span aria-hidden="true" className="codex-quick-question-dialog__icon">
+                <Zap size={18} />
+              </span>
+              <span>
+                <Dialog.Title>Quick question</Dialog.Title>
+                <Dialog.Description id="codex-quick-question-description">
+                  Temporary answer · not added to this conversation
+                </Dialog.Description>
+              </span>
+              <Dialog.Close asChild>
+                <IconButton label="Close temporary question" variant="quiet">
+                  <X aria-hidden="true" size={17} />
+                </IconButton>
+              </Dialog.Close>
+            </header>
+
+            {temporaryQuestion ? (
+              <>
+                <blockquote className="codex-quick-question-dialog__excerpt">
+                  <small>Selected Codex excerpt</small>
+                  <p>{temporaryQuestion.excerpt}</p>
+                </blockquote>
+
+                <div aria-atomic="true" aria-live="polite">
+                  {temporaryQuestion.phase === 'answer' && temporaryQuestion.answer ? (
+                    <section
+                      aria-labelledby="codex-quick-answer-title"
+                      className="codex-quick-question-dialog__answer"
+                    >
+                      <header>
+                        <span>
+                          <small>Temporary response</small>
+                          <strong id="codex-quick-answer-title">Quick answer</strong>
+                        </span>
+                        <CircleCheck aria-hidden="true" size={18} />
+                      </header>
+                      <MarkdownContent>{temporaryQuestion.answer}</MarkdownContent>
+                      <small>
+                        {temporaryQuestion.model
+                          ? `${temporaryQuestion.model} · discarded when closed`
+                          : 'Discarded when closed'}
+                      </small>
+                    </section>
+                  ) : null}
+
+                  {temporaryQuestion.phase === 'loading' ? (
+                    <div className="codex-quick-question-dialog__loading" role="status">
+                      <LoaderCircle aria-hidden="true" className="is-spinning" size={18} />
+                      <span>
+                        <strong>Answering from this excerpt</strong>
+                        <small>No files or conversation history are being changed.</small>
+                      </span>
+                    </div>
+                  ) : null}
+                </div>
+
+                {temporaryQuestion.phase !== 'answer' ? (
+                  <label className="codex-quick-question-dialog__prompt">
+                    <span>What do you want to know?</span>
+                    <textarea
+                      disabled={temporaryQuestion.phase === 'loading'}
+                      maxLength={800}
+                      onChange={(event) =>
+                        setTemporaryQuestion((current) =>
+                          current
+                            ? { ...current, error: undefined, question: event.target.value }
+                            : current,
+                        )
+                      }
+                      onKeyDown={(event) => {
+                        if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                          event.preventDefault();
+                          void askTemporaryQuestion();
+                        }
+                      }}
+                      placeholder="Ask about this excerpt…"
+                      ref={temporaryQuestionTextareaRef}
+                      rows={3}
+                      value={temporaryQuestion.question}
+                    />
+                  </label>
+                ) : null}
+
+                {temporaryQuestion.error ? (
+                  <p className="codex-feedback-error" role="alert">
+                    <CircleAlert aria-hidden="true" size={18} />
+                    {temporaryQuestion.error}
+                  </p>
+                ) : null}
+
+                <footer className="codex-quick-question-dialog__actions">
+                  {temporaryQuestion.phase === 'answer' ? (
+                    <Button
+                      onClick={() => {
+                        setTemporaryQuestion((current) =>
+                          current
+                            ? {
+                                ...current,
+                                answer: undefined,
+                                error: undefined,
+                                phase: 'compose',
+                                question: '',
+                              }
+                            : current,
+                        );
+                        window.requestAnimationFrame(() =>
+                          temporaryQuestionTextareaRef.current?.focus(),
+                        );
+                      }}
+                      variant="secondary"
+                    >
+                      Ask another
+                    </Button>
+                  ) : (
+                    <Button onClick={closeTemporaryQuestion} variant="secondary">
+                      Cancel
+                    </Button>
+                  )}
+                  {temporaryQuestion.phase === 'answer' ? (
+                    <Button onClick={closeTemporaryQuestion}>Done</Button>
+                  ) : (
+                    <Button
+                      disabled={
+                        temporaryQuestion.phase === 'loading' ||
+                        !temporaryQuestion.question.trim() ||
+                        !temporaryQuestionModel
+                      }
+                      onClick={() => void askTemporaryQuestion()}
+                    >
+                      {temporaryQuestion.phase === 'loading' ? (
+                        <LoaderCircle aria-hidden="true" className="is-spinning" size={18} />
+                      ) : (
+                        <Zap aria-hidden="true" size={17} />
+                      )}
+                      {temporaryQuestion.phase === 'loading' ? 'Answering' : 'Ask quickly'}
+                    </Button>
+                  )}
+                </footer>
+              </>
+            ) : null}
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>

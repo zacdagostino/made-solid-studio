@@ -20,6 +20,40 @@ async function openChatSettings(composer) {
   await expect(composer.getByRole('group', { name: 'Chat settings' })).toBeVisible();
 }
 
+async function selectRenderedText(locator, selectedText) {
+  await locator.evaluate((element, text) => {
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    const textNodes = [];
+    let renderedText = '';
+    let node = walker.nextNode();
+    while (node) {
+      textNodes.push({ node, start: renderedText.length, text: node.textContent ?? '' });
+      renderedText += node.textContent ?? '';
+      node = walker.nextNode();
+    }
+    const selectionStart = renderedText.indexOf(text);
+    if (selectionStart < 0) throw new Error(`Could not select rendered text: ${text}`);
+    const selectionEnd = selectionStart + text.length;
+    const startNode = textNodes.find(
+      (candidate) =>
+        selectionStart >= candidate.start &&
+        selectionStart <= candidate.start + candidate.text.length,
+    );
+    const endNode = textNodes.find(
+      (candidate) =>
+        selectionEnd >= candidate.start && selectionEnd <= candidate.start + candidate.text.length,
+    );
+    if (!startNode || !endNode) throw new Error(`Could not map rendered text: ${text}`);
+    const range = document.createRange();
+    range.setStart(startNode.node, selectionStart - startNode.start);
+    range.setEnd(endNode.node, selectionEnd - endNode.start);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  }, selectedText);
+}
+
 async function enableGoogleSpeech(page, onSpeechRequest = () => {}) {
   await page.route('**/__made-solid/codex-speech', async (route) => {
     if (route.request().method() === 'GET') {
@@ -911,6 +945,56 @@ test('sends a text-only chat message to the selected Codex model', async ({ page
   expect(delivered.workMode).toBe('team');
   expect(delivered.prompt).toContain('Review the current implementation');
   expect(delivered).not.toHaveProperty('screenshot');
+});
+
+test('adds selected Codex output to the draft or sends the excerpt immediately', async ({
+  page,
+}) => {
+  const delivered = [];
+  await page.route('**/__made-solid/codex-feedback', async (route) => {
+    delivered.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({ status: 'queued', id: `excerpt-${delivered.length}` }),
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const chat = page.getByRole('dialog', { name: 'Codex', exact: true });
+  const reply = chat.locator('.codex-chat-message--assistant', {
+    hasText: 'Studio chat is connected.',
+  });
+
+  await selectRenderedText(reply.locator('.markdown-content'), 'Studio chat');
+  const excerptActions = chat.getByLabel('Selected Codex excerpt');
+  await expect(excerptActions).toBeVisible();
+  await expect(excerptActions.getByText('Studio chat', { exact: true })).toBeVisible();
+  expect(await chat.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  for (const actionName of ['Add to prompt', 'Send now', 'Dismiss selected excerpt']) {
+    const bounds = await excerptActions.getByRole('button', { name: actionName }).boundingBox();
+    expect(bounds?.height).toBeGreaterThanOrEqual(44);
+  }
+  const accessibility = await new AxeBuilder({ page })
+    .include('.codex-chat-excerpt-actions')
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+
+  await excerptActions.getByRole('button', { name: 'Add to prompt' }).click();
+  await expect(chat.getByLabel('Message to Codex')).toHaveValue(
+    'Quoted from Codex:\n\n> Studio chat\n\n',
+  );
+  await expect(chat.getByLabel('Message to Codex')).toBeFocused();
+  expect(delivered).toHaveLength(0);
+
+  await selectRenderedText(reply.locator('.markdown-content'), 'is connected');
+  await chat.getByLabel('Selected Codex excerpt').getByRole('button', { name: 'Send now' }).click();
+  await expect.poll(() => delivered.length).toBe(1);
+  expect(delivered[0].prompt).toBe('Please respond to this Codex excerpt:\n\n> is connected');
+  await expect(chat.getByLabel('Message to Codex')).toHaveValue(
+    'Quoted from Codex:\n\n> Studio chat\n\n',
+  );
 });
 
 test('restores a message to the composer when optimistic delivery fails', async ({ page }) => {

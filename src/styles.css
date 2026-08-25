@@ -1330,6 +1330,244 @@ html[data-codex-panel='embedded'] body #root {
   color: #11140a;
   background: #d8ef24;
 }
+.codex-chat-excerpt-actions {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid #66752c;
+  border-radius: 10px;
+  background: #292e1d;
+  box-shadow: 0 10px 24px rgb(0 0 0 / 0.28);
+}
+.codex-chat-excerpt-actions__copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.codex-chat-excerpt-actions__copy strong {
+  color: #edf4c8;
+  font-size: 0.72rem;
+}
+.codex-chat-excerpt-actions__copy small {
+  overflow: hidden;
+  color: #bdc69a;
+  font-size: 0.66rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.codex-chat-excerpt-actions__buttons {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.codex-chat-dialog .codex-chat-excerpt-actions__buttons .button {
+  width: 100%;
+  min-height: 45px;
+  white-space: nowrap;
+}
+.codex-chat-dialog .codex-chat-excerpt-actions__buttons .button--quiet {
+  border-color: #68742f;
+  color: #e4edbd;
+  background: #33391f;
+}
+.codex-chat-dialog .codex-chat-excerpt-actions__buttons .button--quiet:hover:not(:disabled) {
+  border-color: #93a53a;
+  color: #f5f8e7;
+  background: #424a25;
+}
+.codex-chat-dialog .codex-chat-excerpt-actions > .button--icon {
+  width: 44px;
+  min-height: 45px;
+  color: #d3d8c1;
+}
+.codex-quick-question-overlay {
+  position: fixed;
+  z-index: 110;
+  inset: 0;
+  background: rgb(0 0 0 / 0.66);
+  backdrop-filter: blur(3px);
+}
+.codex-quick-question-dialog {
+  --codex-text: #171a12;
+  --codex-muted: #515946;
+  position: fixed;
+  z-index: 111;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: min(calc(100vw - 24px), 30rem);
+  max-height: min(calc(100dvh - 24px), 44rem);
+  gap: var(--space-3);
+  padding: var(--space-3);
+  overflow-y: auto;
+  border: 1px solid #99aa2f;
+  border-radius: 16px;
+  color: var(--codex-text);
+  background: #f1f2eb;
+  box-shadow: 0 24px 64px rgb(0 0 0 / 0.62);
+  transform: translate(-50%, -50%);
+  color-scheme: light;
+}
+.codex-quick-question-dialog__header {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 36px minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: var(--space-2);
+}
+.codex-quick-question-dialog__header > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.codex-quick-question-dialog__header h2,
+.codex-quick-question-dialog__header p {
+  margin: 0;
+}
+.codex-quick-question-dialog__header h2 {
+  color: #171a12 !important;
+  -webkit-text-fill-color: #171a12;
+  font-size: 1rem;
+}
+.codex-quick-question-dialog__header p {
+  color: #526039;
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+.codex-quick-question-dialog__icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  color: #181a0c;
+  background: #d8ef24;
+  place-items: center;
+}
+.codex-quick-question-dialog__header .button--icon {
+  width: 44px;
+  min-height: 44px;
+  color: var(--codex-muted) !important;
+}
+.codex-quick-question-dialog__excerpt {
+  display: grid;
+  max-height: 9rem;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  overflow-y: auto;
+  border-left: 3px solid #aebe35;
+  border-radius: 0 9px 9px 0;
+  color: #262b1d;
+  background: #e3e6da;
+}
+.codex-quick-question-dialog__excerpt small {
+  color: #59633d;
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+.codex-quick-question-dialog__excerpt p {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.codex-quick-question-dialog__prompt {
+  display: grid;
+  gap: var(--space-1);
+}
+.codex-quick-question-dialog__prompt > span {
+  color: #343a28;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.codex-quick-question-dialog__prompt textarea {
+  width: 100%;
+  min-height: 104px;
+  padding: var(--space-3);
+  border: 1px solid #919781;
+  border-radius: 11px;
+  color: var(--codex-text);
+  background: #fff;
+  font: inherit;
+  line-height: 1.45;
+  resize: vertical;
+}
+.codex-quick-question-dialog__prompt textarea::placeholder {
+  color: #68705c;
+}
+.codex-quick-question-dialog__prompt textarea:focus-visible {
+  border-color: #afc137;
+  outline: 2px solid #e7ff1f;
+  outline-offset: 2px;
+}
+.codex-quick-question-dialog__loading {
+  display: flex;
+  min-height: 64px;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid #9da77d;
+  border-radius: 10px;
+  color: #252a1c;
+  background: #e5e9d9;
+}
+.codex-quick-question-dialog__loading > span {
+  display: grid;
+  gap: 2px;
+}
+.codex-quick-question-dialog__loading small {
+  color: #59633d;
+  font-size: 0.68rem;
+}
+.codex-quick-question-dialog__answer {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid #626c32;
+  border-radius: 12px;
+  background: #e4e9d6;
+}
+.codex-quick-question-dialog__answer > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  color: #53600d;
+}
+.codex-quick-question-dialog__answer > header > span {
+  display: grid;
+  gap: 1px;
+}
+.codex-quick-question-dialog__answer > header small,
+.codex-quick-question-dialog__answer > small {
+  color: #59633d;
+  font-size: 0.66rem;
+}
+.codex-quick-question-dialog__answer .markdown-content {
+  color: #202519;
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+.codex-quick-question-dialog__answer .markdown-content p,
+.codex-quick-question-dialog__answer .markdown-content li {
+  color: #202519 !important;
+  -webkit-text-fill-color: #202519;
+}
+.codex-quick-question-dialog__actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+.codex-quick-question-dialog__actions .button {
+  width: 100%;
+  min-height: 44px;
+}
 .markdown-content :is(p, ul, ol, blockquote, h3, h4, h5, h6) {
   margin-block: 0;
 }
@@ -2570,6 +2808,12 @@ html[data-codex-panel='embedded'] body #root {
   .codex-feedback-selection-stage img {
     max-width: calc(100vw - 24px);
     max-height: calc(100dvh - 240px);
+  }
+  .codex-chat-excerpt-actions__buttons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .codex-chat-excerpt-actions__buttons .button:first-child {
+    grid-column: 1 / -1;
   }
 }
 

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -205,17 +205,29 @@ function fakeConnection(state) {
           const prompt = params.input.find((item) => item.type === 'text')?.text || '';
           newThread.name = 'Automatically named by Codex';
           newThread.preview = prompt;
-          newThread.status = { type: 'active', activeFlags: ['turn'] };
+          newThread.status = state.temporaryAnswer
+            ? { type: 'idle' }
+            : { type: 'active', activeFlags: ['turn'] };
           newThread.turns = [
             {
               id: `turn-${state.turns.length}`,
-              status: 'inProgress',
+              status: state.temporaryAnswer ? 'completed' : 'inProgress',
               items: [
                 {
                   id: `user-${state.turns.length}`,
                   type: 'userMessage',
                   content: [{ type: 'text', text: prompt }],
                 },
+                ...(state.temporaryAnswer
+                  ? [
+                      {
+                        id: `answer-${state.turns.length}`,
+                        type: 'agentMessage',
+                        phase: 'final',
+                        text: state.temporaryAnswer,
+                      },
+                    ]
+                  : []),
               ],
             },
           ];
@@ -1259,6 +1271,80 @@ test('creates and returns a new persistent repository-scoped Codex conversation'
       sessionStartSource: 'clear',
     },
   ]);
+});
+
+test('answers a temporary excerpt question in an ephemeral read-only thread without a queue record', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-temporary-question-'));
+  const state = {
+    busy: false,
+    deletedThreads: [],
+    temporaryAnswer: 'It means the current implementation is ready for review.',
+    turns: [],
+  };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+
+  const result = await bridge.temporaryQuestion({
+    excerpt: 'The implementation is complete.',
+    question: 'What does this mean?',
+    model: 'gpt-image-capable',
+  });
+
+  assert.equal(result.status, 'complete');
+  assert.equal(result.answer, state.temporaryAnswer);
+  assert.equal(result.model, 'Image capable');
+  assert.equal(state.threadStarts[0].ephemeral, true);
+  assert.equal(state.threadStarts[0].sandbox, 'read-only');
+  assert.match(state.threadStarts[0].cwd, /made-solid-codex-question-/);
+  assert.notEqual(state.threadStarts[0].cwd, '/workspaces/siteforge-os');
+  assert.deepEqual(state.threadStarts[0].runtimeWorkspaceRoots, []);
+  assert.equal(state.turns[0].sandboxPolicy.type, 'readOnly');
+  assert.equal(state.turns[0].cwd, state.threadStarts[0].cwd);
+  assert.deepEqual(state.turns[0].runtimeWorkspaceRoots, []);
+  assert.equal(state.turns[0].effort, 'low');
+  assert.equal(state.turns[0].serviceTier, 'priority');
+  assert.match(state.turns[0].input[0].text, /Do not inspect files, browse, call tools/);
+  assert.deepEqual(state.deletedThreads, ['thread-new-1']);
+  assert.deepEqual(await bridge.readRecords(), []);
+  await assert.rejects(access(state.threadStarts[0].cwd), { code: 'ENOENT' });
+});
+
+test('validates temporary excerpt questions before connecting to Codex', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-temporary-validation-'));
+  let connections = 0;
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: async () => {
+      connections += 1;
+      throw new Error('Connection should not be attempted.');
+    },
+  });
+
+  await assert.rejects(
+    bridge.temporaryQuestion({ excerpt: '', question: 'What does this mean?', model: 'gpt-5' }),
+    /Select a Codex excerpt first/,
+  );
+  await assert.rejects(
+    bridge.temporaryQuestion({ excerpt: 'Ready.', question: '', model: 'gpt-5' }),
+    /Ask a question about the selected excerpt/,
+  );
+  await assert.rejects(
+    bridge.temporaryQuestion({ excerpt: 'x'.repeat(3_001), question: 'Why?', model: 'gpt-5' }),
+    /Shorten the selected excerpt/,
+  );
+  await assert.rejects(
+    bridge.temporaryQuestion({ excerpt: 'Ready.', question: 'x'.repeat(801), model: 'gpt-5' }),
+    /within 800 characters/,
+  );
+  await assert.rejects(
+    bridge.temporaryQuestion({ excerpt: 'Ready.', question: 'Why?', model: '../../unsafe' }),
+    /Choose an available Codex model/,
+  );
+  assert.equal(connections, 0);
 });
 
 test('uses container-level full access while preserving both Railway workspace roots', async () => {

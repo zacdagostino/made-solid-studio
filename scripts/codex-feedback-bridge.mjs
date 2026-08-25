@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
-import { extname, isAbsolute, relative, resolve } from 'node:path';
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { extname, isAbsolute, join, relative, resolve } from 'node:path';
 
 const defaultServerUrl = 'ws://127.0.0.1:4500';
 const maximumImageBytes = 15 * 1024 * 1024;
@@ -11,6 +12,8 @@ const teamDelegationInstruction =
   'Agent team is enabled for this request. You are the supervisor. Delegate useful independent workstreams to attached sub-agents with clear, non-overlapping assignments, run them concurrently when practical, monitor their outcomes, and synthesize the result in this parent conversation. Keep work that is trivial or inherently sequential in the parent agent.';
 const progressUpdateInstruction =
   'During longer work, keep the user oriented with concise commentary at meaningful transitions: explain what you are checking, what you learned or changed, and what remains. When a website search, tool, file change, or check produces a meaningful verified result, include that result in the next commentary and explain how it affects the remaining work. Send an update before a long tool run. Do not narrate routine actions, repeat yourself, expose hidden reasoning, or claim unverified progress.';
+const temporaryQuestionInstruction =
+  'This is a temporary, read-only question about the quoted excerpt. Answer directly and concisely using only the excerpt and the question. Do not inspect files, browse, call tools, change workspace state, create tasks, or provide progress commentary. If the excerpt does not support an answer, say what is missing. Return only the answer.';
 const supportedImageTypes = new Map([
   ['image/png', '.png'],
   ['image/jpeg', '.jpg'],
@@ -906,10 +909,30 @@ function railwayContainerTurnSettings(scope) {
   };
 }
 
+function temporaryQuestionThreadSettings(runtimeWorkspaceRoots) {
+  return {
+    runtimeWorkspaceRoots,
+    sandbox: 'read-only',
+    approvalPolicy: 'never',
+  };
+}
+
+function temporaryQuestionTurnSettings(runtimeWorkspaceRoots) {
+  return {
+    runtimeWorkspaceRoots,
+    sandboxPolicy: { type: 'readOnly' },
+    approvalPolicy: 'never',
+  };
+}
+
 function clientWorkspaceInstruction(scope) {
   return scope.scope === 'client'
     ? `This conversation is exclusively for the client website workspace at ${scope.cwd}. Edit files only inside that exact workspace. Do not inspect, edit, or create files in Studio, the Made Solid website, or any other client's workspace.`
     : '';
+}
+
+function wait(milliseconds) {
+  return new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
 }
 
 export class CodexFeedbackBridge {
@@ -1359,6 +1382,97 @@ export class CodexFeedbackBridge {
           ? 'Visual feedback is queued for the selected Codex conversation.'
           : 'Your message is queued for the selected Codex conversation.',
     };
+  }
+
+  async temporaryQuestion(input) {
+    this.workspaceScope(input);
+    const excerpt = typeof input.excerpt === 'string' ? input.excerpt.trim() : '';
+    const question = typeof input.question === 'string' ? input.question.trim() : '';
+    if (!excerpt) throw new Error('Select a Codex excerpt first.');
+    if (!question) throw new Error('Ask a question about the selected excerpt.');
+    if (excerpt.length > 3_000) throw new Error('Shorten the selected excerpt and try again.');
+    if (question.length > 800) throw new Error('Keep the quick question within 800 characters.');
+    const requestedModel = typeof input.model === 'string' ? input.model.trim() : '';
+    if (!/^[A-Za-z0-9._-]{1,100}$/.test(requestedModel)) {
+      throw new Error('Choose an available Codex model.');
+    }
+
+    const client = await this.connect();
+    let temporaryDirectory;
+    let threadId;
+    let turnId;
+    try {
+      const modelResult = await client.request('model/list', { limit: 100, includeHidden: false });
+      const model = (modelResult.data || [])
+        .map(publicModel)
+        .find((candidate) => candidate.id === requestedModel);
+      if (!model) throw new Error('The quick-answer model is unavailable.');
+      const effortOrder = ['minimal', 'low', 'medium', 'high', 'xhigh'];
+      const effort =
+        effortOrder.find((candidate) => model.efforts.some((item) => item.id === candidate)) ||
+        model.defaultEffort ||
+        model.efforts[0]?.id ||
+        'medium';
+      const serviceTier = model.serviceTiers.some((candidate) => candidate.id === 'priority')
+        ? 'priority'
+        : 'default';
+      temporaryDirectory = await mkdtemp(join(tmpdir(), 'made-solid-codex-question-'));
+      const threadResult = await client.request('thread/start', {
+        cwd: temporaryDirectory,
+        ...temporaryQuestionThreadSettings([]),
+        model: model.id,
+        serviceTier,
+        config: { model_reasoning_effort: effort },
+        ephemeral: true,
+        sessionStartSource: 'clear',
+      });
+      threadId = String(threadResult.thread?.id || '');
+      if (!threadId) throw new Error('Codex did not start the temporary question.');
+      const turnResult = await client.request('turn/start', {
+        threadId,
+        input: [
+          {
+            type: 'text',
+            text: `${temporaryQuestionInstruction}\n\nQuoted Codex excerpt:\n---\n${excerpt}\n---\n\nQuestion: ${question}`,
+          },
+        ],
+        cwd: temporaryDirectory,
+        ...temporaryQuestionTurnSettings([]),
+        model: model.id,
+        effort,
+        serviceTier,
+      });
+      turnId = String(turnResult.turn?.id || '');
+      if (!turnId) throw new Error('Codex did not accept the temporary question.');
+
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        if (attempt) await wait(250);
+        const detail = await client.request('thread/read', { threadId, includeTurns: true });
+        const turn = (Array.isArray(detail.thread?.turns) ? detail.thread.turns : []).find(
+          (candidate) => String(candidate?.id || '') === turnId,
+        );
+        if (!turn || turn.status === 'inProgress') continue;
+        if (turn.status !== 'completed') {
+          throw new Error('The temporary Codex answer did not complete.');
+        }
+        const answer = publicMessages(detail.thread)
+          .filter((message) => message.role === 'assistant' && message.turnId === turnId)
+          .at(-1)?.text;
+        if (!answer) throw new Error('Codex completed without a temporary answer.');
+        return {
+          status: 'complete',
+          answer,
+          model: model.label,
+          detail: 'Temporary answer complete. This exchange was not added to the conversation.',
+        };
+      }
+      await client.request('turn/interrupt', { threadId, turnId }).catch(() => undefined);
+      throw new Error('The temporary answer took too long. Try again.');
+    } finally {
+      if (threadId) await client.request('thread/delete', { threadId }).catch(() => undefined);
+      client.close();
+      if (temporaryDirectory) await rm(temporaryDirectory, { force: true, recursive: true });
+    }
   }
 
   async createThread(input) {
