@@ -406,6 +406,7 @@ function publicMessages(thread) {
           role: 'user',
           text: text.slice(0, maximumPromptLength),
           turnId: typeof turn.id === 'string' ? turn.id : undefined,
+          turnStatus: typeof turn.status === 'string' ? turn.status : undefined,
           position,
         });
     } else if (item.type === 'agentMessage' && typeof item.text === 'string') {
@@ -417,6 +418,7 @@ function publicMessages(thread) {
           text: text.slice(0, 12_000),
           phase: typeof item.phase === 'string' ? item.phase : undefined,
           turnId: typeof turn.id === 'string' ? turn.id : undefined,
+          turnStatus: typeof turn.status === 'string' ? turn.status : undefined,
           position,
         });
     }
@@ -941,6 +943,7 @@ export class CodexFeedbackBridge {
     runtimeWorkspaceRoots,
     storageRoot = resolve('.made-solid', 'codex-feedback'),
     resolveClientWorkspace,
+    notifyCompletion,
     connect = connectCodexAppServer,
   } = {}) {
     this.cwd = resolve(cwd);
@@ -957,6 +960,7 @@ export class CodexFeedbackBridge {
     ];
     this.storageRoot = storageRoot;
     this.resolveClientWorkspace = resolveClientWorkspace;
+    this.notifyCompletion = notifyCompletion;
     this.connect = connect;
     this.flushRequested = false;
     this.flushPromise = undefined;
@@ -1517,6 +1521,89 @@ export class CodexFeedbackBridge {
         status: 'ready',
         detail: 'New Codex conversation created.',
         thread: publicThread(result.thread, { discardable: true, scope: scope.scope }),
+      };
+    } finally {
+      client.close();
+    }
+  }
+
+  async forkThread(input) {
+    const scope = this.workspaceScope(input);
+    const threadId = typeof input.threadId === 'string' ? input.threadId.trim() : '';
+    const turnId = typeof input.turnId === 'string' ? input.turnId.trim() : '';
+    if (!/^[A-Za-z0-9-]{1,100}$/.test(threadId)) {
+      throw new Error('Choose a valid conversation to branch.');
+    }
+    if (!/^[A-Za-z0-9-]{1,100}$/.test(turnId)) {
+      throw new Error('Choose a completed Codex reply to branch from.');
+    }
+    const client = await this.connect();
+    try {
+      const sourceResult = await client.request('thread/read', {
+        threadId,
+        includeTurns: true,
+      });
+      const sourceThread = sourceResult?.thread;
+      if (!sourceThread?.id) throw new Error('That conversation is unavailable.');
+      if (this.assertThreadScope(sourceThread, scope) !== scope.scope) {
+        throw new Error('That conversation belongs to a different workspace.');
+      }
+      const sourceTurns = Array.isArray(sourceThread.turns) ? sourceThread.turns : [];
+      const selectedTurnIndex = sourceTurns.findIndex((turn) => String(turn?.id || '') === turnId);
+      const selectedTurn = sourceTurns[selectedTurnIndex];
+      if (!selectedTurn) {
+        throw new Error('That Codex reply is no longer available in this conversation.');
+      }
+      if (selectedTurn.status !== 'completed') {
+        throw new Error('Wait for this Codex reply to finish before branching from it.');
+      }
+      const result = await client.request('thread/fork', {
+        threadId,
+        lastTurnId: turnId,
+        cwd: scope.cwd,
+        ...railwayContainerThreadSettings(scope),
+        deferGoalContinuation: true,
+        ephemeral: false,
+        threadSource: 'user',
+      });
+      if (!result.thread?.id) throw new Error('Codex did not return a branched conversation.');
+      const forkedThreadId = String(result.thread.id);
+      const includedTurnIds = new Set(
+        sourceTurns
+          .slice(0, selectedTurnIndex + 1)
+          .map((turn) => (typeof turn?.id === 'string' ? turn.id : undefined))
+          .filter(Boolean),
+      );
+      const inheritedRecords = (await this.readRecords()).filter(
+        (record) =>
+          ['completed', 'delivered', 'interrupted'].includes(record.status) &&
+          String(record.threadId || '') === threadId &&
+          includedTurnIds.has(String(record.turnId || '')),
+      );
+      await Promise.all(
+        inheritedRecords.map((record) => {
+          const id = randomUUID();
+          const attachments = Array.isArray(record.attachments)
+            ? record.attachments
+            : record.imagePath && record.mimeType
+              ? [{ id: record.id, mimeType: record.mimeType }]
+              : [];
+          return atomicWriteJson(resolve(this.storageRoot, `${id}.json`), {
+            ...record,
+            id,
+            threadId: forkedThreadId,
+            attachments,
+            imagePath: undefined,
+            forkedFromRecordId: record.id,
+            notificationPending: false,
+            updatedAt: new Date().toISOString(),
+          });
+        }),
+      );
+      return {
+        status: 'ready',
+        detail: 'Codex conversation branched from the selected reply.',
+        thread: publicThread(result.thread, { scope: scope.scope }),
       };
     } finally {
       client.close();
@@ -2118,7 +2205,11 @@ export class CodexFeedbackBridge {
   async runMaintenance() {
     const records = await this.readRecords();
     const running = records.filter((record) => ['running', 'recovering'].includes(record.status));
+    const pendingNotifications = records.filter(
+      (record) => record.status === 'completed' && record.notificationPending === true,
+    );
     if (!running.length) {
+      await this.dispatchCompletionNotifications(pendingNotifications);
       await this.flush();
       return;
     }
@@ -2189,6 +2280,7 @@ export class CodexFeedbackBridge {
           if (trackedTurn.status === 'completed') {
             await this.updateRecordStatus(record, 'completed', {
               completedAt: new Date().toISOString(),
+              notificationPending: Boolean(this.notifyCompletion),
             });
             continue;
           }
@@ -2275,7 +2367,24 @@ export class CodexFeedbackBridge {
     } finally {
       client.close();
     }
+    await this.dispatchCompletionNotifications(pendingNotifications);
     await this.flush();
+  }
+
+  async dispatchCompletionNotifications(records) {
+    if (!this.notifyCompletion || !records.length) return;
+    for (const record of records) {
+      try {
+        const result = await this.notifyCompletion(record);
+        await this.updateRecordStatus(record, 'completed', {
+          notificationDeliveredCount: Number(result?.delivered || 0),
+          notificationPending: false,
+          notificationSentAt: new Date().toISOString(),
+        });
+      } catch {
+        // The durable pending marker retries after a transient push-delivery failure.
+      }
+    }
   }
 
   async updateRecordStatus(record, status, fields = {}) {

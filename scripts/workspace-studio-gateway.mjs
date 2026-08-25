@@ -5,6 +5,10 @@ import {
   createWorkspaceStudioToken,
   verifyWorkspaceStudioToken,
 } from './workspace-preview-access.mjs';
+import {
+  studioDevelopmentOriginForRequest,
+  studioDevelopmentOrigins,
+} from './studio-development-origins.mjs';
 
 const cookieName = '__Host-made-solid-studio-workspace';
 const sessionLifetimeMs = 8 * 60 * 60 * 1_000;
@@ -56,8 +60,9 @@ export function workspaceStudioGatewayConfiguration(environment = process.env) {
     throw new Error('SITEFORGE_WORKSPACE_PREVIEW_SECRET must contain at least 32 characters.');
   }
   const studioOrigin = exactHttpsOrigin('SITEFORGE_PUBLIC_ORIGIN', environment);
-  const workspaceOrigin = exactHttpsOrigin('SITEFORGE_WORKSPACE_PREVIEW_ORIGIN', environment);
-  if (studioOrigin === workspaceOrigin) {
+  const { canonicalOrigin: workspaceOrigin, origins: workspaceOrigins } =
+    studioDevelopmentOrigins(environment);
+  if (workspaceOrigins.includes(studioOrigin)) {
     throw new Error('Production Studio and Workspace Studio origins must be distinct.');
   }
   return {
@@ -67,6 +72,7 @@ export function workspaceStudioGatewayConfiguration(environment = process.env) {
     studioOrigin,
     upstreamPort,
     workspaceOrigin,
+    workspaceOrigins,
   };
 }
 
@@ -84,7 +90,13 @@ function requestCookie(request, requestedName) {
 }
 
 function accessForRequest(request, configuration) {
-  const requestUrl = new URL(request.url || '/', configuration.workspaceOrigin);
+  const requestOrigin = studioDevelopmentOriginForRequest(
+    request,
+    configuration.workspaceOrigins || [configuration.workspaceOrigin],
+    { allowLoopback: true },
+  );
+  if (!requestOrigin) return {};
+  const requestUrl = new URL(request.url || '/', requestOrigin);
   const queryToken = requestUrl.searchParams.get('access');
   const cookieToken = requestCookie(request, cookieName);
   const token = queryToken || cookieToken;
@@ -95,7 +107,7 @@ function accessForRequest(request, configuration) {
     : verifyWorkspaceStudioToken(token, configuration.secret, configuration.ownerUserId, {
         purpose: 'studio-development-session',
       });
-  return { access, queryToken, requestUrl, token };
+  return { access, queryToken, requestOrigin, requestUrl, token };
 }
 
 function requestsDocument(request) {
@@ -183,21 +195,21 @@ function exchangeAccess(response, requestUrl, configuration) {
   response.end();
 }
 
-function upstreamHeaders(request, configuration) {
+function upstreamHeaders(request, configuration, requestOrigin = configuration.workspaceOrigin) {
   const headers = { ...request.headers };
   delete headers.cookie;
   delete headers.origin;
   delete headers.referer;
   headers.host = `127.0.0.1:${configuration.upstreamPort}`;
-  headers['x-forwarded-host'] = new URL(configuration.workspaceOrigin).host;
+  headers['x-forwarded-host'] = new URL(requestOrigin).host;
   headers['x-forwarded-proto'] = 'https';
   return headers;
 }
 
-function proxyHttp(request, response, configuration) {
+function proxyHttp(request, response, configuration, requestOrigin) {
   const upstream = createProxyRequest(
     {
-      headers: upstreamHeaders(request, configuration),
+      headers: upstreamHeaders(request, configuration, requestOrigin),
       hostname: '127.0.0.1',
       method: request.method,
       path: request.url,
@@ -228,9 +240,9 @@ function proxyHttp(request, response, configuration) {
   request.pipe(upstream);
 }
 
-function proxyUpgrade(request, socket, head, configuration) {
+function proxyUpgrade(request, socket, head, configuration, requestOrigin) {
   const upstream = createProxyRequest({
-    headers: upstreamHeaders(request, configuration),
+    headers: upstreamHeaders(request, configuration, requestOrigin),
     hostname: '127.0.0.1',
     method: request.method,
     path: request.url,
@@ -262,7 +274,14 @@ export function startWorkspaceStudioGateway(configuration = workspaceStudioGatew
       response.end('ok');
       return;
     }
-    const { access, queryToken, requestUrl } = accessForRequest(request, configuration);
+    const { access, queryToken, requestOrigin, requestUrl } = accessForRequest(
+      request,
+      configuration,
+    );
+    if (!requestOrigin || !requestUrl) {
+      unavailable(response);
+      return;
+    }
     if (!access) {
       if (requestsDocument(request)) requestOwnerReentry(response, configuration, request);
       else unavailable(response);
@@ -276,15 +295,15 @@ export function startWorkspaceStudioGateway(configuration = workspaceStudioGatew
       exchangeAccess(response, requestUrl, configuration);
       return;
     }
-    proxyHttp(request, response, configuration);
+    proxyHttp(request, response, configuration, requestOrigin);
   });
   server.on('upgrade', (request, socket, head) => {
-    const { access, queryToken } = accessForRequest(request, configuration);
-    if (!access || queryToken) {
+    const { access, queryToken, requestOrigin } = accessForRequest(request, configuration);
+    if (!access || queryToken || !requestOrigin) {
       socket.destroy();
       return;
     }
-    proxyUpgrade(request, socket, head, configuration);
+    proxyUpgrade(request, socket, head, configuration, requestOrigin);
   });
   return server.listen(configuration.port, '0.0.0.0', () => {
     console.log(`[workspace-studio] owner gateway listening on ${configuration.port}`);

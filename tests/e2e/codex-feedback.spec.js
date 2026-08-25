@@ -17,7 +17,13 @@ const capturePng =
 async function openChatSettings(composer) {
   const settings = composer.getByRole('button', { name: 'Chat settings' });
   if ((await settings.getAttribute('aria-expanded')) !== 'true') await settings.click();
-  await expect(composer.getByRole('group', { name: 'Chat settings' })).toBeVisible();
+  await expect(composer.getByRole('dialog', { name: 'Chat settings' })).toBeVisible();
+}
+
+async function openRunSettings(composer) {
+  const settings = composer.getByRole('button', { name: 'Run setup' });
+  if ((await settings.getAttribute('aria-expanded')) !== 'true') await settings.click();
+  await expect(composer.getByRole('group', { name: 'Run setup' })).toBeVisible();
 }
 
 async function selectRenderedText(locator, selectedText) {
@@ -913,7 +919,7 @@ test('sends a text-only chat message to the selected Codex model', async ({ page
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat with Codex' }).click();
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
-  await openChatSettings(composer);
+  await openRunSettings(composer);
   await composer.getByLabel('Model').selectOption('gpt-5.3-codex-spark');
   await expect(composer.getByRole('button', { name: 'Capture this tab' })).toBeDisabled();
   await expect(
@@ -1274,7 +1280,7 @@ test('lets the reviewer choose direct work instead of Agent team delegation', as
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat with Codex' }).click();
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
-  await openChatSettings(composer);
+  await openRunSettings(composer);
   const teamMode = composer.getByRole('button', { name: /Agent team/ });
   await expect(teamMode).toHaveAttribute('aria-pressed', 'true');
   await teamMode.click();
@@ -1610,6 +1616,7 @@ test('filters, previews, and remembers a voice from the global Google catalogue'
   expect(accessibility.violations).toEqual([]);
 
   await voiceSettings.getByRole('button', { name: 'Stop voice preview' }).click();
+  await composer.getByRole('button', { name: 'Close chat settings' }).click();
   await composer.getByRole('button', { name: 'Close Codex chat' }).click();
   await page.reload();
   await page.getByRole('button', { name: 'Chat with Codex' }).click();
@@ -1642,6 +1649,7 @@ test('configures and remembers natural read-aloud preferences', async ({ page })
   await readAloudSettings.getByRole('combobox', { name: 'Speed' }).selectOption('1.15');
   await readAloudSettings.getByRole('checkbox', { name: 'Auto-read Codex' }).check();
 
+  await composer.getByRole('button', { name: 'Close chat settings' }).click();
   await composer.getByRole('button', { name: 'Close Codex chat' }).click();
   await page.reload();
   await page.getByRole('button', { name: /Codex/ }).click();
@@ -1672,7 +1680,7 @@ test('automatically reads one stable progress update and then the final reply', 
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
   await openChatSettings(composer);
   await composer.getByRole('checkbox', { name: 'Auto-read Codex' }).check();
-  await composer.getByRole('button', { name: 'Chat settings' }).click();
+  await composer.getByRole('button', { name: 'Close chat settings' }).click();
 
   status = speechFeatureStatus([
     { id: 'auto-user', role: 'user', text: 'Please check the responsive layout.' },
@@ -1793,7 +1801,7 @@ test('gives manual Read priority and stops future automatic speech when switched
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
   await openChatSettings(composer);
   await composer.getByRole('checkbox', { name: 'Auto-read Codex' }).check();
-  await composer.getByRole('button', { name: 'Chat settings' }).click();
+  await composer.getByRole('button', { name: 'Close chat settings' }).click();
 
   status = speechFeatureStatus([userMessage, earlierFinal, progress]);
   await page.clock.fastForward(5_500);
@@ -1888,6 +1896,40 @@ test('plays Google speech with exact seekable seconds and no device utterance', 
   await playback.getByRole('button', { name: 'Stop reading', exact: true }).click();
   await expect(playback).toHaveCount(0);
   await expect(reply.getByRole('button', { name: 'Read Codex reply', exact: true })).toBeVisible();
+});
+
+test('reads arrow icons naturally and leaves long verification details in chat', async ({
+  page,
+}) => {
+  const replyText = `I completed Settings → Read aloud verification; the details are in chat.
+
+- TypeScript typecheck passed across the workspace source files
+- ESLint completed with no warnings in the application package
+- Vitest ran the focused speech transformation unit tests successfully
+- Production Vite build emitted the expected hashed browser assets
+
+The reading update is ready.
+
+Implemented in codex-speech.ts with coverage in codex-speech.test.ts and codex-feedback.spec.js.
+
+All checks passed: formatting, lint, TypeScript, production build, 23 speech tests, 76 package tests, and Playwright at 375×812, 768×1024, and 1440×900.`;
+  const speechRequests = [];
+  await showCompletedSpeechReply(page, replyText, 'speech-natural-technical-list');
+  await enableGoogleSpeech(page, (request) => speechRequests.push(request));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const reply = page.locator('.codex-chat-message--assistant', {
+    hasText: 'I completed Settings',
+  });
+  await expect(reply).toContainText('Production Vite build emitted');
+  await expect(reply).toContainText('Implemented in codex-speech.ts');
+  await expect(reply).toContainText('All checks passed: formatting');
+  await reply.getByRole('button', { name: 'Read Codex reply', exact: true }).click();
+  await expect
+    .poll(() => speechRequests.map(({ text }) => text))
+    .toEqual([
+      'I completed Settings then Read aloud verification; the details are in chat. The reading update is ready. The technical implementation and verification details are in the chat.',
+    ]);
 });
 
 test('starts the first Google speech chunk while later chunks are still buffering', async ({
@@ -3051,7 +3093,7 @@ test('creates a new Codex conversation with the selected model and reasoning', a
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat with Codex' }).click();
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
-  await openChatSettings(composer);
+  await openRunSettings(composer);
   await composer.getByLabel('Model').selectOption('gpt-5.6-terra');
   await composer.getByLabel('Reasoning').selectOption('high');
   await composer.getByRole('button', { name: 'New chat' }).click();
@@ -3080,6 +3122,7 @@ test('creates a new Codex conversation with the selected model and reasoning', a
     model: 'gpt-5.6-terra',
     effort: 'high',
     serviceTier: 'default',
+    threadScope: 'universal',
   });
   await composer.getByRole('button', { name: 'Conversation' }).click();
   await composer.getByRole('menuitemradio', { name: /^Studio/ }).click();
@@ -3090,17 +3133,22 @@ test('keeps the selected model, reasoning, and Fast preference after reopen', as
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat with Codex' }).click();
   let composer = page.getByRole('dialog', { name: 'Codex', exact: true });
-  await openChatSettings(composer);
+  await openRunSettings(composer);
   await composer.getByLabel('Model').selectOption('gpt-5.6-terra');
   await composer.getByLabel('Reasoning').selectOption('high');
+  await composer.getByRole('button', { name: 'Run setup' }).click();
+  await openChatSettings(composer);
   await composer.getByRole('button', { name: /^Fast/ }).click();
+  await composer.getByRole('button', { name: 'Close chat settings' }).click();
   await composer.getByRole('button', { name: 'Close Codex chat' }).click();
   await page.reload();
   await page.getByRole('button', { name: 'Chat with Codex' }).click();
   composer = page.getByRole('dialog', { name: 'Codex', exact: true });
-  await openChatSettings(composer);
+  await openRunSettings(composer);
   await expect(composer.getByLabel('Model')).toHaveValue('gpt-5.6-terra');
   await expect(composer.getByLabel('Reasoning')).toHaveValue('high');
+  await composer.getByRole('button', { name: 'Run setup' }).click();
+  await openChatSettings(composer);
   await expect(composer.getByRole('button', { name: /^Fast/ })).toHaveAttribute(
     'aria-pressed',
     'true',
@@ -3583,8 +3631,8 @@ test('captures a selected region and queues its prompt for the chosen Codex mode
 
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
   await expect(composer).toBeVisible();
-  await openChatSettings(composer);
-  await expect(composer.getByLabel('Model', { exact: true })).toBeVisible();
+  await openRunSettings(composer);
+  await expect(composer.locator('.codex-model-field select')).toBeVisible();
   await expect(composer).toHaveScreenshot('codex-feedback-compose.png');
   await composer.getByLabel('Model').selectOption('gpt-5.6-terra');
   await composer.getByLabel('Reasoning').selectOption('high');
@@ -3817,15 +3865,23 @@ test('hides the chat and model controls before the browser capture chooser opens
   await expect(page.getByLabel('Model')).toBeHidden();
 });
 
-test('has no automated accessibility violations in the model control panel', async ({ page }) => {
+test('keeps run setup and chat settings accessible with restored focus', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat with Codex' }).click();
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
-  await openChatSettings(composer);
-  const results = await new AxeBuilder({ page }).include('.codex-feedback-dialog').analyze();
+  await openRunSettings(composer);
+  let results = await new AxeBuilder({ page }).include('.codex-feedback-dialog').analyze();
   expect(results.violations).toEqual([]);
   await page.keyboard.press('Escape');
-  await expect(composer.getByRole('group', { name: 'Chat settings' })).toBeHidden();
+  await expect(composer.getByRole('group', { name: 'Run setup' })).toBeHidden();
+  await expect(composer.getByRole('button', { name: 'Run setup' })).toBeFocused();
+
+  await openChatSettings(composer);
+  await expect(composer.getByRole('button', { name: 'Close chat settings' })).toBeFocused();
+  results = await new AxeBuilder({ page }).include('.codex-feedback-dialog').analyze();
+  expect(results.violations).toEqual([]);
+  await page.keyboard.press('Escape');
+  await expect(composer.getByRole('dialog', { name: 'Chat settings' })).toBeHidden();
   await expect(composer.getByRole('button', { name: 'Chat settings' })).toBeFocused();
 });
 
@@ -3862,7 +3918,7 @@ test('lets the owner switch all Studio AI work to disclosed API credits', async 
     'Separately billed for Studio chat, builders, and AI analysis',
   );
   await expect(composer.getByText('OpenAI API credits · connected')).toBeVisible();
-  await expect(composer.getByRole('group', { name: 'Chat settings' })).toHaveScreenshot(
+  await expect(composer.getByRole('dialog', { name: 'Chat settings' })).toHaveScreenshot(
     'owner-api-credits-switch.png',
   );
 });
@@ -3877,6 +3933,7 @@ test('keeps separate Codex quota windows and reports unavailable usage truthfull
   await expect(composer.getByRole('progressbar', { name: '5-hour usage: 42% used' })).toBeVisible();
   await expect(composer.getByRole('progressbar', { name: '7-day usage: 18% used' })).toBeVisible();
 
+  await composer.getByRole('button', { name: 'Close chat settings' }).click();
   await composer.getByRole('button', { name: 'Close Codex chat' }).click();
   await page.goto('/?codexUsageUnavailable=1');
   await page.getByRole('button', { name: 'Chat with Codex' }).click();
@@ -4012,6 +4069,152 @@ test('separates the current client chats from universal Studio chats', async ({ 
   await expect(dialog).toHaveScreenshot('codex-client-scoped-chat.png');
 });
 
+test('branches a completed Codex reply into a separately selected conversation', async ({
+  page,
+}) => {
+  let branchRequest;
+  let releaseBranch;
+  const branchReady = new Promise((resolve) => {
+    releaseBranch = resolve;
+  });
+  const branchedThread = {
+    id: 'thread-fork-1',
+    name: 'Studio branch',
+    status: 'idle',
+    scope: 'universal',
+  };
+  await page.route('**/__made-solid/codex-branch', async (route) => {
+    const request = route.request().postDataJSON();
+    if (request.action !== 'branch-thread') return route.fallback();
+    branchRequest = request;
+    await branchReady;
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'ready',
+        detail: 'Codex conversation branched from the selected reply.',
+        thread: branchedThread,
+      }),
+    });
+  });
+  await page.route('**/__made-solid/codex-status*', async (route) => {
+    const selectedThreadId = new URL(route.request().url()).searchParams.get('threadId');
+    if (selectedThreadId !== branchedThread.id) return route.fallback();
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'ready',
+        detail: 'Connected to the branched Codex conversation.',
+        thread: branchedThread,
+        threads: [
+          branchedThread,
+          { id: 'thread-1', name: 'Studio', status: 'idle', scope: 'universal' },
+        ],
+        messages: [
+          {
+            id: 'branched-user',
+            role: 'user',
+            text: 'Open the Studio chat.',
+            turnId: 'turn-team-1',
+            position: 0,
+          },
+          {
+            id: 'branched-codex',
+            role: 'assistant',
+            text: 'Studio chat is connected.',
+            turnId: 'turn-team-1',
+            turnStatus: 'completed',
+            phase: 'final_answer',
+            position: 1,
+          },
+        ],
+        activities: [],
+        agents: [],
+        queuedCount: 0,
+        interruptingCount: 0,
+        queuedMessages: [],
+        models: [
+          {
+            id: 'gpt-5.6-sol',
+            label: 'GPT-5.6-Sol',
+            defaultEffort: 'medium',
+            isDefault: true,
+            supportsImages: true,
+            efforts: [{ id: 'medium', description: 'Balanced reasoning' }],
+            serviceTiers: [],
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  const branch = composer.getByRole('button', { name: 'Branch chat from this reply' });
+  await expect(branch).toBeVisible();
+  await branch.click();
+
+  const loading = composer.locator('.codex-conversation-loading');
+  await expect(loading).toContainText('Branching conversation');
+  await expect(loading).toContainText('Copying context through the selected reply');
+  await expect(composer.getByRole('log', { name: 'Codex chat log' })).toHaveAttribute(
+    'aria-busy',
+    'true',
+  );
+  await expect.poll(() => branchRequest?.action).toBe('branch-thread');
+  expect(branchRequest).toMatchObject({
+    threadId: 'thread-1',
+    turnId: 'turn-team-1',
+    threadScope: 'universal',
+  });
+
+  releaseBranch();
+  await expect(composer.getByRole('button', { name: 'Conversation' })).toContainText(
+    'Studio branch',
+  );
+  await expect(composer.getByRole('log', { name: 'Codex chat log' })).toContainText(
+    'Studio chat is connected.',
+  );
+  await expect(composer.getByLabel('Message to Codex')).toBeFocused();
+  await composer.getByRole('button', { name: 'Conversation' }).click();
+  await expect(composer.getByRole('menuitemradio', { name: /Studio branch/ })).toBeChecked();
+  await expect(composer.getByRole('menuitemradio', { name: /^Studio/ })).toHaveCount(2);
+  await page.keyboard.press('Escape');
+  const overflow = await composer.evaluate((element) => element.scrollWidth - element.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+  const accessibility = await new AxeBuilder({ page }).include('.codex-chat-dialog').analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect(composer).toHaveScreenshot('codex-branched-chat.png');
+});
+
+test('keeps the original Codex chat selected when branching fails', async ({ page }) => {
+  await page.route('**/__made-solid/codex-branch', async (route) => {
+    const request = route.request().postDataJSON();
+    if (request.action !== 'branch-thread') return route.fallback();
+    await route.fulfill({
+      status: 400,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'That completed reply is no longer available.' }),
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await composer.getByRole('button', { name: 'Branch chat from this reply' }).click();
+
+  await expect(composer.getByRole('alert')).toContainText(
+    'That completed reply is no longer available.',
+  );
+  await expect(composer.getByRole('button', { name: 'Conversation' })).toContainText(
+    'Open the Studio chat.',
+  );
+  await expect(composer.getByRole('log', { name: 'Codex chat log' })).toContainText(
+    'Studio chat is connected.',
+  );
+});
+
 test('keeps the model control usable at the compact 320px viewport', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop');
   await page.setViewportSize({ width: 320, height: 568 });
@@ -4019,6 +4222,7 @@ test('keeps the model control usable at the compact 320px viewport', async ({ pa
   await page.getByRole('button', { name: 'Chat with Codex' }).click();
   const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
   await expect(composer).toBeVisible();
+  await expect(composer.getByRole('button', { name: 'Branch chat from this reply' })).toBeVisible();
   await expect(composer.getByRole('button', { name: 'Capture this tab' })).toBeVisible();
   await expect
     .poll(() =>
@@ -4032,7 +4236,7 @@ test('keeps the model control usable at the compact 320px viewport', async ({ pa
     .toBeGreaterThanOrEqual(180);
   const overflow = await composer.evaluate((element) => element.scrollWidth - element.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
-  await openChatSettings(composer);
-  await expect(composer.getByLabel('Model')).toBeVisible();
+  await openRunSettings(composer);
+  await expect(composer.locator('.codex-model-field select')).toBeVisible();
   await expect(composer).toHaveScreenshot('codex-feedback-compose-320.png');
 });

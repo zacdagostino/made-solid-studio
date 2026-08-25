@@ -5,7 +5,30 @@ function codespaceName(hostname: string) {
   return /^(.+)-\d+\.app\.github\.dev$/.exec(hostname)?.[1];
 }
 
+function isWorkspaceCapabilityPreview(url: URL) {
+  const configuredOrigin =
+    import.meta.env.VITE_SITEFORGE_PREVIEW_ORIGIN?.trim() || 'https://preview.madesolid.com.au';
+  try {
+    const expectedOrigin = new URL(configuredOrigin);
+    const parts = url.pathname.split('/').filter(Boolean);
+    return (
+      expectedOrigin.protocol === 'https:' &&
+      expectedOrigin.href === `${expectedOrigin.origin}/` &&
+      url.origin === expectedOrigin.origin &&
+      !url.username &&
+      !url.password &&
+      parts[0] === '__made-solid' &&
+      parts[1] === 'workspace-frame' &&
+      /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(parts[2] || '') &&
+      /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(parts[3] || '')
+    );
+  } catch {
+    return false;
+  }
+}
+
 function isAllowedDevelopmentPreview(url: URL) {
+  if (isWorkspaceCapabilityPreview(url)) return true;
   if (url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1')) {
     return true;
   }

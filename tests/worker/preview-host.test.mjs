@@ -14,6 +14,7 @@ import {
   prepareWorkspaceFrameResponseBody,
   previewHostRequestListener,
   previewHostConfiguration,
+  previewRouteMatchesBuildMode,
   rewritePreviewRootReferences,
   rewriteNextWorkspaceFrameRuntimeReferences,
   rewritePreviewRuntimeReferences,
@@ -48,17 +49,44 @@ test('parses visitor and working-draft capability routes without path traversal'
   assert.deepEqual(parsePreviewPath(`/site/${runId}/${token}/services/`), {
     filePath: 'services',
     previewMode: 'ready',
+    routePrefix: '/site/',
     runId,
     token,
   });
   assert.deepEqual(parsePreviewPath(`/site/${runId}/${token}/__draft__/`), {
     filePath: 'index.html',
     previewMode: 'draft',
+    routePrefix: '/site/',
+    runId,
+    token,
+  });
+  assert.deepEqual(parsePreviewPath(`/test/${runId}/${token}/services/`), {
+    filePath: 'services',
+    previewMode: 'ready',
+    routePrefix: '/test/',
+    runId,
+    token,
+  });
+  assert.deepEqual(parsePreviewPath(`/build/${runId}/${token}/`), {
+    filePath: 'index.html',
+    previewMode: 'ready',
+    routePrefix: '/build/',
     runId,
     token,
   });
   assert.equal(parsePreviewPath(`/site/${runId}/${token}/../private.txt`), undefined);
   assert.equal(parsePreviewPath(`/site/not-a-run/${token}/`), undefined);
+});
+
+test('keeps test and complete-build capability routes tied to their build modes', () => {
+  for (const mode of ['homepage_test', 'page_test', 'site_test']) {
+    assert.equal(previewRouteMatchesBuildMode('/test/', mode), true);
+    assert.equal(previewRouteMatchesBuildMode('/build/', mode), false);
+  }
+  assert.equal(previewRouteMatchesBuildMode('/build/', 'full_site'), true);
+  assert.equal(previewRouteMatchesBuildMode('/test/', 'full_site'), false);
+  assert.equal(previewRouteMatchesBuildMode('/site/', 'full_site'), true);
+  assert.equal(previewRouteMatchesBuildMode('/site/', 'page_test'), true);
 });
 
 test('parses exact client frame routes without traversal', () => {
@@ -240,6 +268,7 @@ test('proxies a live frame through an exact preview-origin capability', async ()
     serviceRoleKey: 'not-used',
     supabaseUrl: 'https://project.supabase.co',
     workspaceOrigin: 'https://workspace.madesolid.com.au',
+    workspaceOrigins: ['https://dev.studio.madesolid.com.au', 'https://workspace.madesolid.com.au'],
     workspacePreviewSecret: workspaceSecret,
   };
   const proxy = createServer(previewHostRequestListener(frameConfiguration));
@@ -263,7 +292,7 @@ test('proxies a live frame through an exact preview-origin capability', async ()
     );
     assert.match(
       documentResponse.headers.get('content-security-policy') || '',
-      /frame-ancestors https:\/\/workspace\.madesolid\.com\.au/,
+      /frame-ancestors https:\/\/dev\.studio\.madesolid\.com\.au https:\/\/workspace\.madesolid\.com\.au/,
     );
     assert.match(
       documentResponse.headers.get('content-security-policy') || '',
@@ -331,7 +360,9 @@ test('serves a complete hydrated HTML artifact with private visitor protections'
       return Response.json([{ expires_at: '2999-01-01T00:00:00.000Z', preview_mode: 'ready' }]);
     }
     if (target.includes('/rest/v1/builder_runs')) {
-      return Response.json([{ organization_id: 'organisation', status: 'ready' }]);
+      return Response.json([
+        { build_mode: 'full_site', organization_id: 'organisation', status: 'ready' },
+      ]);
     }
     if (target.includes('/rest/v1/builder_artifacts')) {
       return Response.json([{ id: 'artifact' }]);
@@ -368,6 +399,39 @@ test('serves a complete hydrated HTML artifact with private visitor protections'
     assert.equal(runtimeResponse.headers.get('content-type'), 'text/javascript; charset=utf-8');
     assert.match(runtime, new RegExp(`s\\.p="${previewRoot}_next/"`));
     assert.equal(calls.length, 8);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('rejects a valid preview token when its route prefix misrepresents the build mode', async () => {
+  const originalFetch = globalThis.fetch;
+  let buildMode = 'full_site';
+  globalThis.fetch = async (url) => {
+    const target = String(url);
+    if (target.includes('/rest/v1/builder_preview_access')) {
+      return Response.json([{ expires_at: '2999-01-01T00:00:00.000Z', preview_mode: 'ready' }]);
+    }
+    if (target.includes('/rest/v1/builder_runs')) {
+      return Response.json([
+        { build_mode: buildMode, organization_id: 'organisation', status: 'ready' },
+      ]);
+    }
+    throw new Error(`Unexpected lookup: ${target}`);
+  };
+  try {
+    const fullSiteOnTest = await handlePreviewRequest(
+      new Request(`${previewOrigin}/test/${runId}/${token}/`),
+      configuration,
+    );
+    assert.equal(fullSiteOnTest.status, 404);
+
+    buildMode = 'site_test';
+    const testOnBuild = await handlePreviewRequest(
+      new Request(`${previewOrigin}/build/${runId}/${token}/`),
+      configuration,
+    );
+    assert.equal(testOnBuild.status, 404);
   } finally {
     globalThis.fetch = originalFetch;
   }

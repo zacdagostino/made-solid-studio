@@ -11,16 +11,17 @@ serves the immutable build from the reviewed Railway image. Workspace serves the
 from the persistent editable checkout through Vite HMR, behind a short-lived owner exchange and an
 HttpOnly session cookie:
 
-| Domain purpose                           | Suggested hostname           |     Target port |
-| ---------------------------------------- | ---------------------------- | --------------: |
-| Authenticated Studio                     | `studio.madesolid.com.au`    | `8080` (`PORT`) |
-| Private completed and live client frames | `preview.madesolid.com.au`   |          `8787` |
-| Owner-authenticated development Studio   | `workspace.madesolid.com.au` |          `3000` |
+| Domain purpose                           | Suggested hostname            |     Target port |
+| ---------------------------------------- | ----------------------------- | --------------: |
+| Authenticated Studio                     | `studio.madesolid.com.au`     | `8080` (`PORT`) |
+| Private completed and live client frames | `preview.madesolid.com.au`    |          `8787` |
+| Owner-authenticated development Studio   | `dev.studio.madesolid.com.au` |          `3000` |
 
 Railway supports multiple domains with different target ports on one service. Keep the Codex App
 Server on its loopback-only port `4500`; never add a Railway domain for it.
 
-The editable Studio uses `https://workspace.madesolid.com.au/` as its stable browser URL. An
+The editable Studio uses `https://dev.studio.madesolid.com.au/` as its canonical browser URL.
+`https://workspace.madesolid.com.au/` remains an accepted compatibility entry during migration. An
 unauthenticated document returns through the signed-in production Studio, which verifies the owner
 and issues a two-minute, owner-bound exchange. The Workspace gateway removes that exchange from the
 URL and replaces it with an eight-hour `HttpOnly`, `Secure`, `SameSite=Strict` session cookie before
@@ -77,6 +78,8 @@ PORT=8080
 VITE_SUPABASE_URL=
 VITE_SUPABASE_PUBLISHABLE_KEY=
 VITE_SITEFORGE_PREVIEW_ORIGIN=https://preview.madesolid.com.au
+VITE_SITEFORGE_DEVELOPMENT_ORIGIN=https://dev.studio.madesolid.com.au
+VITE_SITEFORGE_DEVELOPMENT_COMPATIBILITY_ORIGINS=https://workspace.madesolid.com.au
 VITE_SITEFORGE_OPENAI_API_ENABLED=false
 
 SITEFORGE_SUPABASE_URL=
@@ -85,7 +88,12 @@ SITEFORGE_RUNTIME_OWNER_USER_ID=
 SITEFORGE_RUNTIME_OWNER_ORGANIZATION_ID=
 SITEFORGE_PUBLIC_ORIGIN=https://studio.madesolid.com.au
 PREVIEW_PUBLIC_ORIGIN=https://preview.madesolid.com.au
+# Canonical owner-only development Studio. Keep the legacy variable during staged rollout.
+SITEFORGE_DEVELOPMENT_ORIGIN=https://dev.studio.madesolid.com.au
+SITEFORGE_DEVELOPMENT_COMPATIBILITY_ORIGINS=https://workspace.madesolid.com.au
 SITEFORGE_WORKSPACE_PREVIEW_ORIGIN=https://workspace.madesolid.com.au
+MADE_SOLID_WEBSITE_DEVELOPMENT_ORIGIN=https://dev.madesolid.com.au
+MADE_SOLID_WEBSITE_PRODUCTION_ORIGIN=https://madesolid.com.au
 SITEFORGE_WORKSPACE_PROXY_PORT=3000
 SITEFORGE_WORKSPACE_STUDIO_PORT=5173
 SITEFORGE_GITHUB_TOKEN=
@@ -102,6 +110,13 @@ VERCEL_TEAM_SLUG=made-solid
 CLIENTSPACE_HANDOFF_URL=
 CLIENTSPACE_HANDOFF_SECRET=
 ```
+
+Attach both `dev.studio.madesolid.com.au` and `workspace.madesolid.com.au` to the owner gateway
+port during the migration. The canonical hostname receives new access exchanges; the legacy
+hostname remains a complete compatibility entry and must not be removed until login, live updates,
+embedded website previews, direct hash routes, and notifications have been verified on the new
+hostname. Browser sessions, service workers, and Web Push subscriptions are hostname-specific and
+are deliberately re-established rather than copied.
 
 `SITEFORGE_GITHUB_TOKEN` should be a fine-grained token restricted to the Made Solid Studio, Made
 Solid website, and generated prospect repositories it must edit. Grant repository contents

@@ -21,20 +21,24 @@ import {
   createWorkspaceStudioToken,
   verifyWorkspacePreviewToken,
   workspaceFrameUrl,
-  workspacePreviewUrl,
 } from './workspace-preview-access.mjs';
 import { assertPublicUrl } from '../worker/security.mjs';
+import { CodexPushNotifications } from './codex-push-notifications.mjs';
+import { studioDevelopmentOrigins } from './studio-development-origins.mjs';
 
 const localWorkspaceEndpoint = '/__made-solid/local-workspace';
 const workspacePreviewAccessEndpoint = '/__made-solid/workspace-preview-access';
 const workspaceDevelopmentAccessEndpoint = '/__made-solid/workspace-development-access';
+const developmentProjectsEndpoint = '/__made-solid/development-projects';
 const workspaceCodexEndpoint = '/__made-solid/workspace-codex';
 const refinementLedgerEndpoint = '/__made-solid/refinement-ledger';
 const learningBundleEndpoint = '/__made-solid/learning-bundle';
 const finalEditEndpoint = '/__made-solid/final-edit';
 const committedPreviewEndpoint = '/__made-solid/committed-preview';
 const codexFeedbackEndpoint = '/__made-solid/codex-feedback';
+const codexBranchEndpoint = '/__made-solid/codex-branch';
 const codexStatusEndpoint = '/__made-solid/codex-status';
+const codexNotificationsEndpoint = '/__made-solid/codex-notifications';
 const aiBillingModeEndpoint = '/__made-solid/ai-billing-mode';
 const codexSpeechEndpoint = '/__made-solid/codex-speech';
 const codexAttachmentPrefix = '/__made-solid/codex-attachment/';
@@ -666,11 +670,14 @@ async function waitForWebsite(port) {
 }
 
 export function previewUrl(request, port, environment = process.env) {
-  const configuredOrigin = environment.SITEFORGE_WORKSPACE_PREVIEW_ORIGIN?.trim();
+  const configuredOrigin =
+    environment.PREVIEW_PUBLIC_ORIGIN?.trim() ||
+    environment.VITE_SITEFORGE_PREVIEW_ORIGIN?.trim() ||
+    'https://preview.madesolid.com.au';
   const previewSecret = environment.SITEFORGE_WORKSPACE_PREVIEW_SECRET?.trim();
   const previewDirectory = environment.SITEFORGE_ACTIVE_PREVIEW_DIRECTORY?.trim();
   if (configuredOrigin && previewSecret && previewDirectory) {
-    return workspacePreviewUrl(configuredOrigin, previewDirectory, previewSecret);
+    return workspaceFrameUrl(configuredOrigin, previewDirectory, previewSecret);
   }
   const codespaceName = String(environment.CODESPACE_NAME || '').trim();
   const forwardingDomain = String(
@@ -715,6 +722,134 @@ export function developmentServerHostFlag(packageDocument) {
   return /(?:^|\s)vite(?:\s|$)/.test(developmentScript) ? '--host' : '--hostname';
 }
 
+const ownedWebsiteSecretNames = [
+  'MICROSOFT_CLIENT_ID',
+  'MICROSOFT_CLIENT_SECRET',
+  'MICROSOFT_SENDER_EMAIL',
+  'MICROSOFT_TENANT_ID',
+  'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
+  'NEXT_PUBLIC_SUPABASE_URL',
+  'OPENAI_API_KEY',
+  'RESEND_API_KEY',
+  'REVIEW_NOTIFICATION_EMAIL',
+  'REVIEW_NOTIFICATION_FROM',
+  'REVIEW_NOTIFICATION_WEBHOOK_URL',
+  'STRIPE_HOSTING_CARE_PRICE_ID',
+  'STRIPE_MANAGED_HOSTING_PRICE_ID',
+  'STRIPE_SECRET_KEY',
+  'STRIPE_WEBHOOK_SECRET',
+  'STUDIO_HANDOFF_SECRET',
+  'SUPABASE_SERVICE_ROLE_KEY',
+];
+
+export function ownedWebsiteDevelopmentEnvironment(destination, environment = process.env) {
+  const configuredWebsite = environment.MADE_SOLID_WEBSITE_DIRECTORY?.trim();
+  if (!configuredWebsite || resolve(destination) !== resolve(configuredWebsite)) return [];
+  const arguments_ = ownedWebsiteSecretNames.flatMap((name) => ['-u', name]);
+  const developmentOrigins = studioDevelopmentOrigins(environment);
+  arguments_.push(
+    'MADE_SOLID_DEPLOYMENT_MODE=development',
+    `MADE_SOLID_STUDIO_ORIGIN=${developmentOrigins.canonicalOrigin}`,
+    `NEXT_PUBLIC_SITE_URL=${environment.MADE_SOLID_WEBSITE_DEVELOPMENT_ORIGIN?.trim() || 'https://dev.madesolid.com.au'}`,
+  );
+  for (const name of [
+    'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
+    'NEXT_PUBLIC_SUPABASE_URL',
+    'SUPABASE_SERVICE_ROLE_KEY',
+  ]) {
+    const value = environment[`MADE_SOLID_DEV_${name}`]?.trim();
+    if (value) arguments_.push(`${name}=${value}`);
+  }
+  return arguments_;
+}
+
+function developmentGitOutput(directory, arguments_) {
+  return execFileSync('git', arguments_, {
+    cwd: directory,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  }).trim();
+}
+
+export function developmentProjectStatus({
+  id,
+  name,
+  directory,
+  developmentUrl,
+  productionUrl,
+  developmentConfigured,
+}) {
+  const branch = developmentGitOutput(directory, ['branch', '--show-current']) || 'detached';
+  const head = developmentGitOutput(directory, ['rev-parse', 'HEAD']);
+  const statusLines = developmentGitOutput(directory, ['status', '--porcelain=v1'])
+    .split('\n')
+    .filter(Boolean);
+  const releaseSource = developmentGitOutput(directory, [
+    'log',
+    '-8',
+    '--format=%H%x1f%h%x1f%s%x1f%cI%x1e',
+  ]);
+  const releases = releaseSource
+    .split('\x1e')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const [commit, shortCommit, title, createdAt] = entry.split('\x1f');
+      return { commit, shortCommit, title, createdAt };
+    });
+  return {
+    branch,
+    changes: statusLines.slice(0, 100).map((line) => ({
+      path: line.slice(3),
+      status: line.slice(0, 2).trim() || 'changed',
+    })),
+    developmentConfigured,
+    developmentUrl,
+    directory: basename(directory),
+    dirty: statusLines.length > 0,
+    head,
+    id,
+    name,
+    productionUrl,
+    releases,
+  };
+}
+
+function developmentProjects(environment = process.env) {
+  const studioDirectory = environment.SITEFORGE_STUDIO_WORKSPACE_DIR?.trim() || process.cwd();
+  const websiteDirectory = environment.MADE_SOLID_WEBSITE_DIRECTORY?.trim();
+  const developmentOrigins = studioDevelopmentOrigins(environment);
+  const websiteDevelopmentOrigin = environment.MADE_SOLID_WEBSITE_DEVELOPMENT_ORIGIN?.trim();
+  const projects = [
+    developmentProjectStatus({
+      id: 'studio',
+      name: 'Made Solid Studio',
+      directory: studioDirectory,
+      developmentUrl: developmentOrigins.canonicalOrigin,
+      productionUrl:
+        environment.SITEFORGE_PUBLIC_ORIGIN?.trim() || 'https://studio.madesolid.com.au',
+      developmentConfigured: Boolean(
+        environment.SITEFORGE_DEVELOPMENT_ORIGIN?.trim() ||
+        environment.SITEFORGE_WORKSPACE_PREVIEW_ORIGIN?.trim(),
+      ),
+    }),
+  ];
+  if (websiteDirectory && workspacePreviewWorkspace(basename(websiteDirectory), environment)) {
+    projects.push(
+      developmentProjectStatus({
+        id: 'website',
+        name: 'Made Solid website',
+        directory: websiteDirectory,
+        developmentUrl: websiteDevelopmentOrigin || 'https://dev.madesolid.com.au',
+        productionUrl:
+          environment.MADE_SOLID_WEBSITE_PRODUCTION_ORIGIN?.trim() || 'https://madesolid.com.au',
+        developmentConfigured: Boolean(websiteDevelopmentOrigin),
+      }),
+    );
+  }
+  return projects;
+}
+
 async function launchWebsite({
   destination,
   directory,
@@ -745,6 +880,7 @@ async function launchWebsite({
     '-c',
     destination,
     'env',
+    ...ownedWebsiteDevelopmentEnvironment(destination),
     'NODE_ENV=development',
     'npm',
     'run',
@@ -830,6 +966,11 @@ async function launchCommittedPreview({ directory, commit, request, writeEvent, 
 
 export function localWorkspacePlugin() {
   const runtimeDataDirectory = process.env.SITEFORGE_RUNTIME_DATA_DIR?.trim();
+  const codexPushNotifications = new CodexPushNotifications({
+    storagePath: runtimeDataDirectory
+      ? resolve(runtimeDataDirectory, 'codex-push-notifications.json')
+      : resolve('.made-solid', 'codex-push-notifications.json'),
+  });
   const codexFeedbackBridgeSource = pathToFileURL(
     resolve(process.cwd(), 'scripts/codex-feedback-bridge.mjs'),
   );
@@ -839,6 +980,7 @@ export function localWorkspacePlugin() {
     storageRoot: runtimeDataDirectory
       ? resolve(runtimeDataDirectory, 'codex-feedback')
       : resolve('.made-solid', 'codex-feedback'),
+    notifyCompletion: (record) => codexPushNotifications.notifyCompletion(record),
   };
   let activeCodexFeedbackBridge;
   let activeCodexFeedbackBridgeModifiedAt = 0;
@@ -965,8 +1107,7 @@ export function localWorkspacePlugin() {
         const document = await renderWorkspaceCodexDocument(server, directory);
         response.writeHead(200, {
           'Cache-Control': 'no-store',
-          'Content-Security-Policy':
-            "frame-ancestors https://workspace.madesolid.com.au; base-uri 'none'; form-action 'none'",
+          'Content-Security-Policy': `frame-ancestors ${studioDevelopmentOrigins(process.env).origins.join(' ')}; base-uri 'none'; form-action 'none'`,
           'Content-Type': 'text/html; charset=utf-8',
           'Referrer-Policy': 'no-referrer',
           'X-Content-Type-Options': 'nosniff',
@@ -1003,7 +1144,7 @@ export function localWorkspacePlugin() {
           return;
         }
         try {
-          const origin = process.env.SITEFORGE_WORKSPACE_PREVIEW_ORIGIN?.trim();
+          const origin = studioDevelopmentOrigins(process.env).canonicalOrigin;
           const secret = process.env.SITEFORGE_WORKSPACE_PREVIEW_SECRET?.trim();
           const ownerUserId = runtimeAuthorization?.userId;
           if (!origin || !secret || !ownerUserId) {
@@ -1020,6 +1161,70 @@ export function localWorkspacePlugin() {
             status: 'unavailable',
             detail:
               error instanceof Error ? error.message : 'Workspace development is unavailable.',
+          });
+        }
+        return;
+      }
+      if (requestUrl.pathname === developmentProjectsEndpoint) {
+        if (request.method !== 'GET') {
+          response.statusCode = 405;
+          response.end('Method not allowed');
+          return;
+        }
+        const fetchSite = String(request.headers['sec-fetch-site'] || '').toLowerCase();
+        if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
+          sendJson(response, 403, {
+            status: 'failed',
+            detail: 'Development projects are only available from Made Solid Studio.',
+          });
+          return;
+        }
+        try {
+          sendJson(response, 200, { projects: developmentProjects(), status: 'ready' });
+        } catch (error) {
+          sendJson(response, 503, {
+            status: 'unavailable',
+            detail:
+              error instanceof Error ? error.message : 'Development project status is unavailable.',
+          });
+        }
+        return;
+      }
+      if (requestUrl.pathname === codexNotificationsEndpoint) {
+        const fetchSite = String(request.headers['sec-fetch-site'] || '').toLowerCase();
+        if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
+          sendJson(response, 403, {
+            status: 'failed',
+            detail: 'Notification settings are only available from Made Solid Studio.',
+          });
+          return;
+        }
+        try {
+          if (request.method === 'GET') {
+            sendJson(response, 200, await codexPushNotifications.configuration());
+            return;
+          }
+          if (request.method !== 'POST') {
+            response.statusCode = 405;
+            response.end('Method not allowed');
+            return;
+          }
+          const input = JSON.parse(await readRequestBody(request, 32 * 1024));
+          const result =
+            input.action === 'unsubscribe'
+              ? await codexPushNotifications.unsubscribe(input.endpoint)
+              : input.action === 'subscribe'
+                ? await codexPushNotifications.subscribe(input.subscription)
+                : undefined;
+          if (!result) throw new Error('Choose a valid notification action.');
+          sendJson(response, 200, result);
+        } catch (error) {
+          sendJson(response, 400, {
+            status: 'failed',
+            detail:
+              error instanceof Error
+                ? error.message
+                : 'Phone notification settings could not be updated.',
           });
         }
         return;
@@ -1243,7 +1448,8 @@ export function localWorkspacePlugin() {
       }
       if (
         requestUrl.pathname === codexStatusEndpoint ||
-        requestUrl.pathname === codexFeedbackEndpoint
+        requestUrl.pathname === codexFeedbackEndpoint ||
+        requestUrl.pathname === codexBranchEndpoint
       ) {
         const fetchSite = request.headers['sec-fetch-site'];
         if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
@@ -1320,21 +1526,25 @@ export function localWorkspacePlugin() {
           }
           const bridge = await codexFeedbackBridge();
           const result =
-            input.action === 'update-queued'
-              ? await bridge.updateQueued(input.id, input)
-              : input.action === 'delete-queued'
-                ? await bridge.deleteQueued(input.id, input)
-                : input.action === 'interrupt-queued'
-                  ? await bridge.interruptQueued(input.id, input)
-                  : input.action === 'delete-empty-thread'
-                    ? await bridge.deleteEmptyThread(input)
-                    : input.action === 'temporary-question'
-                      ? await bridge.temporaryQuestion(input)
-                      : input.action === 'new-thread'
-                        ? await bridge.createThread(input)
-                        : input.action === 'continue-interrupted-thread'
-                          ? await bridge.continueInterruptedThread(input)
-                          : await bridge.enqueue(input);
+            requestUrl.pathname === codexBranchEndpoint
+              ? await bridge.forkThread(input)
+              : input.action === 'update-queued'
+                ? await bridge.updateQueued(input.id, input)
+                : input.action === 'delete-queued'
+                  ? await bridge.deleteQueued(input.id, input)
+                  : input.action === 'interrupt-queued'
+                    ? await bridge.interruptQueued(input.id, input)
+                    : input.action === 'delete-empty-thread'
+                      ? await bridge.deleteEmptyThread(input)
+                      : input.action === 'temporary-question'
+                        ? await bridge.temporaryQuestion(input)
+                        : input.action === 'new-thread'
+                          ? await bridge.createThread(input)
+                          : input.action === 'branch-thread'
+                            ? await bridge.forkThread(input)
+                            : input.action === 'continue-interrupted-thread'
+                              ? await bridge.continueInterruptedThread(input)
+                              : await bridge.enqueue(input);
           sendJson(response, 202, result);
         } catch (error) {
           sendJson(response, 400, {

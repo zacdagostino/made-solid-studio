@@ -64,7 +64,28 @@ test('requires exact HTTPS origins and distinct gateway and Vite ports', () => {
     studioOrigin: 'https://studio.madesolid.com.au',
     upstreamPort: 5173,
     workspaceOrigin: 'https://workspace.madesolid.com.au',
+    workspaceOrigins: ['https://workspace.madesolid.com.au'],
   });
+  assert.deepEqual(
+    workspaceStudioGatewayConfiguration({
+      ...base,
+      SITEFORGE_DEVELOPMENT_ORIGIN: 'https://dev.studio.madesolid.com.au',
+      SITEFORGE_DEVELOPMENT_COMPATIBILITY_ORIGINS: 'https://legacy.example.com',
+    }),
+    {
+      ownerUserId,
+      port: 3000,
+      secret,
+      studioOrigin: 'https://studio.madesolid.com.au',
+      upstreamPort: 5173,
+      workspaceOrigin: 'https://dev.studio.madesolid.com.au',
+      workspaceOrigins: [
+        'https://dev.studio.madesolid.com.au',
+        'https://legacy.example.com',
+        'https://workspace.madesolid.com.au',
+      ],
+    },
+  );
   assert.throws(
     () =>
       workspaceStudioGatewayConfiguration({
@@ -128,6 +149,7 @@ test('protects every Vite request behind an owner cookie and keeps access out of
     studioOrigin: 'https://studio.madesolid.com.au',
     upstreamPort,
     workspaceOrigin: 'https://workspace.madesolid.com.au',
+    workspaceOrigins: ['https://workspace.madesolid.com.au'],
   });
   const gatewayPort = await listening(gateway);
   const origin = `http://127.0.0.1:${gatewayPort}`;

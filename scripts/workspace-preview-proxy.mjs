@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { verifyWorkspacePreviewToken } from './workspace-preview-access.mjs';
+import { studioDevelopmentOrigins } from './studio-development-origins.mjs';
 
 const cookieName = '__Host-made-solid-workspace';
 const lastWorkspaceCookieName = '__Host-made-solid-workspace-last';
@@ -28,7 +29,7 @@ export function workspacePreviewProxyConfiguration(environment = process.env) {
   };
   const studioOrigin = httpsOrigin('SITEFORGE_PUBLIC_ORIGIN');
   const clientFrameOrigin = httpsOrigin('PREVIEW_PUBLIC_ORIGIN');
-  const workspaceOrigin = httpsOrigin('SITEFORGE_WORKSPACE_PREVIEW_ORIGIN');
+  const workspaceOrigin = new URL(studioDevelopmentOrigins(environment).canonicalOrigin);
   if (
     clientFrameOrigin.origin === studioOrigin.origin ||
     clientFrameOrigin.origin === workspaceOrigin?.origin

@@ -4,9 +4,10 @@ import { readFile } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { verifyWorkspacePreviewToken } from '../scripts/workspace-preview-access.mjs';
+import { studioDevelopmentOrigins } from '../scripts/studio-development-origins.mjs';
 
 const defaultPort = 8787;
-const previewRoutePrefix = '/site/';
+const previewRoutePrefixes = ['/test/', '/build/', '/site/'];
 const workspaceFrameRoutePrefix = '/__made-solid/workspace-frame/';
 const directoryPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 const workspaceTokenPattern = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
@@ -30,13 +31,15 @@ export function previewHostConfiguration(environment = process.env) {
   ) {
     throw new Error('PREVIEW_PUBLIC_ORIGIN must use HTTPS outside local development.');
   }
+  const developmentOrigins = studioDevelopmentOrigins(environment);
   return {
     activeWorkspacePreviewPath: environment.SITEFORGE_ACTIVE_PREVIEW_PATH?.trim(),
     port: Number(environment.SITEFORGE_PREVIEW_PORT) || defaultPort,
     publicOrigin: configuredOrigin,
     serviceRoleKey,
     supabaseUrl,
-    workspaceOrigin: environment.SITEFORGE_WORKSPACE_PREVIEW_ORIGIN?.trim().replace(/\/+$/, ''),
+    workspaceOrigin: developmentOrigins.canonicalOrigin,
+    workspaceOrigins: developmentOrigins.origins,
     workspacePreviewSecret: environment.SITEFORGE_WORKSPACE_PREVIEW_SECRET?.trim(),
   };
 }
@@ -68,8 +71,9 @@ export function parseWorkspaceFramePath(pathname) {
 }
 
 export function parsePreviewPath(pathname) {
-  if (!pathname.startsWith(previewRoutePrefix)) return undefined;
-  const parts = pathname.slice(previewRoutePrefix.length).split('/').filter(Boolean);
+  const routePrefix = previewRoutePrefixes.find((prefix) => pathname.startsWith(prefix));
+  if (!routePrefix) return undefined;
+  const parts = pathname.slice(routePrefix.length).split('/').filter(Boolean);
   const runId = parts[0];
   const token = parts[1];
   const requestedPath = parts.slice(2);
@@ -82,7 +86,7 @@ export function parsePreviewPath(pathname) {
   if (filePath.includes('..') || filePath.startsWith('/') || !/^[a-zA-Z0-9._/-]+$/.test(filePath)) {
     return undefined;
   }
-  return { filePath, previewMode, runId, token };
+  return { filePath, previewMode, routePrefix, runId, token };
 }
 
 export function previewFileCandidates(filePath) {
@@ -94,6 +98,15 @@ export function previewFileCandidates(filePath) {
     if (normalized.includes('/')) candidates.push(`${normalized.replaceAll('/', '--')}.html`);
   }
   return candidates.filter((candidate, index) => candidates.indexOf(candidate) === index);
+}
+
+export function previewRouteMatchesBuildMode(routePrefix, buildMode) {
+  if (routePrefix === '/site/') return true;
+  if (routePrefix === '/build/') return buildMode === 'full_site';
+  if (routePrefix === '/test/') {
+    return ['homepage_test', 'page_test', 'site_test'].includes(buildMode);
+  }
+  return false;
 }
 
 export function contentTypeFor(filePath) {
@@ -352,14 +365,16 @@ async function resolvePreviewArtifact(configuration, parsed) {
 
   const runRows = await readRows(configuration, 'builder_runs', {
     id: `eq.${parsed.runId}`,
-    select: 'organization_id,status',
+    select: 'build_mode,organization_id,status',
   });
   const run = runRows[0];
   const allowed =
     parsed.previewMode === 'ready'
       ? run?.status === 'ready' || run?.status === 'review_required'
       : ['running', 'paused', 'failed', 'cancelled'].includes(run?.status);
-  if (!run || !allowed) return undefined;
+  if (!run || !allowed || !previewRouteMatchesBuildMode(parsed.routePrefix, run.build_mode)) {
+    return undefined;
+  }
 
   const artifactKind = parsed.previewMode === 'draft' ? 'draft_file' : 'site_file';
   const artifactPrefix = parsed.previewMode === 'draft' ? 'draft' : 'site';
@@ -412,7 +427,7 @@ export async function handlePreviewRequest(request, configuration = previewHostC
 
     const extension = artifact.filePath.slice(artifact.filePath.lastIndexOf('.')).toLowerCase();
     const draftPrefix = parsed.previewMode === 'draft' ? '__draft__/' : '';
-    const base = `${requestPublicOrigin(request, configuration)}${previewRoutePrefix}${parsed.runId}/${parsed.token}/${draftPrefix}`;
+    const base = `${requestPublicOrigin(request, configuration)}${parsed.routePrefix}${parsed.runId}/${parsed.token}/${draftPrefix}`;
     if (extension === '.html') {
       const source = await storedFile.text();
       if (isLockedStarterDocument(source)) {
@@ -450,9 +465,17 @@ function workspaceFrameConfiguration(configuration) {
   }
   let parsedWorkspaceOrigin;
   let parsedPublicOrigin;
+  let workspaceOrigins;
   try {
     parsedWorkspaceOrigin = new URL(workspaceOrigin);
     parsedPublicOrigin = new URL(publicOrigin);
+    workspaceOrigins = (configuration.workspaceOrigins || [workspaceOrigin]).map((origin) => {
+      const parsed = new URL(origin);
+      if (parsed.protocol !== 'https:' || parsed.href !== `${parsed.origin}/`) {
+        throw new Error('Invalid development origin.');
+      }
+      return parsed.origin;
+    });
   } catch {
     return undefined;
   }
@@ -461,11 +484,18 @@ function workspaceFrameConfiguration(configuration) {
     parsedPublicOrigin.protocol !== 'https:' ||
     parsedWorkspaceOrigin.href !== `${parsedWorkspaceOrigin.origin}/` ||
     parsedPublicOrigin.href !== `${parsedPublicOrigin.origin}/` ||
-    parsedWorkspaceOrigin.origin === parsedPublicOrigin.origin
+    parsedWorkspaceOrigin.origin === parsedPublicOrigin.origin ||
+    workspaceOrigins.includes(parsedPublicOrigin.origin)
   ) {
     return undefined;
   }
-  return { activeWorkspacePreviewPath, publicOrigin, workspaceOrigin, workspacePreviewSecret };
+  return {
+    activeWorkspacePreviewPath,
+    publicOrigin,
+    workspaceOrigin,
+    workspaceOrigins: [...new Set(workspaceOrigins)],
+    workspacePreviewSecret,
+  };
 }
 
 async function activeWorkspacePreview(configuration) {
@@ -523,7 +553,7 @@ function workspaceFrameUpstreamPath(requestUrl, parsed) {
   return `${parsed.upstreamPath}${requestUrl.search}`;
 }
 
-function workspaceFrameContentSecurityPolicy(existing, workspaceOrigin, publicOrigin) {
+function workspaceFrameContentSecurityPolicy(existing, workspaceOrigins, publicOrigin) {
   const sources = Array.isArray(existing) ? existing : [existing || ''];
   const replacedPolicies = sources
     .map((source) =>
@@ -554,7 +584,7 @@ function workspaceFrameContentSecurityPolicy(existing, workspaceOrigin, publicOr
     "object-src 'none'",
     "form-action 'none'",
     "base-uri 'self'",
-    `frame-ancestors ${workspaceOrigin}`,
+    `frame-ancestors ${workspaceOrigins.join(' ')}`,
   ].join('; ');
   return [...replacedPolicies, lockedPolicy].join(', ');
 }
@@ -580,7 +610,7 @@ function proxyWorkspaceFrameHttp(request, response, requestUrl, parsed, active, 
         'cache-control': 'private, no-store',
         'content-security-policy': workspaceFrameContentSecurityPolicy(
           upstreamResponse.headers['content-security-policy'],
-          configuration.workspaceOrigin,
+          configuration.workspaceOrigins || [configuration.workspaceOrigin],
           configuration.publicOrigin,
         ),
         'cross-origin-resource-policy': 'cross-origin',
@@ -679,6 +709,7 @@ function proxyWorkspaceFrameUpgrade(request, socket, head, requestUrl, parsed, a
   upstream.on('upgrade', (upstreamResponse, upstreamSocket, upstreamHead) => {
     const statusLine = `HTTP/${upstreamResponse.httpVersion} ${upstreamResponse.statusCode} ${upstreamResponse.statusMessage}\r\n`;
     const headers = Object.entries(upstreamResponse.headers)
+      .filter(([name]) => !['set-cookie', 'set-cookie2'].includes(name.toLowerCase()))
       .flatMap(([name, value]) =>
         Array.isArray(value)
           ? value.map((item) => `${name}: ${item}\r\n`)

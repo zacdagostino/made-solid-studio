@@ -16,6 +16,7 @@ import {
   CornerDownRight,
   CreditCard,
   Globe2,
+  GitFork,
   ImageUp,
   FilePenLine,
   ListChecks,
@@ -32,6 +33,7 @@ import {
   RotateCw,
   Save,
   Send,
+  Settings,
   Search,
   SlidersHorizontal,
   Square,
@@ -132,6 +134,7 @@ type CodexStatus = {
     role: 'user' | 'assistant';
     text: string;
     turnId?: string;
+    turnStatus?: string;
     phase?: string;
     attachmentId?: string;
     attachmentIds?: string[];
@@ -157,6 +160,31 @@ type CodexStatus = {
     workMode?: 'direct' | 'team';
   }>;
 };
+
+function canBranchCodexMessage(
+  message: CodexStatus['messages'][number],
+  thread: CodexThread | undefined,
+  messages: CodexStatus['messages'],
+) {
+  if (
+    message.role !== 'assistant' ||
+    message.phase === 'commentary' ||
+    !message.turnId ||
+    message.turnId === thread?.activeTurnId
+  )
+    return false;
+  if (message.turnStatus) return message.turnStatus === 'completed';
+  const latestFinalTurnId = [...messages]
+    .reverse()
+    .find(
+      (candidate) => candidate.role === 'assistant' && candidate.phase !== 'commentary',
+    )?.turnId;
+  if (latestFinalTurnId !== message.turnId) return true;
+  return (
+    thread?.lastTurnStatus === 'completed' ||
+    (!thread?.working && thread?.lastTurnStatus !== 'interrupted')
+  );
+}
 
 type CodexActivityKind =
   'command' | 'file' | 'tool' | 'search' | 'image' | 'plan' | 'agent' | 'context';
@@ -230,7 +258,7 @@ type CloudSpeechConfiguration = {
 type CloudSpeechSegment = { audio: HTMLAudioElement; duration: number; url: string };
 type ConversationTransition = {
   id: number;
-  kind: 'create' | 'switch';
+  kind: 'branch' | 'create' | 'switch';
   label: string;
 };
 type CodexExcerpt = { messageId: string; text: string };
@@ -248,6 +276,7 @@ type DraftAttachment = { id: string; name: string; source: string };
 
 const statusEndpoint = '/__made-solid/codex-status';
 const feedbackEndpoint = '/__made-solid/codex-feedback';
+const branchEndpoint = '/__made-solid/codex-branch';
 const localPageCaptureEndpoint = '/__made-solid/page-screenshot';
 const codexAttachmentPrefix = '/__made-solid/codex-attachment/';
 const codexSpeechEndpoint = '/__made-solid/codex-speech';
@@ -758,6 +787,7 @@ function CodexChatActivity({ activity, entering }: { activity: CodexActivity; en
 
 function CodexConversationLoading({ transition }: { transition: ConversationTransition }) {
   const creating = transition.kind === 'create';
+  const branching = transition.kind === 'branch';
   return (
     <div className="codex-conversation-loading" role="status">
       <div className="codex-conversation-loading__status">
@@ -765,9 +795,19 @@ function CodexConversationLoading({ transition }: { transition: ConversationTran
           <Bot size={19} />
         </span>
         <span className="codex-conversation-loading__copy">
-          <strong>{creating ? 'Starting a new chat' : 'Opening conversation'}</strong>
+          <strong>
+            {creating
+              ? 'Starting a new chat'
+              : branching
+                ? 'Branching conversation'
+                : 'Opening conversation'}
+          </strong>
           <small>
-            {creating ? 'Preparing a fresh Codex workspace…' : `Loading ${transition.label}…`}
+            {creating
+              ? 'Preparing a fresh Codex workspace…'
+              : branching
+                ? 'Copying context through the selected reply…'
+                : `Loading ${transition.label}…`}
           </small>
         </span>
         <span aria-hidden="true" className="codex-conversation-loading__dots">
@@ -1074,6 +1114,7 @@ export function CodexFeedbackPanel({
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const conversationTriggerRef = useRef<HTMLButtonElement>(null);
+  const chatPreferencesTriggerRef = useRef<HTMLButtonElement>(null);
   const conversationPickerRef = useRef<HTMLDivElement>(null);
   const conversationTransitionIdRef = useRef(0);
   const initialChatSessionRef = useRef(readCodexChatSession(workspaceDirectory));
@@ -1178,6 +1219,7 @@ export function CodexFeedbackPanel({
   const [isChatFollowingLatest, setIsChatFollowingLatest] = useState(true);
   const [isComposerExpanded, setIsComposerExpanded] = useState(false);
   const [composerSettingsOpen, setComposerSettingsOpen] = useState(false);
+  const [chatPreferencesOpen, setChatPreferencesOpen] = useState(false);
   const [billingModeChanging, setBillingModeChanging] = useState(false);
   const [isPreparingPhoto, setIsPreparingPhoto] = useState(false);
   const [expandedAgentId, setExpandedAgentId] = useState('');
@@ -2812,6 +2854,63 @@ export function CodexFeedbackPanel({
     }
   };
 
+  const branchConversation = async (message: CodexStatus['messages'][number]) => {
+    const sourceThreadId = selectedThreadId || status?.thread?.id || '';
+    const sourceThreadScope = selectedThread?.scope;
+    if (
+      !sourceThreadId ||
+      !message.turnId ||
+      message.role !== 'assistant' ||
+      message.phase === 'commentary' ||
+      !canBranchCodexMessage(message, status?.thread, status?.messages || []) ||
+      conversationTransition
+    )
+      return;
+    const transitionId = conversationTransitionIdRef.current + 1;
+    conversationTransitionIdRef.current = transitionId;
+    setConversationTransition({ id: transitionId, kind: 'branch', label: 'Branched chat' });
+    setError(undefined);
+    try {
+      const response = await studioRuntimeFetch(branchEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          action: 'branch-thread',
+          threadId: sourceThreadId,
+          turnId: message.turnId,
+          threadScope: sourceThreadScope || (workspaceDirectory ? 'client' : 'universal'),
+          workspace: workspaceDirectory,
+        }),
+      });
+      const result = (await response.json()) as { thread?: CodexThread; detail?: string };
+      if (!response.ok || !result.thread?.id) {
+        throw new Error(result.detail || 'The Codex conversation could not be branched.');
+      }
+      const branchedThread = result.thread;
+      selectConversation(branchedThread.id, branchedThread.scope);
+      const loaded = await refreshStatus(branchedThread.id, branchedThread.scope);
+      if (!loaded && selectedThreadIdRef.current === branchedThread.id) {
+        selectConversation(sourceThreadId, sourceThreadScope);
+        await refreshStatus(sourceThreadId, sourceThreadScope);
+        throw new Error(
+          'The branch was created but could not be opened. Your original chat is still selected.',
+        );
+      }
+      setPendingChatMessage(undefined);
+      setPendingVisualMessage(undefined);
+      window.requestAnimationFrame(() => composerTextareaRef.current?.focus());
+    } catch (cause) {
+      if (selectedThreadIdRef.current !== sourceThreadId) {
+        selectConversation(sourceThreadId, sourceThreadScope);
+      }
+      setError(
+        cause instanceof Error ? cause.message : 'The Codex conversation could not be branched.',
+      );
+    } finally {
+      setConversationTransition((current) => (current?.id === transitionId ? undefined : current));
+    }
+  };
+
   const switchConversation = async (thread: CodexThread) => {
     if (
       conversationTransition ||
@@ -3442,6 +3541,8 @@ export function CodexFeedbackPanel({
     restoredChatThreadRef.current = '';
     stopCodexSpeech(false);
     void discardEmptyConversation(selectedThreadId || status?.thread?.id || '');
+    setComposerSettingsOpen(false);
+    setChatPreferencesOpen(false);
     setPhase('closed');
     setError(undefined);
   };
@@ -3500,6 +3601,13 @@ export function CodexFeedbackPanel({
               triggerRef.current?.focus();
             }}
             onEscapeKeyDown={(event) => {
+              if (chatPreferencesOpen) {
+                event.preventDefault();
+                stopVoicePreview();
+                setChatPreferencesOpen(false);
+                window.requestAnimationFrame(() => chatPreferencesTriggerRef.current?.focus());
+                return;
+              }
               if (conversationPickerOpen) {
                 event.preventDefault();
                 setConversationPickerOpen(false);
@@ -3610,7 +3718,9 @@ export function CodexFeedbackPanel({
                     <strong>
                       {conversationTransition?.kind === 'create'
                         ? 'Starting a new chat'
-                        : threadTitle(selectedThread)}
+                        : conversationTransition?.kind === 'branch'
+                          ? 'Branching conversation'
+                          : threadTitle(selectedThread)}
                     </strong>
                     <small>
                       {workspaceDirectory ? (
@@ -3623,7 +3733,9 @@ export function CodexFeedbackPanel({
                       {conversationTransition
                         ? conversationTransition.kind === 'create'
                           ? 'Preparing conversation'
-                          : 'Loading conversation'
+                          : conversationTransition.kind === 'branch'
+                            ? 'Copying conversation'
+                            : 'Loading conversation'
                         : selectedThread?.working
                           ? 'Working'
                           : selectedThread?.interrupted
@@ -3953,32 +4065,55 @@ export function CodexFeedbackPanel({
                                       'Codex'
                                     )}
                                   </strong>
-                                  {speechSupported && isReadableCodexMessage ? (
-                                    isReadingThisReply ? (
-                                      <span className="codex-chat-message__reading-state">
-                                        <Volume2 aria-hidden="true" size={14} />
-                                        Playing above
-                                      </span>
-                                    ) : (
+                                  <ButtonGroup className="codex-chat-message__actions">
+                                    {speechSupported && isReadableCodexMessage ? (
+                                      isReadingThisReply ? (
+                                        <span className="codex-chat-message__reading-state">
+                                          <Volume2 aria-hidden="true" size={14} />
+                                          Playing above
+                                        </span>
+                                      ) : (
+                                        <Button
+                                          aria-label={
+                                            message.phase === 'commentary'
+                                              ? 'Read progress update'
+                                              : 'Read Codex reply'
+                                          }
+                                          className="codex-chat-message__read"
+                                          onClick={() => {
+                                            setAutoReadPending(undefined);
+                                            readCodexReply(message.id, message.text);
+                                          }}
+                                          size="small"
+                                          variant="quiet"
+                                        >
+                                          <Volume2 aria-hidden="true" size={15} />
+                                          Read
+                                        </Button>
+                                      )
+                                    ) : null}
+                                    {message.role === 'assistant' &&
+                                    message.phase !== 'commentary' &&
+                                    message.turnId &&
+                                    canBranchCodexMessage(
+                                      message,
+                                      status?.thread,
+                                      status?.messages || [],
+                                    ) ? (
                                       <Button
-                                        aria-label={
-                                          message.phase === 'commentary'
-                                            ? 'Read progress update'
-                                            : 'Read Codex reply'
-                                        }
-                                        className="codex-chat-message__read"
-                                        onClick={() => {
-                                          setAutoReadPending(undefined);
-                                          readCodexReply(message.id, message.text);
-                                        }}
+                                        aria-label="Branch chat from this reply"
+                                        className="codex-chat-message__branch"
+                                        disabled={Boolean(conversationTransition)}
+                                        onClick={() => void branchConversation(message)}
                                         size="small"
+                                        title="Create a new chat with context through this reply"
                                         variant="quiet"
                                       >
-                                        <Volume2 aria-hidden="true" size={15} />
-                                        Read
+                                        <GitFork aria-hidden="true" size={15} />
+                                        Branch
                                       </Button>
-                                    )
-                                  ) : null}
+                                    ) : null}
+                                  </ButtonGroup>
                                 </header>
                                 {activityContext ? (
                                   <span
@@ -4508,16 +4643,31 @@ export function CodexFeedbackPanel({
                   aria-expanded={composerSettingsOpen}
                   className={composerSettingsOpen ? 'is-active' : ''}
                   disabled={Boolean(conversationTransition)}
-                  label="Chat settings"
+                  label="Run setup"
                   onClick={() =>
                     setComposerSettingsOpen((open) => {
-                      if (open) stopVoicePreview();
+                      if (!open) setChatPreferencesOpen(false);
                       return !open;
                     })
                   }
                   variant="quiet"
                 >
                   <SlidersHorizontal aria-hidden="true" size={18} />
+                </IconButton>
+                <IconButton
+                  aria-controls="codex-chat-preferences"
+                  aria-expanded={chatPreferencesOpen}
+                  className={chatPreferencesOpen ? 'is-active' : ''}
+                  disabled={Boolean(conversationTransition)}
+                  label="Chat settings"
+                  onClick={() => {
+                    setComposerSettingsOpen(false);
+                    setChatPreferencesOpen(true);
+                  }}
+                  ref={chatPreferencesTriggerRef}
+                  variant="quiet"
+                >
+                  <Settings aria-hidden="true" size={18} />
                 </IconButton>
                 <IconButton
                   label={
@@ -4553,336 +4703,375 @@ export function CodexFeedbackPanel({
                 </p>
               ) : null}
 
-              {composerSettingsOpen ? (
+              {composerSettingsOpen || chatPreferencesOpen ? (
                 <div
-                  aria-label="Chat settings"
-                  className="codex-composer-settings"
-                  id="codex-composer-settings"
-                  role="group"
+                  aria-labelledby={chatPreferencesOpen ? 'codex-chat-preferences-title' : undefined}
+                  aria-label={chatPreferencesOpen ? undefined : 'Run setup'}
+                  aria-modal={chatPreferencesOpen || undefined}
+                  className={`codex-composer-settings${chatPreferencesOpen ? ' is-preferences' : ' is-run-setup'}`}
+                  id={chatPreferencesOpen ? 'codex-chat-preferences' : 'codex-composer-settings'}
+                  role={chatPreferencesOpen ? 'dialog' : 'group'}
                 >
-                  <CodexSubscriptionUsage usage={status?.subscriptionUsage} />
-                  <Button
-                    aria-pressed={status?.billing?.mode === 'api_credits'}
-                    className={`codex-agent-mode${status?.billing?.mode === 'api_credits' ? ' is-active' : ''}`}
-                    disabled={
-                      billingModeChanging ||
-                      Boolean(status?.thread?.working) ||
-                      Boolean(status?.queuedCount) ||
-                      (status?.billing?.mode !== 'api_credits' &&
-                        status?.billing?.apiKeyConfigured !== true)
-                    }
-                    onClick={() => void changeBillingMode()}
-                    variant="quiet"
-                  >
-                    {billingModeChanging ? (
-                      <LoaderCircle aria-hidden="true" className="is-spinning" size={17} />
-                    ) : (
-                      <CreditCard aria-hidden="true" size={17} />
-                    )}
-                    <span className="codex-agent-mode__copy">
-                      <strong>
-                        {status?.billing?.mode === 'api_credits'
-                          ? 'OpenAI API credits'
-                          : 'Use API credits'}
-                      </strong>
-                      <small>
-                        {status?.billing?.apiKeyConfigured
-                          ? status.billing.mode === 'api_credits'
-                            ? 'Separately billed for Studio chat, builders, and AI analysis'
-                            : 'Switch here if your ChatGPT subscription allowance runs out'
-                          : 'Add a server-side OpenAI API key in Railway to enable this'}
-                      </small>
-                    </span>
-                    <span aria-hidden="true" className="codex-agent-mode__state">
-                      {billingModeChanging
-                        ? 'Switching'
-                        : status?.billing?.mode === 'api_credits'
-                          ? 'On'
-                          : 'Off'}
-                    </span>
-                  </Button>
-                  <Button
-                    aria-pressed={workMode === 'team'}
-                    className={`codex-agent-mode${workMode === 'team' ? ' is-active' : ''}`}
-                    disabled={phase === 'sending-chat' || Boolean(conversationTransition)}
-                    onClick={() =>
-                      setWorkMode((current) => (current === 'team' ? 'direct' : 'team'))
-                    }
-                    variant="quiet"
-                  >
-                    <UsersRound aria-hidden="true" size={17} />
-                    <span className="codex-agent-mode__copy">
-                      <strong>Agent team</strong>
-                      <small>
-                        {workMode === 'team'
-                          ? 'Codex can delegate independent work in parallel'
-                          : 'Use one Codex agent for this request'}
-                      </small>
-                    </span>
-                    <span aria-hidden="true" className="codex-agent-mode__state">
-                      {workMode === 'team' ? 'On' : 'Off'}
-                    </span>
-                  </Button>
-                  <Button
-                    aria-pressed={selectedServiceTier === 'priority'}
-                    className={`codex-agent-mode${selectedServiceTier === 'priority' ? ' is-active' : ''}`}
-                    disabled={
-                      phase === 'sending-chat' ||
-                      Boolean(conversationTransition) ||
-                      !fastModeAvailable
-                    }
-                    onClick={() => setFastMode((current) => !current)}
-                    variant="quiet"
-                  >
-                    <Clock3 aria-hidden="true" size={17} />
-                    <span className="codex-agent-mode__copy">
-                      <strong>Fast</strong>
-                      <small>
-                        {fastModeAvailable
-                          ? 'Higher-speed Codex responses with increased usage'
-                          : 'Unavailable for the selected model'}
-                      </small>
-                    </span>
-                    <span aria-hidden="true" className="codex-agent-mode__state">
-                      {selectedServiceTier === 'priority' ? 'On' : 'Off'}
-                    </span>
-                  </Button>
-                  <section
-                    aria-labelledby="codex-speech-settings-title"
-                    className="codex-speech-settings"
-                  >
-                    <header>
+                  {chatPreferencesOpen ? (
+                    <header className="codex-chat-preferences__header">
                       <span>
-                        <strong id="codex-speech-settings-title">Read aloud voice</strong>
-                        <small>
-                          {cloudSpeechConfiguration?.available
-                            ? `${cloudSpeechConfiguration.voices.length} Google voices · choose any available language and model`
-                            : cloudSpeechConfiguration
-                              ? 'Google voice setup is not active · using your English device voice'
-                              : 'Checking Google voice availability…'}
-                        </small>
+                        <strong id="codex-chat-preferences-title">Chat settings</strong>
+                        <small>Usage, billing, response speed, and read-aloud preferences</small>
                       </span>
-                    </header>
-                    <div className="codex-speech-settings__controls">
-                      <label>
-                        <span>Language &amp; accent</span>
-                        <select
-                          disabled={!cloudSpeechConfiguration?.available}
-                          onChange={(event) => {
-                            stopCodexSpeech(false);
-                            stopVoicePreview();
-                            const language = event.target.value;
-                            const voice = cloudSpeechConfiguration?.voices
-                              .filter(({ languageCode }) => languageCode === language)
-                              .sort((left, right) => left.qualityRank - right.qualityRank)[0];
-                            if (!voice) return;
-                            setSelectedSpeechLanguage(language);
-                            setSelectedSpeechModel(voice.model);
-                            setSelectedSpeechVoice(voice.id);
-                          }}
-                          value={selectedSpeechLanguage}
-                        >
-                          {speechLanguages.map(({ code, label }) => (
-                            <option key={code} value={code}>
-                              {label} · {code}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>
-                        <span>Model quality</span>
-                        <select
-                          disabled={!cloudSpeechConfiguration?.available}
-                          onChange={(event) => {
-                            stopCodexSpeech(false);
-                            stopVoicePreview();
-                            const model = event.target.value;
-                            const voice = cloudSpeechConfiguration?.voices.find(
-                              (candidate) =>
-                                candidate.languageCode === selectedSpeechLanguage &&
-                                candidate.model === model,
-                            );
-                            if (!voice) return;
-                            setSelectedSpeechModel(model);
-                            setSelectedSpeechVoice(voice.id);
-                          }}
-                          value={selectedSpeechModel}
-                        >
-                          {speechModels.map((voice) => (
-                            <option key={voice.model} value={voice.model}>
-                              {voice.modelLabel} — {voice.qualityLabel}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>
-                        <span>Voice</span>
-                        <select
-                          disabled={!cloudSpeechConfiguration?.available}
-                          onChange={(event) => {
-                            stopCodexSpeech(false);
-                            stopVoicePreview();
-                            setSelectedSpeechVoice(event.target.value);
-                            const voice = cloudSpeechConfiguration?.voices.find(
-                              ({ id }) => id === event.target.value,
-                            );
-                            setSpeechStatus(
-                              `Google ${voice?.name ?? event.target.value} selected.`,
-                            );
-                          }}
-                          value={selectedSpeechVoice}
-                        >
-                          {!cloudSpeechConfiguration?.voices.length ? (
-                            <option value={selectedSpeechVoice}>{selectedSpeechVoice}</option>
-                          ) : null}
-                          {filteredSpeechVoices.map((voice) => (
-                            <option key={voice.id} value={voice.id}>
-                              {voice.name} · {voice.gender}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>
-                        <span>Reading style</span>
-                        <select
-                          onChange={(event) => {
-                            stopCodexSpeech(false);
-                            setSelectedSpeechStyle(event.target.value as CodexSpeechStyle);
-                          }}
-                          value={selectedSpeechStyle}
-                        >
-                          <option value="natural">Natural</option>
-                          <option value="literal">Literal</option>
-                        </select>
-                      </label>
-                      <label>
-                        <span>Speed</span>
-                        <select
-                          onChange={(event) => {
-                            stopCodexSpeech(false);
-                            setSelectedSpeechRate(Number(event.target.value));
-                          }}
-                          value={selectedSpeechRate}
-                        >
-                          <option value="0.85">0.85× · relaxed</option>
-                          <option value="1">1× · conversational</option>
-                          <option value="1.15">1.15× · brisk</option>
-                        </select>
-                      </label>
-                      <label className="codex-speech-settings__toggle">
-                        <span>
-                          <strong>Auto-read Codex</strong>
-                          <small>
-                            Reads progress updates and the final reply automatically while this chat
-                            is open.
-                          </small>
-                        </span>
-                        <input
-                          checked={autoReadCodex}
-                          onChange={(event) => {
-                            const enabled = event.target.checked;
-                            setAutoReadCodex(enabled);
-                            setAutoReadPending(undefined);
-                            if (!enabled && speechInitiatorRef.current === 'auto') {
-                              stopCodexSpeech(false);
-                            }
-                            setSpeechStatus(
-                              enabled
-                                ? 'Auto-read is on for new progress and final replies in this chat.'
-                                : 'Auto-read is off.',
-                            );
-                          }}
-                          type="checkbox"
-                        />
-                      </label>
-                      {selectedCloudSpeechVoice ? (
-                        <p className="codex-speech-settings__selection">
-                          <strong>
-                            {selectedSpeechLanguageLabel} ·{' '}
-                            {selectedSpeechStyle === 'natural' ? 'Natural' : 'Literal'} ·{' '}
-                            {selectedSpeechRate}×
-                          </strong>
-                          <span>
-                            {selectedCloudSpeechVoice.modelLabel} ·{' '}
-                            {selectedCloudSpeechVoice.qualityLabel} ·{' '}
-                            {autoReadCodex ? 'Auto-read on' : 'Auto-read off'}
-                          </span>
-                        </p>
-                      ) : null}
-                      <Button
-                        aria-label={
-                          voicePreviewState === 'playing'
-                            ? 'Stop voice preview'
-                            : voicePreviewState === 'loading'
-                              ? 'Preparing voice preview'
-                              : `Preview ${selectedCloudSpeechVoice?.name ?? selectedSpeechVoice} voice`
-                        }
-                        disabled={
-                          !cloudSpeechConfiguration?.available || voicePreviewState === 'loading'
-                        }
+                      <IconButton
+                        autoFocus
+                        label="Close chat settings"
                         onClick={() => {
-                          if (voicePreviewState === 'playing') stopVoicePreview();
-                          else void previewSpeechVoice();
+                          stopVoicePreview();
+                          setChatPreferencesOpen(false);
+                          window.requestAnimationFrame(() =>
+                            chatPreferencesTriggerRef.current?.focus(),
+                          );
                         }}
-                        size="small"
                         variant="quiet"
                       >
-                        {voicePreviewState === 'loading' ? (
-                          <LoaderCircle aria-hidden="true" className="is-spinning" size={15} />
-                        ) : voicePreviewState === 'playing' ? (
-                          <Square aria-hidden="true" size={14} />
+                        <X aria-hidden="true" size={18} />
+                      </IconButton>
+                    </header>
+                  ) : null}
+                  {chatPreferencesOpen ? (
+                    <>
+                      <CodexSubscriptionUsage usage={status?.subscriptionUsage} />
+                      <Button
+                        aria-pressed={status?.billing?.mode === 'api_credits'}
+                        className={`codex-agent-mode${status?.billing?.mode === 'api_credits' ? ' is-active' : ''}`}
+                        disabled={
+                          billingModeChanging ||
+                          Boolean(status?.thread?.working) ||
+                          Boolean(status?.queuedCount) ||
+                          (status?.billing?.mode !== 'api_credits' &&
+                            status?.billing?.apiKeyConfigured !== true)
+                        }
+                        onClick={() => void changeBillingMode()}
+                        variant="quiet"
+                      >
+                        {billingModeChanging ? (
+                          <LoaderCircle aria-hidden="true" className="is-spinning" size={17} />
                         ) : (
-                          <Play aria-hidden="true" size={15} />
+                          <CreditCard aria-hidden="true" size={17} />
                         )}
-                        {voicePreviewState === 'loading'
-                          ? 'Preparing'
-                          : voicePreviewState === 'playing'
-                            ? 'Stop preview'
-                            : 'Preview voice'}
+                        <span className="codex-agent-mode__copy">
+                          <strong>
+                            {status?.billing?.mode === 'api_credits'
+                              ? 'OpenAI API credits'
+                              : 'Use API credits'}
+                          </strong>
+                          <small>
+                            {status?.billing?.apiKeyConfigured
+                              ? status.billing.mode === 'api_credits'
+                                ? 'Separately billed for Studio chat, builders, and AI analysis'
+                                : 'Switch here if your ChatGPT subscription allowance runs out'
+                              : 'Add a server-side OpenAI API key in Railway to enable this'}
+                          </small>
+                        </span>
+                        <span aria-hidden="true" className="codex-agent-mode__state">
+                          {billingModeChanging
+                            ? 'Switching'
+                            : status?.billing?.mode === 'api_credits'
+                              ? 'On'
+                              : 'Off'}
+                        </span>
                       </Button>
-                    </div>
-                  </section>
-                  <footer className="codex-composer-footer">
-                    <div className="codex-chat-configuration">
-                      <label className="codex-model-field">
-                        <span>Model</span>
-                        <select
-                          disabled={!status?.thread || Boolean(conversationTransition)}
-                          onChange={(event) => {
-                            const model = availableModels.find(
-                              (candidate) => candidate.id === event.target.value,
-                            );
-                            if (model) chooseModel(model);
-                          }}
-                          value={selectedModelId}
-                        >
-                          {availableModels.map((model) => (
-                            <option key={model.id} value={model.id}>
-                              {model.label}
-                              {model.supportsImages ? '' : ' · text only'}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-
-                      {selectedModel?.efforts.length ? (
-                        <label className="codex-effort-field">
-                          <span>Reasoning</span>
-                          <select
-                            disabled={Boolean(conversationTransition)}
-                            onChange={(event) => chooseEffort(selectedModel.id, event.target.value)}
-                            value={modelEffort(selectedModel, selectedEffort)}
+                    </>
+                  ) : null}
+                  {composerSettingsOpen ? (
+                    <Button
+                      aria-pressed={workMode === 'team'}
+                      className={`codex-agent-mode${workMode === 'team' ? ' is-active' : ''}`}
+                      disabled={phase === 'sending-chat' || Boolean(conversationTransition)}
+                      onClick={() =>
+                        setWorkMode((current) => (current === 'team' ? 'direct' : 'team'))
+                      }
+                      variant="quiet"
+                    >
+                      <UsersRound aria-hidden="true" size={17} />
+                      <span className="codex-agent-mode__copy">
+                        <strong>Agent team</strong>
+                        <small>
+                          {workMode === 'team'
+                            ? 'Codex can delegate independent work in parallel'
+                            : 'Use one Codex agent for this request'}
+                        </small>
+                      </span>
+                      <span aria-hidden="true" className="codex-agent-mode__state">
+                        {workMode === 'team' ? 'On' : 'Off'}
+                      </span>
+                    </Button>
+                  ) : null}
+                  {chatPreferencesOpen ? (
+                    <>
+                      <Button
+                        aria-pressed={selectedServiceTier === 'priority'}
+                        className={`codex-agent-mode${selectedServiceTier === 'priority' ? ' is-active' : ''}`}
+                        disabled={
+                          phase === 'sending-chat' ||
+                          Boolean(conversationTransition) ||
+                          !fastModeAvailable
+                        }
+                        onClick={() => setFastMode((current) => !current)}
+                        variant="quiet"
+                      >
+                        <Clock3 aria-hidden="true" size={17} />
+                        <span className="codex-agent-mode__copy">
+                          <strong>Fast</strong>
+                          <small>
+                            {fastModeAvailable
+                              ? 'Higher-speed Codex responses with increased usage'
+                              : 'Unavailable for the selected model'}
+                          </small>
+                        </span>
+                        <span aria-hidden="true" className="codex-agent-mode__state">
+                          {selectedServiceTier === 'priority' ? 'On' : 'Off'}
+                        </span>
+                      </Button>
+                      <section
+                        aria-labelledby="codex-speech-settings-title"
+                        className="codex-speech-settings"
+                      >
+                        <header>
+                          <span>
+                            <strong id="codex-speech-settings-title">Read aloud voice</strong>
+                            <small>
+                              {cloudSpeechConfiguration?.available
+                                ? `${cloudSpeechConfiguration.voices.length} Google voices · choose any available language and model`
+                                : cloudSpeechConfiguration
+                                  ? 'Google voice setup is not active · using your English device voice'
+                                  : 'Checking Google voice availability…'}
+                            </small>
+                          </span>
+                        </header>
+                        <div className="codex-speech-settings__controls">
+                          <label>
+                            <span>Language &amp; accent</span>
+                            <select
+                              disabled={!cloudSpeechConfiguration?.available}
+                              onChange={(event) => {
+                                stopCodexSpeech(false);
+                                stopVoicePreview();
+                                const language = event.target.value;
+                                const voice = cloudSpeechConfiguration?.voices
+                                  .filter(({ languageCode }) => languageCode === language)
+                                  .sort((left, right) => left.qualityRank - right.qualityRank)[0];
+                                if (!voice) return;
+                                setSelectedSpeechLanguage(language);
+                                setSelectedSpeechModel(voice.model);
+                                setSelectedSpeechVoice(voice.id);
+                              }}
+                              value={selectedSpeechLanguage}
+                            >
+                              {speechLanguages.map(({ code, label }) => (
+                                <option key={code} value={code}>
+                                  {label} · {code}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            <span>Model quality</span>
+                            <select
+                              disabled={!cloudSpeechConfiguration?.available}
+                              onChange={(event) => {
+                                stopCodexSpeech(false);
+                                stopVoicePreview();
+                                const model = event.target.value;
+                                const voice = cloudSpeechConfiguration?.voices.find(
+                                  (candidate) =>
+                                    candidate.languageCode === selectedSpeechLanguage &&
+                                    candidate.model === model,
+                                );
+                                if (!voice) return;
+                                setSelectedSpeechModel(model);
+                                setSelectedSpeechVoice(voice.id);
+                              }}
+                              value={selectedSpeechModel}
+                            >
+                              {speechModels.map((voice) => (
+                                <option key={voice.model} value={voice.model}>
+                                  {voice.modelLabel} — {voice.qualityLabel}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            <span>Voice</span>
+                            <select
+                              disabled={!cloudSpeechConfiguration?.available}
+                              onChange={(event) => {
+                                stopCodexSpeech(false);
+                                stopVoicePreview();
+                                setSelectedSpeechVoice(event.target.value);
+                                const voice = cloudSpeechConfiguration?.voices.find(
+                                  ({ id }) => id === event.target.value,
+                                );
+                                setSpeechStatus(
+                                  `Google ${voice?.name ?? event.target.value} selected.`,
+                                );
+                              }}
+                              value={selectedSpeechVoice}
+                            >
+                              {!cloudSpeechConfiguration?.voices.length ? (
+                                <option value={selectedSpeechVoice}>{selectedSpeechVoice}</option>
+                              ) : null}
+                              {filteredSpeechVoices.map((voice) => (
+                                <option key={voice.id} value={voice.id}>
+                                  {voice.name} · {voice.gender}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            <span>Reading style</span>
+                            <select
+                              onChange={(event) => {
+                                stopCodexSpeech(false);
+                                setSelectedSpeechStyle(event.target.value as CodexSpeechStyle);
+                              }}
+                              value={selectedSpeechStyle}
+                            >
+                              <option value="natural">Natural</option>
+                              <option value="literal">Literal</option>
+                            </select>
+                          </label>
+                          <label>
+                            <span>Speed</span>
+                            <select
+                              onChange={(event) => {
+                                stopCodexSpeech(false);
+                                setSelectedSpeechRate(Number(event.target.value));
+                              }}
+                              value={selectedSpeechRate}
+                            >
+                              <option value="0.85">0.85× · relaxed</option>
+                              <option value="1">1× · conversational</option>
+                              <option value="1.15">1.15× · brisk</option>
+                            </select>
+                          </label>
+                          <label className="codex-speech-settings__toggle">
+                            <span>
+                              <strong>Auto-read Codex</strong>
+                              <small>
+                                Reads progress updates and the final reply automatically while this
+                                chat is open.
+                              </small>
+                            </span>
+                            <input
+                              checked={autoReadCodex}
+                              onChange={(event) => {
+                                const enabled = event.target.checked;
+                                setAutoReadCodex(enabled);
+                                setAutoReadPending(undefined);
+                                if (!enabled && speechInitiatorRef.current === 'auto') {
+                                  stopCodexSpeech(false);
+                                }
+                                setSpeechStatus(
+                                  enabled
+                                    ? 'Auto-read is on for new progress and final replies in this chat.'
+                                    : 'Auto-read is off.',
+                                );
+                              }}
+                              type="checkbox"
+                            />
+                          </label>
+                          {selectedCloudSpeechVoice ? (
+                            <p className="codex-speech-settings__selection">
+                              <strong>
+                                {selectedSpeechLanguageLabel} ·{' '}
+                                {selectedSpeechStyle === 'natural' ? 'Natural' : 'Literal'} ·{' '}
+                                {selectedSpeechRate}×
+                              </strong>
+                              <span>
+                                {selectedCloudSpeechVoice.modelLabel} ·{' '}
+                                {selectedCloudSpeechVoice.qualityLabel} ·{' '}
+                                {autoReadCodex ? 'Auto-read on' : 'Auto-read off'}
+                              </span>
+                            </p>
+                          ) : null}
+                          <Button
+                            aria-label={
+                              voicePreviewState === 'playing'
+                                ? 'Stop voice preview'
+                                : voicePreviewState === 'loading'
+                                  ? 'Preparing voice preview'
+                                  : `Preview ${selectedCloudSpeechVoice?.name ?? selectedSpeechVoice} voice`
+                            }
+                            disabled={
+                              !cloudSpeechConfiguration?.available ||
+                              voicePreviewState === 'loading'
+                            }
+                            onClick={() => {
+                              if (voicePreviewState === 'playing') stopVoicePreview();
+                              else void previewSpeechVoice();
+                            }}
+                            size="small"
+                            variant="quiet"
                           >
-                            {selectedModel.efforts.map((effort) => (
-                              <option key={effort.id} value={effort.id}>
-                                {effort.id.charAt(0).toUpperCase() + effort.id.slice(1)}
+                            {voicePreviewState === 'loading' ? (
+                              <LoaderCircle aria-hidden="true" className="is-spinning" size={15} />
+                            ) : voicePreviewState === 'playing' ? (
+                              <Square aria-hidden="true" size={14} />
+                            ) : (
+                              <Play aria-hidden="true" size={15} />
+                            )}
+                            {voicePreviewState === 'loading'
+                              ? 'Preparing'
+                              : voicePreviewState === 'playing'
+                                ? 'Stop preview'
+                                : 'Preview voice'}
+                          </Button>
+                        </div>
+                      </section>
+                    </>
+                  ) : null}
+                  {composerSettingsOpen ? (
+                    <footer className="codex-composer-footer">
+                      <div className="codex-chat-configuration">
+                        <label className="codex-model-field">
+                          <span>Model</span>
+                          <select
+                            disabled={!status?.thread || Boolean(conversationTransition)}
+                            onChange={(event) => {
+                              const model = availableModels.find(
+                                (candidate) => candidate.id === event.target.value,
+                              );
+                              if (model) chooseModel(model);
+                            }}
+                            value={selectedModelId}
+                          >
+                            {availableModels.map((model) => (
+                              <option key={model.id} value={model.id}>
+                                {model.label}
+                                {model.supportsImages ? '' : ' · text only'}
                               </option>
                             ))}
                           </select>
                         </label>
-                      ) : null}
-                    </div>
-                  </footer>
+
+                        {selectedModel?.efforts.length ? (
+                          <label className="codex-effort-field">
+                            <span>Reasoning</span>
+                            <select
+                              disabled={Boolean(conversationTransition)}
+                              onChange={(event) =>
+                                chooseEffort(selectedModel.id, event.target.value)
+                              }
+                              value={modelEffort(selectedModel, selectedEffort)}
+                            >
+                              {selectedModel.efforts.map((effort) => (
+                                <option key={effort.id} value={effort.id}>
+                                  {effort.id.charAt(0).toUpperCase() + effort.id.slice(1)}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        ) : null}
+                      </div>
+                    </footer>
+                  ) : null}
                 </div>
               ) : null}
             </section>

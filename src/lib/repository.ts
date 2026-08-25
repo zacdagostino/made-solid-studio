@@ -405,6 +405,17 @@ const localPersistentCodexChatSurfacesPackageId =
   'agent-package-local-v20-4-persistent-codex-chat-surfaces';
 const localSelectedCodexExcerptActionsPackageId =
   'agent-package-local-v20-5-selected-codex-excerpt-actions';
+const localCodexPhoneNotificationsPackageId = 'agent-package-local-v20-6-codex-phone-notifications';
+const localBranchableCodexConversationsPackageId =
+  'agent-package-local-v20-7-branchable-codex-conversations';
+const localLiveWorkspaceCodexBranchingPackageId =
+  'agent-package-local-v20-8-live-workspace-codex-branching';
+const localLiveWorkspacePhoneNotificationsPackageId =
+  'agent-package-local-v20-9-live-workspace-phone-notifications';
+const localNaturalCodexReadingPackageId = 'agent-package-local-v21-0-natural-codex-reading';
+const localFocusedCodexSettingsPackageId = 'agent-package-local-v21-1-focused-codex-settings';
+const localConciseCodexReadingPackageId = 'agent-package-local-v21-2-concise-codex-reading';
+const localDevelopmentReleaseUrlsPackageId = 'agent-package-local-v21-3-development-release-urls';
 
 type StoreName =
   | 'activities'
@@ -3175,10 +3186,154 @@ export class SiteforgeRepository {
         'Lets reviewers act on precise Codex output without copying text manually or granting a temporary question access to Studio or client files.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localCodexPhoneNotificationsPackage: AgentPackage = {
+      ...localSelectedCodexExcerptActionsPackage,
+      id: localCodexPhoneNotificationsPackageId,
+      version: 20.6,
+      basePackageId: localSelectedCodexExcerptActionsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v20.6',
+      contractAddendum:
+        'The authenticated Studio owner can explicitly subscribe each supported phone to private Web Push notifications when a Studio-submitted Codex supervisor turn completes successfully.',
+      instructionsAddendum:
+        'Offer phone notifications as a device-specific opt-in in Settings. On iPhone and iPad, explain that Studio must first be installed to the Home Screen. Persist subscriptions and an idempotent completion marker on the private runtime, send only after the exact tracked supervisor turn reaches completed, and never describe interrupted, cancelled, or failed work as finished. Keep lock-screen text generic, use a same-origin Codex route, remove expired subscriptions, retry durable pending delivery, and never cache private Studio data in the push-only service worker.',
+      summary:
+        'Codex phone notifications test package: sends private, generic Web Push alerts after successful Studio chat completion.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Adds explicit per-phone completion alerts without exposing prospect or transcript content or depending on an open Studio tab.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localBranchableCodexConversationsPackage: AgentPackage = {
+      ...localCodexPhoneNotificationsPackage,
+      id: localBranchableCodexConversationsPackageId,
+      version: 20.7,
+      basePackageId: localCodexPhoneNotificationsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v20.7',
+      contractAddendum:
+        'A completed final Codex reply can create a durable branched conversation through that exact completed turn while retaining the original conversation unchanged.',
+      instructionsAddendum:
+        'Use the native Codex thread fork contract at completed turn boundaries. Preserve the source thread, its native context, cleaned Studio prompts, approved image attachments, client or universal workspace scope, and recorded source lineage. Never offer a branch from progress output or an in-progress turn, never copy queued or running feedback records, and keep branch creation failure on the original selected conversation with a clear retryable error.',
+      summary:
+        'Branchable Codex conversations test package: creates durable alternate chats from completed replies without changing the original conversation.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Adds native context-preserving Codex chat branches with exact turn boundaries, evidence continuity, accessible controls, and workspace isolation.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localLiveWorkspaceCodexBranchingPackage: AgentPackage = {
+      ...localBranchableCodexConversationsPackage,
+      id: localLiveWorkspaceCodexBranchingPackageId,
+      version: 20.8,
+      basePackageId: localBranchableCodexConversationsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v20.8',
+      contractAddendum:
+        'Branching remains available in the editable Workspace Studio as soon as its source changes, even while the separately reviewed production API image is still on the preceding release.',
+      instructionsAddendum:
+        'Serve the native thread-fork mutation through a narrow owner-gateway-protected Workspace endpoint loaded from the persistent Studio checkout. Keep ordinary chat delivery on the established runtime worker, never start a second queue maintainer, accept legacy completed-turn status only for button visibility, and revalidate completion and exact workspace scope in the current bridge before forking.',
+      summary:
+        'Live Workspace Codex branching test package: makes the Branch control and native fork available immediately from editable Studio source.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Closes the editable-frontend versus reviewed-backend rollout gap without duplicating Codex queue workers or weakening the private owner gateway.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localLiveWorkspacePhoneNotificationsPackage: AgentPackage = {
+      ...localLiveWorkspaceCodexBranchingPackage,
+      id: localLiveWorkspacePhoneNotificationsPackageId,
+      version: 20.9,
+      basePackageId: localLiveWorkspaceCodexBranchingPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v20.9',
+      contractAddendum:
+        'Phone-notification subscription and completion delivery remain available in the editable Workspace Studio while its separately reviewed production API image is still on the preceding release.',
+      instructionsAddendum:
+        'Serve the Web Push configuration and subscription actions through the owner-gateway-protected live Workspace endpoint. Reuse the production runtime data directory, monitor its durable completed records without running a second Codex queue maintainer, and deliver only completions recorded after the first active device subscription. Treat empty or non-JSON runtime responses as a clear retryable availability state instead of exposing a browser parsing exception.',
+      summary:
+        'Live Workspace phone notifications test package: enables device subscriptions and completion alerts immediately from editable Studio source with safe retry guidance.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Closes the editable-frontend versus reviewed-backend rollout gap for private phone alerts without duplicating the Codex queue worker.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localNaturalCodexReadingPackage: AgentPackage = {
+      ...localLiveWorkspacePhoneNotificationsPackage,
+      id: localNaturalCodexReadingPackageId,
+      version: 21,
+      basePackageId: localLiveWorkspacePhoneNotificationsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v21.0',
+      contractAddendum:
+        'Studio Codex read aloud interprets rightward arrow glyphs as a useful spoken transition. Natural reading keeps verification introductions audible while omitting only their long technical result lists; Literal reading preserves every listed item.',
+      instructionsAddendum:
+        'Convert common rightward arrow glyphs to the spoken transition “then” before either Natural or Literal synthesis. In Natural mode only, omit a Markdown list when nearby text identifies it as verification, checks, tests, lint, typecheck, build, audit, quality-gate, command, or diagnostic output and the list contains at least four items or 320 characters. Keep the preceding introduction and all later prose. Continue reading ordinary lists, short check lists, and every list in Literal mode.',
+      summary:
+        'Natural Codex reading test package: speaks right arrows meaningfully and skips long technical verification lists without hiding them in chat.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes long Codex replies easier to follow by voice while preserving complete visible detail and an explicit Literal option.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localFocusedCodexSettingsPackage: AgentPackage = {
+      ...localNaturalCodexReadingPackage,
+      id: localFocusedCodexSettingsPackageId,
+      version: 21.1,
+      basePackageId: localNaturalCodexReadingPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v21.1',
+      contractAddendum:
+        'Studio Codex chat separates request-level run setup from persistent usage, billing, speed, and read-aloud preferences so the compact composer no longer presents unrelated settings in one scrolling menu.',
+      instructionsAddendum:
+        'Keep Model, Reasoning, and Agent team together behind the compact Run setup control beside the composer. Put subscription usage, API-credit billing, Fast service tier, and read-aloud preferences behind a distinct Chat settings cog with a labelled dialog, explicit close control, Escape dismissal, focus restoration, 44-pixel controls, and overflow-free mobile presentation.',
+      summary:
+        'Focused Codex settings test package: separates per-request model and Agent team controls from persistent usage, billing, speed, and voice preferences.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the Codex composer easier to scan while retaining every existing run, billing, usage, and listening control in a clearer hierarchy.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localConciseCodexReadingPackage: AgentPackage = {
+      ...localFocusedCodexSettingsPackage,
+      id: localConciseCodexReadingPackageId,
+      version: 21.2,
+      basePackageId: localFocusedCodexSettingsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v21.2',
+      contractAddendum:
+        'Natural Studio Codex reading replaces compact technical handoff paragraphs about implementation files and completed verification with one short spoken pointer to the full visible chat. Literal reading preserves those details.',
+      instructionsAddendum:
+        'In Natural mode, recognise technical handoff paragraphs beginning with Implemented in, Changed in, Updated in, All checks passed or complete, Verification checks passed or complete, or Verification details or results. Replace consecutive matching paragraphs with exactly one concise sentence explaining that the technical implementation and verification details remain in the chat. Preserve the outcome before the handoff, later non-technical prose, all visible message content, and complete Literal playback.',
+      summary:
+        'Concise Codex reading test package: summarises file, test, tool, count, and viewport handoff details instead of reading them aloud.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps voice playback focused on the result while leaving detailed engineering evidence available for visual review.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localDevelopmentReleaseUrlsPackage: AgentPackage = {
+      ...localConciseCodexReadingPackage,
+      id: localDevelopmentReleaseUrlsPackageId,
+      version: 21.3,
+      basePackageId: localConciseCodexReadingPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v21.3',
+      contractAddendum:
+        'Studio and the Made Solid website expose separate owner-only development surfaces, exact saved Git versions, and explicit production destinations. Canonical development hostnames are additive, legacy Workspace entry remains compatible, private build capabilities identify tests and complete builds, and no development change promotes itself.',
+      instructionsAddendum:
+        'Keep dev.studio.madesolid.com.au separate from studio.madesolid.com.au and dev.madesolid.com.au separate from madesolid.com.au. Retain workspace.madesolid.com.au as a compatibility entry until verified retirement. Present repository changes and saved feature versions in Studio, route generated tests through /test capabilities and complete builds through /build capabilities, preserve legacy /site links, and require an exact reviewed version plus an authenticated deployment connection before production promotion.',
+      summary:
+        'Development release URLs test package: separates Studio and website development, preserves Workspace compatibility, labels private test/build capabilities, and keeps production promotion explicit.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes development and production destinations understandable while keeping every current production route untouched during rollout.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localDevelopmentReleaseUrlsPackage,
+          localConciseCodexReadingPackage,
+          localFocusedCodexSettingsPackage,
+          localNaturalCodexReadingPackage,
+          localLiveWorkspacePhoneNotificationsPackage,
+          localLiveWorkspaceCodexBranchingPackage,
+          localBranchableCodexConversationsPackage,
+          localCodexPhoneNotificationsPackage,
           localSelectedCodexExcerptActionsPackage,
           localPersistentCodexChatSurfacesPackage,
           localRestoredCodexVoiceExperiencePackage,
@@ -3332,6 +3487,14 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localDevelopmentReleaseUrlsPackage,
+          localConciseCodexReadingPackage,
+          localFocusedCodexSettingsPackage,
+          localNaturalCodexReadingPackage,
+          localLiveWorkspacePhoneNotificationsPackage,
+          localLiveWorkspaceCodexBranchingPackage,
+          localBranchableCodexConversationsPackage,
+          localCodexPhoneNotificationsPackage,
           localSelectedCodexExcerptActionsPackage,
           localPersistentCodexChatSurfacesPackage,
           localRestoredCodexVoiceExperiencePackage,
@@ -3488,6 +3651,14 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localDevelopmentReleaseUrlsPackage,
+            localConciseCodexReadingPackage,
+            localFocusedCodexSettingsPackage,
+            localNaturalCodexReadingPackage,
+            localLiveWorkspacePhoneNotificationsPackage,
+            localLiveWorkspaceCodexBranchingPackage,
+            localBranchableCodexConversationsPackage,
+            localCodexPhoneNotificationsPackage,
             localSelectedCodexExcerptActionsPackage,
             localPersistentCodexChatSurfacesPackage,
             localRestoredCodexVoiceExperiencePackage,

@@ -443,7 +443,10 @@ test('registers a single-volume Singapore Railway runtime with a health check', 
   assert.match(viteConfiguration, /healthcheck\.railway\.app/);
   assert.match(viteConfiguration, /SITEFORGE_PUBLIC_ORIGIN/);
   assert.match(viteConfiguration, /SITEFORGE_RUNTIME_API_PROXY_ORIGIN/);
-  assert.match(viteConfiguration, /workspaceDevelopment \? \[\] : \[localWorkspacePlugin\(\)\]/);
+  assert.match(
+    viteConfiguration,
+    /workspaceDevelopment \? \[workspaceCodexBranchPlugin\(\)\] : \[localWorkspacePlugin\(\)\]/,
+  );
   assert.match(viteConfiguration, /'\/__made-solid'/);
   assert.match(viteConfiguration, /server:[\s\S]*\.\.\.railwayAllowedHosts/);
   assert.match(

@@ -19,6 +19,49 @@ const mobileNavigationContract = new URL(
 const studioStyles = new URL('../../src/styles.css', import.meta.url);
 const studioApp = new URL('../../src/App.tsx', import.meta.url);
 
+async function mockStudioPushNotifications(page) {
+  await page.addInitScript(() => {
+    let subscription = null;
+    const createSubscription = () => ({
+      endpoint: 'https://push.example.test/studio-phone',
+      toJSON: () => ({
+        endpoint: 'https://push.example.test/studio-phone',
+        expirationTime: null,
+        keys: { auth: 'auth', p256dh: 'p256dh' },
+      }),
+      unsubscribe: async () => {
+        subscription = null;
+        return true;
+      },
+    });
+    Object.defineProperty(window, 'PushManager', { configurable: true, value: class {} });
+    Object.defineProperty(window, 'Notification', {
+      configurable: true,
+      value: {
+        permission: 'default',
+        requestPermission: async () => {
+          window.Notification.permission = 'granted';
+          return 'granted';
+        },
+      },
+    });
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      value: {
+        register: async () => ({
+          pushManager: {
+            getSubscription: async () => subscription,
+            subscribe: async () => {
+              subscription = createSubscription();
+              return subscription;
+            },
+          },
+        }),
+      },
+    });
+  });
+}
+
 async function mountPopulatedBuilderActivity(page) {
   const codexItems = Array.from(
     { length: 24 },
@@ -1275,6 +1318,8 @@ test('keeps generation, website editing, and Made Solid handoff in separate rout
 }) => {
   const businessId = 'business-demo-local-services';
   const commit = 'd5e37351969f9503a8e0d9bde323f23f547483b6';
+  const committedPreviewUrl =
+    'https://preview.madesolid.com.au/__made-solid/workspace-frame/demo-local-services/payload.signature/';
   let committedPreviewRequest;
   await page.route('**/__made-solid/final-edit?*', async (route) => {
     await route.fulfill({
@@ -1312,7 +1357,13 @@ test('keeps generation, website editing, and Made Solid handoff in separate rout
     committedPreviewRequest = route.request().postDataJSON();
     await route.fulfill({
       contentType: 'application/x-ndjson',
-      body: `${JSON.stringify({ status: 'complete', phase: 'ready', detail: 'Committed edit v1 is ready.', previewUrl: '/#/today' })}\n`,
+      body: `${JSON.stringify({ status: 'complete', phase: 'ready', detail: 'Committed edit v1 is ready.', previewUrl: committedPreviewUrl })}\n`,
+    });
+  });
+  await page.context().route(`${committedPreviewUrl}**`, async (route) => {
+    await route.fulfill({
+      contentType: 'text/html',
+      body: '<!doctype html><html lang="en"><body><main><h1>Committed website v1</h1></main></body></html>',
     });
   });
   await page.route('**/__made-solid/learning-bundle?*', async (route) => {
@@ -1387,6 +1438,11 @@ test('keeps generation, website editing, and Made Solid handoff in separate rout
   await expect
     .poll(() => committedPreviewRequest)
     .toEqual({ directory: 'demo-local-services', commit });
+  await expect(
+    committedPreview
+      .frameLocator('iframe[title="Prospect development website preview"]')
+      .getByRole('heading', { name: 'Committed website v1' }),
+  ).toBeVisible();
   await committedPreview.close();
   await page.reload();
   await expectWorkspaceSectionSelected(page, 'Website editing');
@@ -3291,9 +3347,9 @@ test('keeps the build manifest package separate from the Agent Studio test contr
   await expect(testingBehaviour).toContainText('proposition before supporting media');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.19');
   await expect(testingBehaviour).toContainText('explicit preview, production service');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.89');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.91');
   await expect(testingBehaviour).toContainText(
-    'Codex Test Builder and Codex Website Builder now reject API-key mode',
+    'completed prospect builds now lead with their current outcome and repair action',
   );
   await expect(testingBehaviour).toContainText(
     'Select behaviours to stage for the next production draft',
@@ -3742,9 +3798,17 @@ test('displays the newest test package above retained package versions', async (
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const packagePicker = page.getByLabel('Test agent package');
-  await expect(packagePicker).toHaveValue(
-    'agent-package-local-v20-3-restored-codex-voice-experience',
-  );
+  await expect(packagePicker).toHaveValue('agent-package-local-v21-3-development-release-urls');
+  await expect(packagePicker).toContainText('v21.3 · Approved test');
+  await expect(packagePicker).toContainText('v21.2 · Approved test');
+  await expect(packagePicker).toContainText('v21.1 · Approved test');
+  await expect(packagePicker).toContainText('v21.0 · Approved test');
+  await expect(packagePicker).toContainText('v20.9 · Approved test');
+  await expect(packagePicker).toContainText('v20.8 · Approved test');
+  await expect(packagePicker).toContainText('v20.7 · Approved test');
+  await expect(packagePicker).toContainText('v20.6 · Approved test');
+  await expect(packagePicker).toContainText('v20.5 · Approved test');
+  await expect(packagePicker).toContainText('v20.4 · Approved test');
   await expect(packagePicker).toContainText('v20.3 · Approved test');
   await expect(packagePicker).toContainText('v20.2 · Approved test');
   await expect(packagePicker).toContainText('v20.1 · Approved test');
@@ -3894,6 +3958,16 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v21.3', 'Development release URLs'],
+    ['v21.2', 'Concise Codex reading'],
+    ['v21.1', 'Focused Codex settings'],
+    ['v21.0', 'Natural Codex reading'],
+    ['v20.9', 'Live Workspace phone notifications'],
+    ['v20.8', 'Live Workspace Codex branching'],
+    ['v20.7', 'Branchable Codex conversations'],
+    ['v20.6', 'Codex phone notifications'],
+    ['v20.5', 'Selected Codex excerpt actions'],
+    ['v20.4', 'Persistent Codex chat surfaces'],
     ['v20.3', 'Restored Codex voice experience'],
     ['v20.2', 'Workspace development Studio'],
     ['v20.1', 'Canonical Workspace entry'],
@@ -4115,13 +4189,165 @@ test('offers a responsive saved-source recheck on completed test evidence', asyn
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const quality = page.locator('.builder-quality');
-  await expect(quality).not.toHaveAttribute('open', '');
-  await quality.locator('summary').click();
   await expect(quality).toHaveAttribute('open', '');
   await expect(quality.getByRole('button', { name: 'Recheck saved source' })).toBeVisible();
   await expect(quality).toContainText('without a Codex page generation pass');
   await expect(quality).toHaveScreenshot('saved-source-quality-recheck.png');
   const accessibility = await new AxeBuilder({ page }).include('.builder-quality').analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  expect(testInfo.project.name).toMatch(/mobile|tablet|desktop/);
+});
+
+test('makes prospect build failures and identity obvious while keeping replacement controls advanced', async ({
+  page,
+}, testInfo) => {
+  await openReadyBuildManifest(page);
+  await page.evaluate(async () => {
+    const database = await new Promise((resolve, reject) => {
+      const request = window.indexedDB.open('siteforge-os');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const now = '2026-08-24T12:00:00.000Z';
+    const longNavigationDetail = `The compact navigation failed after Escape. ${'Affected responsive route at 375px. '.repeat(30)}`;
+    const transaction = database.transaction('builderRuns', 'readwrite');
+    transaction.objectStore('builderRuns').put({
+      id: 'f906bbf7-a333-4bfa-bcfb-f667e7f1259b',
+      businessId: 'business-demo-local-services',
+      buildManifestId: 'manifest-layout-check',
+      buildMode: 'full_site',
+      agentPackageId: 'agent-package-local-v6',
+      agentPackageVersion: 6,
+      sourceCheckpointAvailable: true,
+      status: 'review_required',
+      templateVersion: 'made-solid-studio-next-builder-v2',
+      progressPhase: 'complete',
+      progressDetail: 'Private preview generated with quality review required before sharing.',
+      totalItems: 8,
+      completedItems: 8,
+      failureContext: {},
+      qualitySummary: {
+        status: 'failed',
+        checks: [
+          {
+            id: 'responsive-interactions',
+            label: 'Responsive interaction contract',
+            status: 'failed',
+            detail: longNavigationDetail,
+          },
+          {
+            id: 'nested-page-reachability',
+            label: 'Nested page reachability',
+            status: 'failed',
+            detail: 'Seven selected nested routes cannot be reached from the homepage.',
+          },
+          {
+            id: 'semantic-content-coverage',
+            label: 'Approved recovered-content coverage',
+            status: 'failed',
+            detail: 'The approved test-and-tag table does not preserve every reviewed value.',
+          },
+          {
+            id: 'accessibility',
+            label: 'Accessibility analysis',
+            status: 'passed',
+            detail: 'No automated accessibility violations were detected.',
+          },
+        ],
+        generatedAt: now,
+      },
+      startedAt: now,
+      completedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await new Promise((resolve, reject) => {
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+    database.close();
+  });
+
+  await page.goto('/#/prospects/business-demo-local-services/redesign');
+  await page.reload();
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+
+  const prospectBuilder = page.locator('.builder-run').filter({
+    has: page.getByRole('heading', { name: 'Latest full-site build' }),
+  });
+  const identity = prospectBuilder.getByRole('region', { name: 'Current build identity' });
+  await expect(identity).toContainText('Build f906bbf7');
+  await expect(identity).toContainText('f906bbf7-a333-4bfa-bcfb-f667e7f1259b');
+
+  const attention = prospectBuilder.getByRole('alert');
+  await expect(attention.getByRole('heading', { name: '3 quality checks failed' })).toBeVisible();
+  await expect(attention).toContainText('Not client-ready');
+  await expect(attention).toContainText('Responsive interaction contract');
+  await expect(attention).toContainText('Nested page reachability');
+  await expect(attention).toContainText('Approved recovered-content coverage');
+  await expect(attention.getByRole('button', { name: 'Repair 3 failed checks' })).toBeVisible();
+  await expect(
+    attention.getByRole('button', { name: 'Inspect failed private preview' }),
+  ).toBeVisible();
+  await expect(attention.getByRole('button', { name: 'View quality evidence' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Review build inputs' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Build Manifest ready' })).toHaveCount(0);
+
+  const quality = prospectBuilder.locator('.builder-quality');
+  await expect(quality).toHaveAttribute('open', '');
+  await expect(quality.locator('li').first()).toContainText('Responsive interaction contract');
+  await expect(quality).toContainText('3 failed · 1 passed');
+  await expect(quality.getByText('Technical details', { exact: true })).toHaveCount(1);
+  const passedChecks = quality.locator('.builder-quality__passed');
+  await expect(passedChecks).not.toHaveAttribute('open', '');
+  await expect(passedChecks.getByText('Accessibility analysis')).toBeHidden();
+
+  const advanced = prospectBuilder.locator('.builder-new-build-options');
+  await expect(advanced).not.toHaveAttribute('open', '');
+  await expect(advanced.locator('summary')).toContainText('Other recovery options');
+  expect(
+    await prospectBuilder.evaluate((builder) => {
+      const qualityEvidence = builder.querySelector('.builder-quality');
+      const recoveryOptions = builder.querySelector('.builder-new-build-options');
+      return Boolean(
+        qualityEvidence &&
+        recoveryOptions &&
+        (qualityEvidence.compareDocumentPosition(recoveryOptions) &
+          Node.DOCUMENT_POSITION_FOLLOWING) !==
+          0,
+      );
+    }),
+  ).toBe(true);
+  expect(
+    await page.locator('.brief-panel').evaluate((panel) => {
+      const currentBuild = panel.querySelector('.builder-run');
+      const buildInputs = panel.querySelector('.builder-inputs');
+      return Boolean(
+        currentBuild &&
+        buildInputs &&
+        (currentBuild.compareDocumentPosition(buildInputs) & Node.DOCUMENT_POSITION_FOLLOWING) !==
+          0,
+      );
+    }),
+  ).toBe(true);
+  await expect(
+    advanced.getByRole('button', { name: 'Start clean replacement build' }),
+  ).toBeHidden();
+  await expect(attention).toHaveScreenshot('prospect-build-quality-attention.png');
+  const advancedSummary = advanced.locator('summary');
+  await advancedSummary.focus();
+  await advancedSummary.press('Enter');
+  await expect(advanced).toHaveAttribute('open', '');
+  await expect(
+    advanced.getByRole('button', { name: 'Start clean replacement build' }),
+  ).toBeVisible();
+  expect((await advancedSummary.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+
+  const accessibility = await new AxeBuilder({ page }).include('.builder-run').analyze();
   expect(accessibility.violations).toEqual([]);
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
@@ -4256,16 +4482,22 @@ test('offers a saved full-site resume after a provider account failure', async (
   await page.reload();
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
   const prospectBuilder = page.locator('.builder-run').filter({
-    has: page.getByRole('heading', { name: 'Complete prospect website' }),
+    has: page.getByRole('heading', { name: 'Latest full-site build' }),
   });
   await expect(prospectBuilder).toContainText('no credits remaining');
   await expect(
     prospectBuilder.getByRole('button', { name: 'Resume saved website build' }),
   ).toBeVisible();
+  const advanced = prospectBuilder.locator('.builder-new-build-options');
+  await expect(advanced).not.toHaveAttribute('open', '');
+  await expect(
+    prospectBuilder.getByRole('button', { name: 'Start clean website build' }),
+  ).toBeHidden();
+  await expect(prospectBuilder).toHaveScreenshot('failed-full-site-provider-recovery.png');
+  await advanced.locator('summary').click();
   await expect(
     prospectBuilder.getByRole('button', { name: 'Start clean website build' }),
   ).toBeVisible();
-  await expect(prospectBuilder).toHaveScreenshot('failed-full-site-provider-recovery.png');
   const accessibility = await new AxeBuilder({ page }).include('.builder-run').analyze();
   expect(accessibility.violations).toEqual([]);
   await expect
@@ -4833,10 +5065,13 @@ test('groups linked build records and offers one package deletion action in Data
 test('opens the shared builder settings panel from the navigation settings page', async ({
   page,
 }) => {
+  await mockStudioPushNotifications(page);
   await page.goto('/#/settings');
 
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Codex Cloud' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Codex completion notifications' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Turn on phone notifications' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Open Codex Cloud' })).toHaveAttribute(
     'href',
     'https://chatgpt.com/codex',
@@ -4854,6 +5089,65 @@ test('opens the shared builder settings panel from the navigation settings page'
   await page.keyboard.press('Escape');
   await expect(panel).toBeHidden();
   await expect(page.getByRole('button', { name: 'Builder settings' })).toBeFocused();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  const notificationAccessibility = await new AxeBuilder({ page })
+    .include('.settings-notifications')
+    .analyze();
+  expect(notificationAccessibility.violations).toEqual([]);
+  await expect(page).toHaveScreenshot('settings-codex-phone-notifications.png', {
+    fullPage: true,
+  });
+});
+
+test('turns real device push notifications on and off from Settings', async ({ page }) => {
+  await mockStudioPushNotifications(page);
+  const requests = [];
+  await page.route('**/__made-solid/codex-notifications', async (route) => {
+    requests.push(route.request().postDataJSON?.() ?? null);
+    await route.fulfill({
+      contentType: 'application/json',
+      status: 200,
+      body:
+        route.request().method() === 'GET'
+          ? JSON.stringify({
+              status: 'ready',
+              publicKey:
+                'BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+            })
+          : JSON.stringify({ status: 'ready' }),
+    });
+  });
+
+  await page.goto('/#/settings');
+  await page.getByRole('button', { name: 'Turn on phone notifications' }).click();
+  await expect(page.getByText('On for this phone')).toBeVisible();
+  expect(requests.some((request) => request?.action === 'subscribe')).toBe(true);
+  await page.getByRole('button', { name: 'Turn off phone notifications' }).click();
+  await expect(page.getByText('Off', { exact: true })).toBeVisible();
+  expect(requests.some((request) => request?.action === 'unsubscribe')).toBe(true);
+});
+
+test('shows a useful retry message when the notification runtime returns an empty response', async ({
+  page,
+}) => {
+  await mockStudioPushNotifications(page);
+  await page.route('**/__made-solid/codex-notifications', async (route) => {
+    await route.fulfill({ body: '', status: 404 });
+  });
+
+  await page.goto('/#/settings');
+  await page.getByRole('button', { name: 'Turn on phone notifications' }).click();
+
+  await expect(page.getByText('Needs attention')).toBeVisible();
+  await expect(
+    page.getByText(
+      'Phone notifications are not ready on this Studio server yet. Refresh and try again.',
+    ),
+  ).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
+  await expect(page.getByText(/Unexpected end of JSON input/)).toHaveCount(0);
 });
 
 test('opens builder settings from the Agent Studio header', async ({ page }) => {

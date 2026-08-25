@@ -7,6 +7,7 @@ import {
   developmentServerHostFlag,
   authorizeWorkspaceCodexRequest,
   localCaptureTarget,
+  ownedWebsiteDevelopmentEnvironment,
   previewUrl,
   prospectCodexWorkspace,
   readFinalEditState,
@@ -93,6 +94,8 @@ test('exposes same-origin one-click workspace setup through the local Studio ser
   assert.match(source, /websiteIsReady\(active\.port\)/);
   assert.match(source, /clientPreviewUrl: workspaceFrameUrl\(origin, active\.directory, secret\)/);
   assert.match(source, /\/__made-solid\/workspace-development-access/);
+  assert.match(source, /\/__made-solid\/development-projects/);
+  assert.match(source, /developmentProjectStatus/);
   assert.match(source, /createWorkspaceStudioToken\(secret, ownerUserId/);
   assert.match(source, /\/__made-solid\/refinement-ledger/);
   assert.match(source, /request\.method !== 'POST'/);
@@ -158,6 +161,33 @@ test('recovers workspace previews only from configured persistent repository roo
   );
   assert.equal(prospectCodexWorkspace('siteforge-os', environment, pathExists), undefined);
   assert.equal(prospectCodexWorkspace('../customer-site', environment, pathExists), undefined);
+});
+
+test('starts the owned website in fail-closed development mode without inherited live secrets', () => {
+  const arguments_ = ownedWebsiteDevelopmentEnvironment('/data/workspaces/made-solid-website', {
+    MADE_SOLID_WEBSITE_DIRECTORY: '/data/workspaces/made-solid-website',
+    MADE_SOLID_WEBSITE_DEVELOPMENT_ORIGIN: 'https://dev.madesolid.com.au',
+    SITEFORGE_DEVELOPMENT_ORIGIN: 'https://dev.studio.madesolid.com.au',
+  });
+  assert.deepEqual(arguments_.slice(0, 4), [
+    '-u',
+    'MICROSOFT_CLIENT_ID',
+    '-u',
+    'MICROSOFT_CLIENT_SECRET',
+  ]);
+  assert.ok(arguments_.includes('-u'));
+  assert.ok(arguments_.includes('NEXT_PUBLIC_SUPABASE_URL'));
+  assert.ok(arguments_.includes('STRIPE_SECRET_KEY'));
+  assert.ok(arguments_.includes('STUDIO_HANDOFF_SECRET'));
+  assert.ok(arguments_.includes('MADE_SOLID_DEPLOYMENT_MODE=development'));
+  assert.ok(arguments_.includes('NEXT_PUBLIC_SITE_URL=https://dev.madesolid.com.au'));
+  assert.ok(arguments_.includes('MADE_SOLID_STUDIO_ORIGIN=https://dev.studio.madesolid.com.au'));
+  assert.deepEqual(
+    ownedWebsiteDevelopmentEnvironment('/data/prospect-workspaces/client', {
+      MADE_SOLID_WEBSITE_DIRECTORY: '/data/workspaces/made-solid-website',
+    }),
+    [],
+  );
 });
 
 test('binds every client Codex request to its exact workspace capability cookie', () => {
@@ -347,6 +377,15 @@ test('uses the forwarded Codespaces port URL only inside Codespaces', () => {
       GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN: 'app.github.dev',
     }),
     'https://silver-fiesta-xg6xjqvw4pvhp477-3001.app.github.dev',
+  );
+  assert.match(
+    previewUrl(request, 3002, {
+      PREVIEW_PUBLIC_ORIGIN: 'https://preview.madesolid.com.au',
+      SITEFORGE_ACTIVE_PREVIEW_DIRECTORY: 'demo-local-services',
+      SITEFORGE_WORKSPACE_PREVIEW_SECRET:
+        'workspace-preview-secret-longer-than-thirty-two-characters',
+    }),
+    /^https:\/\/preview\.madesolid\.com\.au\/__made-solid\/workspace-frame\/demo-local-services\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\/$/,
   );
 });
 

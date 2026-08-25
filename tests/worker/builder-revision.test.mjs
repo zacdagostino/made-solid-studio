@@ -3134,9 +3134,15 @@ test('registers the subscription tmux builder once above retained package versio
     packageLedger.indexOf('localSubscriptionBuilderPackage,') <
       packageLedger.indexOf('localCompactCodexComposerPackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.89`/);
-  assert.match(app, /reject API-key mode/);
-  assert.match(app, /fail closed if subscription authentication is unavailable/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.91`/);
+  assert.match(
+    app,
+    /completed prospect builds now lead with their current outcome and repair action/,
+  );
+  assert.match(
+    app,
+    /technical activity, replacement builds, and deletion move into secondary disclosures/,
+  );
   assert.match(app, /Build conversation/);
   assert.match(worker, /billingMode: 'chatgpt_subscription'/);
   assert.match(worker, /logged in using chatgpt/i);

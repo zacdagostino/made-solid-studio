@@ -102,6 +102,58 @@ const value = 1;
     expect(literal).toContain('Review docs, link to example.com/docs.');
     expect(literal).toContain('Code block starts. const value = 1; Code block ends.');
   });
+
+  it('speaks rightward arrow icons as a useful transition', () => {
+    expect(codexSpeechText('Open Settings → Read aloud.')).toBe('Open Settings then Read aloud.');
+    expect(codexSpeechText('Checks ➜ complete.', 'literal')).toBe('Checks then complete.');
+  });
+
+  it('keeps the introduction but skips long technical check lists in Natural style', () => {
+    const markdown = `I completed the verification checks; the full results are in chat.
+
+- TypeScript typecheck passed across the workspace source files
+- ESLint completed with no warnings in the application package
+- Vitest ran the focused speech transformation unit tests successfully
+- Production Vite build emitted the expected hashed browser assets
+
+The reading update is ready.`;
+
+    expect(codexSpeechText(markdown, 'natural')).toBe(
+      [
+        'I completed the verification checks; the full results are in chat.',
+        'The reading update is ready.',
+      ].join('\n\n'),
+    );
+    expect(codexSpeechText(markdown, 'literal')).toContain(
+      'Bullet. TypeScript typecheck passed across the workspace source files.',
+    );
+  });
+
+  it('still reads ordinary lists and short verification results in Natural style', () => {
+    expect(codexSpeechText('Choose a route:\n\n- Home\n- Contact')).toContain('Home.');
+    expect(codexSpeechText('Checks complete:\n\n- Unit tests passed\n- Build passed')).toContain(
+      'Unit tests passed.',
+    );
+  });
+
+  it('summarises technical implementation and verification handoff paragraphs in Natural style', () => {
+    const markdown = `The reading feature is fixed.
+
+Implemented in [codex-speech.ts](/workspace/src/lib/codex-speech.ts) with coverage in codex-speech.test.ts and codex-feedback.spec.js.
+
+All checks passed: formatting, lint, TypeScript, production build, 22 speech tests, 75 package tests, and Playwright at 375×812, 768×1024, and 1440×900. The build only reported the existing large-chunk advisory.`;
+
+    expect(codexSpeechText(markdown, 'natural')).toBe(
+      [
+        'The reading feature is fixed.',
+        'The technical implementation and verification details are in the chat.',
+      ].join('\n\n'),
+    );
+    expect(codexSpeechText(markdown, 'literal')).toContain(
+      'Implemented in codex-speech.ts, link to /workspace/src/lib/codex-speech.ts',
+    );
+    expect(codexSpeechText(markdown, 'literal')).toContain('All checks passed: formatting');
+  });
 });
 
 describe('codexSpeechChunks', () => {

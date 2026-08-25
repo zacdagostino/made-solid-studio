@@ -3086,13 +3086,13 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
 
   async createBuilderPreviewUrl(builderRunId: string, mode: BuilderPreviewMode = 'ready') {
     let entryPath = '';
+    const { data: previewRun } = await this.client
+      .from('builder_runs')
+      .select('build_manifest_id, build_mode, target_source_url, target_source_urls')
+      .eq('id', builderRunId)
+      .maybeSingle();
+    const run = recordValue(previewRun);
     if (mode === 'ready') {
-      const { data: previewRun } = await this.client
-        .from('builder_runs')
-        .select('build_manifest_id, target_source_url, target_source_urls')
-        .eq('id', builderRunId)
-        .maybeSingle();
-      const run = recordValue(previewRun);
       const targetUrls = Array.isArray(run.target_source_urls)
         ? run.target_source_urls.filter((value): value is string => typeof value === 'string')
         : typeof run.target_source_url === 'string'
@@ -3132,12 +3132,17 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       throw new Error('The private preview service is not configured.');
     }
     const draftPath = mode === 'draft' ? '__draft__/' : '';
+    const previewRoute = ['homepage_test', 'page_test', 'site_test'].includes(
+      readString(run, 'build_mode'),
+    )
+      ? 'test'
+      : 'build';
     const visitorPreviewOrigin = import.meta.env.VITE_SITEFORGE_PREVIEW_ORIGIN?.trim().replace(
       /\/+$/,
       '',
     );
     if (visitorPreviewOrigin) {
-      return `${visitorPreviewOrigin}/site/${builderRunId}/${token}/${draftPath}${entryPath}`;
+      return `${visitorPreviewOrigin}/${previewRoute}/${builderRunId}/${token}/${draftPath}${entryPath}`;
     }
     const sourceUrl = `${supabaseUrl}/functions/v1/siteforge-preview/${builderRunId}/${token}/${draftPath}${entryPath}`;
     return `${window.location.origin}${window.location.pathname}#/preview?source=${encodeURIComponent(sourceUrl)}`;

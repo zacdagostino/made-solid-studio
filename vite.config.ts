@@ -2,6 +2,8 @@ import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 // @ts-expect-error The local Vite-only Node plugin is intentionally plain JavaScript.
 import { localWorkspacePlugin } from './scripts/local-workspace-vite-plugin.mjs';
+// @ts-expect-error The private Workspace Vite-only bridge is intentionally plain JavaScript.
+import { workspaceCodexBranchPlugin } from './scripts/workspace-codex-branch-vite-plugin.mjs';
 
 function configuredHostname(value?: string) {
   if (!value) return undefined;
@@ -34,14 +36,21 @@ export default defineConfig(({ mode }) => {
     'healthcheck.railway.app',
     configuredHostname(environment.RAILWAY_PUBLIC_DOMAIN),
     configuredHostname(environment.SITEFORGE_PUBLIC_ORIGIN),
+    configuredHostname(environment.SITEFORGE_DEVELOPMENT_ORIGIN),
     configuredHostname(environment.SITEFORGE_WORKSPACE_PREVIEW_ORIGIN),
+    ...(environment.SITEFORGE_DEVELOPMENT_COMPATIBILITY_ORIGINS || '')
+      .split(/[\s,]+/)
+      .map(configuredHostname),
   ].filter((host): host is string => Boolean(host));
   const frameAncestors = workspaceDevelopment
     ? "frame-ancestors 'none'"
     : "frame-ancestors 'self' https://madesolid.com.au https://www.madesolid.com.au";
 
   return {
-    plugins: [react(), ...(workspaceDevelopment ? [] : [localWorkspacePlugin()])],
+    plugins: [
+      react(),
+      ...(workspaceDevelopment ? [workspaceCodexBranchPlugin()] : [localWorkspacePlugin()]),
+    ],
     preview: {
       allowedHosts: railwayAllowedHosts,
       headers: {

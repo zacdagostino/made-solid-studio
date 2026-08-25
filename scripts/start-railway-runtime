@@ -13,6 +13,12 @@ preview_secret_file="$runtime_directory/workspace-preview-secret"
 port="${PORT:-8080}"
 workspace_gateway_port="${SITEFORGE_WORKSPACE_PROXY_PORT:-3000}"
 workspace_studio_port="${SITEFORGE_WORKSPACE_STUDIO_PORT:-5173}"
+development_origin="${SITEFORGE_DEVELOPMENT_ORIGIN:-${SITEFORGE_WORKSPACE_PREVIEW_ORIGIN:-}}"
+
+if [[ -z "$development_origin" ]]; then
+  echo "SITEFORGE_DEVELOPMENT_ORIGIN or SITEFORGE_WORKSPACE_PREVIEW_ORIGIN is required."
+  exit 1
+fi
 
 for port_configuration in \
   "PORT:$port" \
@@ -92,6 +98,7 @@ export SITEFORGE_ACTIVE_PREVIEW_PATH="$runtime_directory/active-preview.json"
 export SITEFORGE_PREVIEW_PORT="${SITEFORGE_PREVIEW_PORT:-8787}"
 export SITEFORGE_WORKSPACE_PROXY_PORT="$workspace_gateway_port"
 export SITEFORGE_WORKSPACE_STUDIO_PORT="$workspace_studio_port"
+export SITEFORGE_DEVELOPMENT_ORIGIN="$development_origin"
 export SITEFORGE_CODEX_AUTH_MODE=runtime
 export SUPABASE_URL="${SUPABASE_URL:-$SITEFORGE_SUPABASE_URL}"
 export SUPABASE_SERVICE_ROLE_KEY="${SUPABASE_SERVICE_ROLE_KEY:-$SITEFORGE_SUPABASE_SERVICE_ROLE_KEY}"
@@ -142,11 +149,19 @@ maintain_workspace_studio() {
       cd "$studio_workspace_directory"
       exec env -i \
         PATH="$PATH" \
-        SITEFORGE_PUBLIC_ORIGIN="$SITEFORGE_WORKSPACE_PREVIEW_ORIGIN" \
+        SITEFORGE_PUBLIC_ORIGIN="$development_origin" \
+        SITEFORGE_DEVELOPMENT_ORIGIN="$development_origin" \
+        SITEFORGE_DEVELOPMENT_COMPATIBILITY_ORIGINS="${SITEFORGE_DEVELOPMENT_COMPATIBILITY_ORIGINS:-}" \
+        SITEFORGE_RUNTIME_DATA_DIR="$runtime_data_directory" \
         SITEFORGE_RUNTIME_API_PROXY_ORIGIN="http://127.0.0.1:$port" \
+        SITEFORGE_STUDIO_WORKSPACE_DIR="$studio_workspace_directory" \
+        SITEFORGE_PROSPECT_WORKSPACES_DIR="$prospect_workspaces_directory" \
+        MADE_SOLID_WEBSITE_DIRECTORY="$workspace_root/made-solid-website" \
         SITEFORGE_WORKSPACE_DEVELOPMENT=1 \
-        SITEFORGE_WORKSPACE_PREVIEW_ORIGIN="$SITEFORGE_WORKSPACE_PREVIEW_ORIGIN" \
+        SITEFORGE_WORKSPACE_PREVIEW_ORIGIN="${SITEFORGE_WORKSPACE_PREVIEW_ORIGIN:-$development_origin}" \
         VITE_SITEFORGE_OPENAI_API_ENABLED=false \
+        VITE_SITEFORGE_DEVELOPMENT_ORIGIN="$development_origin" \
+        VITE_SITEFORGE_DEVELOPMENT_COMPATIBILITY_ORIGINS="${SITEFORGE_DEVELOPMENT_COMPATIBILITY_ORIGINS:-}" \
         VITE_SITEFORGE_PREVIEW_ORIGIN="${VITE_SITEFORGE_PREVIEW_ORIGIN:-}" \
         VITE_SUPABASE_PUBLISHABLE_KEY="${VITE_SUPABASE_PUBLISHABLE_KEY:-}" \
         VITE_SUPABASE_URL="${VITE_SUPABASE_URL:-}" \

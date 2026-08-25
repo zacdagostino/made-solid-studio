@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { ArrowLeft, LoaderCircle } from 'lucide-react';
 import { ButtonLink } from './components/ui';
 import { studioRuntimeFetch } from './lib/studio-runtime';
-import { developmentStudioUrl } from './lib/studio-surface';
+import { developmentStudioOrigins } from './lib/studio-surface';
 
 type WorkspaceDevelopmentAccessResponse = {
   detail?: unknown;
@@ -27,11 +27,11 @@ export function workspaceDevelopmentReturnPath(hash = window.location.hash) {
 export function workspaceDevelopmentDestination(workspaceUrl: unknown, returnPath: string) {
   if (typeof workspaceUrl !== 'string') return undefined;
   try {
-    const expectedOrigin = new URL(developmentStudioUrl('#/prospects')).origin;
+    const expectedOrigins = developmentStudioOrigins();
     const access = new URL(workspaceUrl);
     if (
       access.protocol !== 'https:' ||
-      access.origin !== expectedOrigin ||
+      !expectedOrigins.includes(access.origin) ||
       access.pathname !== '/' ||
       access.hash ||
       access.username ||
@@ -41,8 +41,8 @@ export function workspaceDevelopmentDestination(workspaceUrl: unknown, returnPat
     ) {
       return undefined;
     }
-    const requested = new URL(returnPath, expectedOrigin);
-    if (requested.origin !== expectedOrigin) return undefined;
+    const requested = new URL(returnPath, access.origin);
+    if (requested.origin !== access.origin) return undefined;
     const token = access.searchParams.get('access');
     access.pathname = requested.pathname;
     access.search = requested.search;

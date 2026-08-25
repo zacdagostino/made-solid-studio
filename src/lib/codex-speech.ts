@@ -59,6 +59,83 @@ function punctuate(value: string) {
   return value && !hasTerminalPunctuation(value) ? `${value}.` : value;
 }
 
+const markdownListItemPattern = /^\s*(?:[-+*]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)/;
+const technicalListContextPattern =
+  /\b(?:verification|verified|checks?|tests?|test suite|type[ -]?check|lint|build|audit|quality gates?|commands?|diagnostics?)\b/i;
+
+function condenseNaturalTechnicalLists(value: string) {
+  const lines = value.split('\n');
+  const condensed: string[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!markdownListItemPattern.test(lines[index])) {
+      condensed.push(lines[index]);
+      continue;
+    }
+
+    const listLines: string[] = [];
+    let itemCount = 0;
+    let cursor = index;
+    while (cursor < lines.length) {
+      const line = lines[cursor];
+      if (markdownListItemPattern.test(line)) {
+        itemCount += 1;
+        listLines.push(line);
+        cursor += 1;
+        continue;
+      }
+      if (/^\s{2,}\S/.test(line)) {
+        listLines.push(line);
+        cursor += 1;
+        continue;
+      }
+      break;
+    }
+
+    const nearbyContext = condensed
+      .filter((line) => line.trim())
+      .slice(-3)
+      .join(' ');
+    const listLength = listLines.join(' ').length;
+    const isLongTechnicalList =
+      technicalListContextPattern.test(nearbyContext) && (itemCount >= 4 || listLength >= 320);
+
+    if (isLongTechnicalList) {
+      if (condensed.at(-1)?.trim()) condensed.push('');
+      index = cursor - 1;
+      continue;
+    }
+
+    condensed.push(...listLines);
+    index = cursor - 1;
+  }
+
+  return condensed.join('\n');
+}
+
+const technicalHandoffParagraphPattern =
+  /^(?:(?:implemented|changed|updated)\s+in\b|(?:all\s+)?(?:checks?|verification(?: checks?)?)\s+(?:passed|complete|completed)\b|verification (?:details|results)\s*:)/i;
+
+function condenseNaturalTechnicalHandoff(value: string) {
+  const summary = 'The technical implementation and verification details are in the chat.';
+  const paragraphs = value.split(/\n{2,}/);
+  const condensed: string[] = [];
+
+  for (const paragraph of paragraphs) {
+    const spokenStart = paragraph
+      .replace(/^\s*(?:#{1,6}\s+|>\s*)/gm, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (technicalHandoffParagraphPattern.test(spokenStart)) {
+      if (condensed.at(-1) !== summary) condensed.push(summary);
+      continue;
+    }
+    condensed.push(paragraph);
+  }
+
+  return condensed.join('\n\n');
+}
+
 /**
  * Converts the lightweight Markdown found in Codex replies into text suitable
  * for a SpeechSynthesisUtterance. Fenced code is announced but intentionally
@@ -93,7 +170,13 @@ export function codexSpeechText(markdown: string, style: CodexSpeechStyle = 'nat
     .replace(/`([^`]+)`/g, (_match, code: string) => (style === 'literal' ? `code ${code}` : code))
     .replace(/(\*\*|__|~~)(.*?)\1/g, '$2')
     .replace(/([*_])([^\n]*?\S)\1/g, '$2')
-    .replace(/\\([\\`*_[\]{}()#+\-.!>|])/g, '$1');
+    .replace(/\\([\\`*_[\]{}()#+\-.!>|])/g, '$1')
+    .replace(/\s*[→➜➝➞➡⇒⟶]\s*/g, ' then ');
+
+  if (style === 'natural') {
+    text = condenseNaturalTechnicalLists(text);
+    text = condenseNaturalTechnicalHandoff(text);
+  }
 
   const paragraphs: string[] = [];
   let currentLines: string[] = [];

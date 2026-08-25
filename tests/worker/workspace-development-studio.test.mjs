@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { createServer, request } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import test from 'node:test';
 import {
   createWorkspaceStudioToken,
   verifyWorkspaceStudioToken,
 } from '../../scripts/workspace-preview-access.mjs';
+import { workspaceCodexBranchPlugin } from '../../scripts/workspace-codex-branch-vite-plugin.mjs';
 import {
   startWorkspaceStudioGateway,
   workspaceStudioGatewayConfiguration,
@@ -54,6 +58,31 @@ function httpRequest(port, path, headers = {}) {
   });
 }
 
+function pluginRequest({ body = '', headers = {}, method = 'POST', url }) {
+  const request = Readable.from(body ? [Buffer.from(body)] : []);
+  Object.assign(request, { headers, method, url });
+  return request;
+}
+
+function pluginResponse() {
+  let resolveFinished;
+  const finished = new Promise((resolve) => {
+    resolveFinished = resolve;
+  });
+  return {
+    body: '',
+    finished,
+    statusCode: undefined,
+    end(value = '') {
+      this.body += String(value);
+      resolveFinished();
+    },
+    writeHead(statusCode) {
+      this.statusCode = statusCode;
+    },
+  };
+}
+
 test('Workspace Studio capabilities are short-lived and bound to the exact owner', () => {
   const token = createWorkspaceStudioToken(secret, ownerUserId, {
     lifetimeMs: 120_000,
@@ -94,6 +123,7 @@ test('Workspace Studio configuration rejects insecure origins and colliding port
     studioOrigin: 'https://studio.madesolid.com.au',
     upstreamPort: 5173,
     workspaceOrigin: 'https://workspace.madesolid.com.au',
+    workspaceOrigins: ['https://workspace.madesolid.com.au'],
   });
   assert.throws(
     () =>
@@ -121,6 +151,59 @@ test('Workspace Studio configuration rejects insecure origins and colliding port
   );
 });
 
+test('Workspace Studio owns live Codex branch and phone-notification requests', async () => {
+  let middleware;
+  const runtimeDataDirectory = await mkdtemp(join(tmpdir(), 'made-solid-workspace-studio-'));
+  workspaceCodexBranchPlugin({
+    SITEFORGE_RUNTIME_DATA_DIR: runtimeDataDirectory,
+    SITEFORGE_STUDIO_WORKSPACE_DIR: new URL('../..', import.meta.url).pathname,
+    SITEFORGE_WORKSPACE_DEVELOPMENT: '1',
+  }).configureServer({
+    middlewares: {
+      use(candidate) {
+        middleware = candidate;
+      },
+    },
+  });
+  assert.equal(typeof middleware, 'function');
+
+  const ignoredResponse = pluginResponse();
+  let continued = false;
+  await middleware(pluginRequest({ url: '/__made-solid/codex-feedback' }), ignoredResponse, () => {
+    continued = true;
+  });
+  assert.equal(continued, true);
+
+  const rejectedResponse = pluginResponse();
+  await middleware(
+    pluginRequest({
+      body: JSON.stringify({ action: 'not-a-branch' }),
+      headers: { 'sec-fetch-site': 'same-origin' },
+      url: '/__made-solid/codex-branch',
+    }),
+    rejectedResponse,
+    () => undefined,
+  );
+  await rejectedResponse.finished;
+  assert.equal(rejectedResponse.statusCode, 400);
+  assert.match(rejectedResponse.body, /valid branch action/);
+
+  const notificationResponse = pluginResponse();
+  await middleware(
+    pluginRequest({
+      headers: { 'sec-fetch-site': 'same-origin' },
+      method: 'GET',
+      url: '/__made-solid/codex-notifications',
+    }),
+    notificationResponse,
+    () => undefined,
+  );
+  await notificationResponse.finished;
+  assert.equal(notificationResponse.statusCode, 200);
+  assert.equal(JSON.parse(notificationResponse.body).status, 'ready');
+  assert.match(JSON.parse(notificationResponse.body).publicKey, /^[A-Za-z0-9_-]{80,100}$/);
+});
+
 test('Workspace Studio gateway authenticates documents, assets, and the live-update transport', async () => {
   let upstreamHeaders;
   const upstream = createServer((incoming, response) => {
@@ -140,6 +223,7 @@ test('Workspace Studio gateway authenticates documents, assets, and the live-upd
     upstreamPort,
     upstreamTimeoutMs: 2_000,
     workspaceOrigin: 'https://workspace.madesolid.com.au',
+    workspaceOrigins: ['https://workspace.madesolid.com.au'],
   });
   await new Promise((resolve) => gateway.once('listening', resolve));
   const gatewayPort = gateway.address().port;
@@ -219,6 +303,10 @@ test('Railway keeps production release serving separate from the restartable liv
 
   assert.match(developmentSupervisor, /cd "\$studio_workspace_directory"/);
   assert.match(developmentSupervisor, /exec env -i/);
+  assert.match(developmentSupervisor, /SITEFORGE_RUNTIME_DATA_DIR=/);
+  assert.match(developmentSupervisor, /SITEFORGE_STUDIO_WORKSPACE_DIR=/);
+  assert.match(developmentSupervisor, /SITEFORGE_PROSPECT_WORKSPACES_DIR=/);
+  assert.match(developmentSupervisor, /MADE_SOLID_WEBSITE_DIRECTORY=/);
   assert.match(developmentSupervisor, /SITEFORGE_WORKSPACE_DEVELOPMENT=1/);
   assert.match(developmentSupervisor, /--host 127\.0\.0\.1/);
   assert.match(developmentSupervisor, /--mode development/);
@@ -233,10 +321,7 @@ test('Railway keeps production release serving separate from the restartable liv
   assert.match(launcher, /wait -n "\$\{critical_processes\[@\]\}"/);
   assert.doesNotMatch(launcher, /workspace-preview-proxy\.mjs/);
 
-  assert.match(
-    viteConfiguration,
-    /plugins: \[react\(\), \.\.\.\(workspaceDevelopment \? \[\] : \[localWorkspacePlugin\(\)\]\)\]/,
-  );
+  assert.match(viteConfiguration, /workspaceDevelopment \? \[workspaceCodexBranchPlugin\(\)\]/);
   assert.match(viteConfiguration, /frame-ancestors 'none'/);
   assert.match(viteConfiguration, /SITEFORGE_RUNTIME_API_PROXY_ORIGIN/);
   assert.match(viteConfiguration, /target: runtimeApiTarget/);

@@ -242,6 +242,38 @@ const selectedCodexExcerptActionsMigrationUrl = new URL(
   '../../supabase/migrations/20260825000000_selected_codex_excerpt_actions_test_package.sql',
   import.meta.url,
 );
+const codexPhoneNotificationsMigrationUrl = new URL(
+  '../../supabase/migrations/20260825120000_codex_phone_notifications_test_package.sql',
+  import.meta.url,
+);
+const branchableCodexConversationsMigrationUrl = new URL(
+  '../../supabase/migrations/20260825130000_branchable_codex_conversations_test_package.sql',
+  import.meta.url,
+);
+const liveWorkspaceCodexBranchingMigrationUrl = new URL(
+  '../../supabase/migrations/20260825140000_live_workspace_codex_branching_test_package.sql',
+  import.meta.url,
+);
+const liveWorkspacePhoneNotificationsMigrationUrl = new URL(
+  '../../supabase/migrations/20260825150000_live_workspace_phone_notifications_test_package.sql',
+  import.meta.url,
+);
+const naturalCodexReadingMigrationUrl = new URL(
+  '../../supabase/migrations/20260825160000_natural_codex_reading_test_package.sql',
+  import.meta.url,
+);
+const focusedCodexSettingsMigrationUrl = new URL(
+  '../../supabase/migrations/20260825170000_focused_codex_settings_test_package.sql',
+  import.meta.url,
+);
+const conciseCodexReadingMigrationUrl = new URL(
+  '../../supabase/migrations/20260825180000_concise_codex_reading_test_package.sql',
+  import.meta.url,
+);
+const developmentReleaseUrlsMigrationUrl = new URL(
+  '../../supabase/migrations/20260825190000_development_release_urls_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -264,6 +296,10 @@ const componentUrl = new URL('../../src/components/CodexFeedbackPanel.tsx', impo
 const mobileCaptureUrl = new URL('../../src/lib/mobile-screen-capture.ts', import.meta.url);
 const mainUrl = new URL('../../src/main.tsx', import.meta.url);
 const localServiceUrl = new URL('../../scripts/local-workspace-vite-plugin.mjs', import.meta.url);
+const workspaceBranchServiceUrl = new URL(
+  '../../scripts/workspace-codex-branch-vite-plugin.mjs',
+  import.meta.url,
+);
 const appShellUrl = new URL('../../src/components/AppShell.tsx', import.meta.url);
 const studioHotUpdateUrl = new URL('../../src/lib/studio-hot-update.ts', import.meta.url);
 const launcherUrl = new URL('../../scripts/codespace-work', import.meta.url);
@@ -310,7 +346,7 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 77);
+  assert.equal(Number(revision[1]), 85);
   assert.match(app, /shows chats for that client plus clearly labelled universal Studio chats/);
   assert.match(app, /gives only the authenticated Studio owner a disclosed, reversible switch/);
   assert.match(app, /saved Natural or Literal interpretation and three speeds/);
@@ -321,6 +357,8 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   assert.match(app, /launcher is present during startup checks/);
   assert.match(app, /temporary read-only quick question/);
   assert.match(app, /appending the quote to the draft/);
+  assert.match(app, /per-phone Web Push opt-in/);
+  assert.match(app, /without automatic promotion/);
 });
 
 test('registers the restored Codex voice experience above immutable v20.2', async () => {
@@ -2116,7 +2154,259 @@ test('registers selected Codex excerpt actions above immutable v20.4 in every lo
   assert.match(component, /Add to prompt/);
   assert.match(component, /Send now/);
   assert.match(service, /input\.action === 'temporary-question'/);
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.77`/);
+  assert.match(app, /Selecting text inside one Codex reply/);
+});
+
+test('registers Codex phone notifications above immutable v20.5', async () => {
+  const [migration, repository, app, service] = await Promise.all([
+    readFile(codexPhoneNotificationsMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+    readFile(localServiceUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /made-solid-studio-builder-agent-v20\.6/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v20\.5'/,
+  );
+  assert.match(repository, /version: 20\.6,/);
+  assert.match(repository, /basePackageId: localSelectedCodexExcerptActionsPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localCodexPhoneNotificationsPackage,') <
+      packageLedger.indexOf('localSelectedCodexExcerptActionsPackage,'),
+  );
+  assert.match(app, /Codex completion notifications/);
+  assert.match(app, /Turn on phone notifications/);
+  assert.match(service, /codexNotificationsEndpoint/);
+  assert.match(service, /notifyCompletion/);
+  const existingLedgerUpgrade = repository.slice(repository.indexOf('const missingPackages = ['));
+  assert.ok(
+    existingLedgerUpgrade.indexOf('localCodexPhoneNotificationsPackage,') <
+      existingLedgerUpgrade.indexOf('localSelectedCodexExcerptActionsPackage,'),
+  );
+});
+
+test('registers branchable Codex conversations above immutable v20.6', async () => {
+  const [migration, repository, app, service, bridge, component] = await Promise.all([
+    readFile(branchableCodexConversationsMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+    readFile(localServiceUrl, 'utf8'),
+    readFile(new URL('../../scripts/codex-feedback-bridge.mjs', import.meta.url), 'utf8'),
+    readFile(componentUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /made-solid-studio-builder-agent-v20\.7/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v20\.6'/,
+  );
+  assert.match(repository, /version: 20\.7,/);
+  assert.match(repository, /basePackageId: localCodexPhoneNotificationsPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localBranchableCodexConversationsPackage,') <
+      packageLedger.indexOf('localCodexPhoneNotificationsPackage,'),
+  );
+  const existingLedgerUpgrade = repository.slice(repository.indexOf('const missingPackages = ['));
+  assert.ok(
+    existingLedgerUpgrade.indexOf('localBranchableCodexConversationsPackage,') <
+      existingLedgerUpgrade.indexOf('localCodexPhoneNotificationsPackage,'),
+  );
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.85`/);
+  assert.match(service, /input\.action === 'branch-thread'/);
+  assert.match(service, /codexBranchEndpoint/);
+  assert.match(bridge, /client\.request\('thread\/fork'/);
+  assert.match(bridge, /lastTurnId: turnId/);
+  assert.match(component, /Branch chat from this reply/);
+  assert.match(component, /codex-branch/);
+});
+
+test('registers live Workspace Codex branching above immutable v20.7', async () => {
+  const [migration, repository, workspaceService, viteConfiguration] = await Promise.all([
+    readFile(liveWorkspaceCodexBranchingMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(workspaceBranchServiceUrl, 'utf8'),
+    readFile(new URL('../../vite.config.ts', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /made-solid-studio-builder-agent-v20\.8/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v20\.7'/,
+  );
+  assert.match(repository, /version: 20\.8,/);
+  assert.match(repository, /basePackageId: localBranchableCodexConversationsPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localLiveWorkspaceCodexBranchingPackage,') <
+      packageLedger.indexOf('localBranchableCodexConversationsPackage,'),
+  );
+  assert.match(workspaceService, /workspaceCodexBranchEndpoint/);
+  assert.match(workspaceService, /activeBridge\.forkThread\(input\)/);
+  assert.doesNotMatch(workspaceService, /\.maintain\(/);
+  assert.match(viteConfiguration, /workspaceCodexBranchPlugin\(\)/);
+});
+
+test('registers live Workspace phone notifications above immutable v20.8', async () => {
+  const [migration, repository, workspaceService, notificationClient] = await Promise.all([
+    readFile(liveWorkspacePhoneNotificationsMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(workspaceBranchServiceUrl, 'utf8'),
+    readFile(new URL('../../src/lib/codex-notifications.ts', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /made-solid-studio-builder-agent-v20\.9/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v20\.8'/,
+  );
+  assert.match(repository, /version: 20\.9,/);
+  assert.match(repository, /basePackageId: localLiveWorkspaceCodexBranchingPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localLiveWorkspacePhoneNotificationsPackage,') <
+      packageLedger.indexOf('localLiveWorkspaceCodexBranchingPackage,'),
+  );
+  assert.match(workspaceService, /workspaceCodexNotificationsEndpoint/);
+  assert.match(workspaceService, /dispatchCompletionNotifications/);
+  assert.doesNotMatch(workspaceService, /activeBridge\.maintain\(\)/);
+  assert.match(notificationClient, /if \(!text\.trim\(\)\) return/);
+  assert.match(notificationClient, /Phone notifications are not ready on this Studio server yet/);
+});
+
+test('registers natural Codex reading above immutable v20.9', async () => {
+  const [migration, repository, speech] = await Promise.all([
+    readFile(naturalCodexReadingMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(new URL('../../src/lib/codex-speech.ts', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /made-solid-studio-builder-agent-v21\.0/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v20\.9'/,
+  );
+  assert.match(migration, /'test_ready'/);
+  assert.match(repository, /version: 21,/);
+  assert.match(repository, /basePackageId: localLiveWorkspacePhoneNotificationsPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localNaturalCodexReadingPackage,') <
+      packageLedger.indexOf('localLiveWorkspacePhoneNotificationsPackage,'),
+  );
+  const existingLedgerUpgrade = repository.slice(repository.indexOf('const missingPackages = ['));
+  assert.ok(
+    existingLedgerUpgrade.indexOf('localNaturalCodexReadingPackage,') <
+      existingLedgerUpgrade.indexOf('localLiveWorkspacePhoneNotificationsPackage,'),
+  );
+  assert.match(speech, /condenseNaturalTechnicalLists/);
+  assert.match(speech, /→➜➝➞➡⇒⟶/);
+});
+
+test('registers focused Codex settings above immutable v21.0', async () => {
+  const [migration, repository, component] = await Promise.all([
+    readFile(focusedCodexSettingsMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(componentUrl, 'utf8'),
+  ]);
+  assert.match(migration, /made-solid-studio-builder-agent-v21\.1/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v21\.0'/,
+  );
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /not exists/i);
+  assert.match(repository, /version: 21\.1,/);
+  assert.match(repository, /basePackageId: localNaturalCodexReadingPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localFocusedCodexSettingsPackage,') <
+      packageLedger.indexOf('localNaturalCodexReadingPackage,'),
+  );
+  const existingLedgerUpgrade = repository.slice(repository.indexOf('const missingPackages = ['));
+  assert.ok(
+    existingLedgerUpgrade.indexOf('localFocusedCodexSettingsPackage,') <
+      existingLedgerUpgrade.indexOf('localNaturalCodexReadingPackage,'),
+  );
+  assert.match(component, /label="Run setup"/);
+  assert.match(component, /label="Chat settings"/);
+  assert.match(component, /Close chat settings/);
+});
+
+test('registers concise Codex reading above immutable v21.1', async () => {
+  const [migration, repository, app, speech] = await Promise.all([
+    readFile(conciseCodexReadingMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+    readFile(new URL('../../src/lib/codex-speech.ts', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /made-solid-studio-builder-agent-v21\.2/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v21\.1'/,
+  );
+  assert.match(migration, /'test_ready'/);
+  assert.match(repository, /version: 21\.2,/);
+  assert.match(repository, /basePackageId: localFocusedCodexSettingsPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localConciseCodexReadingPackage,') <
+      packageLedger.indexOf('localFocusedCodexSettingsPackage,'),
+  );
+  const existingLedgerUpgrade = repository.slice(repository.indexOf('const missingPackages = ['));
+  assert.ok(
+    existingLedgerUpgrade.indexOf('localConciseCodexReadingPackage,') <
+      existingLedgerUpgrade.indexOf('localFocusedCodexSettingsPackage,'),
+  );
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.85`/);
+  assert.match(app, /without automatic promotion/);
+  assert.match(speech, /condenseNaturalTechnicalHandoff/);
+});
+
+test('registers development release URLs above immutable v21.2', async () => {
+  const [migration, repository, app, developmentPage, previewHost] = await Promise.all([
+    readFile(developmentReleaseUrlsMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+    readFile(new URL('../../src/components/DevelopmentPage.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../../preview-host/server.mjs', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /made-solid-studio-builder-agent-v21\.3/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v21\.2'/,
+  );
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /not exists/i);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(repository, /version: 21\.3,/);
+  assert.match(repository, /basePackageId: localConciseCodexReadingPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localDevelopmentReleaseUrlsPackage,') <
+      packageLedger.indexOf('localConciseCodexReadingPackage,'),
+  );
+  const existingLedgerUpgrade = repository.slice(repository.indexOf('const missingPackages = ['));
+  assert.ok(
+    existingLedgerUpgrade.indexOf('localDevelopmentReleaseUrlsPackage,') <
+      existingLedgerUpgrade.indexOf('localConciseCodexReadingPackage,'),
+  );
+  const fallbackLedger = repository.slice(repository.indexOf('} catch {'));
+  assert.ok(
+    fallbackLedger.indexOf('localDevelopmentReleaseUrlsPackage,') <
+      fallbackLedger.indexOf('localConciseCodexReadingPackage,'),
+  );
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.85`/);
+  assert.match(app, /Latest edit: Websites now separates Studio and Made Solid development/);
+  assert.match(developmentPage, /Unreleased changes/);
+  assert.match(developmentPage, /Saved feature versions/);
+  assert.match(developmentPage, /Promote exact version/);
+  assert.match(previewHost, /'\/test\/'/);
+  assert.match(previewHost, /'\/build\/'/);
 });
 
 test('ships one locally scoped Manifest V3 capture helper for Chrome and Brave', async () => {
@@ -2196,7 +2486,8 @@ test('keeps the shared Codex panel in the Studio-owned preview shell', async () 
   ]);
   assert.doesNotMatch(layout, /WorkspaceCodexPanel/);
   assert.doesNotMatch(layout, /made-solid-codex-bridge\.js/);
-  assert.doesNotMatch(service, /MADE_SOLID_STUDIO_ORIGIN=/);
+  assert.match(service, /ownedWebsiteDevelopmentEnvironment/);
+  assert.match(service, /MADE_SOLID_STUDIO_ORIGIN=/);
   assert.match(previewFrame, /Back to Studio/);
   assert.match(previewFrame, /window\.top\.location\.href/);
 });

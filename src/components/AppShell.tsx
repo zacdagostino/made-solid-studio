@@ -2,6 +2,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import {
   Bot,
   CalendarDays,
+  Code2,
   Database,
   LoaderCircle,
   LogOut,
@@ -21,7 +22,15 @@ import type { StudioSurface } from '../lib/studio-surface';
 import { Button, IconButton } from './ui';
 
 export type AppPage =
-  'today' | 'prospects' | 'agent-studio' | 'codex' | 'usage' | 'tax' | 'data' | 'settings';
+  | 'today'
+  | 'prospects'
+  | 'development'
+  | 'agent-studio'
+  | 'codex'
+  | 'usage'
+  | 'tax'
+  | 'data'
+  | 'settings';
 type Theme = 'light' | 'dark';
 
 const themeStorageKey = 'siteforge-os.theme';
@@ -29,6 +38,7 @@ const themeStorageKey = 'siteforge-os.theme';
 const navigation = [
   { page: 'today' as const, label: 'Today', icon: CalendarDays },
   { page: 'prospects' as const, label: 'Prospects', icon: UsersRound },
+  { page: 'development' as const, label: 'Websites', icon: Code2 },
   { page: 'agent-studio' as const, label: 'Agent Studio', icon: Bot },
   { page: 'codex' as const, label: 'Codex chat', icon: MessageSquareText },
   { page: 'usage' as const, label: 'AI usage', icon: WalletCards },

@@ -126,39 +126,40 @@ function fakeConnection(state) {
               },
             ],
           }));
-        return {
-          thread: {
-            id: params.threadId,
-            cwd: '/workspaces/siteforge-os',
-            status:
-              state.threadStatus ||
-              (state.busy ? { type: 'active', activeFlags: [] } : { type: 'idle' }),
-            turns: [
-              {
-                id: 'turn-active',
-                status: state.busy ? 'inProgress' : state.interrupted ? 'interrupted' : 'completed',
-                startedAt: state.busy ? Math.floor(Date.now() / 1_000) - 12 : undefined,
-                items: [
-                  {
-                    id: 'message-user',
-                    type: 'userMessage',
-                    content: [{ type: 'text', text: 'Inspect this Studio page.' }],
-                  },
-                  ...(state.activityItems || []).slice(0, state.activityItemsBeforeAgentCount || 0),
-                  {
-                    id: 'message-agent',
-                    type: 'agentMessage',
-                    phase: 'final',
-                    text: 'The Studio page is ready.',
-                  },
-                  ...(state.activityItems || []).slice(state.activityItemsBeforeAgentCount || 0),
-                  ...(state.collabItems || []),
-                ],
-              },
-              ...submittedTurns,
-            ],
-          },
+        const thread = {
+          id: params.threadId,
+          cwd: '/workspaces/siteforge-os',
+          status:
+            state.threadStatus ||
+            (state.busy ? { type: 'active', activeFlags: [] } : { type: 'idle' }),
+          turns: [
+            {
+              id: 'turn-active',
+              status: state.busy ? 'inProgress' : state.interrupted ? 'interrupted' : 'completed',
+              startedAt: state.busy ? Math.floor(Date.now() / 1_000) - 12 : undefined,
+              items: [
+                {
+                  id: 'message-user',
+                  type: 'userMessage',
+                  content: [{ type: 'text', text: 'Inspect this Studio page.' }],
+                },
+                ...(state.activityItems || []).slice(0, state.activityItemsBeforeAgentCount || 0),
+                {
+                  id: 'message-agent',
+                  type: 'agentMessage',
+                  phase: 'final',
+                  text: 'The Studio page is ready.',
+                },
+                ...(state.activityItems || []).slice(state.activityItemsBeforeAgentCount || 0),
+                ...(state.collabItems || []),
+              ],
+            },
+            ...submittedTurns,
+          ],
         };
+        state.readThreads ??= new Map();
+        state.readThreads.set(params.threadId, thread);
+        return { thread };
       }
       if (method === 'thread/resume') {
         state.threadResumes ??= [];
@@ -190,6 +191,26 @@ function fakeConnection(state) {
           modelProvider: 'openai',
           sandbox: { type: 'dangerFullAccess' },
         };
+      }
+      if (method === 'thread/fork') {
+        state.threadForks ??= [];
+        state.threadForks.push(params);
+        const source = state.readThreads?.get(params.threadId);
+        const lastTurnIndex = source?.turns.findIndex(
+          (turn) => String(turn.id) === String(params.lastTurnId),
+        );
+        const thread = {
+          id: `thread-fork-${state.threadForks.length}`,
+          name: `${source?.name || 'Codex conversation'} branch`,
+          cwd: params.cwd,
+          forkedFromId: params.threadId,
+          status: { type: 'idle' },
+          turns:
+            lastTurnIndex >= 0 ? structuredClone(source.turns.slice(0, lastTurnIndex + 1)) : [],
+        };
+        state.newThreads ??= [];
+        state.newThreads.unshift(thread);
+        return { thread };
       }
       if (method === 'turn/start') {
         const agentThread = state.agentThreads?.find((thread) => thread.id === params.threadId);
@@ -1345,6 +1366,104 @@ test('validates temporary excerpt questions before connecting to Codex', async (
     /Choose an available Codex model/,
   );
   assert.equal(connections, 0);
+});
+
+test('branches a completed Codex turn with native context and workspace settings', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-branch-thread-'));
+  const state = { busy: false, turns: [] };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+
+  const branched = await bridge.forkThread({
+    threadId: 'thread-1',
+    turnId: 'turn-active',
+  });
+
+  assert.equal(branched.status, 'ready');
+  assert.equal(branched.thread.id, 'thread-fork-1');
+  assert.equal(branched.thread.discardable, false);
+  assert.deepEqual(state.threadForks, [
+    {
+      threadId: 'thread-1',
+      lastTurnId: 'turn-active',
+      cwd: '/workspaces/siteforge-os',
+      runtimeWorkspaceRoots: bridge.runtimeWorkspaceRoots,
+      sandbox: 'danger-full-access',
+      approvalPolicy: 'never',
+      deferGoalContinuation: true,
+      ephemeral: false,
+      threadSource: 'user',
+    },
+  ]);
+  assert.equal(state.newThreads[0].forkedFromId, 'thread-1');
+  assert.equal(state.newThreads[0].turns.length, 1);
+});
+
+test('branches only stable feedback evidence through the selected completed turn', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-branch-evidence-'));
+  const state = { busy: false, turns: [] };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+  await bridge.enqueue({
+    prompt: 'Compare this exact mobile header.',
+    screenshot: imageDataUrl,
+    context: 'Made Solid Studio · https://workspace.example.test/#/prospects/one',
+    model: 'gpt-image-capable',
+    effort: 'medium',
+    threadId: 'thread-1',
+    workMode: 'team',
+  });
+  state.threadStatus = { type: 'idle' };
+  state.turnStatuses = { 'turn-1': 'completed' };
+  await bridge.maintain();
+
+  const branched = await bridge.forkThread({ threadId: 'thread-1', turnId: 'turn-1' });
+  const branchStatus = await bridge.inspect({ threadId: branched.thread.id });
+  const inheritedPrompt = branchStatus.messages.find(
+    (message) => message.turnId === 'turn-1' && message.role === 'user',
+  );
+
+  assert.equal(inheritedPrompt.text, 'Compare this exact mobile header.');
+  assert.equal(inheritedPrompt.attachmentIds.length, 1);
+  assert.match(inheritedPrompt.feedbackId, /^[0-9a-f-]{36}$/i);
+  const records = await bridge.readRecords();
+  const inheritedRecord = records.find(
+    (record) => String(record.threadId) === branched.thread.id && record.turnId === 'turn-1',
+  );
+  const sourceRecord = records.find(
+    (record) => record.threadId === 'thread-1' && record.turnId === 'turn-1',
+  );
+  assert.ok(inheritedRecord);
+  assert.ok(sourceRecord);
+  assert.equal(inheritedRecord.forkedFromRecordId, sourceRecord.id);
+  assert.deepEqual(inheritedRecord.attachments, sourceRecord.attachments);
+  assert.equal(inheritedRecord.notificationPending, false);
+});
+
+test('rejects unknown and unfinished Codex turns before branching', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-branch-validation-'));
+  const state = { busy: true, turns: [] };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+
+  await assert.rejects(
+    bridge.forkThread({ threadId: 'thread-1', turnId: 'missing-turn' }),
+    /no longer available/,
+  );
+  await assert.rejects(
+    bridge.forkThread({ threadId: 'thread-1', turnId: 'turn-active' }),
+    /Wait for this Codex reply to finish/,
+  );
+  assert.equal(state.threadForks, undefined);
 });
 
 test('uses container-level full access while preserving both Railway workspace roots', async () => {

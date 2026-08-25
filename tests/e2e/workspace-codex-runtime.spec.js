@@ -10,6 +10,8 @@ let devServer;
 let devOrigin;
 
 test.beforeAll(async () => {
+  process.env.SITEFORGE_DEVELOPMENT_ORIGIN = 'https://dev.studio.madesolid.com.au';
+  process.env.SITEFORGE_DEVELOPMENT_COMPATIBILITY_ORIGINS = 'https://workspace.madesolid.com.au';
   process.env.SITEFORGE_STUDIO_WORKSPACE_DIR = workspaceRoot;
   process.env.SITEFORGE_WORKSPACE_PREVIEW_SECRET = secret;
   process.env.VITE_SITEFORGE_STORAGE = 'local';
@@ -25,6 +27,8 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   await devServer?.close();
+  delete process.env.SITEFORGE_DEVELOPMENT_ORIGIN;
+  delete process.env.SITEFORGE_DEVELOPMENT_COMPATIBILITY_ORIGINS;
 });
 
 test('renders the real transformed Workspace Codex document and keeps normal Studio non-frameable', async ({
@@ -62,7 +66,7 @@ test('renders the real transformed Workspace Codex document and keeps normal Stu
     "@vitejs/plugin-react can't detect preamble. Something is wrong.",
   );
   expect(response?.headers()['content-security-policy']).toBe(
-    "frame-ancestors https://workspace.madesolid.com.au; base-uri 'none'; form-action 'none'",
+    "frame-ancestors https://dev.studio.madesolid.com.au https://workspace.madesolid.com.au; base-uri 'none'; form-action 'none'",
   );
 
   const normalStudio = await page.request.get(`${devOrigin}/`);

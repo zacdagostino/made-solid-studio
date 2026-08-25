@@ -133,13 +133,13 @@ test('production links the exact client route into Development Workspace', async
   const developmentLink = page.getByRole('link', { name: 'Open in Development Workspace' }).first();
   await expect(developmentLink).toHaveAttribute(
     'href',
-    `https://workspace.madesolid.com.au/?__made_solid_route=${encodeURIComponent(editingHash)}${editingHash}`,
+    `https://dev.studio.madesolid.com.au/?__made_solid_route=${encodeURIComponent(editingHash)}${editingHash}`,
   );
   await expect(page.getByText('Development · Live source')).toHaveCount(0);
   await expect(page.getByTestId('client-development-editor')).toHaveCount(0);
 });
 
-test('exchanges authenticated Studio access and preserves the exact Workspace route', async ({
+test('exchanges authenticated Studio access through the canonical development origin', async ({
   page,
 }) => {
   const returnPath = `/?__made_solid_route=${encodeURIComponent(editingHash)}`;
@@ -148,12 +148,12 @@ test('exchanges authenticated Studio access and preserves the exact Workspace ro
     await route.fulfill({
       body: JSON.stringify({
         status: 'ready',
-        workspaceUrl: 'https://workspace.madesolid.com.au/?access=short-lived-exchange',
+        workspaceUrl: 'https://dev.studio.madesolid.com.au/?access=short-lived-exchange',
       }),
       contentType: 'application/json',
     });
   });
-  await page.route('https://workspace.madesolid.com.au/**', async (route) => {
+  await page.route('https://dev.studio.madesolid.com.au/**', async (route) => {
     workspaceRequestUrl = route.request().url();
     await route.fulfill({
       body: `<!doctype html><html lang="en"><body><h1>Workspace gateway</h1><script>
@@ -174,6 +174,35 @@ test('exchanges authenticated Studio access and preserves the exact Workspace ro
   expect(workspaceRequestUrl).toContain('access=short-lived-exchange');
   expect(workspaceRequestUrl).toContain(`__made_solid_route=${encodeURIComponent(editingHash)}`);
   await expect(page).toHaveURL(new RegExp(`${editingHash.replaceAll('/', '\\/')}$`));
+  expect(page.url()).not.toContain('access_token');
+  expect(page.url()).not.toContain('refresh_token');
+});
+
+test('accepts a legacy Workspace exchange during the mixed-version rollout', async ({ page }) => {
+  const returnPath = `/?__made_solid_route=${encodeURIComponent(editingHash)}`;
+  let workspaceRequestUrl = '';
+  await page.route('**/__made-solid/workspace-development-access', async (route) => {
+    await route.fulfill({
+      body: JSON.stringify({
+        status: 'ready',
+        workspaceUrl: 'https://workspace.madesolid.com.au/?access=legacy-exchange',
+      }),
+      contentType: 'application/json',
+    });
+  });
+  await page.route('https://workspace.madesolid.com.au/**', async (route) => {
+    workspaceRequestUrl = route.request().url();
+    await route.fulfill({
+      body: '<!doctype html><html lang="en"><body><h1>Legacy Workspace gateway</h1></body></html>',
+      contentType: 'text/html',
+    });
+  });
+
+  await page.goto(`/#/workspace-development-access?path=${encodeURIComponent(returnPath)}`);
+
+  await expect(page.getByRole('heading', { name: 'Legacy Workspace gateway' })).toBeVisible();
+  expect(workspaceRequestUrl).toContain('access=legacy-exchange');
+  expect(workspaceRequestUrl).toContain(`__made_solid_route=${encodeURIComponent(editingHash)}`);
   expect(page.url()).not.toContain('access_token');
   expect(page.url()).not.toContain('refresh_token');
 });

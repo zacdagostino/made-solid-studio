@@ -4,6 +4,8 @@ import {
   ArrowRight,
   ArrowUpRight,
   Ban,
+  BellOff,
+  BellRing,
   Bot,
   Check,
   CheckCheck,
@@ -80,6 +82,7 @@ import madeSolidHandoffWorkerSource from '../worker/made-solid-handoff-worker.mj
 import buildManifestSource from './lib/build-manifest.ts?raw';
 import { AppShell, type AppPage } from './components/AppShell';
 import { CodexFeedbackPanel } from './components/CodexFeedbackPanel';
+import { DevelopmentPage } from './components/DevelopmentPage';
 import { AgentArchitectureOverview } from './components/AgentArchitectureOverview';
 import { MarkdownContent } from './components/MarkdownContent';
 import { TaxExpensesPage } from './components/TaxExpensesPage';
@@ -186,6 +189,7 @@ type Route =
   | { page: 'usage'; builderRunId?: string }
   | { page: 'tax' }
   | { page: 'settings' }
+  | { page: 'development' }
   | { page: 'codex' }
   | { page: 'workspace-development-access'; returnPath: string }
   | { page: 'agent-studio'; section?: AgentStudioSection; businessId?: string }
@@ -253,6 +257,7 @@ function routeFromHash(hash: string): Route {
     };
   }
   if (parts[0] === 'settings') return { page: 'settings' };
+  if (parts[0] === 'development') return { page: 'development' };
   if (parts[0] === 'codex') return { page: 'codex' };
   if (parts[0] === 'usage') return { page: 'usage', builderRunId: parts[1] };
   if (parts[0] === 'tax') return { page: 'tax' };
@@ -274,6 +279,7 @@ function routeFromHash(hash: string): Route {
 function hrefForRoute(route: Route) {
   if (route.page === 'today') return '#/today';
   if (route.page === 'settings') return '#/settings';
+  if (route.page === 'development') return '#/development';
   if (route.page === 'codex') return '#/codex';
   if (route.page === 'data') return '#/data';
   if (route.page === 'usage') return `#/usage${route.builderRunId ? `/${route.builderRunId}` : ''}`;
@@ -8893,10 +8899,10 @@ function BuilderRunPanel({
             id: 'visual-codex-feedback',
             title: 'Codex Workspace Agent and visual feedback',
             detail:
-              'The Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy, available as both a persistent popup and a dedicated Studio page. It defaults to included ChatGPT subscription access and gives only the authenticated Studio owner a disclosed, reversible switch to separately billed OpenAI API credits for all Studio AI work when subscription allowance is exhausted. Production Studio stays on its exact reviewed release, while an authenticated workspace.madesolid.com.au visit opens the full Studio UI from the persistent editable checkout with immediate source updates. A client website editor remains a clean route inside that development Studio and shows chats for that client plus clearly labelled universal Studio chats, hides every other client, and starts new client chats with only that website repository available to edit. Reviewers can send text, images, or both, choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. Voice reading offers saved Natural or Literal interpretation and three speeds, explicit preview and manual Read, opt-in chat-scoped auto-read, progressive private Google audio with device fallback, and a persistent read-along dock with active-word restart, exact seeking where available, five-second skipping, pause, resume, and stop. Selecting text inside one Codex reply offers a temporary read-only quick question, appending the quote to the draft, immediate sending without replacing that draft, or dismissal on both popup and page chat. Studio source edits apply in place without restarting the workspace, and a compact top status announces the brief update while the current route, popup, draft, and conversation remain mounted. The launcher is present during startup checks, and a refresh restores the open selected conversation and its exact transcript reading position without changing the active prospect route. Exact-client preview capabilities stay private and out of the clean Workspace URL. Observable activity and queue state appears without invented progress.',
-            revision: `v${selectedAgentPackage.version}.77`,
+              'The Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy, available as both a persistent popup and a dedicated Studio page. It defaults to included ChatGPT subscription access and gives only the authenticated Studio owner a disclosed, reversible switch to separately billed OpenAI API credits for all Studio AI work when subscription allowance is exhausted. Production Studio stays on its exact reviewed release, while an authenticated dev.studio.madesolid.com.au visit opens the full Studio UI from the persistent editable checkout with immediate source updates; workspace.madesolid.com.au remains a compatibility entry during the staged migration. A client website editor remains a clean route inside that development Studio and shows chats for that client plus clearly labelled universal Studio chats, hides every other client, and starts new client chats with only that website repository available to edit. Reviewers can send text, images, or both, choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. Model, Reasoning, and Agent team stay together in compact Run setup, while usage, billing, Fast, and voice preferences sit behind a separate Chat settings cog. A completed final Codex reply can branch into a separately selected conversation that preserves native context, clean prompts, image evidence, and the same client or universal workspace boundary while leaving the original chat unchanged. Voice reading offers saved Natural or Literal interpretation and three speeds, explicit preview and manual Read, opt-in chat-scoped auto-read, progressive private Google audio with device fallback, and a persistent read-along dock with active-word restart, exact seeking where available, five-second skipping, pause, resume, and stop. Natural reading says “then” for right-arrow icons and keeps a verification introduction while it skips its long technical results list. Selecting text inside one Codex reply offers a temporary read-only quick question, appending the quote to the draft, immediate sending without replacing that draft, or dismissal on both popup and page chat. An explicit per-phone Web Push opt-in sends generic private alerts only after a tracked Studio Codex supervisor turn completes successfully, including while Studio is closed. Studio source edits apply in place without restarting the workspace, and a compact top status announces the brief update while the current route, popup, draft, and conversation remain mounted. The launcher is present during startup checks, and a refresh restores the open selected conversation and its exact transcript reading position without changing the active prospect route. Exact-client preview capabilities stay private and out of the clean development URL. Observable activity and queue state appears without invented progress.',
+            revision: `v${selectedAgentPackage.version}.85`,
             change:
-              'Latest edit: Selecting text in a Codex reply now offers a temporary read-only quick question, Add to prompt, Send now, and Dismiss on both popup and page chat.',
+              'Latest edit: Websites now separates Studio and Made Solid development from production, shows exact repository versions and unreleased files, preserves the Workspace compatibility entry, and labels private test and complete-build capability URLs without automatic promotion.',
           },
           {
             id: 'inbound-client-email-review',
@@ -8984,9 +8990,9 @@ function BuilderRunPanel({
             title: 'Framework and responsive quality gates',
             detail:
               'Generated source must pass formatting, lint, strict typing, production build, route and provenance checks, browser interactions, accessibility, and exact responsive evidence.',
-            revision: `v${selectedAgentPackage.version}.89`,
+            revision: `v${selectedAgentPackage.version}.91`,
             change:
-              'Latest edit: Codex Test Builder and Codex Website Builder now reject API-key mode, force a verified ChatGPT login, strip API credentials, and fail closed if subscription authentication is unavailable.',
+              'Latest edit: completed prospect builds now lead with their current outcome and repair action, while build inputs, passed checks, technical activity, replacement builds, and deletion move into secondary disclosures.',
           },
         ]
       : [];
@@ -9267,11 +9273,6 @@ function BuilderRunPanel({
     run?.qualitySummary.checks.filter((check) => check.status === 'needs_review') ?? [];
   const passedQualityChecks =
     run?.qualitySummary.checks.filter((check) => check.status === 'passed') ?? [];
-  const orderedQualityChecks = [
-    ...failedQualityChecks,
-    ...reviewQualityChecks,
-    ...passedQualityChecks,
-  ];
   const qualityNeedsAttention = failedQualityChecks.length > 0 || reviewQualityChecks.length > 0;
   const qualityDisclosureId = `builder-quality-${buildKind}`;
   const runId = run?.id;
@@ -9608,22 +9609,110 @@ function BuilderRunPanel({
     }
   }
 
+  function renderQualityCheck(check: BuilderRun['qualitySummary']['checks'][number]) {
+    const detailPreview = qualityCheckDetailPreview(check.detail, 320);
+    const hasTechnicalDetail = detailPreview !== check.detail.replace(/\s+/g, ' ').trim();
+    return (
+      <li key={check.id}>
+        <strong>{check.label}</strong>
+        <span>{detailPreview}</span>
+        <StatusBadge
+          tone={
+            check.status === 'passed' ? 'success' : check.status === 'failed' ? 'danger' : 'warning'
+          }
+        >
+          {check.status.replaceAll('_', ' ')}
+        </StatusBadge>
+        {hasTechnicalDetail ? (
+          <details className="builder-quality__technical">
+            <summary>Technical details</summary>
+            <p>{check.detail}</p>
+          </details>
+        ) : null}
+      </li>
+    );
+  }
+
+  const qualityEvidence = run?.qualitySummary.checks.length ? (
+    <details
+      className="builder-quality builder-evidence-disclosure"
+      id={qualityDisclosureId}
+      open={active || qualityNeedsAttention ? true : undefined}
+    >
+      <summary className="builder-evidence-disclosure__summary">
+        <span>
+          <Eyebrow>Quality checks</Eyebrow>
+          <strong>Generated preview review</strong>
+          <small>
+            {failedQualityChecks.length
+              ? `${failedQualityChecks.length} failed · ${passedQualityChecks.length} passed`
+              : `${run.qualitySummary.checks.length} checks · ${builderQualityStatusLabel(run)}`}
+          </small>
+        </span>
+        <span className="builder-evidence-disclosure__aside">
+          <ChevronDown aria-hidden="true" size={18} />
+        </span>
+      </summary>
+      {isTestBuild &&
+      onQualityRecheck &&
+      run.sourceCheckpointAvailable &&
+      (run.status === 'ready' || run.status === 'review_required') ? (
+        <div className="builder-quality__recheck">
+          <p>
+            Reapply the selected package’s protected navigation and Brand Kit rules to this saved
+            source, then compile, capture, and test it again without a Codex page generation pass.
+          </p>
+          <Button
+            disabled={isRechecking || !selectedAgentPackageId}
+            onClick={() => void qualityRecheck(run.id)}
+            type="button"
+            variant="secondary"
+          >
+            <RotateCcw aria-hidden="true" size={16} />
+            {isRechecking ? 'Queueing recheck' : 'Recheck saved source'}
+          </Button>
+        </div>
+      ) : null}
+      {failedQualityChecks.length || reviewQualityChecks.length ? (
+        <ul className="builder-quality__attention-list">
+          {[...failedQualityChecks, ...reviewQualityChecks].map(renderQualityCheck)}
+        </ul>
+      ) : null}
+      {passedQualityChecks.length ? (
+        <details className="builder-quality__passed">
+          <summary>
+            Passed checks <span>{passedQualityChecks.length}</span>
+          </summary>
+          <ul>{passedQualityChecks.map(renderQualityCheck)}</ul>
+        </details>
+      ) : null}
+    </details>
+  ) : null;
+
   return (
     <section className="builder-run" aria-labelledby="builder-run-title">
       <div className="brief-panel__header">
         <div>
           <Eyebrow>{isTestBuild ? 'Private test build' : 'Private prospect build'}</Eyebrow>
-          <h3 id="builder-run-title">
-            {isTestBuild ? 'Codex test builder' : 'Complete prospect website'}
-          </h3>
+          {isTestBuild ? (
+            <h3 id="builder-run-title">Codex test builder</h3>
+          ) : (
+            <h2 id="builder-run-title">{run ? 'Latest full-site build' : 'Build website'}</h2>
+          )}
           <p className="muted-copy">
             {isTestBuild
               ? 'Tests one approved page or one feature across a moved whole-site source, then saves a private draft and logs for agent refinement. It does not publish or contact anyone.'
-              : 'Builds this prospect’s complete private website from its immutable Build Manifest, then saves source and automated browser checks for review. It does not publish or contact anyone.'}
+              : run
+                ? 'Review this build’s readiness, repair blocking findings, or inspect its private preview. Nothing here publishes or contacts the prospect.'
+                : 'Create this prospect’s complete private website from its approved build inputs, then review the generated source and browser checks.'}
           </p>
         </div>
         {run ? (
-          <StatusBadge tone={builderRunTone(run.status)}>{builderRunLabel(run.status)}</StatusBadge>
+          <StatusBadge tone={builderRunTone(run.status)}>
+            {run.status === 'review_required' && failedQualityChecks.length
+              ? 'Build checks failed'
+              : builderRunLabel(run.status)}
+          </StatusBadge>
         ) : null}
       </div>
 
@@ -9667,14 +9756,22 @@ function BuilderRunPanel({
             </span>
             <div>
               <Eyebrow>Action required · Build {run.id.slice(0, 8)}</Eyebrow>
-              <h4 id={`builder-attention-${buildKind}-title`}>
-                {failedQualityChecks.length
-                  ? `${failedQualityChecks.length} quality check${failedQualityChecks.length === 1 ? '' : 's'} failed`
-                  : `${reviewQualityChecks.length} quality check${reviewQualityChecks.length === 1 ? '' : 's'} need review`}
-              </h4>
+              {isTestBuild ? (
+                <h4 id={`builder-attention-${buildKind}-title`}>
+                  {failedQualityChecks.length
+                    ? `${failedQualityChecks.length} quality check${failedQualityChecks.length === 1 ? '' : 's'} failed`
+                    : `${reviewQualityChecks.length} quality check${reviewQualityChecks.length === 1 ? '' : 's'} need review`}
+                </h4>
+              ) : (
+                <h3 id={`builder-attention-${buildKind}-title`}>
+                  {failedQualityChecks.length
+                    ? `${failedQualityChecks.length} quality check${failedQualityChecks.length === 1 ? '' : 's'} failed`
+                    : `${reviewQualityChecks.length} quality check${reviewQualityChecks.length === 1 ? '' : 's'} need review`}
+                </h3>
+              )}
               <p>
-                This build remains private and is not ready for client handoff. Address these
-                findings, then verify a replacement build.
+                This build remains private and is not ready for client handoff. Repair these
+                findings in a linked run, then verify the replacement.
               </p>
             </div>
             <StatusBadge tone="danger">Not client-ready</StatusBadge>
@@ -9690,19 +9787,58 @@ function BuilderRunPanel({
               </li>
             ))}
           </ul>
-          <Button
-            onClick={() =>
-              document.getElementById(qualityDisclosureId)?.scrollIntoView({
-                behavior: 'smooth',
-                block: 'start',
-              })
-            }
-            type="button"
-            variant="secondary"
-          >
-            <ListChecks aria-hidden="true" size={16} />
-            Review complete quality evidence
-          </Button>
+          <ButtonGroup className="builder-run-attention__actions">
+            {onMoveToAgentStudio ? (
+              run.agentStudioSourceAt ? (
+                <ButtonLink
+                  href={`#/agent-studio/refine/${workspace.business.id}`}
+                  variant="primary"
+                >
+                  <FolderTree aria-hidden="true" size={16} />
+                  Continue repair in Agent Studio
+                </ButtonLink>
+              ) : (
+                <Button
+                  disabled={movingRunId === run.id}
+                  onClick={() => void moveToAgentStudio(run.id)}
+                  type="button"
+                >
+                  <Wrench aria-hidden="true" size={16} />
+                  {movingRunId === run.id
+                    ? 'Opening repair workspace'
+                    : failedQualityChecks.length
+                      ? `Repair ${failedQualityChecks.length} failed check${failedQualityChecks.length === 1 ? '' : 's'}`
+                      : 'Resolve quality review'}
+                </Button>
+              )
+            ) : null}
+            <Button
+              disabled={isOpeningPreview}
+              onClick={() => void openPreview(run.id, 'ready')}
+              type="button"
+              variant="secondary"
+            >
+              <ArrowUpRight aria-hidden="true" size={16} />
+              {isOpeningPreview ? 'Opening preview' : 'Inspect failed private preview'}
+            </Button>
+            <Button
+              onClick={() => {
+                const qualityDisclosure = document.getElementById(qualityDisclosureId);
+                if (qualityDisclosure instanceof HTMLDetailsElement) qualityDisclosure.open = true;
+                qualityDisclosure?.scrollIntoView({
+                  behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+                    ? 'auto'
+                    : 'smooth',
+                  block: 'start',
+                });
+              }}
+              type="button"
+              variant="secondary"
+            >
+              <ListChecks aria-hidden="true" size={16} />
+              View quality evidence
+            </Button>
+          </ButtonGroup>
         </section>
       ) : null}
 
@@ -10450,73 +10586,6 @@ function BuilderRunPanel({
           </section>
         ) : null}
 
-        {!isTestBuild && !active ? (
-          <details
-            className={`builder-new-build-options${run ? '' : ' builder-new-build-options--initial'}`}
-            open={run ? undefined : true}
-          >
-            <summary>
-              <span>
-                <strong>Advanced options</strong>
-                <small>
-                  Start a separate clean full-site build or change its visual tone. The current
-                  build and evidence will remain in history.
-                </small>
-              </span>
-              <ChevronDown aria-hidden="true" size={18} />
-            </summary>
-            <div className="builder-run__tests">
-              <p className="builder-run__action-label">Prospect build</p>
-              <div className="builder-page-test">
-                <p>
-                  Build the complete private website for this prospect from its approved Build
-                  Manifest. This is separate from Agent Studio test runs.
-                </p>
-                {publishedPackage ? (
-                  <p className="builder-page-test__production-version">
-                    <span>Production version</span>
-                    <strong className="agent-production-version-value">
-                      {agentPackageVersionLabel(publishedPackage.version)}
-                      <AgentProductionNotification count={pendingProductionFeatureCount} />
-                    </strong>
-                    <small>This exact published version will be pinned to the build.</small>
-                  </p>
-                ) : (
-                  <p className="form-message form-message--error" role="alert">
-                    No production builder version is available. Publish a production package before
-                    starting this build.
-                  </p>
-                )}
-                <WebsiteToneControl
-                  disabled={isRequesting}
-                  helpId="website-tone-help"
-                  name="website-tone"
-                  onChange={setWebsiteTone}
-                  tone={websiteTone}
-                />
-                <ButtonGroup>
-                  <Button
-                    disabled={isRequesting || !homepageTestReady || !publishedPackage}
-                    onClick={() => void requestBuild('full_site')}
-                    type="button"
-                    variant={
-                      run?.status === 'failed' && savedSourceAvailable ? 'secondary' : 'primary'
-                    }
-                  >
-                    <Play aria-hidden="true" size={16} />
-                    {isRequesting
-                      ? 'Queueing prospect build'
-                      : run?.status === 'failed' && savedSourceAvailable
-                        ? 'Start clean website build'
-                        : 'Build complete prospect website'}
-                  </Button>
-                </ButtonGroup>
-                <small>{homepageRequirementDetail}</small>
-              </div>
-            </div>
-          </details>
-        ) : null}
-
         <div className="builder-run__primary-actions">
           {!isTestBuild && run?.status === 'failed' && savedSourceAvailable && onResumeBuild ? (
             <Button disabled={isResuming} onClick={() => void resumeBuild(run.id)} type="button">
@@ -10524,7 +10593,7 @@ function BuilderRunPanel({
               {isResuming ? 'Resuming saved website' : 'Resume saved website build'}
             </Button>
           ) : null}
-          {!isTestBuild && (run?.status === 'ready' || run?.status === 'review_required') ? (
+          {!isTestBuild && run?.status === 'ready' ? (
             <Button
               disabled={isOpeningPreview}
               onClick={() => run && void openPreview(run.id, 'ready')}
@@ -10534,10 +10603,7 @@ function BuilderRunPanel({
               {isOpeningPreview ? 'Opening preview' : 'Open private prospect preview'}
             </Button>
           ) : null}
-          {!isTestBuild &&
-          run &&
-          (run.status === 'ready' || run.status === 'review_required') &&
-          onMoveToAgentStudio ? (
+          {!isTestBuild && run && run.status === 'ready' && onMoveToAgentStudio ? (
             run.agentStudioSourceAt ? (
               <Button disabled type="button" variant="secondary">
                 <Check aria-hidden="true" size={16} />
@@ -10593,20 +10659,98 @@ function BuilderRunPanel({
                 Open usage analysis
               </Button>
             ) : null}
-            {run && !active && !isTestBuild ? (
-              <Button
-                disabled={isDeleting}
-                onClick={() => void deleteBuild()}
-                type="button"
-                variant="quiet"
-              >
-                <Trash2 aria-hidden="true" size={16} />
-                {isDeleting ? 'Deleting builds' : 'Delete test and prospect builds'}
-              </Button>
-            ) : null}
           </div>
         ) : null}
       </div>
+
+      {!isTestBuild ? qualityEvidence : null}
+
+      {!isTestBuild && !active ? (
+        <details
+          className={`builder-new-build-options${run ? '' : ' builder-new-build-options--initial'}`}
+          open={run ? undefined : true}
+        >
+          <summary>
+            <span>
+              <strong>{run ? 'Other recovery options' : 'Advanced options'}</strong>
+              <small>
+                {run
+                  ? 'Start a clean full-site build only after changing the builder package, or when intentionally discarding this source. The current build remains in history.'
+                  : 'Configure the production package and visual tone for the first full-site build.'}
+              </small>
+            </span>
+            <ChevronDown aria-hidden="true" size={18} />
+          </summary>
+          <div className="builder-run__tests">
+            <p className="builder-run__action-label">Prospect build</p>
+            <div className="builder-page-test">
+              <p>
+                Build the complete private website for this prospect from its approved Build
+                Manifest. This is separate from Agent Studio test runs.
+              </p>
+              {publishedPackage ? (
+                <p className="builder-page-test__production-version">
+                  <span>Production version</span>
+                  <strong className="agent-production-version-value">
+                    {agentPackageVersionLabel(publishedPackage.version)}
+                    <AgentProductionNotification count={pendingProductionFeatureCount} />
+                  </strong>
+                  <small>This exact published version will be pinned to the build.</small>
+                </p>
+              ) : (
+                <p className="form-message form-message--error" role="alert">
+                  No production builder version is available. Publish a production package before
+                  starting this build.
+                </p>
+              )}
+              <WebsiteToneControl
+                disabled={isRequesting}
+                helpId="website-tone-help"
+                name="website-tone"
+                onChange={setWebsiteTone}
+                tone={websiteTone}
+              />
+              <ButtonGroup>
+                <Button
+                  disabled={isRequesting || !homepageTestReady || !publishedPackage}
+                  onClick={() => void requestBuild('full_site')}
+                  type="button"
+                  variant={
+                    run?.status === 'failed' && savedSourceAvailable ? 'secondary' : 'primary'
+                  }
+                >
+                  <Play aria-hidden="true" size={16} />
+                  {isRequesting
+                    ? 'Queueing prospect build'
+                    : run?.status === 'failed' && savedSourceAvailable
+                      ? 'Start clean website build'
+                      : run
+                        ? 'Start clean replacement build'
+                        : 'Build complete prospect website'}
+                </Button>
+              </ButtonGroup>
+              <small>{homepageRequirementDetail}</small>
+            </div>
+            {run ? (
+              <div className="builder-new-build-options__danger">
+                <p>
+                  Delete every saved test, prospect build, private preview and diagnostic for this
+                  prospect. Research and the Build Manifest are kept.
+                </p>
+                <Button
+                  disabled={isDeleting}
+                  onClick={() => void deleteBuild()}
+                  type="button"
+                  variant="secondary"
+                >
+                  <Trash2 aria-hidden="true" size={16} />
+                  {isDeleting ? 'Deleting builds' : 'Delete all private builds'}
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        </details>
+      ) : null}
 
       {isTestBuild && studioSourceRuns.length ? (
         <section
@@ -10837,7 +10981,11 @@ function BuilderRunPanel({
               >
                 <div className="builder-run-overview__header">
                   <Eyebrow>Current run</Eyebrow>
-                  <h4 id="builder-run-overview-title">Build status</h4>
+                  {isTestBuild ? (
+                    <h4 id="builder-run-overview-title">Build status</h4>
+                  ) : (
+                    <h3 id="builder-run-overview-title">Build status</h3>
+                  )}
                 </div>
                 <dl className="builder-run-summary" aria-label="Private preview build progress">
                   <div>
@@ -10909,21 +11057,20 @@ function BuilderRunPanel({
               run={run}
             />
           ) : null}
-          {showCurrentRunLogs ? (
-            <div className="builder-activity-heading">
-              <Eyebrow>Current run</Eyebrow>
-              <h3>Build activity</h3>
-              <p className="muted-copy">
-                Saved Codex updates, diagnostics, and completed build stages for this run only.
-                While a build is active, this refreshes automatically as the worker saves each
-                update.
-              </p>
-              {active && !currentEvents.length ? (
-                <BuilderActivityWaiting
-                  detail="The build is queued or preparing. This panel will populate as the worker saves activity."
-                  label="Waiting for the builder to report activity"
-                />
-              ) : currentRunEvidenceLoading ? (
+          {showCurrentRunLogs && !active && !isTestBuild ? (
+            <details className="builder-activity-archive builder-evidence-disclosure">
+              <summary className="builder-evidence-disclosure__summary">
+                <span>
+                  <Eyebrow>Technical build evidence</Eyebrow>
+                  <strong>Build activity and Codex updates</strong>
+                  <small>{currentEvents.length} saved entries</small>
+                </span>
+                <span className="builder-evidence-disclosure__aside">
+                  <StatusBadge tone="neutral">Private</StatusBadge>
+                  <ChevronDown aria-hidden="true" size={18} />
+                </span>
+              </summary>
+              {currentRunEvidenceLoading ? (
                 <BuilderActivityWaiting
                   detail="Loading the saved activity, files, diagnostics, and responsive evidence for this prospect build."
                   label="Loading prospect build activity"
@@ -10934,15 +11081,47 @@ function BuilderRunPanel({
                   {currentRunEvidenceError}
                 </p>
               ) : null}
-            </div>
-          ) : null}
-          {showCurrentRunLogs ? (
-            <BuilderConversation
-              active={active}
-              events={currentEvents}
-              newActivityIds={newActivityIds}
-              run={run}
-            />
+              <BuilderConversation
+                active={false}
+                events={currentEvents}
+                newActivityIds={newActivityIds}
+                run={run}
+              />
+            </details>
+          ) : showCurrentRunLogs ? (
+            <>
+              <div className="builder-activity-heading">
+                <Eyebrow>Current run</Eyebrow>
+                <h3>Build activity</h3>
+                <p className="muted-copy">
+                  Saved Codex updates, diagnostics, and completed build stages for this run only.
+                  While a build is active, this refreshes automatically as the worker saves each
+                  update.
+                </p>
+                {active && !currentEvents.length ? (
+                  <BuilderActivityWaiting
+                    detail="The build is queued or preparing. This panel will populate as the worker saves activity."
+                    label="Waiting for the builder to report activity"
+                  />
+                ) : currentRunEvidenceLoading ? (
+                  <BuilderActivityWaiting
+                    detail="Loading the saved activity, files, diagnostics, and responsive evidence for this prospect build."
+                    label="Loading prospect build activity"
+                  />
+                ) : null}
+                {currentRunEvidenceError ? (
+                  <p className="form-message form-message--error" role="alert">
+                    {currentRunEvidenceError}
+                  </p>
+                ) : null}
+              </div>
+              <BuilderConversation
+                active={active}
+                events={currentEvents}
+                newActivityIds={newActivityIds}
+                run={run}
+              />
+            </>
           ) : null}
           {showCurrentRunLogs ? (
             <details
@@ -11056,7 +11235,11 @@ function BuilderRunPanel({
           {run.failureCode ? (
             <section className="builder-recovery" aria-labelledby="builder-recovery-title">
               <Eyebrow>Build recovery</Eyebrow>
-              <h4 id="builder-recovery-title">What needs attention</h4>
+              {isTestBuild ? (
+                <h4 id="builder-recovery-title">What needs attention</h4>
+              ) : (
+                <h3 id="builder-recovery-title">What needs attention</h3>
+              )}
               <dl>
                 <div>
                   <dt>Failed stage</dt>
@@ -11127,79 +11310,7 @@ function BuilderRunPanel({
             </section>
           ) : null}
 
-          {run.qualitySummary.checks.length ? (
-            <details
-              className="builder-quality builder-evidence-disclosure"
-              id={qualityDisclosureId}
-              open={active || qualityNeedsAttention ? true : undefined}
-            >
-              <summary className="builder-evidence-disclosure__summary">
-                <span>
-                  <Eyebrow>Quality checks</Eyebrow>
-                  <strong>Generated preview review</strong>
-                  <small>
-                    {failedQualityChecks.length
-                      ? `${failedQualityChecks.length} failed · ${passedQualityChecks.length} passed`
-                      : `${run.qualitySummary.checks.length} checks · ${builderQualityStatusLabel(run)}`}
-                  </small>
-                </span>
-                <span className="builder-evidence-disclosure__aside">
-                  <ChevronDown aria-hidden="true" size={18} />
-                </span>
-              </summary>
-              {isTestBuild &&
-              onQualityRecheck &&
-              run.sourceCheckpointAvailable &&
-              (run.status === 'ready' || run.status === 'review_required') ? (
-                <div className="builder-quality__recheck">
-                  <p>
-                    Reapply the selected package’s protected navigation and Brand Kit rules to this
-                    saved source, then compile, capture, and test it again without a Codex page
-                    generation pass.
-                  </p>
-                  <Button
-                    disabled={isRechecking || !selectedAgentPackageId}
-                    onClick={() => void qualityRecheck(run.id)}
-                    type="button"
-                    variant="secondary"
-                  >
-                    <RotateCcw aria-hidden="true" size={16} />
-                    {isRechecking ? 'Queueing recheck' : 'Recheck saved source'}
-                  </Button>
-                </div>
-              ) : null}
-              <ul>
-                {orderedQualityChecks.map((check) => {
-                  const detailPreview = qualityCheckDetailPreview(check.detail, 320);
-                  const hasTechnicalDetail =
-                    detailPreview !== check.detail.replace(/\s+/g, ' ').trim();
-                  return (
-                    <li key={check.id}>
-                      <strong>{check.label}</strong>
-                      <span>{detailPreview}</span>
-                      <StatusBadge
-                        tone={
-                          check.status === 'passed'
-                            ? 'success'
-                            : check.status === 'failed'
-                              ? 'danger'
-                              : 'warning'
-                        }
-                      >
-                        {check.status.replaceAll('_', ' ')}
-                      </StatusBadge>
-                      {hasTechnicalDetail ? (
-                        <details className="builder-quality__technical">
-                          <summary>Technical details</summary>
-                          <p>{check.detail}</p>
-                        </details>
-                      ) : null}
-                    </li>
-                  );
-                })}
-              </ul>
-            </details>
-          ) : null}
+          {isTestBuild ? qualityEvidence : null}
 
           {screenshots.length ? (
             <details
@@ -11324,7 +11435,11 @@ function BuilderRunPanel({
       {historyRuns.length ? (
         <section className="builder-history" aria-labelledby="builder-history-title">
           <Eyebrow>{isTestBuild ? 'Test build history' : 'Prospect build history'}</Eyebrow>
-          <h4 id="builder-history-title">Open a run to inspect its private logs</h4>
+          {isTestBuild ? (
+            <h4 id="builder-history-title">Open a run to inspect its private logs</h4>
+          ) : (
+            <h3 id="builder-history-title">Open a run to inspect its private logs</h3>
+          )}
           <p className="muted-copy">
             Stored {isTestBuild ? 'test' : 'prospect'} build evidence stays out of the current
             workspace. Open a run only when you need to inspect its private logs or responsive
@@ -13117,6 +13232,7 @@ function BuilderSettingsPage() {
           Open Codex Cloud <ExternalLink aria-hidden="true" size={16} />
         </ButtonLink>
       </Card>
+      <CodexPhoneNotificationSettings />
       <Card className="workspace-panel settings-page__card">
         <div>
           <Eyebrow>Website builder</Eyebrow>
@@ -13141,6 +13257,115 @@ function BuilderSettingsPage() {
         </StatusBadge>
       </Card>
     </section>
+  );
+}
+
+function CodexPhoneNotificationSettings() {
+  const [notificationState, setNotificationState] =
+    useState<import('./lib/codex-notifications').CodexNotificationState>('loading');
+  const [notificationError, setNotificationError] = useState('');
+
+  const readState = useCallback(async () => {
+    setNotificationState('loading');
+    setNotificationError('');
+    try {
+      const { readCodexNotificationState } = await import('./lib/codex-notifications');
+      setNotificationState(await readCodexNotificationState());
+    } catch (error) {
+      setNotificationError(
+        error instanceof Error ? error.message : 'Phone notification settings are unavailable.',
+      );
+      setNotificationState('error');
+    }
+  }, []);
+
+  useEffect(() => {
+    void readState();
+  }, [readState]);
+
+  const changeNotifications = async () => {
+    const turningOff = notificationState === 'on';
+    setNotificationState('loading');
+    setNotificationError('');
+    try {
+      const notifications = await import('./lib/codex-notifications');
+      setNotificationState(
+        turningOff
+          ? await notifications.disableCodexNotifications()
+          : await notifications.enableCodexNotifications(),
+      );
+    } catch (error) {
+      setNotificationError(
+        error instanceof Error ? error.message : 'Phone notification settings could not change.',
+      );
+      setNotificationState('error');
+    }
+  };
+
+  const detail =
+    notificationState === 'on'
+      ? 'This phone will receive a private system notification when a Studio Codex chat finishes, even after Studio closes.'
+      : notificationState === 'blocked'
+        ? 'Notifications are blocked. Allow notifications for Made Solid Studio in this phone’s browser or system settings, then return here.'
+        : notificationState === 'install_required'
+          ? 'On iPhone or iPad, open Share, choose Add to Home Screen, then open the installed Studio app and turn notifications on here.'
+          : notificationState === 'unsupported'
+            ? 'This browser cannot receive Web Push notifications. Open Studio in a current browser that supports notifications.'
+            : notificationState === 'error'
+              ? notificationError
+              : notificationState === 'loading'
+                ? 'Checking this device’s notification permission and subscription…'
+                : 'Turn this on once on each phone that should alert you when a Studio Codex chat finishes.';
+  const status =
+    notificationState === 'on'
+      ? { label: 'On for this phone', tone: 'success' as const }
+      : notificationState === 'blocked'
+        ? { label: 'Blocked', tone: 'danger' as const }
+        : notificationState === 'install_required'
+          ? { label: 'Install first', tone: 'warning' as const }
+          : notificationState === 'unsupported'
+            ? { label: 'Unsupported', tone: 'warning' as const }
+            : notificationState === 'error'
+              ? { label: 'Needs attention', tone: 'danger' as const }
+              : notificationState === 'loading'
+                ? { label: 'Checking', tone: 'warning' as const }
+                : { label: 'Off', tone: 'neutral' as const };
+  const canChange = ['off', 'on', 'error'].includes(notificationState);
+
+  return (
+    <Card
+      aria-busy={notificationState === 'loading'}
+      className="workspace-panel settings-page__card settings-notifications"
+    >
+      <div>
+        <Eyebrow>Phone alerts</Eyebrow>
+        <h2>Codex completion notifications</h2>
+        <p aria-live="polite" className="muted-copy" role="status">
+          {detail}
+        </p>
+      </div>
+      <div className="settings-notifications__actions">
+        <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+        {canChange ? (
+          <Button
+            disabled={notificationState === 'loading'}
+            onClick={() => void changeNotifications()}
+            variant={notificationState === 'on' ? 'secondary' : 'primary'}
+          >
+            {notificationState === 'on' ? (
+              <BellOff aria-hidden="true" size={16} />
+            ) : (
+              <BellRing aria-hidden="true" size={16} />
+            )}
+            {notificationState === 'on'
+              ? 'Turn off phone notifications'
+              : notificationState === 'error'
+                ? 'Try again'
+                : 'Turn on phone notifications'}
+          </Button>
+        ) : null}
+      </div>
+    </Card>
   );
 }
 
@@ -15825,6 +16050,9 @@ function BuildManifestPanel({
   const [message, setMessage] = useState('');
   const brief = workspace.redesignBrief;
   const manifest = workspace.buildManifest;
+  const latestFullSiteBuild = workspace.builderRuns.find(
+    (candidate) => candidate.buildMode === 'full_site',
+  );
 
   async function prepareManifest() {
     setIsPreparing(true);
@@ -15908,54 +16136,90 @@ function BuildManifestPanel({
 
   return (
     <Card className="workspace-panel brief-panel">
-      <div className="brief-panel__header builder-handoff__header">
-        <div className="builder-handoff__topline">
-          <Eyebrow>Builder handoff</Eyebrow>
-          <div className="builder-handoff__actions">
-            <StatusBadge tone="success">Ready for builder</StatusBadge>
+      {!latestFullSiteBuild ? (
+        <div className="brief-panel__header builder-handoff__header">
+          <div className="builder-handoff__topline">
+            <Eyebrow>Builder handoff</Eyebrow>
+            <div className="builder-handoff__actions">
+              <StatusBadge tone="success">Ready for builder</StatusBadge>
+            </div>
+          </div>
+          <div>
+            <h2>Build Manifest ready</h2>
+            <p className="muted-copy">
+              Approved brief v{brief.version} is the permissioned input for every private preview:
+              {` ${permittedFactCount}`} permitted facts, {selectedPageCount} selected pages, and{' '}
+              {selectedAssetCount} source assets.
+            </p>
           </div>
         </div>
-        <div>
-          <h2>Build Manifest ready</h2>
-          <p className="muted-copy">
-            Approved brief v{brief.version} is the permissioned input for every private preview:
-            {` ${permittedFactCount}`} permitted facts, {selectedPageCount} selected pages, and{' '}
-            {selectedAssetCount} source assets.
-          </p>
-        </div>
-      </div>
+      ) : null}
+
+      {latestFullSiteBuild ? (
+        <BuilderRunPanel
+          agentPackages={agentPackages}
+          buildKind="prospect"
+          onCancelBuild={onCancelBuild}
+          onDeleteBuild={onDeleteBuild}
+          onLoadBuildEvidence={onLoadBuildEvidence}
+          onMoveToAgentStudio={onMoveToAgentStudio}
+          onOpenPreview={onOpenPreview}
+          onResumeBuild={onResumeBuild}
+          onRequestBuild={onRequestBuild}
+          workspace={workspace}
+        />
+      ) : null}
 
       <Dialog.Root onOpenChange={setIsManifestOpen} open={isManifestOpen}>
-        <Dialog.Trigger asChild>
-          <button aria-haspopup="dialog" className="build-manifest-package" type="button">
-            <span className="build-manifest-package__heading">
-              <PackageCheck aria-hidden="true" size={22} />
-              <span>
-                <span className="build-manifest-package__eyebrow">Immutable build package</span>
-                <strong>Approved and ready for the builder</strong>
+        {latestFullSiteBuild ? (
+          <section className="builder-inputs" aria-labelledby="builder-inputs-title">
+            <div>
+              <Eyebrow>Build provenance</Eyebrow>
+              <h3 id="builder-inputs-title">Inputs used for this build</h3>
+              <p>
+                Brief v{brief.version} · Manifest {manifest.id.slice(0, 8)} · {selectedPageCount}{' '}
+                selected page{selectedPageCount === 1 ? '' : 's'}
+              </p>
+            </div>
+            <Dialog.Trigger asChild>
+              <Button type="button" variant="secondary">
+                <PackageCheck aria-hidden="true" size={16} />
+                Review build inputs
+              </Button>
+            </Dialog.Trigger>
+          </section>
+        ) : (
+          <Dialog.Trigger asChild>
+            <button aria-haspopup="dialog" className="build-manifest-package" type="button">
+              <span className="build-manifest-package__heading">
+                <PackageCheck aria-hidden="true" size={22} />
+                <span>
+                  <span className="build-manifest-package__eyebrow">Immutable build package</span>
+                  <strong>Approved and ready for the builder</strong>
+                </span>
+                <span className="build-manifest-package__action">Open package</span>
               </span>
-              <span className="build-manifest-package__action">Open package</span>
-            </span>
-            <span className="build-manifest-summary" aria-label="Build Manifest contents">
-              <span>
-                <span>Permitted facts</span>
-                <strong>{permittedFactCount}</strong>
+              <span className="build-manifest-summary" aria-label="Build Manifest contents">
+                <span>
+                  <span>Permitted facts</span>
+                  <strong>{permittedFactCount}</strong>
+                </span>
+                <span>
+                  <span>Selected pages</span>
+                  <strong>{selectedPageCount}</strong>
+                </span>
+                <span>
+                  <span>Source assets</span>
+                  <strong>{selectedAssetCount}</strong>
+                </span>
+                <span>
+                  <span>Approved reuse assets</span>
+                  <strong>{approvedAssetCount}</strong>
+                </span>
               </span>
-              <span>
-                <span>Selected pages</span>
-                <strong>{selectedPageCount}</strong>
-              </span>
-              <span>
-                <span>Source assets</span>
-                <strong>{selectedAssetCount}</strong>
-              </span>
-              <span>
-                <span>Approved reuse assets</span>
-                <strong>{approvedAssetCount}</strong>
-              </span>
-            </span>
-          </button>
-        </Dialog.Trigger>
+            </button>
+          </Dialog.Trigger>
+        )}
         <Dialog.Portal>
           <Dialog.Overlay className="image-preview-overlay" />
           <Dialog.Content
@@ -16073,18 +16337,20 @@ function BuildManifestPanel({
         </Dialog.Portal>
       </Dialog.Root>
 
-      <BuilderRunPanel
-        agentPackages={agentPackages}
-        buildKind="prospect"
-        onCancelBuild={onCancelBuild}
-        onDeleteBuild={onDeleteBuild}
-        onLoadBuildEvidence={onLoadBuildEvidence}
-        onMoveToAgentStudio={onMoveToAgentStudio}
-        onOpenPreview={onOpenPreview}
-        onResumeBuild={onResumeBuild}
-        onRequestBuild={onRequestBuild}
-        workspace={workspace}
-      />
+      {!latestFullSiteBuild ? (
+        <BuilderRunPanel
+          agentPackages={agentPackages}
+          buildKind="prospect"
+          onCancelBuild={onCancelBuild}
+          onDeleteBuild={onDeleteBuild}
+          onLoadBuildEvidence={onLoadBuildEvidence}
+          onMoveToAgentStudio={onMoveToAgentStudio}
+          onOpenPreview={onOpenPreview}
+          onResumeBuild={onResumeBuild}
+          onRequestBuild={onRequestBuild}
+          workspace={workspace}
+        />
+      ) : null}
     </Card>
   );
 }
@@ -21570,11 +21836,13 @@ function WorkspaceApp({
                     ? { page: 'tax' }
                     : page === 'settings'
                       ? { page: 'settings' }
-                      : page === 'codex'
-                        ? { page: 'codex' }
-                        : page === 'agent-studio'
-                          ? { page: 'agent-studio', section: 'refine' }
-                          : { page: 'prospects' },
+                      : page === 'development'
+                        ? { page: 'development' }
+                        : page === 'codex'
+                          ? { page: 'codex' }
+                          : page === 'agent-studio'
+                            ? { page: 'agent-studio', section: 'refine' }
+                            : { page: 'prospects' },
           )
         }
         onSignOut={onSignOut}
@@ -21614,6 +21882,8 @@ function WorkspaceApp({
           <TaxExpensesPage repository={repository} workspaces={workspaces} />
         ) : route.page === 'settings' ? (
           <BuilderSettingsPage />
+        ) : route.page === 'development' ? (
+          <DevelopmentPage />
         ) : route.page === 'codex' ? (
           <section aria-label="Codex chat page" className="codex-chat-page">
             <CodexFeedbackPanel page />
