@@ -1041,9 +1041,11 @@ function loadCloudSpeechSegment(blob: Blob, signal: AbortSignal): Promise<CloudS
 
 export function CodexFeedbackPanel({
   embedded = false,
+  page = false,
   workspaceDirectory,
 }: {
   embedded?: boolean;
+  page?: boolean;
   workspaceDirectory?: string;
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -1093,7 +1095,7 @@ export function CodexFeedbackPanel({
   const [isSupported, setIsSupported] = useState<boolean>();
   const [mountedChatLog, setMountedChatLog] = useState<HTMLDivElement | null>(null);
   const [phase, setPhase] = useState<PanelPhase>(() =>
-    initialChatSessionRef.current.isOpen ? 'compose' : 'closed',
+    page || initialChatSessionRef.current.isOpen ? 'compose' : 'closed',
   );
   const [status, setStatus] = useState<CodexStatus>();
   const [enteringTimelineIds, setEnteringTimelineIds] = useState<Set<string>>(() => new Set());
@@ -3235,48 +3237,55 @@ export function CodexFeedbackPanel({
     setError(undefined);
   };
 
-  if (isSupported !== true) return null;
-
   return (
     <>
-      <IconButton
-        className={`codex-feedback-trigger${embedded ? ' is-embedded' : ''}${isCodexWorking ? ' is-working' : ''}${hasUnseenCompletion ? ' has-completion' : ''}`}
-        label={
-          isCodexWorking
-            ? 'Codex is working'
-            : hasUnseenCompletion
-              ? 'Codex finished — open chat'
-              : 'Chat with Codex'
-        }
-        onClick={() => {
-          setHasUnseenCompletion(false);
-          restoredChatThreadRef.current = '';
-          updateChatSession({ isOpen: true });
-          setPhase('compose');
-          setError(undefined);
-          void refreshStatus();
-        }}
-        ref={triggerRef}
-        variant="primary"
-      >
-        {isCodexWorking ? (
-          <LoaderCircle aria-hidden="true" className="is-spinning" size={20} />
-        ) : hasUnseenCompletion ? (
-          <BellRing aria-hidden="true" size={20} />
-        ) : (
-          <MessageSquareText aria-hidden="true" size={20} />
-        )}
-      </IconButton>
+      {!page ? (
+        <IconButton
+          aria-busy={isSupported === undefined}
+          className={`codex-feedback-trigger${embedded ? ' is-embedded' : ''}${isCodexWorking ? ' is-working' : ''}${hasUnseenCompletion ? ' has-completion' : ''}`}
+          disabled={isSupported === false}
+          label={
+            isSupported === undefined
+              ? 'Connecting to Codex'
+              : isSupported === false
+                ? 'Codex chat is unavailable'
+                : isCodexWorking
+                  ? 'Codex is working'
+                  : hasUnseenCompletion
+                    ? 'Codex finished — open chat'
+                    : 'Chat with Codex'
+          }
+          onClick={() => {
+            setHasUnseenCompletion(false);
+            restoredChatThreadRef.current = '';
+            updateChatSession({ isOpen: true });
+            setPhase('compose');
+            setError(undefined);
+            void refreshStatus();
+          }}
+          ref={triggerRef}
+          variant="primary"
+        >
+          {isSupported === undefined || isCodexWorking ? (
+            <LoaderCircle aria-hidden="true" className="is-spinning" size={20} />
+          ) : hasUnseenCompletion ? (
+            <BellRing aria-hidden="true" size={20} />
+          ) : (
+            <MessageSquareText aria-hidden="true" size={20} />
+          )}
+        </IconButton>
+      ) : null}
 
       <Dialog.Root
-        onOpenChange={(open) => !open && closePanel()}
-        open={phase === 'compose' || phase === 'sending-chat'}
+        modal={!page}
+        onOpenChange={(open) => !page && !open && closePanel()}
+        open={page || phase === 'compose' || phase === 'sending-chat'}
       >
         <Dialog.Portal>
-          <Dialog.Overlay className="codex-feedback-overlay" />
+          {!page ? <Dialog.Overlay className="codex-feedback-overlay" /> : null}
           <Dialog.Content
             aria-describedby="codex-feedback-description"
-            className={`codex-feedback-dialog codex-chat-dialog${embedded ? ' is-embedded' : ''}`}
+            className={`codex-feedback-dialog codex-chat-dialog${embedded ? ' is-embedded' : ''}${page ? ' is-page' : ''}`}
             onCloseAutoFocus={(event) => {
               event.preventDefault();
               triggerRef.current?.focus();
@@ -3292,10 +3301,12 @@ export function CodexFeedbackPanel({
                 event.preventDefault();
                 stopVoicePreview();
                 setComposerSettingsOpen(false);
+                return;
               }
+              if (page) event.preventDefault();
             }}
           >
-            <header className="codex-feedback-dialog__header">
+            <div className="codex-feedback-dialog__header">
               <div className="codex-feedback-dialog__identity">
                 <span className="codex-feedback-dialog__icon" aria-hidden="true">
                   <Bot size={20} />
@@ -3330,12 +3341,14 @@ export function CodexFeedbackPanel({
                   </div>
                 </div>
               </div>
-              <Dialog.Close asChild>
-                <IconButton label="Close Codex chat" variant="quiet">
-                  <X aria-hidden="true" size={18} />
-                </IconButton>
-              </Dialog.Close>
-            </header>
+              {!page ? (
+                <Dialog.Close asChild>
+                  <IconButton label="Close Codex chat" variant="quiet">
+                    <X aria-hidden="true" size={18} />
+                  </IconButton>
+                </Dialog.Close>
+              ) : null}
+            </div>
 
             <Dialog.Description className="sr-only" id="codex-feedback-description">
               {workspaceDirectory

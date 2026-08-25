@@ -770,6 +770,92 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+test('keeps the Codex launcher visible while its initial status reconnects', async ({ page }) => {
+  let releaseStatus;
+  const statusGate = new Promise((resolve) => {
+    releaseStatus = resolve;
+  });
+  await page.route('**/__made-solid/codex-status*', async (route) => {
+    await statusGate;
+    await route.fallback();
+  });
+
+  await page.goto('/#/prospects');
+  const launcher = page.getByRole('button', { name: 'Connecting to Codex' });
+  await expect(launcher).toBeVisible();
+  await expect(launcher).toHaveAttribute('aria-busy', 'true');
+
+  releaseStatus();
+  await expect(page.getByRole('button', { name: 'Chat with Codex' })).toBeVisible();
+});
+
+test('provides Codex chat as a dedicated responsive Studio page', async ({ page }, testInfo) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/#/codex');
+
+  await expect(page).toHaveURL(/#\/codex$/);
+  if (testInfo.project.name !== 'desktop') {
+    await page.getByRole('button', { name: 'Open navigation menu' }).click();
+  }
+  await expect(page.getByRole('button', { name: 'Codex chat', exact: true })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  if (testInfo.project.name !== 'desktop') {
+    await page.getByRole('button', { name: 'Close navigation menu' }).click();
+  }
+  const chat = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await expect(chat).toBeVisible();
+  await expect(chat).toContainText('Studio chat is connected.');
+  await expect(page.locator('.codex-feedback-trigger')).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  const accessibility = await new AxeBuilder({ page }).include('.codex-chat-dialog').analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect(page).toHaveScreenshot('codex-chat-page.png', { animations: 'disabled' });
+
+  await page.reload();
+  await expect(page).toHaveURL(/#\/codex$/);
+  await expect(page.getByRole('dialog', { name: 'Codex', exact: true })).toBeVisible();
+
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await expect(page.getByRole('dialog', { name: 'Codex', exact: true })).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    await expect(page).toHaveScreenshot('codex-chat-page-compact-mobile.png', {
+      animations: 'disabled',
+    });
+  }
+});
+
+test('keeps an open Codex popup and draft through a Studio source update', async ({ page }) => {
+  await page.goto('/#/prospects');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const chat = page.getByRole('dialog', { name: 'Codex', exact: true });
+  const input = chat.getByLabel('Message to Codex');
+  await input.fill('Keep this draft open while Studio updates.');
+
+  await page.evaluate(() => document.dispatchEvent(new Event('made-solid:studio-update-started')));
+  await expect(page.getByLabel('Updating Studio')).toBeVisible();
+  await expect(chat).toBeVisible();
+  await expect(input).toHaveValue('Keep this draft open while Studio updates.');
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => JSON.parse(localStorage.getItem('made-solid-codex-chat-session-v1') || '{}').isOpen,
+      ),
+    )
+    .toBe(true);
+
+  await page.evaluate(() => document.dispatchEvent(new Event('made-solid:studio-update-finished')));
+  await expect(page.getByLabel('Updating Studio')).toBeHidden();
+  await expect(chat).toBeVisible();
+  await expect(input).toHaveValue('Keep this draft open while Studio updates.');
+});
+
 test('sends a text-only chat message to the selected Codex model', async ({ page }) => {
   let delivered;
   let releaseDelivery;

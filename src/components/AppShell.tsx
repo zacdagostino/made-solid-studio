@@ -6,6 +6,7 @@ import {
   LoaderCircle,
   LogOut,
   Menu,
+  MessageSquareText,
   Moon,
   ReceiptText,
   Settings,
@@ -20,7 +21,7 @@ import type { StudioSurface } from '../lib/studio-surface';
 import { Button, IconButton } from './ui';
 
 export type AppPage =
-  'today' | 'prospects' | 'agent-studio' | 'usage' | 'tax' | 'data' | 'settings';
+  'today' | 'prospects' | 'agent-studio' | 'codex' | 'usage' | 'tax' | 'data' | 'settings';
 type Theme = 'light' | 'dark';
 
 const themeStorageKey = 'siteforge-os.theme';
@@ -29,6 +30,7 @@ const navigation = [
   { page: 'today' as const, label: 'Today', icon: CalendarDays },
   { page: 'prospects' as const, label: 'Prospects', icon: UsersRound },
   { page: 'agent-studio' as const, label: 'Agent Studio', icon: Bot },
+  { page: 'codex' as const, label: 'Codex chat', icon: MessageSquareText },
   { page: 'usage' as const, label: 'AI usage', icon: WalletCards },
   { page: 'tax' as const, label: 'Tax expenses', icon: ReceiptText },
   { page: 'data' as const, label: 'Data', icon: Database },

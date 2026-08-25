@@ -401,6 +401,8 @@ const localWorkspaceDevelopmentStudioPackageId =
   'agent-package-local-v20-2-workspace-development-studio';
 const localRestoredCodexVoiceExperiencePackageId =
   'agent-package-local-v20-3-restored-codex-voice-experience';
+const localPersistentCodexChatSurfacesPackageId =
+  'agent-package-local-v20-4-persistent-codex-chat-surfaces';
 
 type StoreName =
   | 'activities'
@@ -3137,10 +3139,28 @@ export class SiteforgeRepository {
         'Restores the four developed Codex listening features in the Workspace development Studio without weakening speech privacy, cancellation, accessibility, or client-chat isolation.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localPersistentCodexChatSurfacesPackage: AgentPackage = {
+      ...localRestoredCodexVoiceExperiencePackage,
+      id: localPersistentCodexChatSurfacesPackageId,
+      version: 20.4,
+      basePackageId: localRestoredCodexVoiceExperiencePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v20.4',
+      contractAddendum:
+        'Studio Codex chat is available on its own route and as a persistent popup whose launcher and open conversation survive initial capability checks, refresh restoration, and in-place Studio source updates.',
+      instructionsAddendum:
+        'Expose universal Codex chat as a normal authenticated Studio route while retaining the floating launcher on other Studio routes. Reuse one conversation, draft, preference, and transcript-position contract across both surfaces without rendering duplicate chat owners. Keep the launcher mounted in a truthful connecting or unavailable state instead of removing it during capability checks. An open popup, selected thread, draft, and transcript position must survive Studio update notifications and remount restoration; update indicators must never implicitly close the chat.',
+      summary:
+        'Persistent Codex chat surfaces test package: adds a dedicated Studio chat page and keeps the popup launcher and open conversation stable through refresh and source updates.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes Codex continuously reachable during Studio work while preserving the same authenticated conversation state across page and popup presentations.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localPersistentCodexChatSurfacesPackage,
           localRestoredCodexVoiceExperiencePackage,
           localWorkspaceDevelopmentStudioPackage,
           localCanonicalWorkspaceEntryPackage,
@@ -3292,6 +3312,9 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localPersistentCodexChatSurfacesPackage,
+          localRestoredCodexVoiceExperiencePackage,
+          localWorkspaceDevelopmentStudioPackage,
           localCanonicalWorkspaceEntryPackage,
           localDeployedStudioShellPackage,
           localOwnerApiCreditsSwitchPackage,
@@ -3444,6 +3467,9 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localPersistentCodexChatSurfacesPackage,
+            localRestoredCodexVoiceExperiencePackage,
+            localWorkspaceDevelopmentStudioPackage,
             localCanonicalWorkspaceEntryPackage,
             localDeployedStudioShellPackage,
             localOwnerApiCreditsSwitchPackage,

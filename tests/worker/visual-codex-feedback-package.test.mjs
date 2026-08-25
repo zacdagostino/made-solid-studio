@@ -234,6 +234,10 @@ const restoredCodexVoiceExperienceMigrationUrl = new URL(
   '../../supabase/migrations/20260824120000_restored_codex_voice_experience_test_package.sql',
   import.meta.url,
 );
+const persistentCodexChatSurfacesMigrationUrl = new URL(
+  '../../supabase/migrations/20260824130000_persistent_codex_chat_surfaces_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -302,13 +306,15 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 75);
+  assert.equal(Number(revision[1]), 76);
   assert.match(app, /shows chats for that client plus clearly labelled universal Studio chats/);
   assert.match(app, /gives only the authenticated Studio owner a disclosed, reversible switch/);
-  assert.match(app, /saved Natural or Literal reading and three speeds/);
+  assert.match(app, /saved Natural or Literal interpretation and three speeds/);
   assert.match(app, /opt-in chat-scoped auto-read/);
-  assert.match(app, /progressive private audio/);
-  assert.match(app, /persistent interactive read-along dock/);
+  assert.match(app, /progressive private Google audio/);
+  assert.match(app, /persistent read-along dock/);
+  assert.match(app, /dedicated Studio page/);
+  assert.match(app, /popup launcher remains visible while reconnecting/);
 });
 
 test('registers the restored Codex voice experience above immutable v20.2', async () => {
@@ -2020,6 +2026,51 @@ test('uses shared controls, a compact model selector, and live model discovery f
   assert.match(service, /110 \* 1024 \* 1024/);
   assert.match(service, /configurePreviewServer: configureWorkspaceServer/);
   assert.match(service, /configureServer: configureWorkspaceServer/);
+});
+
+test('registers persistent Codex page and popup surfaces as the newest immutable package', async () => {
+  const [migration, repository, app, appShell, component] = await Promise.all([
+    readFile(persistentCodexChatSurfacesMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+    readFile(appShellUrl, 'utf8'),
+    readFile(componentUrl, 'utf8'),
+  ]);
+  assert.match(migration, /coalesce\(max\(existing\.version\), 0\) \+ 0\.1/);
+  assert.match(migration, /made-solid-studio-builder-agent-v20\.4/);
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v20\.3'/,
+  );
+  assert.match(repository, /version: 20\.4,/);
+  assert.match(repository, /basePackageId: localRestoredCodexVoiceExperiencePackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localPersistentCodexChatSurfacesPackage,') <
+      packageLedger.indexOf('localRestoredCodexVoiceExperiencePackage,'),
+  );
+  assert.match(app, /page: 'codex'/);
+  assert.match(app, /<CodexFeedbackPanel page \/>/);
+  assert.match(appShell, /label: 'Codex chat'/);
+  assert.match(component, /disabled=\{isSupported === false\}/);
+  assert.match(component, /page \|\| phase === 'compose'/);
+  const existingLedgerUpgrade = repository.slice(repository.indexOf('const missingPackages = ['));
+  assert.ok(
+    existingLedgerUpgrade.indexOf('localPersistentCodexChatSurfacesPackage,') <
+      existingLedgerUpgrade.indexOf('localRestoredCodexVoiceExperiencePackage,'),
+  );
+  assert.ok(
+    existingLedgerUpgrade.indexOf('localRestoredCodexVoiceExperiencePackage,') <
+      existingLedgerUpgrade.indexOf('localWorkspaceDevelopmentStudioPackage,'),
+  );
+  const corruptLedgerFallback = repository.slice(
+    repository.indexOf("} catch {\n        await this.put('meta'"),
+  );
+  assert.match(corruptLedgerFallback, /localPersistentCodexChatSurfacesPackage,/);
+  assert.match(corruptLedgerFallback, /localRestoredCodexVoiceExperiencePackage,/);
+  assert.match(corruptLedgerFallback, /localWorkspaceDevelopmentStudioPackage,/);
 });
 
 test('ships one locally scoped Manifest V3 capture helper for Chrome and Brave', async () => {
