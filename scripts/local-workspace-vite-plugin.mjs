@@ -1533,7 +1533,11 @@ export function localWorkspacePlugin() {
               threadScope:
                 requestUrl.searchParams.get('threadScope') === 'client' ? 'client' : 'universal',
             });
-            sendJson(response, 200, { ...inspected, billing: runtimeAiBillingStatus() });
+            sendJson(response, 200, {
+              ...inspected,
+              billing: runtimeAiBillingStatus(),
+              capabilities: { stopActiveTurn: true },
+            });
           } catch (error) {
             sendJson(response, 503, {
               status: 'unavailable',
@@ -1567,28 +1571,46 @@ export function localWorkspacePlugin() {
             return;
           }
           const bridge = await codexFeedbackBridge();
-          const result =
-            requestUrl.pathname === codexBranchEndpoint
-              ? await bridge.forkThread(input)
-              : input.action === 'update-queued'
-                ? await bridge.updateQueued(input.id, input)
-                : input.action === 'delete-queued'
-                  ? await bridge.deleteQueued(input.id, input)
-                  : input.action === 'interrupt-queued'
-                    ? await bridge.interruptQueued(input.id, input)
-                    : input.action === 'stop-active-turn'
-                      ? await bridge.stopActiveTurn(input)
-                      : input.action === 'delete-empty-thread'
-                        ? await bridge.deleteEmptyThread(input)
-                        : input.action === 'temporary-question'
-                          ? await bridge.temporaryQuestion(input)
-                          : input.action === 'new-thread'
-                            ? await bridge.createThread(input)
-                            : input.action === 'branch-thread'
-                              ? await bridge.forkThread(input)
-                              : input.action === 'continue-interrupted-thread'
-                                ? await bridge.continueInterruptedThread(input)
-                                : await bridge.enqueue(input);
+          let result;
+          if (requestUrl.pathname === codexBranchEndpoint) {
+            result = await bridge.forkThread(input);
+          } else {
+            switch (input.action) {
+              case undefined:
+              case 'enqueue':
+                result = await bridge.enqueue(input);
+                break;
+              case 'update-queued':
+                result = await bridge.updateQueued(input.id, input);
+                break;
+              case 'delete-queued':
+                result = await bridge.deleteQueued(input.id, input);
+                break;
+              case 'interrupt-queued':
+                result = await bridge.interruptQueued(input.id, input);
+                break;
+              case 'stop-active-turn':
+                result = await bridge.stopActiveTurn(input);
+                break;
+              case 'delete-empty-thread':
+                result = await bridge.deleteEmptyThread(input);
+                break;
+              case 'temporary-question':
+                result = await bridge.temporaryQuestion(input);
+                break;
+              case 'new-thread':
+                result = await bridge.createThread(input);
+                break;
+              case 'branch-thread':
+                result = await bridge.forkThread(input);
+                break;
+              case 'continue-interrupted-thread':
+                result = await bridge.continueInterruptedThread(input);
+                break;
+              default:
+                throw new Error('Choose a valid Codex chat action.');
+            }
+          }
           sendJson(response, 202, result);
         } catch (error) {
           sendJson(response, 400, {

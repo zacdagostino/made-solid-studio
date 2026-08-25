@@ -8,6 +8,7 @@ const maximumImageBytes = 15 * 1024 * 1024;
 const maximumImageAttachments = 5;
 const maximumPromptLength = 4_000;
 const maximumAgentThreads = 24;
+const defaultThreadReadTimeoutMs = 2_500;
 const teamDelegationInstruction =
   'Agent team is enabled for this request. You are the supervisor. Delegate useful independent workstreams to attached sub-agents with clear, non-overlapping assignments, run them concurrently when practical, monitor their outcomes, and synthesize the result in this parent conversation. Keep work that is trivial or inherently sequential in the parent agent.';
 const progressUpdateInstruction =
@@ -182,18 +183,21 @@ function selectThread(threads, cwd) {
 
 function publicThread(thread, { discardable = false, scope = 'universal' } = {}) {
   const turn = activeTurn(thread);
-  const lastTurn = [...(Array.isArray(thread?.turns) ? thread.turns : [])]
+  const hasTurnDetails = Array.isArray(thread?.turns);
+  const lastTurn = [...(hasTurnDetails ? thread.turns : [])]
     .reverse()
     .find((candidate) => typeof candidate?.id === 'string');
-  const activeFlags = Array.isArray(thread.status?.activeFlags)
-    ? thread.status.activeFlags.filter((flag) => typeof flag === 'string').slice(0, 8)
-    : [];
+  const working = Boolean(turn) || (!hasTurnDetails && thread.status?.type === 'active');
+  const activeFlags =
+    working && Array.isArray(thread.status?.activeFlags)
+      ? thread.status.activeFlags.filter((flag) => typeof flag === 'string').slice(0, 8)
+      : [];
   return {
     id: String(thread.id),
     name: typeof thread.name === 'string' ? thread.name : undefined,
     preview: typeof thread.preview === 'string' ? thread.preview.slice(0, 160) : undefined,
     status: String(thread.status?.type || 'unknown'),
-    working: thread.status?.type === 'active',
+    working,
     activeTurnId: typeof turn?.id === 'string' ? turn.id : undefined,
     activeFlags,
     updatedAt: typeof thread.updatedAt === 'number' ? thread.updatedAt : undefined,
@@ -945,6 +949,7 @@ export class CodexFeedbackBridge {
     resolveClientWorkspace,
     notifyCompletion,
     connect = connectCodexAppServer,
+    threadReadTimeoutMs = defaultThreadReadTimeoutMs,
   } = {}) {
     this.cwd = resolve(cwd);
     this.runtimeWorkspaceRoots = [
@@ -962,11 +967,29 @@ export class CodexFeedbackBridge {
     this.resolveClientWorkspace = resolveClientWorkspace;
     this.notifyCompletion = notifyCompletion;
     this.connect = connect;
+    this.threadReadTimeoutMs = threadReadTimeoutMs;
     this.flushRequested = false;
     this.flushPromise = undefined;
     this.flushRetryTimer = undefined;
     this.startedThreads = new Map();
     this.maintenancePromise = undefined;
+  }
+
+  async readThreadForStatus(client, params) {
+    let timeout;
+    try {
+      return await Promise.race([
+        client.request('thread/read', params),
+        new Promise((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error('The selected conversation took too long to load.')),
+            this.threadReadTimeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   workspaceScope({ workspace, threadScope } = {}) {
@@ -1077,17 +1100,20 @@ export class CodexFeedbackBridge {
             requestedScope,
       );
       let requestedThreadDetail;
+      let threadIssue;
       if (
         !requestedThread &&
         typeof threadId === 'string' &&
         /^[A-Za-z0-9-]{1,100}$/.test(threadId)
       ) {
         try {
-          requestedThreadDetail = await client.request('thread/read', {
+          requestedThreadDetail = await this.readThreadForStatus(client, {
             threadId,
             includeTurns: true,
           });
-        } catch {
+        } catch (error) {
+          threadIssue =
+            error instanceof Error ? error.message : 'The selected conversation could not load.';
           // A stale browser selection falls back to the newest listed Studio thread.
         }
         if (requestedThreadDetail?.thread?.id) {
@@ -1108,7 +1134,7 @@ export class CodexFeedbackBridge {
           : undefined;
       if (thread) {
         try {
-          threadDetail ??= await client.request('thread/read', {
+          threadDetail ??= await this.readThreadForStatus(client, {
             threadId: thread.id,
             includeTurns: true,
           });
@@ -1116,7 +1142,8 @@ export class CodexFeedbackBridge {
             this.startedThreads.delete(String(thread.id));
           }
         } catch (error) {
-          if (!this.startedThreads.has(String(thread.id))) throw error;
+          threadIssue =
+            error instanceof Error ? error.message : 'The selected conversation could not load.';
           threadDetail = { thread: { ...thread, turns: [] } };
         }
       }
@@ -1232,8 +1259,13 @@ export class CodexFeedbackBridge {
       return {
         status: 'ready',
         detail: thread
-          ? 'Connected to the local Codex conversation.'
+          ? threadIssue
+            ? 'The selected conversation is unavailable, but the other conversations remain accessible.'
+            : 'Connected to the local Codex conversation.'
           : 'Codex is connected, but no Studio conversation is available yet.',
+        threadIssue: threadIssue
+          ? 'This conversation could not be loaded safely. Choose another chat or start a new one; the existing conversation has been preserved.'
+          : undefined,
         account: accountResult.account
           ? {
               type: String(accountResult.account.type || ''),
@@ -1764,9 +1796,13 @@ export class CodexFeedbackBridge {
     const client = await this.connect();
     try {
       const threadCandidates = await this.listedThreads(client, scope);
-      const thread = threadId
+      let thread = threadId
         ? threadCandidates.find((candidate) => String(candidate.id) === String(threadId))
         : selectThread(threadCandidates, scope.cwd);
+      if (!thread && threadId) {
+        const direct = await client.request('thread/read', { threadId, includeTurns: false });
+        thread = direct?.thread;
+      }
       if (!thread) return false;
       if (this.assertThreadScope(thread, scope) !== scope.scope) {
         throw new Error('That conversation belongs to a different workspace.');

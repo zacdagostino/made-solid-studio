@@ -117,6 +117,7 @@ type CodexUsageWindow = {
 type CodexStatus = {
   status: 'ready' | 'unavailable';
   detail: string;
+  threadIssue?: string;
   account?: { type: string; planType: string };
   subscriptionUsage?: {
     primary?: CodexUsageWindow;
@@ -127,6 +128,7 @@ type CodexStatus = {
     mode: 'chatgpt_subscription' | 'api_credits';
     label: string;
   };
+  capabilities?: { stopActiveTurn?: boolean };
   thread?: CodexThread;
   threads: CodexThread[];
   messages: Array<{
@@ -1197,6 +1199,7 @@ export function CodexFeedbackPanel({
     initialChatSessionRef.current.selectedThreadId,
   );
   const [conversationPickerOpen, setConversationPickerOpen] = useState(false);
+  const statusRequestSequenceRef = useRef(0);
   const selectedThreadIdRef = useRef(initialChatSessionRef.current.selectedThreadId);
   const selectedThreadScopeRef = useRef(initialChatSessionRef.current.selectedThreadScope);
   const [sourceScreenshot, setSourceScreenshot] = useState('');
@@ -2040,6 +2043,7 @@ export function CodexFeedbackPanel({
 
   const refreshStatus = useCallback(
     async (threadIdOverride?: string, threadScopeOverride?: CodexThread['scope']) => {
+      const requestSequence = ++statusRequestSequenceRef.current;
       const requestedThreadId = threadIdOverride ?? selectedThreadIdRef.current;
       try {
         const requestedScope =
@@ -2056,6 +2060,7 @@ export function CodexFeedbackPanel({
             headers: { Accept: 'application/json' },
           },
         );
+        if (requestSequence !== statusRequestSequenceRef.current) return false;
         if (
           response.status === 404 ||
           !response.headers.get('content-type')?.includes('application/json')
@@ -2090,6 +2095,7 @@ export function CodexFeedbackPanel({
         }
         return true;
       } catch {
+        if (requestSequence !== statusRequestSequenceRef.current) return false;
         setIsSupported((current) => (current === undefined ? false : current));
         return false;
       }
@@ -2123,11 +2129,24 @@ export function CodexFeedbackPanel({
     }
   }, [refreshStatus, status?.billing?.mode]);
 
+  const pollingActiveTurnId = status?.thread?.activeTurnId;
+  const pollingActiveWork =
+    status?.thread?.working === true ||
+    (Boolean(pollingActiveTurnId) &&
+      status?.agents?.some(
+        (agent) =>
+          agent.working &&
+          (!agent.supervisorTurnId || agent.supervisorTurnId === pollingActiveTurnId),
+      ));
+
   useEffect(() => {
     void refreshStatus();
-    const interval = window.setInterval(() => void refreshStatus(), 5_000);
+    const interval = window.setInterval(
+      () => void refreshStatus(),
+      pollingActiveWork ? 1_000 : 5_000,
+    );
     return () => window.clearInterval(interval);
-  }, [refreshStatus]);
+  }, [pollingActiveWork, refreshStatus]);
 
   useEffect(() => {
     const openPanel = () => {
@@ -2600,15 +2619,14 @@ export function CodexFeedbackPanel({
     return teamsByMessage;
   }, [status?.agents, status?.messages, status?.thread?.activeTurnId]);
   const legacyAgents = status?.agents?.filter((agent) => !agent.supervisorTurnId) ?? [];
-  const isCodexWorking = status?.thread?.working === true || activeAgents.length > 0;
-  const hasActiveTeam =
-    status?.agents?.some(
-      (agent) =>
-        agent.working &&
-        (status.thread?.activeTurnId
-          ? agent.supervisorTurnId === status.thread.activeTurnId
-          : agentTeamsAfterMessage.size > 0),
-    ) === true;
+  const currentActiveAgents = status?.thread?.activeTurnId
+    ? activeAgents.filter(
+        (agent) =>
+          !agent.supervisorTurnId || agent.supervisorTurnId === status.thread?.activeTurnId,
+      )
+    : [];
+  const isCodexWorking = status?.thread?.working === true || currentActiveAgents.length > 0;
+  const hasActiveTeam = currentActiveAgents.length > 0;
   const anyConversationWorking = status?.threads.some((thread) => thread.working) === true;
   const queuedCount = status?.queuedCount ?? 0;
   const interruptingCount = status?.interruptingCount ?? 0;
@@ -2702,6 +2720,7 @@ export function CodexFeedbackPanel({
   const fastModeAvailable =
     selectedModel?.serviceTiers?.some((tier) => tier.id === 'priority') === true;
   const selectedServiceTier = fastMode && fastModeAvailable ? 'priority' : 'default';
+  const stopActiveTurnSupported = status?.capabilities?.stopActiveTurn === true;
   const isInterrupted = selectedThread?.interrupted === true;
   const selectionRectangle = selectedRectangle(selection);
   const selectionReady = Boolean(
@@ -3390,6 +3409,7 @@ export function CodexFeedbackPanel({
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({
+          action: 'enqueue',
           screenshots: submittedAttachments.map((attachment) => attachment.source),
           prompt: submittedPrompt,
           model: selectedModel.id,
@@ -4049,6 +4069,12 @@ export function CodexFeedbackPanel({
                   <CodexConversationLoading transition={conversationTransition} />
                 ) : (
                   <>
+                    {status?.threadIssue ? (
+                      <p className="codex-feedback-error" role="alert">
+                        <CircleAlert aria-hidden="true" size={18} />
+                        {status.threadIssue}
+                      </p>
+                    ) : null}
                     {transcriptEntries.length
                       ? transcriptEntries.map((entry) => {
                           if (entry.kind === 'activity') {
@@ -4282,7 +4308,8 @@ export function CodexFeedbackPanel({
                           );
                         })
                       : null}
-                    {!transcriptEntries.length &&
+                    {!status?.threadIssue &&
+                    !transcriptEntries.length &&
                     !status?.queuedMessages?.length &&
                     !showPendingChatMessage &&
                     !showPendingVisualMessage ? (
@@ -4591,7 +4618,11 @@ export function CodexFeedbackPanel({
               <label className="codex-feedback-prompt codex-feedback-prompt--compose">
                 <span>Message to Codex</span>
                 <textarea
-                  disabled={phase === 'sending-chat' || Boolean(conversationTransition)}
+                  disabled={
+                    phase === 'sending-chat' ||
+                    Boolean(conversationTransition) ||
+                    Boolean(status?.threadIssue)
+                  }
                   maxLength={4_000}
                   onChange={(event) => setPrompt(event.target.value)}
                   onBlur={() => {
@@ -4628,6 +4659,7 @@ export function CodexFeedbackPanel({
                   disabled={
                     phase === 'sending-chat' ||
                     Boolean(conversationTransition) ||
+                    Boolean(status?.threadIssue) ||
                     isPreparingPhoto ||
                     !selectedModel?.supportsImages
                   }
@@ -4645,6 +4677,7 @@ export function CodexFeedbackPanel({
                   disabled={
                     phase === 'sending-chat' ||
                     Boolean(conversationTransition) ||
+                    Boolean(status?.threadIssue) ||
                     isPreparingPhoto ||
                     !selectedModel?.supportsImages
                   }
@@ -4658,6 +4691,7 @@ export function CodexFeedbackPanel({
                   disabled={
                     phase === 'sending-chat' ||
                     Boolean(conversationTransition) ||
+                    Boolean(status?.threadIssue) ||
                     !status?.thread ||
                     !selectedModel ||
                     !selectedModel.supportsImages
@@ -4713,37 +4747,55 @@ export function CodexFeedbackPanel({
                 >
                   <Settings aria-hidden="true" size={18} />
                 </IconButton>
-                <IconButton
-                  label={
-                    phase === 'sending-chat'
-                      ? 'Sending message'
-                      : isStoppingTurn
+                {phase !== 'sending-chat' && (isStoppingTurn || isCodexWorking) ? (
+                  <IconButton
+                    disabled={
+                      Boolean(conversationTransition) ||
+                      isStoppingTurn ||
+                      !status?.thread ||
+                      !stopActiveTurnSupported
+                    }
+                    key="stop-codex"
+                    label={
+                      isStoppingTurn
                         ? 'Stopping Codex'
-                        : isCodexWorking
+                        : stopActiveTurnSupported
                           ? 'Stop Codex'
-                          : 'Send message'
-                  }
-                  disabled={
-                    phase === 'sending-chat' ||
-                    Boolean(conversationTransition) ||
-                    isStoppingTurn ||
-                    !status?.thread ||
-                    (!isCodexWorking &&
-                      (isPreparingPhoto ||
-                        !selectedModel ||
-                        (!prompt.trim() && draftAttachments.length === 0)))
-                  }
-                  onClick={() => void (isCodexWorking ? stopActiveTurn() : sendFeedback())}
-                  variant={isCodexWorking ? 'danger' : 'primary'}
-                >
-                  {phase === 'sending-chat' || isStoppingTurn ? (
-                    <LoaderCircle aria-hidden="true" className="is-spinning" size={18} />
-                  ) : isCodexWorking ? (
-                    <Square aria-hidden="true" fill="currentColor" size={16} />
-                  ) : (
-                    <Send aria-hidden="true" size={18} />
-                  )}
-                </IconButton>
+                          : 'Stop Codex unavailable until Studio reconnects'
+                    }
+                    onClick={() => void stopActiveTurn()}
+                    variant="danger"
+                  >
+                    {isStoppingTurn ? (
+                      <LoaderCircle aria-hidden="true" className="is-spinning" size={18} />
+                    ) : (
+                      <Square aria-hidden="true" fill="currentColor" size={16} />
+                    )}
+                  </IconButton>
+                ) : (
+                  <IconButton
+                    disabled={
+                      phase === 'sending-chat' ||
+                      Boolean(conversationTransition) ||
+                      Boolean(status?.threadIssue) ||
+                      isPreparingPhoto ||
+                      !status?.thread ||
+                      !selectedModel ||
+                      !selectedEffort ||
+                      (!prompt.trim() && draftAttachments.length === 0)
+                    }
+                    key="send-codex"
+                    label={phase === 'sending-chat' ? 'Sending message' : 'Send message'}
+                    onClick={() => void sendFeedback()}
+                    variant="primary"
+                  >
+                    {phase === 'sending-chat' ? (
+                      <LoaderCircle aria-hidden="true" className="is-spinning" size={18} />
+                    ) : (
+                      <Send aria-hidden="true" size={18} />
+                    )}
+                  </IconButton>
+                )}
               </div>
 
               {error ? (

@@ -423,6 +423,7 @@ const localClientUrlReleaseContractPackageId =
   'agent-package-local-v21-6-client-url-release-contract';
 const localRevocableReadyClientReviewsPackageId =
   'agent-package-local-v21-7-revocable-ready-client-reviews';
+const localReliableCodexStopStatePackageId = 'agent-package-local-v21-8-reliable-codex-stop-state';
 
 type StoreName =
   | 'activities'
@@ -3397,10 +3398,28 @@ export class SiteforgeRepository {
         'Closes the final review-link lifecycle gap so a reviewer can withdraw access after sharing without deleting the build or affecting production.',
       stagedBehaviourIds: ['client-url-release-contract'],
     };
+    const localReliableCodexStopStatePackage: AgentPackage = {
+      ...localRevocableReadyClientReviewsPackage,
+      id: localReliableCodexStopStatePackageId,
+      version: 21.8,
+      basePackageId: localRevocableReadyClientReviewsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v21.8',
+      contractAddendum:
+        'The Studio Codex composer derives Stop from the selected turn rather than coarse thread or historical-agent state. Completion replaces the keyed Stop control with a distinct Send control promptly, out-of-order status responses cannot restore stale work, and a stop gesture can never be reinterpreted as message submission. The runtime advertises stop support explicitly and rejects unknown chat actions instead of treating them as prompts. A malformed or stalled saved transcript is isolated to that exact conversation so the conversation picker, new chats, and other healthy chats remain usable.',
+      instructionsAddendum:
+        'Treat an included turn list as the source of truth for selected-thread activity; use coarse active thread status only for summaries that omit turns. Scope running agents to the selected active supervisor turn. Poll active work once per second, discard any status response older than the most recently started request, and render separate keyed Send and Stop buttons so a lifecycle transition between pointer-down and click cancels the old gesture. Include an explicit enqueue action for messages, disable Send without both a model and reasoning choice, advertise stop-active-turn capability from the same server dispatcher that implements it, disable Stop during frontend/server version skew, and fail closed on unknown chat actions. Bound selected-transcript reads below the owner-gateway timeout, preserve an unreadable conversation without rendering or accepting new work into it, return the remaining conversation list, and direct the user to another or new chat.',
+      summary:
+        'Reliable Codex chat state test package: removes stale Stop controls, prevents stop/send races, and keeps healthy chats usable when one saved conversation cannot load.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the familiar chat surface trustworthy across completion timing, agent-team history, overlapping polling, live Studio server updates, and one malformed saved conversation.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localReliableCodexStopStatePackage,
           localRevocableReadyClientReviewsPackage,
           localClientUrlReleaseContractPackage,
           localStoppableCodexTurnsPackage,
@@ -3566,6 +3585,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localReliableCodexStopStatePackage,
           localRevocableReadyClientReviewsPackage,
           localClientUrlReleaseContractPackage,
           localStoppableCodexTurnsPackage,
@@ -3734,6 +3754,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localReliableCodexStopStatePackage,
             localRevocableReadyClientReviewsPackage,
             localClientUrlReleaseContractPackage,
             localStoppableCodexTurnsPackage,

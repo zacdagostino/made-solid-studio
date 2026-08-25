@@ -86,13 +86,20 @@ function fakeConnection(state) {
             status: state.threadStatus || { type: 'idle' },
           },
         ];
+        const visibleThreads = state.omitThreadIds?.length
+          ? threads.filter((thread) => !state.omitThreadIds.includes(thread.id))
+          : threads;
         return {
           data: state.filterThreadsByCwd
-            ? threads.filter((thread) => thread.cwd === params.cwd)
-            : threads,
+            ? visibleThreads.filter((thread) => thread.cwd === params.cwd)
+            : visibleThreads,
         };
       }
       if (method === 'thread/read') {
+        if (state.unreadableThreadIds?.includes(params.threadId)) {
+          if (state.hangingThreadRead) return new Promise(() => {});
+          throw new Error('Custom tool call output is missing for this conversation.');
+        }
         const agentThread = state.agentThreads?.find((thread) => thread.id === params.threadId);
         if (agentThread) return { thread: agentThread };
         const newThread = state.newThreads?.find((thread) => thread.id === params.threadId);
@@ -311,6 +318,53 @@ test('discovers ChatGPT models, image support, efforts, and the active Studio th
   );
   assert.equal(status.models[1].supportsImages, false);
   assert.deepEqual(status.agents, []);
+});
+
+test('does not report a completed turn as working from lagging active thread status', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-completed-status-'));
+  const state = {
+    busy: false,
+    turns: [],
+    threadStatus: { type: 'active', activeFlags: ['turn'] },
+  };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+
+  const status = await bridge.inspect({ threadId: 'thread-1' });
+  assert.equal(status.thread.working, false);
+  assert.equal(status.thread.activeTurnId, undefined);
+  assert.deepEqual(status.thread.activeFlags, []);
+});
+
+test('isolates an unreadable selected conversation so another chat can still open', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-unreadable-thread-'));
+  const state = {
+    busy: false,
+    turns: [],
+    unreadableThreadIds: ['thread-1'],
+    hangingThreadRead: true,
+  };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+    threadReadTimeoutMs: 10,
+  });
+
+  const unavailable = await bridge.inspect({ threadId: 'thread-1' });
+  assert.equal(unavailable.status, 'ready');
+  assert.equal(unavailable.thread.id, 'thread-1');
+  assert.match(unavailable.threadIssue, /Choose another chat or start a new one/);
+  assert.equal(unavailable.threads.length, 2);
+  assert.deepEqual(unavailable.messages, []);
+
+  const available = await bridge.inspect({ threadId: 'thread-2' });
+  assert.equal(available.thread.id, 'thread-2');
+  assert.equal(available.threadIssue, undefined);
+  assert.equal(available.messages.at(-1).text, 'The Studio page is ready.');
 });
 
 test('keeps chat available when subscription usage cannot be read', async () => {
@@ -1587,6 +1641,33 @@ test('stops the active supervisor and agent team without recovering the app-owne
 
   await bridge.maintain();
   assert.equal(state.turns.length, 1);
+});
+
+test('stops an exact active thread omitted from the bounded conversation list', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-stop-unlisted-'));
+  const state = {
+    busy: false,
+    turns: [],
+    interrupts: [],
+    omitThreadIds: ['thread-hidden'],
+    extraThreads: [
+      {
+        id: 'thread-hidden',
+        cwd: '/workspaces/siteforge-os',
+        status: { type: 'active', activeFlags: ['turn'] },
+        turns: [{ id: 'turn-hidden', status: 'inProgress', items: [] }],
+      },
+    ],
+  };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+
+  const stopped = await bridge.stopActiveTurn({ threadId: 'thread-hidden' });
+  assert.equal(stopped.status, 'stopping');
+  assert.deepEqual(state.interrupts, [{ threadId: 'thread-hidden', turnId: 'turn-hidden' }]);
 });
 
 test('deletes only the selected queued message before it can be dispatched', async () => {

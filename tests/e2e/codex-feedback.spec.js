@@ -450,8 +450,12 @@ test.beforeEach(async ({ page }) => {
     statusRequestCount += 1;
     const selectedThreadId = new URL(route.request().url()).searchParams.get('threadId');
     const pageUrl = new URL(route.request().headers().referer || 'http://localhost');
+    const outOfOrderStatus = pageUrl.searchParams.has('codexOutOfOrderStatus');
+    const delayedWorkingStatus = outOfOrderStatus && statusRequestCount === 1;
     const noWorkingStart = pageUrl.searchParams.has('codexWorkingNoStart');
-    const working = pageUrl.searchParams.has('codexWorking') || noWorkingStart;
+    const working = outOfOrderStatus
+      ? delayedWorkingStatus
+      : pageUrl.searchParams.has('codexWorking') || noWorkingStart;
     const interrupted = pageUrl.searchParams.has('codexInterrupted');
     const teamHistory = pageUrl.searchParams.has('codexTeamHistory');
     const directWorkingTurn = pageUrl.searchParams.has('codexDirectWorking');
@@ -459,23 +463,36 @@ test.beforeEach(async ({ page }) => {
     const incomingActivity = pageUrl.searchParams.has('codexIncomingActivity');
     const activityHistory = pageUrl.searchParams.has('codexActivityHistory');
     const evidenceNarrative = pageUrl.searchParams.has('codexEvidenceNarrative');
+    const unreadableConversation =
+      pageUrl.searchParams.has('codexUnreadableConversation') && selectedThreadId !== 'thread-2';
     const usageUnavailable = pageUrl.searchParams.has('codexUsageUnavailable');
     const twoUsageWindows = pageUrl.searchParams.has('codexTwoUsage');
     const workingSince = Math.floor(Date.now() / 1_000) - 65;
     const threadUpdatedAt = noWorkingStart
       ? Math.floor(Date.now() / 1_000) - 97 * 60 * 60
       : workingSince;
+    if (delayedWorkingStatus) {
+      await new Promise((resolve) => setTimeout(resolve, 6_000));
+    }
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
         status: 'ready',
-        detail: 'Connected to the local Codex conversation.',
+        detail: unreadableConversation
+          ? 'The selected conversation is unavailable, but the other conversations remain accessible.'
+          : 'Connected to the local Codex conversation.',
+        threadIssue: unreadableConversation
+          ? 'This conversation could not be loaded safely. Choose another chat or start a new one; the existing conversation has been preserved.'
+          : undefined,
         account: { type: 'chatgpt', planType: 'plus' },
         billing: {
           apiKeyConfigured: true,
           label: billingMode === 'api_credits' ? 'OpenAI API credits' : 'ChatGPT subscription',
           mode: billingMode,
         },
+        capabilities: pageUrl.searchParams.has('noStopCapability')
+          ? undefined
+          : { stopActiveTurn: true },
         subscriptionUsage: usageUnavailable
           ? undefined
           : {
@@ -541,8 +558,9 @@ test.beforeEach(async ({ page }) => {
             updatedAt: Math.floor(Date.now() / 1_000) - 3_700,
           },
         ],
-        messages:
-          selectedThreadId === 'thread-2'
+        messages: unreadableConversation
+          ? []
+          : selectedThreadId === 'thread-2'
             ? [
                 { id: 'old-user', role: 'user', text: 'Review the earlier homepage.' },
                 { id: 'old-codex', role: 'assistant', text: 'The earlier review is complete.' },
@@ -1403,6 +1421,29 @@ test('shows an accessible loading state while switching saved Codex conversation
   await expect(log).toContainText('The earlier review is complete.');
   await expect(loading).toBeHidden();
   await expect(log).toHaveAttribute('aria-busy', 'false');
+});
+
+test('keeps other conversations usable when one saved transcript cannot load', async ({ page }) => {
+  await page.goto('/?codexUnreadableConversation=1');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  const log = composer.getByRole('log', { name: 'Codex chat log' });
+
+  await expect(log.getByRole('alert')).toContainText('Choose another chat or start a new one');
+  await expect(composer.getByLabel('Message to Codex')).toBeDisabled();
+  await expect(composer.getByRole('button', { name: 'Send message' })).toBeDisabled();
+  await expect(composer).toHaveScreenshot('codex-unreadable-conversation.png');
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  const accessibility = await new AxeBuilder({ page }).include('.codex-chat-dialog').analyze();
+  expect(accessibility.violations).toEqual([]);
+
+  await composer.getByRole('button', { name: 'Conversation' }).click();
+  await composer.getByRole('menuitemradio', { name: /Review the earlier homepage\./ }).click();
+  await expect(log).toContainText('The earlier review is complete.');
+  await expect(log.getByRole('alert')).toHaveCount(0);
+  await expect(composer.getByLabel('Message to Codex')).toBeEnabled();
 });
 
 test('keeps conversation loading motion static when reduced motion is requested', async ({
@@ -3266,6 +3307,59 @@ test('turns Send into Stop while Codex works and preserves the current draft', a
   await expect
     .poll(() => composer.evaluate((element) => element.scrollWidth - element.clientWidth))
     .toBeLessThanOrEqual(1);
+});
+
+test('never changes a pressed Stop into Send while completion status arrives', async ({ page }) => {
+  const feedbackRequests = [];
+  await page.route('**/__made-solid/codex-feedback', async (route) => {
+    feedbackRequests.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({ status: 'queued' }),
+    });
+  });
+  await page.goto('/?codexWorking=1&codexAgents=1');
+  await page.getByRole('button', { name: 'Codex is working' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  const stopButton = composer.getByRole('button', { name: 'Stop Codex' });
+  const bounds = await stopButton.boundingBox();
+  if (!bounds) throw new Error('The Stop Codex control must have visible bounds.');
+
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await page.mouse.down();
+  await page.evaluate(() => window.history.replaceState({}, '', '/?codexAgents=1'));
+  await expect(composer.getByRole('button', { name: 'Send message' })).toBeVisible({
+    timeout: 3_000,
+  });
+  await page.mouse.up();
+
+  await expect(composer.getByRole('button', { name: 'Stop Codex' })).toHaveCount(0);
+  await expect(composer).not.toContainText('Choose an available Codex model and reasoning level.');
+  expect(feedbackRequests).toEqual([]);
+});
+
+test('ignores an older working poll after a newer completion poll', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'The status ordering is viewport-independent.');
+  await page.goto('/?codexOutOfOrderStatus=1');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click({ timeout: 8_000 });
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await expect(composer.getByRole('button', { name: 'Send message' })).toBeVisible();
+  await page.waitForTimeout(1_500);
+  await expect(composer.getByRole('button', { name: 'Send message' })).toBeVisible();
+  await expect(composer.getByRole('button', { name: 'Stop Codex' })).toHaveCount(0);
+});
+
+test('keeps Stop disabled when the running server does not advertise cancellation', async ({
+  page,
+}) => {
+  await page.goto('/?codexWorking=1&noStopCapability=1');
+  await page.getByRole('button', { name: 'Codex is working' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await expect(
+    composer.getByRole('button', { name: 'Stop Codex unavailable until Studio reconnects' }),
+  ).toBeDisabled();
+  await expect(composer.getByRole('button', { name: 'Send message' })).toHaveCount(0);
 });
 
 test('shows real Codex working state, queued work, and a live elapsed timer', async ({ page }) => {
