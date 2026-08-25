@@ -426,6 +426,8 @@ const localRevocableReadyClientReviewsPackageId =
 const localReliableCodexStopStatePackageId = 'agent-package-local-v21-8-reliable-codex-stop-state';
 const localDedicatedClientWebsiteEditorPackageId =
   'agent-package-local-v21-9-dedicated-client-website-editor';
+const localResilientDevelopmentStudioRuntimePackageId =
+  'agent-package-local-v22-0-resilient-development-studio-runtime';
 
 type StoreName =
   | 'activities'
@@ -3434,10 +3436,28 @@ export class SiteforgeRepository {
         'Keeps focused client editing easy to understand while preventing a healthy but stale Railway process from serving a different checkout than Studio’s ledger and checkpoint controls.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localResilientDevelopmentStudioRuntimePackage: AgentPackage = {
+      ...localDedicatedClientWebsiteEditorPackage,
+      id: localResilientDevelopmentStudioRuntimePackageId,
+      version: 22,
+      basePackageId: localDedicatedClientWebsiteEditorPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v22.0',
+      contractAddendum:
+        'The editable development Studio serves optimized dependencies from a runtime-owned cache that build verification cannot remove. Its supervisor probes both the Vite client and a real React dependency, restarts an unhealthy live server automatically, and the document shell remains visible with one bounded reconnect attempt plus a manual recovery action when application modules cannot start.',
+      instructionsAddendum:
+        'Keep live-serve and build optimizer caches physically separate. Run the Railway development Vite server with a runtime-owned cache outside the editable checkout, and probe both /@vite/client and the optimized React dependency while its process is alive. Restart after two consecutive failed probes. Ship a dependency-free startup shell in the HTML document, attempt one session-scoped reload after a module startup failure, and then show a clear reload action that states saved source is safe. Never leave a blank document as the failure state.',
+      summary:
+        'Resilient development Studio runtime test package: prevents build checks from blanking the live app and recovers visibly when frontend modules fail.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Separates verification from the live module graph and adds automatic plus user-visible recovery for development Studio startup failures.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localResilientDevelopmentStudioRuntimePackage,
           localDedicatedClientWebsiteEditorPackage,
           localReliableCodexStopStatePackage,
           localRevocableReadyClientReviewsPackage,
@@ -3605,6 +3625,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localResilientDevelopmentStudioRuntimePackage,
           localDedicatedClientWebsiteEditorPackage,
           localReliableCodexStopStatePackage,
           localRevocableReadyClientReviewsPackage,
@@ -3775,6 +3796,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localResilientDevelopmentStudioRuntimePackage,
             localDedicatedClientWebsiteEditorPackage,
             localReliableCodexStopStatePackage,
             localRevocableReadyClientReviewsPackage,

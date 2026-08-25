@@ -38,6 +38,11 @@ if (isCodexPanelRoute) {
 }
 
 const root = createRoot(document.getElementById('root')!);
+const announceStudioMounted = () => {
+  window.requestAnimationFrame(() => {
+    window.dispatchEvent(new Event('made-solid:studio-mounted'));
+  });
+};
 if (isClientReviewRevocationFixture) {
   void import('./ClientReviewRevocationFixture').then(({ ClientReviewRevocationFixture }) => {
     root.render(
@@ -45,6 +50,7 @@ if (isClientReviewRevocationFixture) {
         <ClientReviewRevocationFixture />
       </StrictMode>,
     );
+    announceStudioMounted();
   });
 } else {
   root.render(
@@ -58,4 +64,5 @@ if (isClientReviewRevocationFixture) {
       ) : null}
     </StrictMode>,
   );
+  announceStudioMounted();
 }

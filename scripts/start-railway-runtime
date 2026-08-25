@@ -5,6 +5,7 @@ set -euo pipefail
 application_directory="$(cd "$(dirname "$0")/.." && pwd)"
 runtime_data_directory="${SITEFORGE_RUNTIME_DATA_DIR:-/data}"
 runtime_directory="$runtime_data_directory/runtime"
+workspace_vite_cache_directory="$runtime_directory/workspace-vite-cache"
 workspace_root="${SITEFORGE_RUNTIME_WORKSPACES_DIR:-$runtime_data_directory/workspaces}"
 studio_workspace_directory="$workspace_root/siteforge-os"
 prospect_workspaces_directory="$runtime_data_directory/prospect-workspaces"
@@ -48,6 +49,7 @@ done
 
 mkdir -p \
   "$runtime_directory" \
+  "$workspace_vite_cache_directory" \
   "$prospect_workspaces_directory" \
   "$codex_home_directory"
 
@@ -142,8 +144,9 @@ maintain_codex_app_server() {
 
 maintain_workspace_studio() {
   local workspace_process=''
+  local health_process=''
   local workspace_stopping=0
-  trap 'workspace_stopping=1; [[ -z "$workspace_process" ]] || kill -TERM "$workspace_process" 2>/dev/null || true' INT TERM
+  trap 'workspace_stopping=1; [[ -z "$health_process" ]] || kill -TERM "$health_process" 2>/dev/null || true; [[ -z "$workspace_process" ]] || kill -TERM "$workspace_process" 2>/dev/null || true' INT TERM
   while ((workspace_stopping == 0)); do
     (
       cd "$studio_workspace_directory"
@@ -153,6 +156,7 @@ maintain_workspace_studio() {
         SITEFORGE_DEVELOPMENT_ORIGIN="$development_origin" \
         SITEFORGE_DEVELOPMENT_COMPATIBILITY_ORIGINS="${SITEFORGE_DEVELOPMENT_COMPATIBILITY_ORIGINS:-}" \
         SITEFORGE_RUNTIME_DATA_DIR="$runtime_data_directory" \
+        SITEFORGE_VITE_CACHE_DIR="$workspace_vite_cache_directory" \
         SITEFORGE_RUNTIME_API_PROXY_ORIGIN="http://127.0.0.1:$port" \
         SITEFORGE_STUDIO_WORKSPACE_DIR="$studio_workspace_directory" \
         SITEFORGE_PROSPECT_WORKSPACES_DIR="$prospect_workspaces_directory" \
@@ -174,7 +178,31 @@ maintain_workspace_studio() {
           --strictPort
     ) &
     workspace_process=$!
+    (
+      failures=0
+      sleep 8
+      while kill -0 "$workspace_process" 2>/dev/null; do
+        if curl --fail --silent --show-error --max-time 5 \
+          "http://127.0.0.1:$workspace_studio_port/@vite/client" >/dev/null 2>&1 && \
+          curl --fail --silent --show-error --max-time 5 \
+          "http://127.0.0.1:$workspace_studio_port/node_modules/.vite/deps/react.js" >/dev/null 2>&1; then
+          failures=0
+        else
+          failures=$((failures + 1))
+          if ((failures >= 2)); then
+            echo "[railway-runtime] Workspace Studio dependency graph is unhealthy; restarting it from the isolated serve cache."
+            kill -TERM "$workspace_process" 2>/dev/null || true
+            break
+          fi
+        fi
+        sleep 5
+      done
+    ) &
+    health_process=$!
     wait "$workspace_process" 2>/dev/null || true
+    kill -TERM "$health_process" 2>/dev/null || true
+    wait "$health_process" 2>/dev/null || true
+    health_process=''
     workspace_process=''
     if ((workspace_stopping == 0)); then
       echo "[railway-runtime] Workspace Studio stopped; production remains available while it restarts."

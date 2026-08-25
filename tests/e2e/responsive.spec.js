@@ -3813,8 +3813,9 @@ test('displays the newest test package above retained package versions', async (
 
   const packagePicker = page.getByLabel('Test agent package');
   await expect(packagePicker).toHaveValue(
-    'agent-package-local-v21-9-dedicated-client-website-editor',
+    'agent-package-local-v22-0-resilient-development-studio-runtime',
   );
+  await expect(packagePicker).toContainText('v22.0 · Approved test');
   await expect(packagePicker).toContainText('v21.9 · Approved test');
   await expect(packagePicker).toContainText('v21.8 · Approved test');
   await expect(packagePicker).toContainText('v21.7 · Approved test');
@@ -3980,6 +3981,7 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v22.0', 'Resilient development Studio runtime'],
     ['v21.9', 'Dedicated client website editor'],
     ['v21.8', 'Reliable Codex chat state'],
     ['v21.7', 'Revocable ready client reviews'],

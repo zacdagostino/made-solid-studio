@@ -456,6 +456,8 @@ test('registers a single-volume Singapore Railway runtime with a health check', 
   assert.match(viteConfiguration, /healthcheck\.railway\.app/);
   assert.match(viteConfiguration, /SITEFORGE_PUBLIC_ORIGIN/);
   assert.match(viteConfiguration, /SITEFORGE_RUNTIME_API_PROXY_ORIGIN/);
+  assert.match(viteConfiguration, /command === 'serve' \? 'serve' : 'build'/);
+  assert.match(viteConfiguration, /SITEFORGE_VITE_CACHE_DIR/);
   assert.match(
     viteConfiguration,
     /workspaceDevelopment \? \[workspaceCodexBranchPlugin\(\)\] : \[localWorkspacePlugin\(\)\]/,
@@ -476,6 +478,14 @@ test('registers a single-volume Singapore Railway runtime with a health check', 
   assert.match(launcher, /exec env -i/);
   assert.match(launcher, /SITEFORGE_WORKSPACE_DEVELOPMENT=1/);
   assert.match(launcher, /SITEFORGE_RUNTIME_API_PROXY_ORIGIN="http:\/\/127\.0\.0\.1:\$port"/);
+  assert.match(launcher, /SITEFORGE_VITE_CACHE_DIR="\$workspace_vite_cache_directory"/);
+  assert.match(launcher, /\/@vite\/client/);
+  assert.match(launcher, /node_modules\/\.vite\/deps\/react\.js/);
+  assert.match(launcher, /failures >= 2/);
+  assert.match(
+    launcher,
+    /dependency graph is unhealthy; restarting it from the isolated serve cache/,
+  );
   assert.match(launcher, /--config "\$studio_workspace_directory\/vite\.config\.ts"/);
   assert.equal(
     (launcher.match(/--config "\$application_directory\/vite\.config\.ts"/g) || []).length,

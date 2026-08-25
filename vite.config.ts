@@ -23,7 +23,7 @@ function loopbackRuntimeTarget(value?: string) {
   return value.trim();
 }
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ command, mode }) => {
   const environment = loadEnv(mode, '.', '');
   const workspaceDevelopment = environment.SITEFORGE_WORKSPACE_DEVELOPMENT === '1';
   const runtimeApiTarget = loopbackRuntimeTarget(environment.SITEFORGE_RUNTIME_API_PROXY_ORIGIN);
@@ -45,8 +45,12 @@ export default defineConfig(({ mode }) => {
   const frameAncestors = workspaceDevelopment
     ? "frame-ancestors 'none'"
     : "frame-ancestors 'self' https://madesolid.com.au https://www.madesolid.com.au";
+  const cacheDir = environment.SITEFORGE_VITE_CACHE_DIR
+    ? environment.SITEFORGE_VITE_CACHE_DIR.trim()
+    : `node_modules/.vite-${command === 'serve' ? 'serve' : 'build'}`;
 
   return {
+    cacheDir,
     plugins: [
       react(),
       ...(workspaceDevelopment ? [workspaceCodexBranchPlugin()] : [localWorkspacePlugin()]),
