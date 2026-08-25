@@ -18,6 +18,9 @@ if (import.meta.hot) {
 
 const isPreviewRoute = window.location.hash.startsWith('#/preview?');
 const isCodexPanelRoute = window.location.hash.startsWith('#/codex-panel');
+const isClientReviewRevocationFixture =
+  import.meta.env.VITE_SITEFORGE_E2E_FIXTURES === 'true' &&
+  window.location.hash === '#/__e2e/client-review-revocation';
 const codexPanelDirectory = (() => {
   if (!isCodexPanelRoute) return undefined;
   const query = new URLSearchParams(window.location.hash.slice('#/codex-panel?'.length));
@@ -34,14 +37,25 @@ if (isCodexPanelRoute) {
   document.documentElement.dataset.codexPanel = 'embedded';
 }
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    {isCodexPanelRoute ? null : isPreviewRoute ? <PreviewFrame /> : <App />}
-    {isCodexPanelRoute || isPreviewRoute ? (
-      <AuthenticatedCodexFeedbackPanel
-        embedded={isCodexPanelRoute}
-        workspaceDirectory={workspaceDirectory}
-      />
-    ) : null}
-  </StrictMode>,
-);
+const root = createRoot(document.getElementById('root')!);
+if (isClientReviewRevocationFixture) {
+  void import('./ClientReviewRevocationFixture').then(({ ClientReviewRevocationFixture }) => {
+    root.render(
+      <StrictMode>
+        <ClientReviewRevocationFixture />
+      </StrictMode>,
+    );
+  });
+} else {
+  root.render(
+    <StrictMode>
+      {isCodexPanelRoute ? null : isPreviewRoute ? <PreviewFrame /> : <App />}
+      {isCodexPanelRoute || isPreviewRoute ? (
+        <AuthenticatedCodexFeedbackPanel
+          embedded={isCodexPanelRoute}
+          workspaceDirectory={workspaceDirectory}
+        />
+      ) : null}
+    </StrictMode>,
+  );
+}

@@ -3812,7 +3812,10 @@ test('displays the newest test package above retained package versions', async (
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const packagePicker = page.getByLabel('Test agent package');
-  await expect(packagePicker).toHaveValue('agent-package-local-v21-6-client-url-release-contract');
+  await expect(packagePicker).toHaveValue(
+    'agent-package-local-v21-7-revocable-ready-client-reviews',
+  );
+  await expect(packagePicker).toContainText('v21.7 · Approved test');
   await expect(packagePicker).toContainText('v21.6 · Approved test');
   await expect(packagePicker).toContainText('v21.5 · Approved test');
   await expect(packagePicker).toContainText('v21.4 · Approved test');
@@ -3975,6 +3978,7 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v21.7', 'Revocable ready client reviews'],
     ['v21.6', 'Client URL release contract'],
     ['v21.5', 'Stoppable Codex turns'],
     ['v21.4', 'Resilient live Codex branching'],

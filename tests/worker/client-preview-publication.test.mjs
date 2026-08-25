@@ -11,6 +11,11 @@ const privateReviewMigrationUrl = new URL(
   '../../supabase/migrations/20260825220000_private_client_review_capabilities.sql',
   import.meta.url,
 );
+const reviewRevocationMigrationUrl = new URL(
+  '../../supabase/migrations/20260825240000_revoke_private_client_review_capabilities.sql',
+  import.meta.url,
+);
+const appUrl = new URL('../../src/App.tsx', import.meta.url);
 
 test('publishes only an expiring private review capability through the Clientspace worker path', async () => {
   const source = await readFile(workerUrl, 'utf8');
@@ -55,4 +60,22 @@ test('queues only quality-passed full-site builds and keeps the worker service-r
   );
   assert.match(privateReviewSource, /preview_mode in \('ready', 'draft', 'review'\)/);
   assert.match(privateReviewSource, /expiring, revocable Clientspace-only links/);
+});
+
+test('lets an organization member revoke a ready private review capability immediately', async () => {
+  const [source, appSource] = await Promise.all([
+    readFile(reviewRevocationMigrationUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+  ]);
+  assert.match(source, /target_publication\.status not in \('queued', 'running', 'ready'\)/);
+  assert.match(source, /update public\.builder_preview_access/);
+  assert.match(source, /preview_mode = 'review'/);
+  assert.match(source, /revoked_at = coalesce\(revoked_at, stopped_at\)/);
+  assert.match(source, /status = case when status in \('queued', 'ready'\) then 'cancelled'/);
+  assert.match(
+    source,
+    /grant execute on function public\.cancel_client_preview_publication\(uuid\) to authenticated/,
+  );
+  assert.match(appSource, /Revoke review link/);
+  assert.match(appSource, /Anyone using the current link will lose access/);
 });

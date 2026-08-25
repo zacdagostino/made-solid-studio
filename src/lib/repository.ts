@@ -421,6 +421,8 @@ const localResilientLiveCodexBranchingPackageId =
 const localStoppableCodexTurnsPackageId = 'agent-package-local-v21-5-stoppable-codex-turns';
 const localClientUrlReleaseContractPackageId =
   'agent-package-local-v21-6-client-url-release-contract';
+const localRevocableReadyClientReviewsPackageId =
+  'agent-package-local-v21-7-revocable-ready-client-reviews';
 
 type StoreName =
   | 'activities'
@@ -3378,10 +3380,28 @@ export class SiteforgeRepository {
         'Makes every client-facing URL state explicit and recoverable while closing public-preview, cross-client, historical-version, and accidental-production paths.',
       stagedBehaviourIds: ['client-url-release-contract'],
     };
+    const localRevocableReadyClientReviewsPackage: AgentPackage = {
+      ...localClientUrlReleaseContractPackage,
+      id: localRevocableReadyClientReviewsPackageId,
+      version: 21.7,
+      basePackageId: localClientUrlReleaseContractPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v21.7',
+      contractAddendum:
+        'A private client review remains revocable after it becomes ready. Revocation immediately disables every active review capability for the exact build before recording the ready publication as cancelled, while queued and running work retains its truthful cancellation lifecycle.',
+      instructionsAddendum:
+        'Allow an authenticated organization member to cancel a queued, running, or ready private client review. Revoke every unrevoked review capability for the exact builder run before closing a ready publication, record its phase as revoked with a plain-language explanation, and make repeated cancellation safe. Cancel queued work before it starts; keep running work in cooperative cancellation until its next safe checkpoint. Preserve completed build evidence and never turn review cancellation into a production or source deletion action.',
+      summary:
+        'Revocable ready client reviews test package: closes an already-ready private review immediately while preserving truthful queued and running cancellation states.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Closes the final review-link lifecycle gap so a reviewer can withdraw access after sharing without deleting the build or affecting production.',
+      stagedBehaviourIds: ['client-url-release-contract'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localRevocableReadyClientReviewsPackage,
           localClientUrlReleaseContractPackage,
           localStoppableCodexTurnsPackage,
           localResilientLiveCodexBranchingPackage,
@@ -3546,6 +3566,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localRevocableReadyClientReviewsPackage,
           localClientUrlReleaseContractPackage,
           localStoppableCodexTurnsPackage,
           localResilientLiveCodexBranchingPackage,
@@ -3713,6 +3734,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localRevocableReadyClientReviewsPackage,
             localClientUrlReleaseContractPackage,
             localStoppableCodexTurnsPackage,
             localResilientLiveCodexBranchingPackage,

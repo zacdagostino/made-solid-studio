@@ -45,7 +45,7 @@ export default defineConfig({
   ],
   webServer: {
     command:
-      'VITE_SITEFORGE_STORAGE=local VITE_SITEFORGE_DEVELOPMENT_ORIGIN=https://dev.studio.madesolid.com.au VITE_SITEFORGE_DEVELOPMENT_COMPATIBILITY_ORIGINS=https://workspace.madesolid.com.au npm run build && node node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4175 --strictPort',
+      'VITE_SITEFORGE_STORAGE=local VITE_SITEFORGE_E2E_FIXTURES=true VITE_SITEFORGE_DEVELOPMENT_ORIGIN=https://dev.studio.madesolid.com.au VITE_SITEFORGE_DEVELOPMENT_COMPATIBILITY_ORIGINS=https://workspace.madesolid.com.au npm run build && node node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4175 --strictPort',
     url: 'http://127.0.0.1:4175',
     reuseExistingServer: false,
   },

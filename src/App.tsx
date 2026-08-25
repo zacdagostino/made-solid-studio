@@ -8900,9 +8900,9 @@ function BuilderRunPanel({
             title: 'Client URL and release contract',
             detail:
               'Generated tests use private /test links, complete builds use private /build links, and approved Clientspace review uses an expiring /review capability. Live website editing stays in the selected client route on dev.studio.madesolid.com.au. Every committed edit preview remains bound to its exact Git revision. A Made Solid source handoff creates review material only: it never deploys production or attaches a client domain. Production remains a separate confirmed release action.',
-            revision: `v${selectedAgentPackage.version}.1`,
+            revision: `v${selectedAgentPackage.version}.2`,
             change:
-              'Latest edit: client review now uses a seven-day revocable capability, concurrent working and committed previews remain isolated by exact revision, and source handoff can no longer run a production deploy or assign a Made Solid hostname.',
+              'Latest edit: an already-ready private client review can now be revoked immediately, which disables its active review capability without deleting the completed build or changing production.',
           },
           {
             id: 'visual-codex-feedback',
@@ -18633,6 +18633,7 @@ export function ClientPreviewPublicationPanel({
   const [handoffNotes, setHandoffNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [revokeDialogOpen, setRevokeDialogOpen] = useState(false);
   const [message, setMessage] = useState('');
   const active = publication?.status === 'queued' || publication?.status === 'running';
   const canPublish =
@@ -18669,170 +18670,206 @@ export function ClientPreviewPublicationPanel({
     setMessage('');
     try {
       await onCancel(publication.id);
+      setRevokeDialogOpen(false);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Publishing could not be cancelled.');
+      setMessage(
+        error instanceof Error ? error.message : 'The private review could not be cancelled.',
+      );
     } finally {
       setCancelling(false);
     }
   }
 
   return (
-    <Card className="workspace-panel client-publication" data-testid="client-preview-publication">
-      <div className="client-publication__header">
-        <div>
-          <Eyebrow>Client delivery</Eyebrow>
-          <h2>Private client review</h2>
-          <p className="muted-copy">
-            Create a seven-day private review link for the latest quality-approved full website,
-            then place it in Clientspace admin. This does not email the client.
-          </p>
-        </div>
-        <StatusBadge
-          tone={
-            publication?.status === 'ready'
-              ? 'success'
-              : publication?.status === 'failed'
-                ? 'danger'
-                : active
-                  ? 'warning'
-                  : 'neutral'
-          }
-        >
-          {publication?.status.replaceAll('_', ' ') ?? 'No review link'}
-        </StatusBadge>
-      </div>
-
-      {publication?.status === 'ready' ? (
-        <section className="client-publication__result" aria-labelledby="client-publication-ready">
-          <Globe2 aria-hidden="true" size={24} />
+    <>
+      <Card className="workspace-panel client-publication" data-testid="client-preview-publication">
+        <div className="client-publication__header">
           <div>
-            <h3 id="client-publication-ready">Private review waiting in Clientspace admin</h3>
-            <p>
-              The expiring review capability and client details were transferred. Review them in
-              admin, create Clientspace, then edit and send the invitation.
+            <Eyebrow>Client delivery</Eyebrow>
+            <h2>Private client review</h2>
+            <p className="muted-copy">
+              Create a seven-day private review link for the latest quality-approved full website,
+              then place it in Clientspace admin. This does not email the client.
             </p>
-            {publication.deploymentUrl ? (
-              <ButtonLink href={publication.deploymentUrl} target="_blank" variant="secondary">
-                <ExternalLink aria-hidden="true" size={16} />
-                Open private review
-              </ButtonLink>
-            ) : null}
           </div>
-        </section>
-      ) : active ? (
-        <section className="client-publication__progress" aria-live="polite">
-          <IndeterminateProgress
-            detail={publication.progressDetail || 'Preparing the client preview.'}
-            label={publication.progressPhase.replaceAll('_', ' ')}
-          />
-          {publication.totalItems > 0 ? (
-            <p>
-              {publication.completedItems} of {publication.totalItems} saved checkpoints complete.
-            </p>
-          ) : null}
-          <Button
-            disabled={cancelling || Boolean(publication.cancelRequestedAt)}
-            onClick={() => void cancel()}
-            type="button"
-            variant="secondary"
+          <StatusBadge
+            tone={
+              publication?.status === 'ready'
+                ? 'success'
+                : publication?.status === 'failed'
+                  ? 'danger'
+                  : active
+                    ? 'warning'
+                    : 'neutral'
+            }
           >
-            <Ban aria-hidden="true" size={16} />
-            {cancelling || publication.cancelRequestedAt ? 'Stopping publish' : 'Cancel publish'}
-          </Button>
-        </section>
-      ) : (
-        <form className="client-publication__form" onSubmit={publish}>
-          <PricingCalculator
-            manifest={workspace.buildManifest}
-            onApprovedQuoteChange={setApprovedQuote}
-          />
-          <div className="client-publication__fields">
-            <label>
-              <span>Client or business name</span>
-              <input
-                maxLength={160}
-                onChange={(event) => setClientName(event.target.value)}
-                required
-                value={clientName}
-              />
-            </label>
-            <label>
-              <span>Contact name</span>
-              <input
-                maxLength={160}
-                onChange={(event) => setContactName(event.target.value)}
-                value={contactName}
-              />
-            </label>
-            <label>
-              <span>Client email</span>
-              <input
-                autoComplete="email"
-                maxLength={254}
-                onChange={(event) => setClientEmail(event.target.value)}
-                required
-                type="email"
-                value={clientEmail}
-              />
-            </label>
-            <label>
-              <span>Project name</span>
-              <input
-                maxLength={200}
-                onChange={(event) => setProjectName(event.target.value)}
-                required
-                value={projectName}
-              />
-            </label>
-            <label className="client-publication__notes">
-              <span>Internal handoff notes (optional)</span>
-              <textarea
-                maxLength={4000}
-                onChange={(event) => setHandoffNotes(event.target.value)}
-                rows={3}
-                value={handoffNotes}
-              />
-            </label>
-          </div>
-          {!canPublish ? (
-            <p className="form-message form-message--error" role="alert">
-              {completedBuild
-                ? completedBuild.status === 'review_required'
-                  ? 'Resolve the build’s quality-review findings before creating a client review.'
-                  : 'Complete a full-site build with passed quality checks before creating a review.'
-                : 'Build the complete prospect website before creating a client review.'}
-            </p>
-          ) : null}
-          {publication?.status === 'failed' && publication.errorSummary ? (
-            <p className="form-message form-message--error" role="alert">
-              {publication.errorSummary}
-            </p>
-          ) : null}
-          {message ? (
-            <p className="form-message form-message--error" role="alert">
-              {message}
-            </p>
-          ) : null}
-          {!approvedQuote ? (
-            <p className="form-message" role="status">
-              Approve the calculated quote before creating this review in Clientspace.
-            </p>
-          ) : null}
-          <Button disabled={!canPublish || !approvedQuote || submitting} type="submit">
-            <Globe2 aria-hidden="true" size={16} />
-            {submitting
-              ? 'Creating private review'
-              : publication?.status === 'failed'
-                ? 'Retry private review'
-                : 'Create private review link'}
-          </Button>
-          <small>
-            The protected worker creates a revocable capability. No preview or Clientspace secret is
-            exposed to this browser.
-          </small>
-        </form>
-      )}
-    </Card>
+            {publication?.status.replaceAll('_', ' ') ?? 'No review link'}
+          </StatusBadge>
+        </div>
+
+        {publication?.status === 'ready' ? (
+          <section
+            className="client-publication__result"
+            aria-labelledby="client-publication-ready"
+          >
+            <Globe2 aria-hidden="true" size={24} />
+            <div>
+              <h3 id="client-publication-ready">Private review waiting in Clientspace admin</h3>
+              <p>
+                The expiring review capability and client details were transferred. Review them in
+                admin, create Clientspace, then edit and send the invitation.
+              </p>
+              <ButtonGroup>
+                {publication.deploymentUrl ? (
+                  <ButtonLink href={publication.deploymentUrl} target="_blank" variant="secondary">
+                    <ExternalLink aria-hidden="true" size={16} />
+                    Open private review
+                  </ButtonLink>
+                ) : null}
+                <Button
+                  disabled={cancelling}
+                  onClick={() => setRevokeDialogOpen(true)}
+                  type="button"
+                  variant="danger"
+                >
+                  <Ban aria-hidden="true" size={16} />
+                  {cancelling ? 'Revoking review link' : 'Revoke review link'}
+                </Button>
+              </ButtonGroup>
+            </div>
+          </section>
+        ) : active ? (
+          <section className="client-publication__progress" aria-live="polite">
+            <IndeterminateProgress
+              detail={publication.progressDetail || 'Preparing the client preview.'}
+              label={publication.progressPhase.replaceAll('_', ' ')}
+            />
+            {publication.totalItems > 0 ? (
+              <p>
+                {publication.completedItems} of {publication.totalItems} saved checkpoints complete.
+              </p>
+            ) : null}
+            <Button
+              disabled={cancelling || Boolean(publication.cancelRequestedAt)}
+              onClick={() => void cancel()}
+              type="button"
+              variant="secondary"
+            >
+              <Ban aria-hidden="true" size={16} />
+              {cancelling || publication.cancelRequestedAt
+                ? 'Stopping review'
+                : 'Cancel review creation'}
+            </Button>
+          </section>
+        ) : (
+          <form className="client-publication__form" onSubmit={publish}>
+            <PricingCalculator
+              manifest={workspace.buildManifest}
+              onApprovedQuoteChange={setApprovedQuote}
+            />
+            <div className="client-publication__fields">
+              <label>
+                <span>Client or business name</span>
+                <input
+                  maxLength={160}
+                  onChange={(event) => setClientName(event.target.value)}
+                  required
+                  value={clientName}
+                />
+              </label>
+              <label>
+                <span>Contact name</span>
+                <input
+                  maxLength={160}
+                  onChange={(event) => setContactName(event.target.value)}
+                  value={contactName}
+                />
+              </label>
+              <label>
+                <span>Client email</span>
+                <input
+                  autoComplete="email"
+                  maxLength={254}
+                  onChange={(event) => setClientEmail(event.target.value)}
+                  required
+                  type="email"
+                  value={clientEmail}
+                />
+              </label>
+              <label>
+                <span>Project name</span>
+                <input
+                  maxLength={200}
+                  onChange={(event) => setProjectName(event.target.value)}
+                  required
+                  value={projectName}
+                />
+              </label>
+              <label className="client-publication__notes">
+                <span>Internal handoff notes (optional)</span>
+                <textarea
+                  maxLength={4000}
+                  onChange={(event) => setHandoffNotes(event.target.value)}
+                  rows={3}
+                  value={handoffNotes}
+                />
+              </label>
+            </div>
+            {!canPublish ? (
+              <p className="form-message form-message--error" role="alert">
+                {completedBuild
+                  ? completedBuild.status === 'review_required'
+                    ? 'Resolve the build’s quality-review findings before creating a client review.'
+                    : 'Complete a full-site build with passed quality checks before creating a review.'
+                  : 'Build the complete prospect website before creating a client review.'}
+              </p>
+            ) : null}
+            {publication?.status === 'failed' && publication.errorSummary ? (
+              <p className="form-message form-message--error" role="alert">
+                {publication.errorSummary}
+              </p>
+            ) : null}
+            {message ? (
+              <p className="form-message form-message--error" role="alert">
+                {message}
+              </p>
+            ) : null}
+            {!approvedQuote ? (
+              <p className="form-message" role="status">
+                Approve the calculated quote before creating this review in Clientspace.
+              </p>
+            ) : null}
+            <Button disabled={!canPublish || !approvedQuote || submitting} type="submit">
+              <Globe2 aria-hidden="true" size={16} />
+              {submitting
+                ? 'Creating private review'
+                : publication?.status === 'failed'
+                  ? 'Retry private review'
+                  : 'Create private review link'}
+            </Button>
+            <small>
+              The protected worker creates a revocable capability. No preview or Clientspace secret
+              is exposed to this browser.
+            </small>
+          </form>
+        )}
+      </Card>
+      <ConfirmationDialog
+        confirmLabel="Revoke review link"
+        detail="Revoke this private client review link immediately? Anyone using the current link will lose access. You can create a new link afterward."
+        error={message}
+        isConfirming={cancelling}
+        onConfirm={() => void cancel()}
+        onOpenChange={(open) => {
+          if (!cancelling) {
+            setRevokeDialogOpen(open);
+            if (!open) setMessage('');
+          }
+        }}
+        open={revokeDialogOpen}
+        title="Revoke this client review?"
+      />
+    </>
   );
 }
 

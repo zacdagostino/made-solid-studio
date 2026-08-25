@@ -286,6 +286,10 @@ const clientUrlReleaseContractMigrationUrl = new URL(
   '../../supabase/migrations/20260825230000_client_url_release_contract_test_package.sql',
   import.meta.url,
 );
+const revocableReadyClientReviewsMigrationUrl = new URL(
+  '../../supabase/migrations/20260825250000_revocable_ready_client_reviews_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -2538,8 +2542,45 @@ test('registers the client URL release contract above immutable v21.5', async ()
       fallbackLedger.indexOf('localStoppableCodexTurnsPackage,'),
   );
   assert.match(app, /id: 'client-url-release-contract'/);
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.1`/);
-  assert.match(app, /seven-day revocable capability/);
+  assert.match(repository, /expire them after seven days/);
+});
+
+test('registers revocable ready client reviews above immutable v21.6', async () => {
+  const [migration, repository, app] = await Promise.all([
+    readFile(revocableReadyClientReviewsMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+  ]);
+  assert.match(migration, /base\.organization_id,\s*21\.7,/);
+  assert.match(migration, /made-solid-studio-builder-agent-v21\.7/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v21\.6'/,
+  );
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /not exists/i);
+  assert.match(migration, /"client-url-release-contract"/);
+  assert.match(migration, /Revocable ready client reviews test package:/);
+  assert.match(repository, /version: 21\.7,/);
+  assert.match(repository, /basePackageId: localClientUrlReleaseContractPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localRevocableReadyClientReviewsPackage,') <
+      packageLedger.indexOf('localClientUrlReleaseContractPackage,'),
+  );
+  const existingLedgerUpgrade = repository.slice(repository.indexOf('const missingPackages = ['));
+  assert.ok(
+    existingLedgerUpgrade.indexOf('localRevocableReadyClientReviewsPackage,') <
+      existingLedgerUpgrade.indexOf('localClientUrlReleaseContractPackage,'),
+  );
+  const fallbackLedger = repository.slice(repository.indexOf('} catch {'));
+  assert.ok(
+    fallbackLedger.indexOf('localRevocableReadyClientReviewsPackage,') <
+      fallbackLedger.indexOf('localClientUrlReleaseContractPackage,'),
+  );
+  assert.match(app, /id: 'client-url-release-contract'/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.2`/);
+  assert.match(app, /already-ready private client review can now be revoked immediately/);
 });
 
 test('ships one locally scoped Manifest V3 capture helper for Chrome and Brave', async () => {
