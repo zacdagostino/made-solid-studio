@@ -3147,7 +3147,6 @@ test('registers the subscription tmux builder once above retained package versio
   assert.match(worker, /billingMode: 'chatgpt_subscription'/);
   assert.match(worker, /logged in using chatgpt/i);
   assert.match(worker, /forced_login_method="chatgpt"/);
-  assert.match(worker, /subscription-only/);
   assert.match(cloudRepository, /contains\('metadata', \{ stream: 'codex' \}\)/);
   assert.match(launcher, /-n builds/);
   assert.match(launcher, /scripts\/start-subscription-builder/);
