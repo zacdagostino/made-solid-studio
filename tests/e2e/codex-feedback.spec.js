@@ -3228,6 +3228,46 @@ test('stacks editable queued messages with exact interrupt and delete actions', 
   ]);
 });
 
+test('turns Send into Stop while Codex works and preserves the current draft', async ({ page }) => {
+  let stoppedRequest;
+  let releaseStop;
+  const stopGate = new Promise((resolve) => {
+    releaseStop = resolve;
+  });
+  await page.route('**/__made-solid/codex-feedback', async (route) => {
+    stoppedRequest = route.request().postDataJSON();
+    await stopGate;
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({ status: 'stopping', detail: 'Codex is stopping the current turn.' }),
+    });
+  });
+  await page.goto('/?codexWorking=1#/settings');
+  await page.getByRole('button', { name: 'Codex is working' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  const draft = composer.getByLabel('Message to Codex');
+  await draft.fill('Keep this unsent follow-up intact.');
+
+  await expect(composer.getByRole('button', { name: 'Send message' })).toHaveCount(0);
+  const stopButton = composer.getByRole('button', { name: 'Stop Codex' });
+  await expect(stopButton).toBeEnabled();
+  await stopButton.click();
+  await expect(composer.getByRole('button', { name: 'Stopping Codex' })).toBeDisabled();
+  await expect(draft).toHaveValue('Keep this unsent follow-up intact.');
+  expect(stoppedRequest).toEqual({
+    action: 'stop-active-turn',
+    threadId: 'thread-1',
+    threadScope: 'universal',
+  });
+  releaseStop();
+  await expect(composer.getByRole('button', { name: 'Stop Codex' })).toBeEnabled();
+  await expect(draft).toHaveValue('Keep this unsent follow-up intact.');
+  await expect
+    .poll(() => composer.evaluate((element) => element.scrollWidth - element.clientWidth))
+    .toBeLessThanOrEqual(1);
+});
+
 test('shows real Codex working state, queued work, and a live elapsed timer', async ({ page }) => {
   await page.goto('/?codexWorking=1&codexEvidenceNarrative=1');
   await page.getByRole('button', { name: 'Codex is working' }).click();
@@ -3235,6 +3275,9 @@ test('shows real Codex working state, queued work, and a live elapsed timer', as
   const workingState = composer.locator('.codex-working-status');
   const chatLog = composer.getByRole('log', { name: 'Codex chat log' });
   const activityRows = chatLog.locator('.codex-chat-activity');
+
+  await expect(composer.getByRole('button', { name: 'Stop Codex' })).toBeEnabled();
+  await expect(composer.getByRole('button', { name: 'Send message' })).toHaveCount(0);
 
   await expect(activityRows).toHaveCount(4);
   await expect(chatLog.locator('.codex-chat-activity-boundary')).toContainText(

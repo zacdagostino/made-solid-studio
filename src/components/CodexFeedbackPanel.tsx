@@ -1225,6 +1225,7 @@ export function CodexFeedbackPanel({
   const [queueActionId, setQueueActionId] = useState('');
   const [queueActionError, setQueueActionError] = useState('');
   const [deleteQueueId, setDeleteQueueId] = useState('');
+  const [isStoppingTurn, setIsStoppingTurn] = useState(false);
   const [isCreatingThread, setIsCreatingThread] = useState(false);
   const [conversationTransition, setConversationTransition] = useState<ConversationTransition>();
   const [isResumingThread, setIsResumingThread] = useState(false);
@@ -2619,24 +2620,27 @@ export function CodexFeedbackPanel({
         message.phase === 'commentary' &&
         (!status.thread?.activeTurnId || message.turnId === status.thread.activeTurnId),
     ) === true;
-  const workingTitle = interruptingCount
-    ? 'Stopping the current turn'
-    : activeFlags.includes('waitingOnApproval')
-      ? 'Waiting for approval'
-      : activeFlags.includes('waitingOnUserInput')
-        ? 'Waiting for your input'
-        : hasActiveProgressUpdate
-          ? 'Working through the next step'
-          : 'Getting oriented';
-  const workingDetail = interruptingCount
-    ? `${interruptingCount} ${interruptingCount === 1 ? 'message is' : 'messages are'} lined up next`
-    : activeFlags.includes('waitingOnApproval')
-      ? 'Codex will continue as soon as the requested approval is available.'
-      : activeFlags.includes('waitingOnUserInput')
-        ? 'Codex needs your response before it can continue safely.'
-        : hasActiveProgressUpdate
-          ? 'The latest progress is above. Another update will appear after the next verified step.'
-          : 'Reading your request and workspace context before acting.';
+  const workingTitle =
+    isStoppingTurn || interruptingCount
+      ? 'Stopping the current turn'
+      : activeFlags.includes('waitingOnApproval')
+        ? 'Waiting for approval'
+        : activeFlags.includes('waitingOnUserInput')
+          ? 'Waiting for your input'
+          : hasActiveProgressUpdate
+            ? 'Working through the next step'
+            : 'Getting oriented';
+  const workingDetail = isStoppingTurn
+    ? 'Sending the stop request for this conversation and its active agent team.'
+    : interruptingCount
+      ? `${interruptingCount} ${interruptingCount === 1 ? 'message is' : 'messages are'} lined up next`
+      : activeFlags.includes('waitingOnApproval')
+        ? 'Codex will continue as soon as the requested approval is available.'
+        : activeFlags.includes('waitingOnUserInput')
+          ? 'Codex needs your response before it can continue safely.'
+          : hasActiveProgressUpdate
+            ? 'The latest progress is above. Another update will appear after the next verified step.'
+            : 'Reading your request and workspace context before acting.';
 
   useEffect(() => {
     if (!isCodexWorking && !anyConversationWorking) return;
@@ -3423,6 +3427,31 @@ export function CodexFeedbackPanel({
       setPhase('compose');
       setError(cause instanceof Error ? cause.message : 'Codex could not accept this feedback.');
       if (!preserveDraft) window.requestAnimationFrame(() => composerTextareaRef.current?.focus());
+    }
+  };
+
+  const stopActiveTurn = async () => {
+    if (!selectedThread?.id || isStoppingTurn) return;
+    setIsStoppingTurn(true);
+    setError(undefined);
+    try {
+      const response = await studioRuntimeFetch(feedbackEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          action: 'stop-active-turn',
+          threadId: selectedThread.id,
+          threadScope: selectedThread.scope || (workspaceDirectory ? 'client' : 'universal'),
+          workspace: workspaceDirectory,
+        }),
+      });
+      const result = (await response.json()) as { detail?: string };
+      if (!response.ok) throw new Error(result.detail || 'Codex could not stop this turn.');
+      await refreshStatus(selectedThread.id, selectedThread.scope);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Codex could not stop this turn.');
+    } finally {
+      setIsStoppingTurn(false);
     }
   };
 
@@ -4688,23 +4717,29 @@ export function CodexFeedbackPanel({
                   label={
                     phase === 'sending-chat'
                       ? 'Sending message'
-                      : isCodexWorking
-                        ? 'Queue message'
-                        : 'Send message'
+                      : isStoppingTurn
+                        ? 'Stopping Codex'
+                        : isCodexWorking
+                          ? 'Stop Codex'
+                          : 'Send message'
                   }
                   disabled={
                     phase === 'sending-chat' ||
                     Boolean(conversationTransition) ||
-                    isPreparingPhoto ||
+                    isStoppingTurn ||
                     !status?.thread ||
-                    !selectedModel ||
-                    (!prompt.trim() && draftAttachments.length === 0)
+                    (!isCodexWorking &&
+                      (isPreparingPhoto ||
+                        !selectedModel ||
+                        (!prompt.trim() && draftAttachments.length === 0)))
                   }
-                  onClick={() => void sendFeedback()}
-                  variant="primary"
+                  onClick={() => void (isCodexWorking ? stopActiveTurn() : sendFeedback())}
+                  variant={isCodexWorking ? 'danger' : 'primary'}
                 >
-                  {phase === 'sending-chat' ? (
+                  {phase === 'sending-chat' || isStoppingTurn ? (
                     <LoaderCircle aria-hidden="true" className="is-spinning" size={18} />
+                  ) : isCodexWorking ? (
+                    <Square aria-hidden="true" fill="currentColor" size={16} />
                   ) : (
                     <Send aria-hidden="true" size={18} />
                   )}

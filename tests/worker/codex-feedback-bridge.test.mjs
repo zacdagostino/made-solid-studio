@@ -1546,6 +1546,49 @@ test('edits a queued message and interrupts the active turn from that exact queu
   assert.match(state.turns[0].input[0].text, /Send an update before a long tool run/);
 });
 
+test('stops the active supervisor and agent team without recovering the app-owned turn', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-stop-'));
+  const state = {
+    busy: false,
+    turns: [],
+    interrupts: [],
+    agentThreads: [
+      {
+        id: 'agent-active',
+        parentThreadId: 'thread-1',
+        cwd: '/workspaces/siteforge-os',
+        status: { type: 'active', activeFlags: ['turn'] },
+        turns: [{ id: 'agent-turn-active', status: 'inProgress', items: [] }],
+      },
+    ],
+  };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+  await bridge.enqueue({
+    prompt: 'Keep working until I stop this turn.',
+    model: 'gpt-text-only',
+    effort: 'medium',
+    threadId: 'thread-1',
+  });
+  await new Promise((resolveWait) => setTimeout(resolveWait, 30));
+
+  const stopped = await bridge.stopActiveTurn({ threadId: 'thread-1' });
+  assert.equal(stopped.status, 'stopping');
+  assert.deepEqual(state.interrupts, [
+    { threadId: 'thread-1', turnId: 'turn-1' },
+    { threadId: 'agent-active', turnId: 'agent-turn-active' },
+  ]);
+  const [record] = await bridge.readRecords('interrupted');
+  assert.equal(record.manuallyStopped, true);
+  assert.equal(record.threadId, 'thread-1');
+
+  await bridge.maintain();
+  assert.equal(state.turns.length, 1);
+});
+
 test('deletes only the selected queued message before it can be dispatched', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-delete-queued-'));
   const state = { busy: true, turns: [], interrupts: [] };

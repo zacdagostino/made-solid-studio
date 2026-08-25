@@ -1534,17 +1534,19 @@ export function localWorkspacePlugin() {
                   ? await bridge.deleteQueued(input.id, input)
                   : input.action === 'interrupt-queued'
                     ? await bridge.interruptQueued(input.id, input)
-                    : input.action === 'delete-empty-thread'
-                      ? await bridge.deleteEmptyThread(input)
-                      : input.action === 'temporary-question'
-                        ? await bridge.temporaryQuestion(input)
-                        : input.action === 'new-thread'
-                          ? await bridge.createThread(input)
-                          : input.action === 'branch-thread'
-                            ? await bridge.forkThread(input)
-                            : input.action === 'continue-interrupted-thread'
-                              ? await bridge.continueInterruptedThread(input)
-                              : await bridge.enqueue(input);
+                    : input.action === 'stop-active-turn'
+                      ? await bridge.stopActiveTurn(input)
+                      : input.action === 'delete-empty-thread'
+                        ? await bridge.deleteEmptyThread(input)
+                        : input.action === 'temporary-question'
+                          ? await bridge.temporaryQuestion(input)
+                          : input.action === 'new-thread'
+                            ? await bridge.createThread(input)
+                            : input.action === 'branch-thread'
+                              ? await bridge.forkThread(input)
+                              : input.action === 'continue-interrupted-thread'
+                                ? await bridge.continueInterruptedThread(input)
+                                : await bridge.enqueue(input);
           sendJson(response, 202, result);
         } catch (error) {
           sendJson(response, 400, {

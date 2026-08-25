@@ -418,6 +418,7 @@ const localConciseCodexReadingPackageId = 'agent-package-local-v21-2-concise-cod
 const localDevelopmentReleaseUrlsPackageId = 'agent-package-local-v21-3-development-release-urls';
 const localResilientLiveCodexBranchingPackageId =
   'agent-package-local-v21-4-resilient-live-codex-branching';
+const localStoppableCodexTurnsPackageId = 'agent-package-local-v21-5-stoppable-codex-turns';
 
 type StoreName =
   | 'activities'
@@ -3341,10 +3342,28 @@ export class SiteforgeRepository {
         'Prevents valid long-running branches from timing out early and makes an uncertain interrupted response safe to verify before retrying.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localStoppableCodexTurnsPackage: AgentPackage = {
+      ...localResilientLiveCodexBranchingPackage,
+      id: localStoppableCodexTurnsPackageId,
+      version: 21.5,
+      basePackageId: localResilientLiveCodexBranchingPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v21.5',
+      contractAddendum:
+        'While the selected Studio Codex conversation is working, its primary composer action becomes an accessible Stop Codex control. Stopping cooperatively interrupts the exact active supervisor turn and any active attached agents, preserves the unsent draft, and records the app-owned turn as intentionally interrupted so maintenance cannot restart it.',
+      instructionsAddendum:
+        'Derive the primary composer action from the selected conversation lifecycle. Show Send only while idle and Stop Codex with a square icon while working; expose an explicit disabled Stopping Codex state while the request is pending. Send the exact selected thread and workspace scope to a protected stop-active-turn bridge action, interrupt its active supervisor and discoverable active descendants, and mark its running app-owned records interrupted with a manual-stop marker. Never clear or submit the current draft when stopping, never auto-recover a manually stopped turn, and preserve visible focus, error feedback, and 44px touch targets.',
+      summary:
+        'Stoppable Codex turns test package: changes Send into Stop during active work and safely interrupts the selected supervisor and agent team without losing the draft.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Gives reviewers the familiar immediate stop control they expect in chat while keeping cancellation scoped, observable, and safe from automatic recovery.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localStoppableCodexTurnsPackage,
           localResilientLiveCodexBranchingPackage,
           localDevelopmentReleaseUrlsPackage,
           localConciseCodexReadingPackage,
@@ -3507,6 +3526,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localStoppableCodexTurnsPackage,
           localResilientLiveCodexBranchingPackage,
           localDevelopmentReleaseUrlsPackage,
           localConciseCodexReadingPackage,
@@ -3672,6 +3692,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localStoppableCodexTurnsPackage,
             localResilientLiveCodexBranchingPackage,
             localDevelopmentReleaseUrlsPackage,
             localConciseCodexReadingPackage,

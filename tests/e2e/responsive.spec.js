@@ -3799,8 +3799,9 @@ test('displays the newest test package above retained package versions', async (
 
   const packagePicker = page.getByLabel('Test agent package');
   await expect(packagePicker).toHaveValue(
-    'agent-package-local-v21-4-resilient-live-codex-branching',
+    'agent-package-local-v21-5-stoppable-codex-turns',
   );
+  await expect(packagePicker).toContainText('v21.5 · Approved test');
   await expect(packagePicker).toContainText('v21.4 · Approved test');
   await expect(packagePicker).toContainText('v21.3 · Approved test');
   await expect(packagePicker).toContainText('v21.2 · Approved test');
@@ -3961,6 +3962,7 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v21.5', 'Stoppable Codex turns'],
     ['v21.4', 'Resilient live Codex branching'],
     ['v21.3', 'Development release URLs'],
     ['v21.2', 'Concise Codex reading'],

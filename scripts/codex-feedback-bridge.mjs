@@ -1759,7 +1759,7 @@ export class CodexFeedbackBridge {
     }
   }
 
-  async interruptActiveTurn(threadId, scopeInput = {}) {
+  async interruptActiveTurn(threadId, scopeInput = {}, { includeDescendants = false } = {}) {
     const scope = this.workspaceScope(scopeInput);
     const client = await this.connect();
     try {
@@ -1775,13 +1775,85 @@ export class CodexFeedbackBridge {
         threadId: thread.id,
         includeTurns: true,
       });
+      const activeTurns = [];
       const turn = activeTurn(threadDetail?.thread);
-      if (!turn) return false;
-      await client.request('turn/interrupt', { threadId: thread.id, turnId: turn.id });
-      return true;
+      if (turn) activeTurns.push({ threadId: thread.id, turnId: turn.id });
+      if (includeDescendants) {
+        try {
+          const descendants = await client.request('thread/list', {
+            limit: maximumAgentThreads,
+            ancestorThreadId: thread.id,
+            sortKey: 'created_at',
+            sortDirection: 'asc',
+            sourceKinds: [
+              'subAgent',
+              'subAgentReview',
+              'subAgentCompact',
+              'subAgentThreadSpawn',
+              'subAgentOther',
+            ],
+          });
+          for (const descendant of (Array.isArray(descendants.data) ? descendants.data : []).slice(
+            0,
+            maximumAgentThreads,
+          )) {
+            const detail = await client.request('thread/read', {
+              threadId: descendant.id,
+              includeTurns: true,
+            });
+            const descendantTurn = activeTurn(detail?.thread);
+            if (descendantTurn) {
+              activeTurns.push({ threadId: descendant.id, turnId: descendantTurn.id });
+            }
+          }
+        } catch {
+          // Stopping the scoped supervisor still succeeds when descendant discovery is unavailable.
+        }
+      }
+      let interrupted = false;
+      for (const active of activeTurns) {
+        try {
+          await client.request('turn/interrupt', active);
+          interrupted = true;
+        } catch (error) {
+          if (String(active.threadId) === String(thread.id)) throw error;
+        }
+      }
+      return interrupted;
     } finally {
       client.close();
     }
+  }
+
+  async stopActiveTurn(input = {}) {
+    const threadId = typeof input.threadId === 'string' ? input.threadId.trim() : '';
+    if (!/^[A-Za-z0-9-]{1,100}$/.test(threadId)) {
+      throw new Error('Choose a valid active conversation to stop.');
+    }
+    const interrupted = await this.interruptActiveTurn(threadId, input, {
+      includeDescendants: true,
+    });
+    if (interrupted) {
+      const activeRecords = (await this.readRecords()).filter(
+        (record) =>
+          ['running', 'recovering'].includes(record.status) &&
+          String(record.threadId || '') === threadId,
+      );
+      await Promise.all(
+        activeRecords.map((record) =>
+          this.updateRecordStatus(record, 'interrupted', {
+            interruptedAt: new Date().toISOString(),
+            manuallyStopped: true,
+          }),
+        ),
+      );
+    }
+    return {
+      status: interrupted ? 'stopping' : 'stopped',
+      detail: interrupted
+        ? 'Codex is stopping the current turn.'
+        : 'That Codex turn had already stopped.',
+    };
   }
 
   async updateQueued(id, input) {
