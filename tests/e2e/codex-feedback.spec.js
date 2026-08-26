@@ -4118,34 +4118,55 @@ test('keeps Codex above a separately served prospect development preview', async
 test('separates the current client chats from universal Studio chats', async ({ page }) => {
   await page.unroute('**/__made-solid/codex-status*');
   let newThreadRequest;
+  const requestedWorkspaces = [];
   await page.route('**/__made-solid/codex-status*', async (route) => {
     const requestUrl = new URL(route.request().url());
-    expect(requestUrl.searchParams.get('workspace')).toBe('lece-group');
+    const workspace = requestUrl.searchParams.get('workspace');
+    requestedWorkspaces.push(workspace);
+    const clientScoped = workspace === 'lece-group';
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
         status: 'ready',
-        detail: 'Connected to the client website editor.',
-        thread: {
-          id: 'client-thread',
-          name: 'Homepage revisions',
-          status: 'idle',
-          scope: 'client',
-        },
-        threads: [
-          {
-            id: 'client-thread',
-            name: 'Homepage revisions',
-            status: 'idle',
-            scope: 'client',
-          },
-          {
-            id: 'universal-thread',
-            name: 'Studio planning',
-            status: 'idle',
-            scope: 'universal',
-          },
-        ],
+        detail: clientScoped
+          ? 'Connected to the client website editor.'
+          : 'Connected to Universal Studio.',
+        thread: clientScoped
+          ? {
+              id: 'client-thread',
+              name: 'Homepage revisions',
+              status: 'idle',
+              scope: 'client',
+            }
+          : {
+              id: 'universal-thread',
+              name: 'Studio planning',
+              status: 'idle',
+              scope: 'universal',
+            },
+        threads: clientScoped
+          ? [
+              {
+                id: 'client-thread',
+                name: 'Homepage revisions',
+                status: 'idle',
+                scope: 'client',
+              },
+              {
+                id: 'universal-thread',
+                name: 'Studio planning',
+                status: 'idle',
+                scope: 'universal',
+              },
+            ]
+          : [
+              {
+                id: 'universal-thread',
+                name: 'Studio planning',
+                status: 'idle',
+                scope: 'universal',
+              },
+            ],
         messages: [],
         activities: [],
         agents: [],
@@ -4187,7 +4208,7 @@ test('separates the current client chats from universal Studio chats', async ({ 
   const dialog = page.getByRole('dialog', { name: 'Lece Group website editor' });
   await expect(dialog.getByText('Editing only Lece Group')).toBeVisible();
   await dialog.getByRole('button', { name: 'Conversation' }).click();
-  await expect(dialog.getByRole('group', { name: 'This client' })).toContainText(
+  await expect(dialog.getByRole('group', { name: 'This client · Lece Group' })).toContainText(
     'Homepage revisions',
   );
   await expect(dialog.getByRole('group', { name: 'Universal Studio' })).toContainText(
@@ -4204,6 +4225,19 @@ test('separates the current client chats from universal Studio chats', async ({ 
   const accessibility = await new AxeBuilder({ page }).include('.codex-chat-dialog').analyze();
   expect(accessibility.violations).toEqual([]);
   await expect(dialog).toHaveScreenshot('codex-client-scoped-chat.png');
+
+  await dialog.getByRole('button', { name: 'Close Codex chat' }).click();
+  await page.getByRole('link', { name: 'Back to Studio' }).click();
+  await expect(page).toHaveURL(/\/#\/prospects$/);
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const universalDialog = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await expect(universalDialog).toBeVisible();
+  await universalDialog.getByRole('button', { name: 'Conversation' }).click();
+  await expect(universalDialog.getByRole('group', { name: 'Studio conversations' })).toContainText(
+    'Studio planning',
+  );
+  expect(requestedWorkspaces).toContain('lece-group');
+  expect(requestedWorkspaces).toContain(null);
 });
 
 test('branches a completed Codex reply into a separately selected conversation', async ({

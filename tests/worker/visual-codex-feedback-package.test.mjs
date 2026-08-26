@@ -302,6 +302,10 @@ const resilientDevelopmentStudioRuntimeMigrationUrl = new URL(
   '../../supabase/migrations/20260825280000_resilient_development_studio_runtime_test_package.sql',
   import.meta.url,
 );
+const focusedProspectPreviewModesMigrationUrl = new URL(
+  '../../supabase/migrations/20260826000000_focused_prospect_preview_modes_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -374,9 +378,9 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 91);
-  assert.match(app, /build checks can no longer erase the live development module cache/);
-  assert.match(app, /shows a safe reload screen instead of a white page/);
+  assert.equal(Number(revision[1]), 92);
+  assert.match(app, /Fit, exact Tablet and Desktop viewports/);
+  assert.match(app, /reset to universal scope after leaving website editing/);
   assert.match(app, /shows chats for that client plus clearly labelled universal Studio chats/);
   assert.match(app, /gives only the authenticated Studio owner a disclosed, reversible switch/);
   assert.match(app, /saved Natural or Literal interpretation and three speeds/);
@@ -2633,7 +2637,7 @@ test('registers reliable Codex Stop state above immutable v21.7', async () => {
       fallbackLedger.indexOf('localRevocableReadyClientReviewsPackage,'),
   );
   assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.91`/);
-  assert.match(app, /build checks can no longer erase the live development module cache/);
+  assert.match(app, /Fit, exact Tablet and Desktop viewports/);
   assert.match(component, /statusRequestSequenceRef/);
   assert.match(component, /key="stop-codex"/);
   assert.match(component, /key="send-codex"/);
@@ -2719,8 +2723,47 @@ test('registers the resilient development Studio runtime above immutable v21.9',
       fallbackLedger.indexOf('localDedicatedClientWebsiteEditorPackage,'),
   );
   assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.91`/);
-  assert.match(app, /build checks can no longer erase the live development module cache/);
-  assert.match(app, /shows a safe reload screen instead of a white page/);
+  assert.match(repository, /build verification cannot remove/);
+  assert.match(repository, /Never leave a blank document as the failure state/);
+});
+
+test('registers focused prospect preview modes above immutable v22.0', async () => {
+  const [migration, repository, app] = await Promise.all([
+    readFile(focusedProspectPreviewModesMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+  ]);
+  assert.match(migration, /base\.organization_id,\s*22\.1,/);
+  assert.match(migration, /made-solid-studio-builder-agent-v22\.1/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v22\.0'/,
+  );
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /not exists/i);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.doesNotMatch(migration, /"visual-codex-feedback",/);
+  assert.match(migration, /Focused prospect preview modes test package:/);
+  assert.match(repository, /version: 22\.1,/);
+  assert.match(repository, /basePackageId: localResilientDevelopmentStudioRuntimePackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localFocusedProspectPreviewModesPackage,') <
+      packageLedger.indexOf('localResilientDevelopmentStudioRuntimePackage,'),
+  );
+  const existingLedgerUpgrade = repository.slice(repository.indexOf('const missingPackages = ['));
+  assert.ok(
+    existingLedgerUpgrade.indexOf('localFocusedProspectPreviewModesPackage,') <
+      existingLedgerUpgrade.indexOf('localResilientDevelopmentStudioRuntimePackage,'),
+  );
+  const fallbackLedger = repository.slice(repository.indexOf('} catch {'));
+  assert.ok(
+    fallbackLedger.indexOf('localFocusedProspectPreviewModesPackage,') <
+      fallbackLedger.indexOf('localResilientDevelopmentStudioRuntimePackage,'),
+  );
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.92`/);
+  assert.match(app, /Fit, exact Tablet and Desktop viewports/);
+  assert.match(app, /reset to universal scope after leaving website editing/);
 });
 
 test('ships one locally scoped Manifest V3 capture helper for Chrome and Brave', async () => {

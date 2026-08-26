@@ -770,6 +770,13 @@ html[data-codex-panel='embedded'] body #root {
   line-height: 1.2;
   text-transform: uppercase;
 }
+.codex-conversation-picker__empty {
+  margin: 0;
+  padding: var(--space-2);
+  color: var(--codex-muted);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
 .codex-thread-scope {
   display: inline-flex;
   margin-right: 5px;
@@ -12154,12 +12161,34 @@ a:focus-visible {
 .focused-website-editor__switcher {
   display: none;
 }
+.focused-website-editor__controls {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.focused-website-editor__viewports {
+  min-width: 0;
+}
+.focused-website-editor__viewports .button {
+  min-width: 0;
+}
 .focused-website-editor__workspace {
   display: grid;
   height: 100%;
   min-width: 0;
   min-height: 0;
   grid-template-columns: minmax(0, 1.65fr) minmax(360px, 0.85fr);
+}
+.focused-website-editor.is-full-preview .focused-website-editor__workspace {
+  grid-template-columns: minmax(0, 1fr);
+}
+.focused-website-editor.is-full-preview .focused-website-editor__codex {
+  display: none;
+}
+.focused-website-editor.is-full-preview .focused-website-editor__switcher {
+  display: none;
 }
 .focused-website-editor__preview,
 .focused-website-editor__codex {
@@ -12189,17 +12218,46 @@ a:focus-visible {
 .client-development-editor--focused .client-development-editor__scope {
   padding: var(--space-2) var(--space-3);
 }
-.client-development-editor--focused .client-development-editor__surface,
-.client-development-editor--focused .client-development-editor__surface iframe {
+.client-development-editor--focused .client-development-editor__surface {
   height: 100%;
   min-height: 0;
 }
 .client-development-editor--focused .client-development-editor__surface {
   flex: 1 1 auto;
 }
-.client-development-editor--focused .client-development-editor__surface iframe {
+.client-development-editor__viewport {
   position: absolute;
   inset: 0;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  align-items: flex-start;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--color-canvas);
+}
+.client-development-editor__viewport-frame {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  flex: 0 0 auto;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 0 0 1px var(--color-line);
+  transform-origin: top center;
+}
+.client-development-editor__viewport-frame iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.client-development-editor__viewport.is-fit .client-development-editor__viewport-frame {
+  box-shadow: none;
+}
+.client-development-editor--focused.is-full-preview .client-development-editor__header,
+.client-development-editor--focused.is-full-preview .client-development-editor__scope {
+  display: none;
 }
 .focused-website-editor__codex .codex-chat-dialog.is-page {
   position: absolute;
@@ -12220,9 +12278,12 @@ a:focus-visible {
   .focused-website-editor__identity small {
     display: none;
   }
+  .focused-website-editor__viewports .button {
+    padding-inline: var(--space-2);
+  }
 }
 
-@media (max-width: 700px) {
+@media (max-width: 700px), (max-height: 500px) and (orientation: landscape) {
   .focused-website-editor__toolbar {
     align-items: stretch;
     flex-direction: column;
@@ -12244,8 +12305,23 @@ a:focus-visible {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .focused-website-editor__controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 44px;
+  }
+  .focused-website-editor__viewports {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .focused-website-editor__viewports .button {
+    width: 100%;
+    padding-inline: var(--space-1);
+  }
   .focused-website-editor__switcher .button {
     width: 100%;
+  }
+  .focused-website-editor__switcher {
+    grid-column: 1 / -1;
   }
   .focused-website-editor__workspace {
     display: block;
@@ -12263,7 +12339,15 @@ a:focus-visible {
   .focused-website-editor__codex {
     border-left: 0;
   }
+  .focused-website-editor.is-full-preview .focused-website-editor__preview {
+    display: block;
+  }
   .client-development-editor--focused .client-development-editor__header {
+    display: none;
+  }
+}
+@media (max-width: 360px) {
+  .focused-website-editor__viewports .button svg {
     display: none;
   }
 }

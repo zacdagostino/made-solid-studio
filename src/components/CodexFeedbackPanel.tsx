@@ -3852,11 +3852,13 @@ export function CodexFeedbackPanel({
                       ? [
                           {
                             icon: <PanelsTopLeft aria-hidden="true" size={14} />,
-                            label: 'This client',
+                            emptyLabel: 'No client chats yet',
+                            label: `This client · ${clientWorkspaceLabel}`,
                             threads: clientThreads,
                           },
                           {
                             icon: <Globe2 aria-hidden="true" size={14} />,
+                            emptyLabel: 'No Universal Studio chats yet',
                             label: 'Universal Studio',
                             threads: universalThreads,
                           },
@@ -3864,18 +3866,19 @@ export function CodexFeedbackPanel({
                       : [
                           {
                             icon: <Globe2 aria-hidden="true" size={14} />,
+                            emptyLabel: 'No Studio conversations yet',
                             label: 'Studio conversations',
                             threads: universalThreads,
                           },
                         ]
-                    ).map((group) =>
-                      group.threads.length ? (
-                        <div aria-label={group.label} key={group.label} role="group">
-                          <p className="codex-conversation-picker__group-label" role="presentation">
-                            {group.icon}
-                            {group.label}
-                          </p>
-                          {group.threads.map((thread) => {
+                    ).map((group) => (
+                      <div aria-label={group.label} key={group.label} role="group">
+                        <p className="codex-conversation-picker__group-label" role="presentation">
+                          {group.icon}
+                          {group.label}
+                        </p>
+                        {group.threads.length ? (
+                          group.threads.map((thread) => {
                             const selected = thread.id === (selectedThreadId || status?.thread?.id);
                             const lastUsedAt = threadLastUsedAt(thread);
                             const usedAt = timestampMilliseconds(lastUsedAt);
@@ -3926,10 +3929,14 @@ export function CodexFeedbackPanel({
                                 </span>
                               </Button>
                             );
-                          })}
-                        </div>
-                      ) : null,
-                    )}
+                          })
+                        ) : (
+                          <p className="codex-conversation-picker__empty" role="presentation">
+                            {group.emptyLabel}
+                          </p>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 ) : null}
               </div>

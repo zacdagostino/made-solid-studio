@@ -3361,7 +3361,7 @@ test('keeps the build manifest package separate from the Agent Studio test contr
   await expect(testingBehaviour).toContainText('proposition before supporting media');
   await expect(testingBehaviour).toContainText('Behaviour revision · v7.19');
   await expect(testingBehaviour).toContainText('explicit preview, production service');
-  await expect(testingBehaviour).toContainText('Behaviour revision · v7.91');
+  await expect(testingBehaviour).toContainText('Behaviour revision · v7.92');
   await expect(testingBehaviour).toContainText(
     'completed prospect builds now lead with their current outcome and repair action',
   );
@@ -3813,8 +3813,9 @@ test('displays the newest test package above retained package versions', async (
 
   const packagePicker = page.getByLabel('Test agent package');
   await expect(packagePicker).toHaveValue(
-    'agent-package-local-v22-0-resilient-development-studio-runtime',
+    'agent-package-local-v22-1-focused-prospect-preview-modes',
   );
+  await expect(packagePicker).toContainText('v22.1 · Approved test');
   await expect(packagePicker).toContainText('v22.0 · Approved test');
   await expect(packagePicker).toContainText('v21.9 · Approved test');
   await expect(packagePicker).toContainText('v21.8 · Approved test');
@@ -3981,6 +3982,7 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v22.1', 'Focused prospect preview modes'],
     ['v22.0', 'Resilient development Studio runtime'],
     ['v21.9', 'Dedicated client website editor'],
     ['v21.8', 'Reliable Codex chat state'],

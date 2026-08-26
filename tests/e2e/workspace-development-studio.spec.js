@@ -127,13 +127,50 @@ test('opens the exact client preview and scoped Codex in a dedicated editor tab'
   await expect(page.getByTestId('client-development-editor')).toBeVisible();
 
   const editor = page.getByTestId('focused-website-editor');
+  const previewWidth = async () => {
+    const previewFrame = page.frames().find((frame) => frame.url().startsWith(clientPreviewUrl));
+    return previewFrame?.evaluate(() => window.innerWidth);
+  };
+  await page.getByRole('button', { name: 'Tablet' }).click();
+  await expect(page.getByRole('button', { name: 'Tablet' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect.poll(previewWidth).toBe(768);
+  await page.getByRole('button', { name: 'Desktop' }).click();
+  await expect(page.getByRole('button', { name: 'Desktop' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect.poll(previewWidth).toBe(1440);
+  await page.getByRole('button', { name: 'Enter full preview' }).click();
+  await expect(editor).toHaveClass(/is-full-preview/);
+  await expect(page.getByLabel('Demo Local Services Codex chat')).toBeHidden();
+  await expect(
+    page.getByTestId('client-development-editor').getByText('Editing only Demo Local Services'),
+  ).toBeHidden();
+  await expect(editor).toHaveScreenshot('workspace-development-full-desktop-preview.png');
+  await page.getByRole('button', { name: 'Exit full preview' }).click();
+  await page.getByRole('button', { name: 'Fit' }).click();
   await expect(editor).toHaveScreenshot('workspace-development-focused-editor.png');
 
   if (testInfo.project.name === 'mobile') {
     await page.getByRole('button', { name: 'Codex' }).click();
     await expect(page.getByLabel('Demo Local Services Codex chat')).toBeVisible();
-    await page.getByRole('button', { name: 'Preview' }).click();
+    await page.getByRole('button', { name: 'Preview', exact: true }).click();
+    await page.setViewportSize({ width: 812, height: 375 });
+    await page.getByRole('button', { name: 'Desktop' }).click();
+    await expect.poll(previewWidth).toBe(1440);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      ),
+    ).toBe(true);
+    await expect(editor).toHaveScreenshot(
+      'workspace-development-focused-editor-rotated-desktop.png',
+    );
     await page.setViewportSize({ width: 320, height: 568 });
+    await page.getByRole('button', { name: 'Fit' }).click();
     await expect(editor).toBeVisible();
     expect(
       await page.evaluate(

@@ -428,6 +428,8 @@ const localDedicatedClientWebsiteEditorPackageId =
   'agent-package-local-v21-9-dedicated-client-website-editor';
 const localResilientDevelopmentStudioRuntimePackageId =
   'agent-package-local-v22-0-resilient-development-studio-runtime';
+const localFocusedProspectPreviewModesPackageId =
+  'agent-package-local-v22-1-focused-prospect-preview-modes';
 
 type StoreName =
   | 'activities'
@@ -3453,10 +3455,28 @@ export class SiteforgeRepository {
         'Separates verification from the live module graph and adds automatic plus user-visible recovery for development Studio startup failures.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localFocusedProspectPreviewModesPackage: AgentPackage = {
+      ...localResilientDevelopmentStudioRuntimePackage,
+      id: localFocusedProspectPreviewModesPackageId,
+      version: 22.1,
+      basePackageId: localResilientDevelopmentStudioRuntimePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v22.1',
+      contractAddendum:
+        'The focused prospect website editor provides fit, exact 768px tablet, and exact 1440px desktop preview modes plus an in-app full-preview mode. Fixed viewports scale inside the available Studio surface without changing the website browsing context width or creating page overflow. Client-scoped Codex conversations and Universal Studio conversations remain visibly grouped, and leaving the website editing context restores the universal chat scope.',
+      instructionsAddendum:
+        'Keep preview viewport selection separate from the generated website source. Render tablet and desktop modes at their exact CSS viewport widths and scale the visual surface down when the device is narrower, including after phone rotation. Full preview hides secondary editor chrome and the Codex column without entering browser Fullscreen or losing the selected mode. Label client conversation groups with the selected client, keep the Universal Studio group visible even when either group is empty, reject other-client conversations server-side, and remove the client workspace parameter whenever the user leaves the website editing or preview route.',
+      summary:
+        'Focused prospect preview modes test package: adds fit, tablet, desktop, and full-preview views while making client and universal chat scope explicit and route-bound.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes responsive prospect review practical from phone, tablet, and desktop while keeping website-specific Codex work visibly separated from universal Studio work.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localFocusedProspectPreviewModesPackage,
           localResilientDevelopmentStudioRuntimePackage,
           localDedicatedClientWebsiteEditorPackage,
           localReliableCodexStopStatePackage,
@@ -3625,6 +3645,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localFocusedProspectPreviewModesPackage,
           localResilientDevelopmentStudioRuntimePackage,
           localDedicatedClientWebsiteEditorPackage,
           localReliableCodexStopStatePackage,
@@ -3796,6 +3817,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localFocusedProspectPreviewModesPackage,
             localResilientDevelopmentStudioRuntimePackage,
             localDedicatedClientWebsiteEditorPackage,
             localReliableCodexStopStatePackage,

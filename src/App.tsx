@@ -33,6 +33,9 @@ import {
   Laptop,
   LoaderCircle,
   Mail,
+  Maximize2,
+  Minimize2,
+  Monitor,
   PackageCheck,
   Play,
   Plus,
@@ -44,6 +47,7 @@ import {
   ShieldAlert,
   Sparkles,
   SlidersHorizontal,
+  Tablet,
   Trash2,
   UsersRound,
   WalletCards,
@@ -8915,9 +8919,9 @@ function BuilderRunPanel({
             title: 'Codex Workspace Agent and visual feedback',
             detail:
               'The Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy, available as both a persistent popup and a dedicated Studio page. It defaults to included ChatGPT subscription access and gives only the authenticated Studio owner a disclosed, reversible switch to separately billed OpenAI API credits for all Studio AI work when subscription allowance is exhausted. Production Studio stays on its exact reviewed release, while an authenticated dev.studio.madesolid.com.au visit opens the full Studio UI from the persistent editable checkout with immediate source updates; workspace.madesolid.com.au remains a compatibility entry during the staged migration. A client website editor remains a clean route inside that development Studio and shows chats for that client plus clearly labelled universal Studio chats, hides every other client, and starts new client chats with only that website repository available to edit. Reviewers can send text, images, or both, choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. While Codex is working, the primary Send control becomes a Stop Codex control that interrupts the selected supervisor and active attached agents without clearing the unsent draft. Stop follows the exact selected turn, disappears promptly on completion, and is a separate control from Send so a completion or server-version race cannot submit a stop click as a message. Model, Reasoning, and Agent team stay together in compact Run setup, while usage, billing, Fast, and voice preferences sit behind a separate Chat settings cog. A completed final Codex reply can branch into a separately selected conversation that preserves native context, clean prompts, image evidence, and the same client or universal workspace boundary while leaving the original chat unchanged. Voice reading offers saved Natural or Literal interpretation and three speeds, explicit preview and manual Read, opt-in chat-scoped auto-read, progressive private Google audio with device fallback, and a persistent read-along dock with active-word restart, exact seeking where available, five-second skipping, pause, resume, and stop. Natural reading says “then” for right-arrow icons and keeps a verification introduction while it skips its long technical results list. Selecting text inside one Codex reply offers a temporary read-only quick question, appending the quote to the draft, immediate sending without replacing that draft, or dismissal on both popup and page chat. An explicit per-phone Web Push opt-in sends generic private alerts only after a tracked Studio Codex supervisor turn completes successfully, including while Studio is closed. Studio source edits apply in place without restarting the workspace, and a compact top status announces the brief update while the current route, popup, draft, and conversation remain mounted. The launcher is present during startup checks, and a refresh restores the open selected conversation and its exact transcript reading position without changing the active prospect route. Exact-client preview capabilities stay private and out of the clean development URL. Observable activity and queue state appears without invented progress.',
-            revision: `v${selectedAgentPackage.version}.91`,
+            revision: `v${selectedAgentPackage.version}.92`,
             change:
-              'Latest edit: build checks can no longer erase the live development module cache; the Studio now restarts an unhealthy server automatically and shows a safe reload screen instead of a white page.',
+              'Latest edit: the focused prospect editor now offers Fit, exact Tablet and Desktop viewports, and a full-preview mode, while client chats stay visibly grouped from Universal Studio and reset to universal scope after leaving website editing.',
           },
           {
             id: 'inbound-client-email-review',
@@ -17500,6 +17504,13 @@ type ClientDevelopmentAccessResponse = {
   status?: unknown;
 };
 
+type PreviewViewportMode = 'fit' | 'tablet' | 'desktop';
+
+const fixedPreviewViewportWidths: Partial<Record<PreviewViewportMode, number>> = {
+  tablet: 768,
+  desktop: 1440,
+};
+
 function validClientPreviewUrl(value: unknown, directory: string) {
   if (typeof value !== 'string') return undefined;
   try {
@@ -17529,17 +17540,39 @@ function ClientDevelopmentEditor({
   refreshKey,
   clientName,
   focused = false,
+  fullPreview = false,
+  viewportMode = 'fit',
 }: {
   directory: string;
   refreshKey: number;
   clientName: string;
   focused?: boolean;
+  fullPreview?: boolean;
+  viewportMode?: PreviewViewportMode;
 }) {
   const [previewUrl, setPreviewUrl] = useState('');
   const [loadKey, setLoadKey] = useState(0);
   const [loading, setLoading] = useState(true);
   const [frameLoading, setFrameLoading] = useState(false);
   const [error, setError] = useState('');
+  const [surfaceSize, setSurfaceSize] = useState({ width: 0, height: 0 });
+  const surfaceRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const surface = surfaceRef.current;
+    if (!surface) return;
+    const measure = () => {
+      const bounds = surface.getBoundingClientRect();
+      setSurfaceSize((current) => {
+        const next = { width: bounds.width, height: bounds.height };
+        return current.width === next.width && current.height === next.height ? current : next;
+      });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(surface);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -17582,10 +17615,22 @@ function ClientDevelopmentEditor({
     return () => controller.abort();
   }, [directory, loadKey, refreshKey]);
 
+  const fixedViewportWidth = fixedPreviewViewportWidths[viewportMode];
+  const viewportScale = fixedViewportWidth
+    ? Math.min(1, surfaceSize.width > 0 ? surfaceSize.width / fixedViewportWidth : 1)
+    : 1;
+  const viewportFrameStyle: CSSProperties | undefined = fixedViewportWidth
+    ? {
+        width: `${fixedViewportWidth}px`,
+        height: `${Math.max(surfaceSize.height / viewportScale, surfaceSize.height)}px`,
+        transform: `scale(${viewportScale})`,
+      }
+    : undefined;
+
   return (
     <section
       aria-labelledby="client-development-editor-title"
-      className={`client-development-editor${focused ? ' client-development-editor--focused' : ''}`}
+      className={`client-development-editor${focused ? ' client-development-editor--focused' : ''}${fullPreview ? ' is-full-preview' : ''}`}
       data-testid="client-development-editor"
     >
       <header className="client-development-editor__header">
@@ -17625,7 +17670,11 @@ function ClientDevelopmentEditor({
           </small>
         </span>
       </div>
-      <div className="client-development-editor__surface">
+      <div
+        className="client-development-editor__surface"
+        data-preview-viewport={viewportMode}
+        ref={surfaceRef}
+      >
         {loading || frameLoading ? (
           <div className="client-development-editor__loading" role="status">
             <LoaderCircle aria-hidden="true" className="spin" size={18} />
@@ -17647,19 +17696,27 @@ function ClientDevelopmentEditor({
               </Button>
             </div>
           </div>
-        ) : previewUrl ? (
-          <iframe
-            key={`${previewUrl}:${loadKey}`}
-            onError={() => {
-              setFrameLoading(false);
-              setError('The secured client preview stopped responding.');
-            }}
-            onLoad={() => setFrameLoading(false)}
-            sandbox="allow-modals allow-popups allow-scripts"
-            src={previewUrl}
-            title={`${clientName} live website preview`}
-          />
         ) : null}
+        <div
+          aria-label={`${clientName} ${viewportMode} viewport`}
+          className={`client-development-editor__viewport is-${viewportMode}`}
+        >
+          <div className="client-development-editor__viewport-frame" style={viewportFrameStyle}>
+            {previewUrl ? (
+              <iframe
+                key={`${previewUrl}:${loadKey}`}
+                onError={() => {
+                  setFrameLoading(false);
+                  setError('The secured client preview stopped responding.');
+                }}
+                onLoad={() => setFrameLoading(false)}
+                sandbox="allow-modals allow-popups allow-scripts"
+                src={previewUrl}
+                title={`${clientName} live website preview`}
+              />
+            ) : null}
+          </div>
+        </div>
       </div>
     </section>
   );
@@ -17667,6 +17724,8 @@ function ClientDevelopmentEditor({
 
 function FocusedWebsiteEditor({ workspace }: { workspace: ProspectWorkspace }) {
   const [mobileSurface, setMobileSurface] = useState<'preview' | 'codex'>('preview');
+  const [viewportMode, setViewportMode] = useState<PreviewViewportMode>('fit');
+  const [fullPreview, setFullPreview] = useState(false);
   const [codexContainer, setCodexContainer] = useState<HTMLElement | null>(null);
   const directory = editableWorkspaceDirectoryName(workspace);
   const editingRoute = hrefForRoute({
@@ -17697,7 +17756,10 @@ function FocusedWebsiteEditor({ workspace }: { workspace: ProspectWorkspace }) {
   }, []);
 
   return (
-    <main className="focused-website-editor" data-testid="focused-website-editor">
+    <main
+      className={`focused-website-editor${fullPreview ? ' is-full-preview' : ''}`}
+      data-testid="focused-website-editor"
+    >
       <header className="focused-website-editor__toolbar">
         <div className="focused-website-editor__identity">
           <ButtonLink href={editingRoute} size="small" variant="quiet">
@@ -17710,29 +17772,80 @@ function FocusedWebsiteEditor({ workspace }: { workspace: ProspectWorkspace }) {
             <small>Live website editor · client-scoped Codex</small>
           </div>
         </div>
-        <ButtonGroup
-          aria-label="Choose editor surface"
-          className="focused-website-editor__switcher"
-        >
-          <Button
-            aria-pressed={mobileSurface === 'preview'}
-            onClick={() => setMobileSurface('preview')}
-            size="small"
-            variant={mobileSurface === 'preview' ? 'primary' : 'secondary'}
+        <div className="focused-website-editor__controls">
+          <ButtonGroup aria-label="Preview viewport" className="focused-website-editor__viewports">
+            <Button
+              aria-pressed={viewportMode === 'fit'}
+              onClick={() => setViewportMode('fit')}
+              size="small"
+              variant={viewportMode === 'fit' ? 'primary' : 'secondary'}
+            >
+              Fit
+            </Button>
+            <Button
+              aria-pressed={viewportMode === 'tablet'}
+              onClick={() => setViewportMode('tablet')}
+              size="small"
+              variant={viewportMode === 'tablet' ? 'primary' : 'secondary'}
+            >
+              <Tablet aria-hidden="true" size={16} />
+              Tablet
+            </Button>
+            <Button
+              aria-pressed={viewportMode === 'desktop'}
+              onClick={() => setViewportMode('desktop')}
+              size="small"
+              variant={viewportMode === 'desktop' ? 'primary' : 'secondary'}
+            >
+              <Monitor aria-hidden="true" size={16} />
+              Desktop
+            </Button>
+          </ButtonGroup>
+          <IconButton
+            aria-pressed={fullPreview}
+            label={fullPreview ? 'Exit full preview' : 'Enter full preview'}
+            onClick={() => {
+              setFullPreview((current) => !current);
+              setMobileSurface('preview');
+            }}
+            variant="secondary"
           >
-            <Laptop aria-hidden="true" size={17} />
-            Preview
-          </Button>
-          <Button
-            aria-pressed={mobileSurface === 'codex'}
-            onClick={() => setMobileSurface('codex')}
-            size="small"
-            variant={mobileSurface === 'codex' ? 'primary' : 'secondary'}
+            {fullPreview ? (
+              <Minimize2 aria-hidden="true" size={17} />
+            ) : (
+              <Maximize2 aria-hidden="true" size={17} />
+            )}
+          </IconButton>
+          <ButtonGroup
+            aria-label="Choose editor surface"
+            className="focused-website-editor__switcher"
           >
-            <Bot aria-hidden="true" size={17} />
-            Codex
-          </Button>
-        </ButtonGroup>
+            <Button
+              aria-pressed={mobileSurface === 'preview'}
+              onClick={() => {
+                setFullPreview(false);
+                setMobileSurface('preview');
+              }}
+              size="small"
+              variant={mobileSurface === 'preview' ? 'primary' : 'secondary'}
+            >
+              <Laptop aria-hidden="true" size={17} />
+              Preview
+            </Button>
+            <Button
+              aria-pressed={mobileSurface === 'codex'}
+              onClick={() => {
+                setFullPreview(false);
+                setMobileSurface('codex');
+              }}
+              size="small"
+              variant={mobileSurface === 'codex' ? 'primary' : 'secondary'}
+            >
+              <Bot aria-hidden="true" size={17} />
+              Codex
+            </Button>
+          </ButtonGroup>
+        </div>
       </header>
       <div className="focused-website-editor__workspace">
         <section
@@ -17743,7 +17856,9 @@ function FocusedWebsiteEditor({ workspace }: { workspace: ProspectWorkspace }) {
             clientName={workspace.business.name}
             directory={directory}
             focused
+            fullPreview={fullPreview}
             refreshKey={0}
+            viewportMode={viewportMode}
           />
         </section>
         <section
