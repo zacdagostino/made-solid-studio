@@ -56,6 +56,7 @@ export async function connectCodexAppServer({
   await waitForOpen(socket);
   let nextId = 1;
   const pending = new Map();
+  const notificationListeners = new Set();
   const request = (method, params = {}) =>
     new Promise((resolveRequest, reject) => {
       const id = nextId++;
@@ -69,7 +70,11 @@ export async function connectCodexAppServer({
     } catch {
       return;
     }
-    if (message.id === undefined || !pending.has(message.id)) return;
+    if (message.id === undefined) {
+      for (const listener of notificationListeners) listener(message);
+      return;
+    }
+    if (!pending.has(message.id)) return;
     const pendingRequest = pending.get(message.id);
     pending.delete(message.id);
     if (message.error)
@@ -96,10 +101,74 @@ export async function connectCodexAppServer({
   socket.send(JSON.stringify({ method: 'initialized', params: {} }));
   return {
     request,
+    watchTurn(threadId) {
+      const turns = new Map();
+      const stateFor = (turnId) => {
+        const key = String(turnId || '');
+        if (!turns.has(key)) turns.set(key, { completedItems: [], deltas: [], completion: null });
+        return turns.get(key);
+      };
+      const listener = (message) => {
+        const params = message?.params || {};
+        if (params.threadId && String(params.threadId) !== String(threadId)) return;
+        const turnId = String(params.turnId || params.turn?.id || '');
+        if (!turnId) return;
+        const state = stateFor(turnId);
+        if (message.method === 'item/agentMessage/delta' && typeof params.delta === 'string') {
+          state.deltas.push(params.delta);
+        } else if (message.method === 'item/completed' && params.item?.type === 'agentMessage') {
+          state.completedItems.push(params.item);
+        } else if (message.method === 'turn/completed') {
+          state.completion = params.turn;
+          state.resolve?.();
+        }
+      };
+      notificationListeners.add(listener);
+      return {
+        async wait(turnId, timeoutMs = 30_000) {
+          const state = stateFor(turnId);
+          if (!state.completion) {
+            await new Promise((resolveTurn, reject) => {
+              const timeout = setTimeout(
+                () => reject(new Error('The temporary answer took too long. Try again.')),
+                timeoutMs,
+              );
+              state.resolve = () => {
+                clearTimeout(timeout);
+                resolveTurn();
+              };
+            });
+          }
+          if (state.completion?.status !== 'completed') {
+            throw new Error(
+              String(
+                state.completion?.error?.message || 'The temporary Codex answer did not complete.',
+              ),
+            );
+          }
+          const completedAnswer = state.completedItems
+            .map((item) => String(item.text || '').trim())
+            .filter(Boolean)
+            .at(-1);
+          return {
+            status: state.completion.status,
+            answer: completedAnswer || state.deltas.join('').trim(),
+          };
+        },
+        close() {
+          notificationListeners.delete(listener);
+        },
+      };
+    },
     close() {
       socket.close();
     },
   };
+}
+
+function isUnmaterializedThreadReadError(error) {
+  const detail = error instanceof Error ? error.message : String(error || '');
+  return /not materialized|includeTurns.*(?:unavailable|not support)/i.test(detail);
 }
 
 function publicModel(model) {
@@ -937,10 +1006,6 @@ function clientWorkspaceInstruction(scope) {
     : '';
 }
 
-function wait(milliseconds) {
-  return new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
-}
-
 export class CodexFeedbackBridge {
   constructor({
     cwd = process.cwd(),
@@ -1142,8 +1207,12 @@ export class CodexFeedbackBridge {
             this.startedThreads.delete(String(thread.id));
           }
         } catch (error) {
-          threadIssue =
-            error instanceof Error ? error.message : 'The selected conversation could not load.';
+          const isStartedEmptyThread =
+            this.startedThreads.has(String(thread.id)) && isUnmaterializedThreadReadError(error);
+          if (!isStartedEmptyThread) {
+            threadIssue =
+              error instanceof Error ? error.message : 'The selected conversation could not load.';
+          }
           threadDetail = { thread: { ...thread, turns: [] } };
         }
       }
@@ -1437,6 +1506,7 @@ export class CodexFeedbackBridge {
     let temporaryDirectory;
     let threadId;
     let turnId;
+    let turnWatcher;
     try {
       const modelResult = await client.request('model/list', { limit: 100, includeHidden: false });
       const model = (modelResult.data || [])
@@ -1464,6 +1534,7 @@ export class CodexFeedbackBridge {
       });
       threadId = String(threadResult.thread?.id || '');
       if (!threadId) throw new Error('Codex did not start the temporary question.');
+      turnWatcher = client.watchTurn(threadId);
       const turnResult = await client.request('turn/start', {
         threadId,
         input: [
@@ -1480,31 +1551,16 @@ export class CodexFeedbackBridge {
       });
       turnId = String(turnResult.turn?.id || '');
       if (!turnId) throw new Error('Codex did not accept the temporary question.');
-
-      for (let attempt = 0; attempt < 120; attempt += 1) {
-        if (attempt) await wait(250);
-        const detail = await client.request('thread/read', { threadId, includeTurns: true });
-        const turn = (Array.isArray(detail.thread?.turns) ? detail.thread.turns : []).find(
-          (candidate) => String(candidate?.id || '') === turnId,
-        );
-        if (!turn || turn.status === 'inProgress') continue;
-        if (turn.status !== 'completed') {
-          throw new Error('The temporary Codex answer did not complete.');
-        }
-        const answer = publicMessages(detail.thread)
-          .filter((message) => message.role === 'assistant' && message.turnId === turnId)
-          .at(-1)?.text;
-        if (!answer) throw new Error('Codex completed without a temporary answer.');
-        return {
-          status: 'complete',
-          answer,
-          model: model.label,
-          detail: 'Temporary answer complete. This exchange was not added to the conversation.',
-        };
-      }
-      await client.request('turn/interrupt', { threadId, turnId }).catch(() => undefined);
-      throw new Error('The temporary answer took too long. Try again.');
+      const completedTurn = await turnWatcher.wait(turnId);
+      if (!completedTurn.answer) throw new Error('Codex completed without a temporary answer.');
+      return {
+        status: 'complete',
+        answer: completedTurn.answer,
+        model: model.label,
+        detail: 'Temporary answer complete. This exchange was not added to the conversation.',
+      };
     } finally {
+      turnWatcher?.close();
       if (threadId) await client.request('thread/delete', { threadId }).catch(() => undefined);
       client.close();
       if (temporaryDirectory) await rm(temporaryDirectory, { force: true, recursive: true });

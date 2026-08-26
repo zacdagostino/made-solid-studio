@@ -430,6 +430,8 @@ const localResilientDevelopmentStudioRuntimePackageId =
   'agent-package-local-v22-0-resilient-development-studio-runtime';
 const localFocusedProspectPreviewModesPackageId =
   'agent-package-local-v22-1-focused-prospect-preview-modes';
+const localReliableCodexEphemeralThreadsPackageId =
+  'agent-package-local-v22-2-reliable-codex-ephemeral-threads';
 
 type StoreName =
   | 'activities'
@@ -3472,10 +3474,28 @@ export class SiteforgeRepository {
         'Makes responsive prospect review practical from phone, tablet, and desktop while keeping website-specific Codex work visibly separated from universal Studio work.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localReliableCodexEphemeralThreadsPackage: AgentPackage = {
+      ...localFocusedProspectPreviewModesPackage,
+      id: localReliableCodexEphemeralThreadsPackageId,
+      version: 22.2,
+      basePackageId: localFocusedProspectPreviewModesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v22.2',
+      contractAddendum:
+        'A newly created persistent Codex conversation remains a valid empty selection until its first user message materializes stored turn history. Temporary Quick Questions run in an ephemeral read-only thread and collect their answer from scoped app-server item and turn completion events instead of requesting stored turns that ephemeral threads do not support. The Quick Question surface uses the same dark visual system as the parent Codex chat.',
+      instructionsAddendum:
+        'Keep the exact newly started thread in the visible conversation ledger while it is empty, and suppress only the expected not-materialized history-read response for that app-started thread; preserve genuine unreadable-conversation errors. Subscribe to app-server notifications before starting an ephemeral turn, treat the final completed agent-message item as authoritative, require a completed turn, remove the temporary thread and directory, and never add the exchange to conversation history. Render Quick Question with dark surfaces, accessible contrast, and unchanged focus, error, loading, and action semantics.',
+      summary:
+        'Reliable Codex ephemeral chats test package: keeps new empty chats safe and makes dark Quick Questions complete through live turn events.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Removes two chat dead ends without weakening corrupt-history isolation or persisting temporary questions.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localReliableCodexEphemeralThreadsPackage,
           localFocusedProspectPreviewModesPackage,
           localResilientDevelopmentStudioRuntimePackage,
           localDedicatedClientWebsiteEditorPackage,
@@ -3645,6 +3665,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localReliableCodexEphemeralThreadsPackage,
           localFocusedProspectPreviewModesPackage,
           localResilientDevelopmentStudioRuntimePackage,
           localDedicatedClientWebsiteEditorPackage,
@@ -3817,6 +3838,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localReliableCodexEphemeralThreadsPackage,
             localFocusedProspectPreviewModesPackage,
             localResilientDevelopmentStudioRuntimePackage,
             localDedicatedClientWebsiteEditorPackage,

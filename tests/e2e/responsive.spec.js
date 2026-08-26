@@ -3813,8 +3813,9 @@ test('displays the newest test package above retained package versions', async (
 
   const packagePicker = page.getByLabel('Test agent package');
   await expect(packagePicker).toHaveValue(
-    'agent-package-local-v22-1-focused-prospect-preview-modes',
+    'agent-package-local-v22-2-reliable-codex-ephemeral-threads',
   );
+  await expect(packagePicker).toContainText('v22.2 · Approved test');
   await expect(packagePicker).toContainText('v22.1 · Approved test');
   await expect(packagePicker).toContainText('v22.0 · Approved test');
   await expect(packagePicker).toContainText('v21.9 · Approved test');
@@ -3982,6 +3983,7 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v22.2', 'Reliable Codex ephemeral chats'],
     ['v22.1', 'Focused prospect preview modes'],
     ['v22.0', 'Resilient development Studio runtime'],
     ['v21.9', 'Dedicated client website editor'],

@@ -3,7 +3,10 @@ import { access, mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { CodexFeedbackBridge } from '../../scripts/codex-feedback-bridge.mjs';
+import {
+  CodexFeedbackBridge,
+  connectCodexAppServer,
+} from '../../scripts/codex-feedback-bridge.mjs';
 
 const imageDataUrl = `data:image/png;base64,${Buffer.from('private screenshot').toString('base64')}`;
 const secondImageDataUrl = `data:image/webp;base64,${Buffer.from('second private image').toString('base64')}`;
@@ -96,6 +99,8 @@ function fakeConnection(state) {
         };
       }
       if (method === 'thread/read') {
+        state.threadReads ??= [];
+        state.threadReads.push(params);
         if (state.unreadableThreadIds?.includes(params.threadId)) {
           if (state.hangingThreadRead) return new Promise(() => {});
           throw new Error('Custom tool call output is missing for this conversation.');
@@ -184,6 +189,7 @@ function fakeConnection(state) {
         const thread = {
           id: `thread-new-${state.threadStarts.length}`,
           cwd: params.cwd,
+          ephemeral: params.ephemeral === true,
           status: { type: 'idle' },
           turns: [],
         };
@@ -283,11 +289,74 @@ function fakeConnection(state) {
       }
       throw new Error(`Unexpected method: ${method}`);
     },
+    watchTurn(threadId) {
+      return {
+        async wait(turnId) {
+          state.watchedTurns ??= [];
+          state.watchedTurns.push({ threadId, turnId });
+          if (state.temporaryTurnFailure) throw new Error(state.temporaryTurnFailure);
+          return { status: 'completed', answer: state.temporaryAnswer || '' };
+        },
+        close() {
+          state.closedTurnWatchers = Number(state.closedTurnWatchers || 0) + 1;
+        },
+      };
+    },
     close() {
       state.closedConnections = Number(state.closedConnections || 0) + 1;
     },
   });
 }
+
+test('collects an ephemeral answer from app-server item and turn notifications', async () => {
+  class NotificationSocket extends EventTarget {
+    static activeSocket;
+
+    constructor() {
+      super();
+      NotificationSocket.activeSocket = this;
+      queueMicrotask(() => this.dispatchEvent(new Event('open')));
+    }
+
+    send(payload) {
+      const message = JSON.parse(payload);
+      if (message.id === undefined) return;
+      queueMicrotask(() =>
+        this.dispatchEvent(
+          new MessageEvent('message', {
+            data: JSON.stringify({ id: message.id, result: {} }),
+          }),
+        ),
+      );
+    }
+
+    close() {
+      this.dispatchEvent(new Event('close'));
+    }
+
+    notify(method, params) {
+      this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ method, params }) }));
+    }
+  }
+
+  const client = await connectCodexAppServer({ WebSocketImplementation: NotificationSocket });
+  const watcher = client.watchTurn('thread-ephemeral');
+  NotificationSocket.activeSocket.notify('item/completed', {
+    threadId: 'thread-ephemeral',
+    turnId: 'turn-ephemeral',
+    item: { id: 'answer', type: 'agentMessage', text: 'A temporary answer.' },
+  });
+  NotificationSocket.activeSocket.notify('turn/completed', {
+    turn: { id: 'turn-ephemeral', status: 'completed', items: [] },
+  });
+
+  assert.deepEqual(await watcher.wait('turn-ephemeral'), {
+    status: 'completed',
+    answer: 'A temporary answer.',
+  });
+  watcher.close();
+  client.close();
+});
 
 test('discovers ChatGPT models, image support, efforts, and the active Studio thread', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-status-'));
@@ -807,9 +876,11 @@ test('keeps a newly started empty thread selectable before thread/list includes 
   assert.equal(status.thread.id, created.thread.id);
   assert.equal(status.threads[0].id, created.thread.id);
   assert.deepEqual(status.messages, []);
+  assert.equal(status.threadIssue, undefined);
   assert.equal(polledStatus.thread.id, created.thread.id);
   assert.equal(polledStatus.threads[0].id, created.thread.id);
   assert.deepEqual(polledStatus.messages, []);
+  assert.equal(polledStatus.threadIssue, undefined);
 });
 
 test('keeps feedback queued while Codex is busy, then delivers every image and model override', async () => {
@@ -1382,6 +1453,9 @@ test('answers a temporary excerpt question in an ephemeral read-only thread with
   assert.equal(state.turns[0].effort, 'low');
   assert.equal(state.turns[0].serviceTier, 'priority');
   assert.match(state.turns[0].input[0].text, /Do not inspect files, browse, call tools/);
+  assert.deepEqual(state.watchedTurns, [{ threadId: 'thread-new-1', turnId: 'turn-1' }]);
+  assert.equal(state.closedTurnWatchers, 1);
+  assert.deepEqual(state.threadReads || [], []);
   assert.deepEqual(state.deletedThreads, ['thread-new-1']);
   assert.deepEqual(await bridge.readRecords(), []);
   await assert.rejects(access(state.threadStarts[0].cwd), { code: 'ENOENT' });

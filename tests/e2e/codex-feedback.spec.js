@@ -1035,6 +1035,8 @@ test('adds selected Codex output to the draft or sends the excerpt immediately',
   await excerptActions.getByRole('button', { name: 'Quick question' }).click();
   const quickQuestion = page.getByRole('dialog', { name: 'Quick question' });
   await expect(quickQuestion.getByLabel('What do you want to know?')).toBeFocused();
+  await expect(quickQuestion).toHaveCSS('color-scheme', 'dark');
+  await expect(quickQuestion).toHaveCSS('background-color', 'rgb(31, 31, 31)');
   await quickQuestion.getByLabel('What do you want to know?').fill('What does this confirm?');
   await quickQuestion.getByRole('button', { name: 'Ask quickly' }).press('Enter');
   await expect(quickQuestion.getByText('Quick answer')).toBeVisible();

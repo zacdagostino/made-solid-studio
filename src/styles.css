@@ -1412,8 +1412,8 @@ html[data-codex-panel='embedded'] body #root {
   backdrop-filter: blur(3px);
 }
 .codex-quick-question-dialog {
-  --codex-text: #171a12;
-  --codex-muted: #515946;
+  --codex-text: #f1f1f1;
+  --codex-muted: #a7a7a7;
   position: fixed;
   z-index: 111;
   top: 50%;
@@ -1424,13 +1424,13 @@ html[data-codex-panel='embedded'] body #root {
   gap: var(--space-3);
   padding: var(--space-3);
   overflow-y: auto;
-  border: 1px solid #99aa2f;
+  border: 1px solid #59651f;
   border-radius: 16px;
   color: var(--codex-text);
-  background: #f1f2eb;
+  background: #1f1f1f;
   box-shadow: 0 24px 64px rgb(0 0 0 / 0.62);
   transform: translate(-50%, -50%);
-  color-scheme: light;
+  color-scheme: dark;
 }
 .codex-quick-question-dialog__header {
   display: grid;
@@ -1449,12 +1449,12 @@ html[data-codex-panel='embedded'] body #root {
   margin: 0;
 }
 .codex-quick-question-dialog__header h2 {
-  color: #171a12 !important;
-  -webkit-text-fill-color: #171a12;
+  color: var(--codex-text) !important;
+  -webkit-text-fill-color: var(--codex-text);
   font-size: 1rem;
 }
 .codex-quick-question-dialog__header p {
-  color: #526039;
+  color: var(--codex-muted);
   font-size: 0.7rem;
   line-height: 1.35;
 }
@@ -1481,11 +1481,11 @@ html[data-codex-panel='embedded'] body #root {
   overflow-y: auto;
   border-left: 3px solid #aebe35;
   border-radius: 0 9px 9px 0;
-  color: #262b1d;
-  background: #e3e6da;
+  color: #eef3d9;
+  background: #2b2f22;
 }
 .codex-quick-question-dialog__excerpt small {
-  color: #59633d;
+  color: #cbd49d;
   font-size: 0.66rem;
   font-weight: 700;
 }
@@ -1500,7 +1500,7 @@ html[data-codex-panel='embedded'] body #root {
   gap: var(--space-1);
 }
 .codex-quick-question-dialog__prompt > span {
-  color: #343a28;
+  color: #e4e8d4;
   font-size: 0.72rem;
   font-weight: 700;
 }
@@ -1508,16 +1508,16 @@ html[data-codex-panel='embedded'] body #root {
   width: 100%;
   min-height: 104px;
   padding: var(--space-3);
-  border: 1px solid #919781;
+  border: 1px solid #555a4c;
   border-radius: 11px;
   color: var(--codex-text);
-  background: #fff;
+  background: #292929;
   font: inherit;
   line-height: 1.45;
   resize: vertical;
 }
 .codex-quick-question-dialog__prompt textarea::placeholder {
-  color: #68705c;
+  color: #999f90;
 }
 .codex-quick-question-dialog__prompt textarea:focus-visible {
   border-color: #afc137;
@@ -1530,33 +1530,33 @@ html[data-codex-panel='embedded'] body #root {
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  border: 1px solid #9da77d;
+  border: 1px solid #596044;
   border-radius: 10px;
-  color: #252a1c;
-  background: #e5e9d9;
+  color: #eef3d9;
+  background: #292d24;
 }
 .codex-quick-question-dialog__loading > span {
   display: grid;
   gap: 2px;
 }
 .codex-quick-question-dialog__loading small {
-  color: #59633d;
+  color: #b7c083;
   font-size: 0.68rem;
 }
 .codex-quick-question-dialog__answer {
   display: grid;
   gap: var(--space-3);
   padding: var(--space-3);
-  border: 1px solid #626c32;
+  border: 1px solid #59651f;
   border-radius: 12px;
-  background: #e4e9d6;
+  background: #292d24;
 }
 .codex-quick-question-dialog__answer > header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  color: #53600d;
+  color: #d8ef24;
 }
 .codex-quick-question-dialog__answer > header > span {
   display: grid;
@@ -1564,18 +1564,18 @@ html[data-codex-panel='embedded'] body #root {
 }
 .codex-quick-question-dialog__answer > header small,
 .codex-quick-question-dialog__answer > small {
-  color: #59633d;
+  color: #b7c083;
   font-size: 0.66rem;
 }
 .codex-quick-question-dialog__answer .markdown-content {
-  color: #202519;
+  color: #f1f1f1;
   font-size: 0.84rem;
   line-height: 1.5;
 }
 .codex-quick-question-dialog__answer .markdown-content p,
 .codex-quick-question-dialog__answer .markdown-content li {
-  color: #202519 !important;
-  -webkit-text-fill-color: #202519;
+  color: #f1f1f1 !important;
+  -webkit-text-fill-color: #f1f1f1;
 }
 .codex-quick-question-dialog__actions {
   display: grid;
@@ -1585,6 +1585,15 @@ html[data-codex-panel='embedded'] body #root {
 .codex-quick-question-dialog__actions .button {
   width: 100%;
   min-height: 44px;
+}
+.codex-quick-question-dialog__actions .button--secondary {
+  border-color: #555a4c;
+  color: var(--codex-text);
+  background: #292929;
+}
+.codex-quick-question-dialog__actions .button--secondary:hover:not(:disabled) {
+  border-color: #7b863c;
+  background: #34372d;
 }
 .markdown-content :is(p, ul, ol, blockquote, h3, h4, h5, h6) {
   margin-block: 0;

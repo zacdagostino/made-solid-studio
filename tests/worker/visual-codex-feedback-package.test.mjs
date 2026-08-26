@@ -306,6 +306,10 @@ const focusedProspectPreviewModesMigrationUrl = new URL(
   '../../supabase/migrations/20260826000000_focused_prospect_preview_modes_test_package.sql',
   import.meta.url,
 );
+const reliableCodexEphemeralThreadsMigrationUrl = new URL(
+  '../../supabase/migrations/20260826010000_reliable_codex_ephemeral_threads_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -378,9 +382,9 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 92);
-  assert.match(app, /Fit, exact Tablet and Desktop viewports/);
-  assert.match(app, /reset to universal scope after leaving website editing/);
+  assert.equal(Number(revision[1]), 93);
+  assert.match(app, /newly added empty chat now stays safely selectable/);
+  assert.match(app, /dark Quick Question popup completes temporary answers/);
   assert.match(app, /shows chats for that client plus clearly labelled universal Studio chats/);
   assert.match(app, /gives only the authenticated Studio owner a disclosed, reversible switch/);
   assert.match(app, /saved Natural or Literal interpretation and three speeds/);
@@ -2637,7 +2641,7 @@ test('registers reliable Codex Stop state above immutable v21.7', async () => {
       fallbackLedger.indexOf('localRevocableReadyClientReviewsPackage,'),
   );
   assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.91`/);
-  assert.match(app, /Fit, exact Tablet and Desktop viewports/);
+  assert.match(app, /newly added empty chat now stays safely selectable/);
   assert.match(component, /statusRequestSequenceRef/);
   assert.match(component, /key="stop-codex"/);
   assert.match(component, /key="send-codex"/);
@@ -2761,9 +2765,50 @@ test('registers focused prospect preview modes above immutable v22.0', async () 
     fallbackLedger.indexOf('localFocusedProspectPreviewModesPackage,') <
       fallbackLedger.indexOf('localResilientDevelopmentStudioRuntimePackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.92`/);
-  assert.match(app, /Fit, exact Tablet and Desktop viewports/);
-  assert.match(app, /reset to universal scope after leaving website editing/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.93`/);
+  assert.match(app, /newly added empty chat now stays safely selectable/);
+  assert.match(repository, /fit, exact 768px tablet, and exact 1440px desktop preview modes/);
+});
+
+test('registers reliable Codex ephemeral chats above immutable v22.1', async () => {
+  const [migration, repository, app, bridge, styles] = await Promise.all([
+    readFile(reliableCodexEphemeralThreadsMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+    readFile(new URL('../../scripts/codex-feedback-bridge.mjs', import.meta.url), 'utf8'),
+    readFile(new URL('../../src/styles.css', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /base\.organization_id,\s*22\.2,/);
+  assert.match(migration, /made-solid-studio-builder-agent-v22\.2/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v22\.1'/,
+  );
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /not exists/i);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.doesNotMatch(migration, /"visual-codex-feedback",/);
+  assert.match(repository, /version: 22\.2,/);
+  assert.match(repository, /basePackageId: localFocusedProspectPreviewModesPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localReliableCodexEphemeralThreadsPackage,') <
+      packageLedger.indexOf('localFocusedProspectPreviewModesPackage,'),
+  );
+  const existingLedgerUpgrade = repository.slice(repository.indexOf('const missingPackages = ['));
+  assert.ok(
+    existingLedgerUpgrade.indexOf('localReliableCodexEphemeralThreadsPackage,') <
+      existingLedgerUpgrade.indexOf('localFocusedProspectPreviewModesPackage,'),
+  );
+  const fallbackLedger = repository.slice(repository.indexOf('} catch {'));
+  assert.ok(
+    fallbackLedger.indexOf('localReliableCodexEphemeralThreadsPackage,') <
+      fallbackLedger.indexOf('localFocusedProspectPreviewModesPackage,'),
+  );
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.93`/);
+  assert.match(bridge, /watchTurn\(threadId\)/);
+  assert.match(bridge, /isUnmaterializedThreadReadError/);
+  assert.match(styles, /\.codex-quick-question-dialog \{[\s\S]*color-scheme: dark;/);
 });
 
 test('ships one locally scoped Manifest V3 capture helper for Chrome and Brave', async () => {
