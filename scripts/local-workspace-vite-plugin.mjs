@@ -25,6 +25,10 @@ import {
 import { assertPublicUrl } from '../worker/security.mjs';
 import { CodexPushNotifications } from './codex-push-notifications.mjs';
 import { studioDevelopmentOrigins } from './studio-development-origins.mjs';
+import {
+  meaningfulGitStatus,
+  restoreGeneratedNextEnvironment,
+} from './prospect-workspace-state.mjs';
 
 const localWorkspaceEndpoint = '/__made-solid/local-workspace';
 const workspacePreviewAccessEndpoint = '/__made-solid/workspace-preview-access';
@@ -441,18 +445,6 @@ function gitOutput(workspace, ...arguments_) {
   }
 }
 
-function gitStatusOutput(workspace) {
-  try {
-    return execFileSync('git', ['status', '--porcelain'], {
-      cwd: workspace,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trimEnd();
-  } catch {
-    return '';
-  }
-}
-
 function editVersionHistory(workspace) {
   const source = gitOutput(
     workspace,
@@ -592,7 +584,7 @@ export async function readFinalEditState(directory) {
     Promise.resolve(gitOutput(workspace, 'rev-parse', 'HEAD')),
     Promise.resolve(gitOutput(workspace, 'rev-parse', 'HEAD^{tree}')),
     Promise.resolve(gitOutput(workspace, 'log', '-1', '--pretty=%s')),
-    Promise.resolve(gitStatusOutput(workspace)),
+    Promise.resolve(meaningfulGitStatus(workspace)),
     readFile(resolve(workspace, '.made-solid', 'origin.json'), 'utf8').catch(() => '{}'),
   ]);
   const upstreamCommit = gitOutput(workspace, 'rev-parse', '@{upstream}');
@@ -985,8 +977,6 @@ async function launchWebsite({
     providedSessionName ?? `made-solid-${directory.replace(/[^A-Za-z0-9_-]/g, '-')}`.slice(0, 80);
   const packageDocument = JSON.parse(await readFile(resolve(destination, 'package.json'), 'utf8'));
   const hostFlag = developmentServerHostFlag(packageDocument);
-  const nextEnvironmentPath = resolve(destination, 'next-env.d.ts');
-  const committedNextEnvironmentSource = gitOutput(destination, 'show', 'HEAD:next-env.d.ts');
   await run('tmux', ['kill-session', '-t', sessionName]).catch(() => undefined);
   await run('tmux', [
     'new-session',
@@ -1025,17 +1015,7 @@ async function launchWebsite({
     });
     process.env.SITEFORGE_ACTIVE_PREVIEW_DIRECTORY = directory;
   }
-  if (committedNextEnvironmentSource) {
-    const normalizedNextEnvironmentSource = `${committedNextEnvironmentSource}\n`;
-    const generatedDevelopmentSource = normalizedNextEnvironmentSource.replace(
-      './.next/types/routes.d.ts',
-      './.next/dev/types/routes.d.ts',
-    );
-    const currentSource = await readFile(nextEnvironmentPath, 'utf8').catch(() => undefined);
-    if (currentSource === generatedDevelopmentSource) {
-      await writeFile(nextEnvironmentPath, normalizedNextEnvironmentSource);
-    }
-  }
+  restoreGeneratedNextEnvironment(destination);
   finish({
     status: 'complete',
     phase: 'ready',

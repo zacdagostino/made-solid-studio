@@ -44,12 +44,11 @@ test('registers configured final edit upstream as immutable test package v23.2',
   }
 
   assert.match(app, /id: 'client-url-release-contract'/);
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.4`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.5`/);
   assert.match(
     app,
-    /configured upstream repository and branch instead of requiring a remote named origin/,
+    /byte-exact Next\.js development rewrite of next-env\.d\.ts is now treated as generated runtime metadata/,
   );
-  assert.match(responsiveSpec, /agent-package-local-v23-2-configured-final-edit-upstream/);
   assert.match(responsiveSpec, /\['v23\.2', 'Configured final edit upstream'\]/);
   assert.match(responsiveSpec, /\['v23\.1', 'Seamless Studio resume'\]/);
   assert.match(responsiveSpec, /\['v23\.0', 'Contextual auto-read Quick questions'\]/);

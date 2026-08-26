@@ -1,17 +1,10 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import {
-  cpSync,
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { relative, resolve, sep } from 'node:path';
+import { restoreGeneratedNextEnvironment } from './prospect-workspace-state.mjs';
 
 const directoryPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 const arguments_ = process.argv.slice(2);
@@ -44,30 +37,6 @@ function prospectWorkspace(directory, environment = process.env) {
     ? resolve(studioWorkspace, 'prospect-workspaces')
     : resolve(environment.SITEFORGE_PROSPECT_WORKSPACES_DIR?.trim() || 'prospect-workspaces');
   return resolve(prospectRoot, directory);
-}
-
-function restoreGeneratedNextEnvironment(workspace) {
-  const relativePath = 'next-env.d.ts';
-  const changed = optionalGit(workspace, 'status', '--porcelain', '--', relativePath);
-  if (!changed || !existsSync(resolve(workspace, relativePath))) return;
-  let committedSource;
-  try {
-    committedSource = execFileSync('git', ['show', `HEAD:${relativePath}`], {
-      cwd: workspace,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-  } catch {
-    return;
-  }
-  const generatedDevelopmentSource = committedSource.replace(
-    './.next/types/routes.d.ts',
-    './.next/dev/types/routes.d.ts',
-  );
-  const currentSource = readFileSync(resolve(workspace, relativePath), 'utf8');
-  if (currentSource === generatedDevelopmentSource) {
-    writeFileSync(resolve(workspace, relativePath), committedSource);
-  }
 }
 
 function run(command, commandArguments, cwd, environment = process.env) {

@@ -32,9 +32,9 @@ test('registers exact edited-site release as immutable test package v22.6', asyn
   );
   assert.match(repository, /missingPackages = \[[\s\S]*localExactEditedSiteReleasePackage/);
 
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.4`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.5`/);
   assert.match(
     app,
-    /configured upstream repository and branch instead of requiring a remote named origin/i,
+    /manual environment declarations and real source changes remain pending edits/i,
   );
 });

@@ -4013,8 +4013,9 @@ test('displays the newest test package above retained package versions', async (
 
   const packagePicker = page.getByLabel('Test agent package');
   await expect(packagePicker).toHaveValue(
-    'agent-package-local-v23-2-configured-final-edit-upstream',
+    'agent-package-local-v23-3-generated-next-environment-hygiene',
   );
+  await expect(packagePicker).toContainText('v23.3 · Approved test');
   await expect(packagePicker).toContainText('v23.2 · Approved test');
   await expect(packagePicker).toContainText('v23.1 · Approved test');
   await expect(packagePicker).toContainText('v23.0 · Approved test');
@@ -4193,6 +4194,7 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v23.3', 'Generated Next environment hygiene'],
     ['v23.2', 'Configured final edit upstream'],
     ['v23.1', 'Seamless Studio resume'],
     ['v23.0', 'Contextual auto-read Quick questions'],

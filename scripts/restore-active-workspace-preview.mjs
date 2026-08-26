@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { restoreGeneratedNextEnvironment } from './prospect-workspace-state.mjs';
 
 const directoryPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 const exactRevisionPattern = /^[0-9a-f]{40}$/i;
@@ -109,6 +110,7 @@ export async function restoreActiveWorkspacePreview({
   const destination = activeWorkspaceDirectory(active.directory, environment, pathExists);
   if (!destination) return { ...active, status: 'rejected' };
   if (active.workspace === destination && (await ready(active.port))) {
+    restoreGeneratedNextEnvironment(destination);
     return { ...active, status: 'ready' };
   }
   let packageDocument;
@@ -145,6 +147,7 @@ export async function restoreActiveWorkspacePreview({
   await runCommand('tmux', ['set-option', '-t', sessionName, 'remain-on-exit', 'on']);
   for (let attempt = 0; attempt < 60; attempt += 1) {
     if (await ready(active.port)) {
+      restoreGeneratedNextEnvironment(destination);
       const source = JSON.parse(await readFileImplementation(activePreviewPath, 'utf8'));
       const candidates = Array.isArray(source?.previews) ? source.previews : [source];
       const previews = candidates.map((candidate) =>

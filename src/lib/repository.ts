@@ -451,6 +451,8 @@ const localContextualQuickQuestionsPackageId =
 const localSeamlessStudioResumePackageId = 'agent-package-local-v23-1-seamless-studio-resume';
 const localConfiguredFinalEditUpstreamPackageId =
   'agent-package-local-v23-2-configured-final-edit-upstream';
+const localGeneratedNextEnvironmentHygienePackageId =
+  'agent-package-local-v23-3-generated-next-environment-hygiene';
 
 type StoreName =
   | 'activities'
@@ -3682,10 +3684,28 @@ export class SiteforgeRepository {
         'Makes final edit checkpoints reliable for every correctly tracked prospect repository while preventing partial or misdirected client handoffs.',
       stagedBehaviourIds: ['client-url-release-contract'],
     };
+    const localGeneratedNextEnvironmentHygienePackage: AgentPackage = {
+      ...localConfiguredFinalEditUpstreamPackage,
+      id: localGeneratedNextEnvironmentHygienePackageId,
+      version: 23.3,
+      basePackageId: localConfiguredFinalEditUpstreamPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v23.3',
+      contractAddendum:
+        'Next.js development may rewrite next-env.d.ts from its committed route-types declaration to the byte-exact development route-types declaration. Studio treats only that deterministic framework-generated rewrite as runtime metadata, excludes it from pending-edit and release-dirty state, and restores the committed declaration after preview startup, preview recovery, or finalisation. Every other next-env.d.ts difference and every real source change remains a pending website edit.',
+      instructionsAddendum:
+        'Compare next-env.d.ts with the exact committed file and recognise only the byte-exact Next.js development transformation from ./.next/types/routes.d.ts to ./.next/dev/types/routes.d.ts. Use one shared workspace-state contract for the Editing status, final edit, exact release verification, manual preview launch, and restored preview. Restore that generated transformation to the committed declaration before a checkpoint completes. Never ignore or overwrite any other next-env.d.ts difference, and keep every genuine source change pending.',
+      summary:
+        'Generated Next environment hygiene test package: prevents byte-exact Next.js development metadata from appearing as a website edit or blocking exact release verification.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps edit versions and release gates tied to intentional website work while preserving every manual environment declaration and genuine source change.',
+      stagedBehaviourIds: ['client-url-release-contract'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localGeneratedNextEnvironmentHygienePackage,
           localConfiguredFinalEditUpstreamPackage,
           localSeamlessStudioResumePackage,
           localContextualQuickQuestionsPackage,
@@ -3866,6 +3886,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localGeneratedNextEnvironmentHygienePackage,
           localConfiguredFinalEditUpstreamPackage,
           localSeamlessStudioResumePackage,
           localContextualQuickQuestionsPackage,
@@ -4049,6 +4070,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localGeneratedNextEnvironmentHygienePackage,
             localConfiguredFinalEditUpstreamPackage,
             localSeamlessStudioResumePackage,
             localContextualQuickQuestionsPackage,

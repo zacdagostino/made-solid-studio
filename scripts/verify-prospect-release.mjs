@@ -21,6 +21,7 @@ import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import AxeBuilder from '@axe-core/playwright';
 import { createClient } from '@supabase/supabase-js';
 import { chromium } from 'playwright';
+import { meaningfulGitStatus } from './prospect-workspace-state.mjs';
 
 const directoryPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 const shaPattern = /^[0-9a-f]{40}$/i;
@@ -354,7 +355,7 @@ try {
   sourceWorkspace = resolve(prospectRoot, directory);
   if (!existsSync(join(sourceWorkspace, '.git')))
     throw new Error('Open the prospect workspace before release verification.');
-  if (git(sourceWorkspace, 'status', '--porcelain'))
+  if (meaningfulGitStatus(sourceWorkspace))
     throw new Error('Commit or discard pending edits before release verification.');
   const branch = git(sourceWorkspace, 'branch', '--show-current');
   const commit = git(sourceWorkspace, 'rev-parse', 'HEAD').toLowerCase();
