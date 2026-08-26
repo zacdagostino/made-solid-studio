@@ -3484,21 +3484,17 @@ main {
 }
 @keyframes content-enter-up {
   from {
-    opacity: 0;
     transform: translateY(14px);
   }
   to {
-    opacity: 1;
     transform: translateY(0);
   }
 }
 @keyframes content-enter-side {
   from {
-    opacity: 0;
     transform: translateX(14px);
   }
   to {
-    opacity: 1;
     transform: translateX(0);
   }
 }
@@ -3663,6 +3659,7 @@ main {
     left: 50%;
     transform: translateX(-50%) scale(1.5);
   }
+  50%,
   to {
     top: 0;
     left: 0;
@@ -3674,6 +3671,11 @@ main {
     top: 62px;
     left: 50%;
     transform: translateX(-50%) scale(1.5);
+  }
+  50% {
+    top: 62px;
+    left: 48px;
+    transform: translateX(0) scale(1);
   }
   to {
     top: 6px;

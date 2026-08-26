@@ -394,7 +394,7 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 100);
+  assert.equal(Number(revision[1]), 101);
   assert.match(app, /presentedProspectIndex = true/);
   assert.match(app, /client-scoped Codex/);
   assert.match(app, /gives only the authenticated Studio owner a disclosed, reversible switch/);
@@ -807,7 +807,8 @@ test('retains the renderable Railway Studio as the immutable v18.9 base package'
   assert.match(launcher, /maintain_workspace_studio/);
   assert.match(launcher, /cd "\$studio_workspace_directory"/);
   assert.match(launcher, /--mode development/);
-  assert.match(launcher, /--force/);
+  assert.doesNotMatch(launcher, /--force/);
+  assert.match(launcher, /SITEFORGE_VITE_CACHE_DIR="\$workspace_vite_cache_directory"/);
 });
 
 test('registers resilient Studio session recovery as the newest immutable package', async () => {
@@ -916,7 +917,8 @@ test('registers the live editable Studio runtime as the newest immutable package
   assert.match(launcher, /SITEFORGE_WORKSPACE_DEVELOPMENT=1/);
   assert.match(launcher, /--host 127\.0\.0\.1/);
   assert.match(launcher, /--mode development/);
-  assert.match(launcher, /--force/);
+  assert.doesNotMatch(launcher, /--force/);
+  assert.match(launcher, /SITEFORGE_VITE_CACHE_DIR="\$workspace_vite_cache_directory"/);
   assert.match(launcher, /studio_workspace_directory/);
   assert.match(viteConfiguration, /\.\.\.railwayAllowedHosts/);
 });

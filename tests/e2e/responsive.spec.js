@@ -2929,7 +2929,10 @@ test('transitions the complete workspace brand from loading into navigation', as
   expect(loadingMarkBox).not.toBeNull();
   expect(loadingWordmarkBox).not.toBeNull();
   if (loadingMarkBox && loadingWordmarkBox) {
-    expect(loadingMarkBox.y + loadingMarkBox.height).toBeLessThan(loadingWordmarkBox.y);
+    const remainsSeparated =
+      loadingMarkBox.y + loadingMarkBox.height <= loadingWordmarkBox.y ||
+      loadingMarkBox.x + loadingMarkBox.width <= loadingWordmarkBox.x;
+    expect(remainsSeparated).toBe(true);
     expect(loadingWordmarkBox.width).toBeGreaterThan(120);
   }
   await expect(loader).toHaveAttribute('data-phase', /entering|departing/);
