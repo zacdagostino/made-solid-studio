@@ -45,12 +45,15 @@ test('registers contextual auto-read Quick questions as immutable test package v
     );
   }
 
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.100`/);
-  assert.match(app, /Quick questions now inherit the complete selected conversation/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.101`/);
+  assert.match(
+    app,
+    /temporary read-only quick question that inherits the whole selected conversation/,
+  );
   assert.match(component, /threadId: temporaryQuestion\.threadId/);
   assert.match(component, /setAutoReadPending\(\{/);
   assert.match(bridge, /client\.request\('thread\/fork'/);
   assert.match(bridge, /complete inherited conversation as context/);
-  assert.match(responsiveSpec, /agent-package-local-v23-0-contextual-auto-read-quick-questions/);
+  assert.match(responsiveSpec, /v23\.0 · Approved test/);
   assert.match(responsiveSpec, /\['v23\.0', 'Contextual auto-read Quick questions'\]/);
 });

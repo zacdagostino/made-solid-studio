@@ -49,10 +49,7 @@ test('registers Codex conversation status indicators as immutable test package v
       fallbackLedger.indexOf('localEditorOnlyClientChatScopePackage,'),
   );
 
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.100`/);
-  assert.match(
-    app,
-    /Quick questions now inherit the complete selected conversation in an isolated read-only fork/,
-  );
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.101`/);
+  assert.match(app, /returning from a backgrounded Chrome tab now keeps the live Studio mounted/);
   assert.match(responsiveSpec, /\['v22\.9', 'Codex conversation status indicators'\]/);
 });

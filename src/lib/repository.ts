@@ -448,6 +448,9 @@ const localCodexConversationStatusIndicatorsPackageId =
   'agent-package-local-v22-9-codex-conversation-status-indicators';
 const localContextualQuickQuestionsPackageId =
   'agent-package-local-v23-0-contextual-auto-read-quick-questions';
+const localSeamlessStudioResumePackageId = 'agent-package-local-v23-1-seamless-studio-resume';
+const localConfiguredFinalEditUpstreamPackageId =
+  'agent-package-local-v23-2-configured-final-edit-upstream';
 
 type StoreName =
   | 'activities'
@@ -3645,10 +3648,46 @@ export class SiteforgeRepository {
         'Makes a precise follow-up useful without losing the surrounding conversation or requiring the reviewer to read the temporary answer manually.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localSeamlessStudioResumePackage: AgentPackage = {
+      ...localContextualQuickQuestionsPackage,
+      id: localSeamlessStudioResumePackageId,
+      version: 23.1,
+      basePackageId: localContextualQuickQuestionsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v23.1',
+      contractAddendum:
+        'The authenticated development Studio keeps its owner-only live-update connection active while Chrome is backgrounded, privately revalidates editable source instead of discarding every browser module, reuses versioned optimized dependencies and the runtime optimizer cache, and pre-warms its largest client entry files. A routine return keeps the mounted route and workspace intact; an unavoidable cold start removes its post-load pause and restores saved workspace data before live hydration.',
+      instructionsAddendum:
+        'Send a bounded server-side WebSocket heartbeat through the owner gateway so background-tab timer throttling does not turn an idle live-update connection into a document reload. Keep documents and runtime API responses private and no-store. Serve editable source as private no-cache responses with validators, and versioned optimized dependencies as private immutable responses. Reuse the isolated Vite optimizer cache on routine restarts, pre-warm the primary Studio client entries, require four consecutive failed dependency-graph probes before restarting, and keep saved workspace hydration non-blocking. Never cache authenticated API data or weaken owner-cookie validation.',
+      summary:
+        'Seamless Studio resume test package: prevents idle development reconnect reloads and makes unavoidable reloads reuse warm private modules and saved workspace state.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps the editable Studio responsive when Chrome resumes while retaining immediate source updates, owner isolation, and fresh live data.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localConfiguredFinalEditUpstreamPackage: AgentPackage = {
+      ...localSeamlessStudioResumePackage,
+      id: localConfiguredFinalEditUpstreamPackageId,
+      version: 23.2,
+      basePackageId: localSeamlessStudioResumePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v23.2',
+      contractAddendum:
+        "A final website edit checkpoint targets the editable branch's configured upstream repository and branch instead of requiring a remote named origin. Studio validates that destination before it commits, pushes the exact verified revision to it, and keeps the checkpoint unlocked when the upstream is missing or invalid.",
+      instructionsAddendum:
+        'Resolve the current editable branch and its configured upstream remote and merge branch before mutating the prospect repository. Validate that the configured remote exists, then push the exact final-edit commit to that configured remote branch and confirm HEAD matches the upstream revision before locking the handoff checkpoint. Do not assume the remote is named origin. If no valid upstream is configured, preserve the working files and return actionable repository-setup guidance without creating a partial checkpoint.',
+      summary:
+        'Configured final edit upstream test package: commits and pushes a verified edit to its tracked repository branch without requiring a remote named origin.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes final edit checkpoints reliable for every correctly tracked prospect repository while preventing partial or misdirected client handoffs.',
+      stagedBehaviourIds: ['client-url-release-contract'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localConfiguredFinalEditUpstreamPackage,
+          localSeamlessStudioResumePackage,
           localContextualQuickQuestionsPackage,
           localCodexConversationStatusIndicatorsPackage,
           localEditorOnlyClientChatScopePackage,
@@ -3827,6 +3866,8 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localConfiguredFinalEditUpstreamPackage,
+          localSeamlessStudioResumePackage,
           localContextualQuickQuestionsPackage,
           localCodexConversationStatusIndicatorsPackage,
           localEditorOnlyClientChatScopePackage,
@@ -4008,6 +4049,8 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localConfiguredFinalEditUpstreamPackage,
+            localSeamlessStudioResumePackage,
             localContextualQuickQuestionsPackage,
             localCodexConversationStatusIndicatorsPackage,
             localEditorOnlyClientChatScopePackage,

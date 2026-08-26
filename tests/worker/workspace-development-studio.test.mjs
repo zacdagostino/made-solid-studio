@@ -325,13 +325,28 @@ test('Workspace Studio gateway authenticates documents, assets, and the live-upd
     });
     assert.equal(authenticatedAsset.status, 200);
     assert.equal(authenticatedAsset.body, 'development:/@vite/client');
-    assert.equal(authenticatedAsset.headers['cache-control'], 'private, no-store');
+    assert.equal(authenticatedAsset.headers['cache-control'], 'private, no-cache');
     assert.equal(authenticatedAsset.headers['set-cookie'], undefined);
     assert.equal(upstreamHeaders.cookie, undefined);
     assert.equal(upstreamHeaders.origin, undefined);
     assert.equal(upstreamHeaders.referer, undefined);
     assert.equal(upstreamHeaders['x-forwarded-host'], 'workspace.madesolid.com.au');
     assert.equal(upstreamHeaders['x-forwarded-proto'], 'https');
+
+    const optimizedDependency = await httpRequest(
+      gatewayPort,
+      '/node_modules/.vite/deps/react.js?v=stable-hash',
+      { cookie },
+    );
+    assert.equal(optimizedDependency.status, 200);
+    assert.equal(
+      optimizedDependency.headers['cache-control'],
+      'private, max-age=31536000, immutable',
+    );
+
+    const runtimeData = await httpRequest(gatewayPort, '/__made-solid/codex-status', { cookie });
+    assert.equal(runtimeData.status, 200);
+    assert.equal(runtimeData.headers['cache-control'], 'private, no-store');
   } finally {
     await Promise.all([close(gateway), close(upstream)]);
   }
@@ -425,7 +440,7 @@ test('Railway keeps production release serving separate from the restartable liv
   );
   assert.match(developmentSupervisor, /--host 127\.0\.0\.1/);
   assert.match(developmentSupervisor, /--mode development/);
-  assert.match(developmentSupervisor, /--force/);
+  assert.doesNotMatch(developmentSupervisor, /--force/);
   assert.doesNotMatch(
     developmentSupervisor,
     /SITEFORGE_SUPABASE_SERVICE_ROLE_KEY=|SITEFORGE_WORKSPACE_PREVIEW_SECRET=|SUPABASE_SERVICE_ROLE_KEY=|SITEFORGE_GITHUB_TOKEN=|CODEX_HOME=/,
@@ -436,7 +451,10 @@ test('Railway keeps production release serving separate from the restartable liv
   assert.match(launcher, /wait -n "\$\{critical_processes\[@\]\}"/);
   assert.doesNotMatch(launcher, /workspace-preview-proxy\.mjs/);
 
-  assert.match(viteConfiguration, /workspaceDevelopment \? \[workspaceCodexBranchPlugin\(\)\]/);
+  assert.match(
+    viteConfiguration,
+    /workspaceDevelopment[\s\S]*?workspaceCodexBranchPlugin\(\), workspaceHmrHeartbeatPlugin\(\)/,
+  );
   assert.match(viteConfiguration, /frame-ancestors 'none'/);
   assert.match(viteConfiguration, /SITEFORGE_RUNTIME_API_PROXY_ORIGIN/);
   assert.match(viteConfiguration, /target: runtimeApiTarget/);

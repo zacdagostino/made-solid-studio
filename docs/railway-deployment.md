@@ -68,6 +68,10 @@ from replacing the gateway/runtime policy while still applying source edits imme
 persistent checkout has no `node_modules`, the launcher links the image's locked installation rather
 than installing packages during startup. A Workspace Vite or gateway failure is restarted
 independently and cannot stop production Studio, workers, the private Preview host, or Codex.
+The owner gateway keeps documents and authenticated runtime data `no-store`, privately revalidates
+editable source modules, and privately caches versioned optimized dependencies. Its server-side
+WebSocket heartbeat keeps live updates connected while Chrome backgrounds the tab, and routine Vite
+restarts reuse the isolated runtime optimizer cache instead of rebuilding every dependency.
 
 ## Configure variables
 

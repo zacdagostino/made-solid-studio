@@ -172,7 +172,6 @@ maintain_workspace_studio() {
         node "$application_directory/node_modules/vite/bin/vite.js" \
           --config "$studio_workspace_directory/vite.config.ts" \
           --mode development \
-          --force \
           --host 127.0.0.1 \
           --port "$workspace_studio_port" \
           --strictPort
@@ -189,7 +188,7 @@ maintain_workspace_studio() {
           failures=0
         else
           failures=$((failures + 1))
-          if ((failures >= 2)); then
+          if ((failures >= 4)); then
             echo "[railway-runtime] Workspace Studio dependency graph is unhealthy; restarting it from the isolated serve cache."
             kill -TERM "$workspace_process" 2>/dev/null || true
             break

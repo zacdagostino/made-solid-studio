@@ -192,9 +192,12 @@ test('protects every Vite request behind an owner cookie and keeps access out of
       }),
     );
 
-    const document = await fetch(`${origin}/`, { headers: { Cookie: cookie } });
+    const document = await fetch(`${origin}/`, {
+      headers: { ...documentHeaders, Cookie: cookie },
+    });
     assert.equal(document.status, 200);
     assert.equal(await document.text(), '<h1>Studio</h1>');
+    assert.equal(document.headers.get('cache-control'), 'private, no-store');
     assert.equal(document.headers.get('set-cookie'), null);
     const module = await fetch(`${origin}/src/main.tsx`, { headers: { Cookie: cookie } });
     assert.equal(module.status, 200);

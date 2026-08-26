@@ -17,6 +17,8 @@ test('keeps repeated workspace loading cached, targeted, and non-blocking', asyn
   assert.match(app, /}, 900\)/);
   assert.match(app, /readCachedOrganizationId\(userId\)/);
   assert.match(app, /clearWorkspaceCache\(workspaceCacheKey\)/);
+  assert.match(app, /setTimeout\(onComplete, 200\)/);
+  assert.doesNotMatch(app, /setTimeout\(onComplete, 660\)/);
 
   assert.match(cache, /made-solid-studio-workspace-cache/);
   assert.match(cache, /7 \* 24 \* 60 \* 60 \* 1_000/);

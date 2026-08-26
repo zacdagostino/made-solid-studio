@@ -208,6 +208,17 @@ function upstreamHeaders(request, configuration, requestOrigin = configuration.w
   return headers;
 }
 
+function workspaceResponseCacheControl(request) {
+  const url = new URL(request.url || '/', 'http://made-solid-workspace.local');
+  if (requestsDocument(request) || url.pathname.startsWith('/__made-solid/')) {
+    return 'private, no-store';
+  }
+  if (url.pathname.startsWith('/node_modules/.vite/deps/') && url.searchParams.has('v')) {
+    return 'private, max-age=31536000, immutable';
+  }
+  return 'private, no-cache';
+}
+
 function proxyHttp(request, response, configuration, requestOrigin) {
   const requestPath = new URL(request.url || '/', requestOrigin).pathname;
   const upstream = createProxyRequest(
@@ -221,7 +232,7 @@ function proxyHttp(request, response, configuration, requestOrigin) {
     (upstreamResponse) => {
       const headers = {
         ...upstreamResponse.headers,
-        'cache-control': 'private, no-store',
+        'cache-control': workspaceResponseCacheControl(request),
         'content-security-policy': "frame-ancestors 'none'; base-uri 'self'",
         'cross-origin-opener-policy': 'same-origin',
         'cross-origin-resource-policy': 'same-origin',

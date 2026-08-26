@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
@@ -386,7 +388,15 @@ test('exposes a validated, staged final-edit checkpoint for the prospect reposit
   assert.match(finaliseSource, /git\(workspace, 'add', '-A'\)/);
   assert.match(finaliseSource, /git\(workspace, 'commit', '-m'/);
   assert.match(finaliseSource, /Made Solid edit v\$\{editVersion\}/);
-  assert.match(finaliseSource, /run\('git', \['push', 'origin', branch\]/);
+  assert.match(finaliseSource, /SITEFORGE_STUDIO_WORKSPACE_DIR/);
+  assert.match(finaliseSource, /SITEFORGE_PROSPECT_WORKSPACES_DIR/);
+  assert.match(finaliseSource, /branch\.\$\{branch\}\.remote/);
+  assert.match(finaliseSource, /branch\.\$\{branch\}\.merge/);
+  assert.match(finaliseSource, /upstream !== `\$\{upstreamRemote\}\/\$\{upstreamBranch\}`/);
+  assert.match(finaliseSource, /startingCommit !== upstreamCommit/);
+  assert.match(finaliseSource, /restoreGeneratedNextEnvironment\(workspace\)/);
+  assert.match(finaliseSource, /HEAD:refs\/heads\/\$\{upstreamBranch\}/);
+  assert.match(finaliseSource, /pushedCommit !== commit/);
   assert.match(finaliseSource, /delete githubEnvironment\.GITHUB_TOKEN/);
   assert.match(finaliseSource, /'gh', \['auth', 'setup-git'\]/);
   assert.doesNotMatch(finaliseSource, /emit\([^)]*remote/s);
@@ -409,6 +419,157 @@ test('exposes a validated, staged final-edit checkpoint for the prospect reposit
   assert.match(appSource, /Push committed edit to Made Solid/);
   assert.match(appSource, /Made Solid handoff is not connected/);
   assert.doesNotMatch(appSource, /website-admin connection is not configured/i);
+});
+
+test('finalises the configured Studio checkout instead of a same-named runtime decoy', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'made-solid-final-edit-path-'));
+  const studioRoot = join(root, 'studio');
+  const runtimeRoot = join(root, 'runtime');
+  const repositoryName = 'example-prospect';
+  const workspace = join(studioRoot, 'prospect-workspaces', repositoryName);
+  const decoy = join(runtimeRoot, 'prospect-workspaces', repositoryName);
+  const remote = join(root, 'prospect.git');
+  const fakeBin = join(root, 'bin');
+  const git = (cwd, ...arguments_) =>
+    execFileSync('git', arguments_, {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+
+  try {
+    await Promise.all([
+      mkdir(join(workspace, '.made-solid'), { recursive: true }),
+      mkdir(decoy, { recursive: true }),
+      mkdir(fakeBin, { recursive: true }),
+    ]);
+    execFileSync('git', ['init', '--bare', remote]);
+    for (const repository of [workspace, decoy]) {
+      git(repository, 'init', '-b', 'main');
+      git(repository, 'config', 'user.name', 'Made Solid test');
+      git(repository, 'config', 'user.email', 'studio-test@madesolid.com.au');
+      await writeFile(join(repository, 'README.md'), `${repositoryName}\n`);
+      if (repository === workspace) {
+        await writeFile(join(repository, '.made-solid', 'refinement-log.jsonl'), '{}\n');
+        await writeFile(
+          join(repository, 'package.json'),
+          `${JSON.stringify({
+            private: true,
+            scripts: {
+              verify: 'node -e ""',
+              'made-solid:bundle': 'node -e ""',
+            },
+          })}\n`,
+        );
+        await writeFile(
+          join(repository, 'next-env.d.ts'),
+          '/// <reference types="next" />\nimport "./.next/types/routes.d.ts";\n',
+        );
+      }
+      git(repository, 'add', '-A');
+      git(repository, 'commit', '-m', `Made Solid edit v1: ${repositoryName}`);
+    }
+    git(workspace, 'remote', 'add', 'prospect', remote);
+    git(workspace, 'push', '--set-upstream', 'prospect', 'HEAD:website');
+    await mkdir(join(workspace, 'node_modules'));
+    await writeFile(join(workspace, 'website.txt'), 'A real website edit.\n');
+    await writeFile(
+      join(workspace, 'next-env.d.ts'),
+      '/// <reference types="next" />\nimport "./.next/dev/types/routes.d.ts";\n',
+    );
+    await writeFile(join(fakeBin, 'gh'), '#!/bin/sh\nexit 0\n');
+    await chmod(join(fakeBin, 'gh'), 0o755);
+
+    const decoyCommit = git(decoy, 'rev-parse', 'HEAD');
+    const output = execFileSync(
+      process.execPath,
+      [fileURLToPath(finaliseUrl), '--directory', repositoryName],
+      {
+        cwd: runtimeRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${fakeBin}:${process.env.PATH}`,
+          SITEFORGE_STUDIO_WORKSPACE_DIR: studioRoot,
+          SITEFORGE_PROSPECT_WORKSPACES_DIR: join(runtimeRoot, 'prospect-workspaces'),
+        },
+      },
+    );
+    const events = output
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+
+    assert.equal(events.at(-1)?.status, 'complete');
+    assert.match(events.at(-1)?.detail ?? '', /committed and available/);
+    assert.equal(
+      git(workspace, 'rev-parse', 'HEAD'),
+      git(remote, 'rev-parse', 'refs/heads/website'),
+    );
+    assert.equal(
+      git(workspace, 'log', '-1', '--pretty=%s'),
+      'Made Solid edit v2: example-prospect',
+    );
+    assert.match(await readFile(join(workspace, 'website.txt'), 'utf8'), /real website edit/);
+    assert.doesNotMatch(await readFile(join(workspace, 'next-env.d.ts'), 'utf8'), /\.next\/dev/);
+    assert.equal(git(decoy, 'rev-parse', 'HEAD'), decoyCommit);
+    assert.equal(git(workspace, 'remote'), 'prospect');
+    assert.equal(output.includes(remote), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('preserves pending edits and reports actionable recovery when no upstream is configured', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'made-solid-final-edit-upstream-'));
+  const repositoryName = 'disconnected-prospect';
+  const workspace = join(root, 'prospect-workspaces', repositoryName);
+  try {
+    await mkdir(join(workspace, '.made-solid'), { recursive: true });
+    execFileSync('git', ['init', '-b', 'main'], { cwd: workspace });
+    execFileSync('git', ['config', 'user.name', 'Made Solid test'], { cwd: workspace });
+    execFileSync('git', ['config', 'user.email', 'studio-test@madesolid.com.au'], {
+      cwd: workspace,
+    });
+    await writeFile(join(workspace, '.made-solid', 'refinement-log.jsonl'), '{}\n');
+    await writeFile(join(workspace, 'website.txt'), 'Original website.\n');
+    execFileSync('git', ['add', '-A'], { cwd: workspace });
+    execFileSync('git', ['commit', '-m', `Made Solid edit v1: ${repositoryName}`], {
+      cwd: workspace,
+    });
+    const originalCommit = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: workspace,
+      encoding: 'utf8',
+    }).trim();
+    await writeFile(join(workspace, 'website.txt'), 'Pending website edit.\n');
+
+    const result = spawnSync(
+      process.execPath,
+      [fileURLToPath(finaliseUrl), '--directory', repositoryName],
+      {
+        cwd: root,
+        encoding: 'utf8',
+        env: { ...process.env, SITEFORGE_STUDIO_WORKSPACE_DIR: root },
+      },
+    );
+
+    assert.equal(result.status, 1);
+    const events = result.stdout
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    assert.equal(events.at(-1)?.status, 'failed');
+    assert.match(events.at(-1)?.detail ?? '', /connection needs repair/i);
+    assert.match(events.at(-1)?.detail ?? '', /changes are still safe/i);
+    assert.doesNotMatch(result.stdout, /git remote|get-url|No such remote/i);
+    assert.equal(
+      execFileSync('git', ['rev-parse', 'HEAD'], { cwd: workspace, encoding: 'utf8' }).trim(),
+      originalCommit,
+    );
+    assert.equal(await readFile(join(workspace, 'website.txt'), 'utf8'), 'Pending website edit.\n');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('uses the forwarded Codespaces port URL only inside Codespaces', () => {

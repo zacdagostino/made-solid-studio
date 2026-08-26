@@ -1712,13 +1712,21 @@ test('closes the website edit dialog and reports verification failures on the pa
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
+        releaseVerificationAvailable: true,
         status: 'changes_pending',
         detail: 'There are saved website changes ready to commit.',
         branch: 'main',
+        commit: '923b61b9d1d81e0c36243e3a21418b7ea7ca8f29',
+        synced: true,
         changedFiles: ['src/App.tsx'],
         bundleReady: false,
         refinementCount: 4,
-        sourceBuild: { buildId: 'f906bbf7-a333-4bfa-bcfb-f667e7f1259b' },
+        businessId,
+        sourceBuild: {
+          buildId: 'f906bbf7-a333-4bfa-bcfb-f667e7f1259b',
+          manifestId: '91f62af2-2af3-4523-9f73-883628fcd478',
+        },
+        releaseStatus: 'missing',
         versions: [],
         workingVersion: 1,
       }),
@@ -1746,9 +1754,11 @@ test('closes the website edit dialog and reports verification failures on the pa
   const dialog = page.getByRole('dialog', { name: 'Commit website edit v1?' });
   await dialog.getByRole('button', { name: 'Verify, commit and push' }).click();
   await expect(dialog).toBeHidden();
-  await expect(page.getByRole('alert')).toContainText(
+  const checkpoint = page.getByTestId('final-edit-checkpoint');
+  await expect(checkpoint.getByRole('alert')).toContainText(
     'Next.js build worker exited before verification completed.',
   );
+  await expect(checkpoint.locator('.final-edit__progress')).toBeHidden();
   await expect(page.getByRole('button', { name: 'Commit edit v1' })).toBeEnabled();
 
   const results = await new AxeBuilder({ page })
@@ -4003,8 +4013,10 @@ test('displays the newest test package above retained package versions', async (
 
   const packagePicker = page.getByLabel('Test agent package');
   await expect(packagePicker).toHaveValue(
-    'agent-package-local-v23-0-contextual-auto-read-quick-questions',
+    'agent-package-local-v23-2-configured-final-edit-upstream',
   );
+  await expect(packagePicker).toContainText('v23.2 · Approved test');
+  await expect(packagePicker).toContainText('v23.1 · Approved test');
   await expect(packagePicker).toContainText('v23.0 · Approved test');
   await expect(packagePicker).toContainText('v22.9 · Approved test');
   await expect(packagePicker).toContainText('v22.8 · Approved test');
@@ -4181,6 +4193,8 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v23.2', 'Configured final edit upstream'],
+    ['v23.1', 'Seamless Studio resume'],
     ['v23.0', 'Contextual auto-read Quick questions'],
     ['v22.9', 'Codex conversation status indicators'],
     ['v22.8', 'Editor-only client chat scope'],

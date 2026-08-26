@@ -4,6 +4,8 @@ import react from '@vitejs/plugin-react';
 import { localWorkspacePlugin } from './scripts/local-workspace-vite-plugin.mjs';
 // @ts-expect-error The private Workspace Vite-only bridge is intentionally plain JavaScript.
 import { workspaceCodexBranchPlugin } from './scripts/workspace-codex-branch-vite-plugin.mjs';
+// @ts-expect-error The development-only HMR heartbeat plugin is intentionally plain JavaScript.
+import { workspaceHmrHeartbeatPlugin } from './scripts/workspace-hmr-heartbeat.mjs';
 
 function configuredHostname(value?: string) {
   if (!value) return undefined;
@@ -53,7 +55,9 @@ export default defineConfig(({ command, mode }) => {
     cacheDir,
     plugins: [
       react(),
-      ...(workspaceDevelopment ? [workspaceCodexBranchPlugin()] : [localWorkspacePlugin()]),
+      ...(workspaceDevelopment
+        ? [workspaceCodexBranchPlugin(), workspaceHmrHeartbeatPlugin()]
+        : [localWorkspacePlugin()]),
     ],
     preview: {
       allowedHosts: railwayAllowedHosts,
@@ -66,6 +70,16 @@ export default defineConfig(({ command, mode }) => {
       headers: {
         'Content-Security-Policy': frameAncestors,
       },
+      warmup: workspaceDevelopment
+        ? {
+            clientFiles: [
+              './src/main.tsx',
+              './src/App.tsx',
+              './src/components/CodexFeedbackPanel.tsx',
+              './src/styles.css',
+            ],
+          }
+        : undefined,
       proxy: runtimeApiTarget
         ? {
             '/__made-solid': {

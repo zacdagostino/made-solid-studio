@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { relative, resolve, sep } from 'node:path';
 
@@ -20,6 +28,46 @@ function git(workspace, ...gitArguments) {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
+}
+
+function optionalGit(workspace, ...gitArguments) {
+  try {
+    return git(workspace, ...gitArguments);
+  } catch {
+    return '';
+  }
+}
+
+function prospectWorkspace(directory, environment = process.env) {
+  const studioWorkspace = environment.SITEFORGE_STUDIO_WORKSPACE_DIR?.trim();
+  const prospectRoot = studioWorkspace
+    ? resolve(studioWorkspace, 'prospect-workspaces')
+    : resolve(environment.SITEFORGE_PROSPECT_WORKSPACES_DIR?.trim() || 'prospect-workspaces');
+  return resolve(prospectRoot, directory);
+}
+
+function restoreGeneratedNextEnvironment(workspace) {
+  const relativePath = 'next-env.d.ts';
+  const changed = optionalGit(workspace, 'status', '--porcelain', '--', relativePath);
+  if (!changed || !existsSync(resolve(workspace, relativePath))) return;
+  let committedSource;
+  try {
+    committedSource = execFileSync('git', ['show', `HEAD:${relativePath}`], {
+      cwd: workspace,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch {
+    return;
+  }
+  const generatedDevelopmentSource = committedSource.replace(
+    './.next/types/routes.d.ts',
+    './.next/dev/types/routes.d.ts',
+  );
+  const currentSource = readFileSync(resolve(workspace, relativePath), 'utf8');
+  if (currentSource === generatedDevelopmentSource) {
+    writeFileSync(resolve(workspace, relativePath), committedSource);
+  }
 }
 
 function run(command, commandArguments, cwd, environment = process.env) {
@@ -93,7 +141,7 @@ try {
   if (!directory || !directoryPattern.test(directory)) {
     throw new Error('A valid prospect workspace directory is required.');
   }
-  const workspace = resolve('prospect-workspaces', directory);
+  const workspace = prospectWorkspace(directory);
   if (!existsSync(resolve(workspace, '.git'))) {
     throw new Error('Open the prospect workspace before committing its final edit.');
   }
@@ -101,10 +149,37 @@ try {
     throw new Error('The Made Solid refinement ledger is missing.');
   }
 
-  const branch = git(workspace, 'branch', '--show-current');
-  const remote = git(workspace, 'remote', 'get-url', 'origin');
-  if (!branch || !remote)
-    throw new Error('The prospect repository branch or origin is unavailable.');
+  const branch = optionalGit(workspace, 'branch', '--show-current');
+  const upstreamRemote = branch
+    ? optionalGit(workspace, 'config', '--get', `branch.${branch}.remote`)
+    : '';
+  const upstreamMergeReference = branch
+    ? optionalGit(workspace, 'config', '--get', `branch.${branch}.merge`)
+    : '';
+  const upstreamBranch = upstreamMergeReference.startsWith('refs/heads/')
+    ? upstreamMergeReference.slice('refs/heads/'.length)
+    : '';
+  const remote = upstreamRemote ? optionalGit(workspace, 'remote', 'get-url', upstreamRemote) : '';
+  if (!branch || !upstreamRemote || upstreamRemote === '.' || !upstreamBranch || !remote) {
+    throw new Error(
+      'Repository connection needs repair. Your website changes are still safe and no new version was committed. Reopen the editing workspace, then retry this checkpoint.',
+    );
+  }
+  const upstream = optionalGit(workspace, 'rev-parse', '--abbrev-ref', '@{upstream}');
+  if (upstream !== `${upstreamRemote}/${upstreamBranch}`) {
+    throw new Error(
+      'The editable repository branch does not match its configured upstream branch. Reconnect the editing workspace before committing it.',
+    );
+  }
+  const startingCommit = git(workspace, 'rev-parse', 'HEAD');
+  const upstreamCommit = git(workspace, 'rev-parse', '@{upstream}');
+  if (startingCommit !== upstreamCommit) {
+    throw new Error(
+      'The editable repository is not synced with its GitHub branch. Sync it before committing this website edit.',
+    );
+  }
+
+  restoreGeneratedNextEnvironment(workspace);
 
   const latestSubject = git(workspace, 'log', '-1', '--pretty=%s');
   const hasChanges = Boolean(git(workspace, 'status', '--porcelain'));
@@ -150,11 +225,20 @@ try {
   }
 
   const commit = git(workspace, 'rev-parse', 'HEAD');
-  emit('running', 'pushing', `Pushing the final edit to origin/${branch}.`);
+  emit('running', 'pushing', 'Pushing the final edit to its configured repository branch.');
   const githubEnvironment = { ...process.env };
   delete githubEnvironment.GITHUB_TOKEN;
   run('gh', ['auth', 'setup-git'], workspace, githubEnvironment);
-  run('git', ['push', 'origin', branch], workspace, githubEnvironment);
+  run(
+    'git',
+    ['push', upstreamRemote, `HEAD:refs/heads/${upstreamBranch}`],
+    workspace,
+    githubEnvironment,
+  );
+  const pushedCommit = git(workspace, 'rev-parse', '@{upstream}');
+  if (pushedCommit !== commit) {
+    throw new Error('GitHub did not confirm the exact website edit commit on its tracked branch.');
+  }
   emit(
     'complete',
     'ready',

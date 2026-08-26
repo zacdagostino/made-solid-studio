@@ -986,7 +986,7 @@ async function launchWebsite({
   const packageDocument = JSON.parse(await readFile(resolve(destination, 'package.json'), 'utf8'));
   const hostFlag = developmentServerHostFlag(packageDocument);
   const nextEnvironmentPath = resolve(destination, 'next-env.d.ts');
-  const nextEnvironmentSource = await readFile(nextEnvironmentPath, 'utf8').catch(() => undefined);
+  const committedNextEnvironmentSource = gitOutput(destination, 'show', 'HEAD:next-env.d.ts');
   await run('tmux', ['kill-session', '-t', sessionName]).catch(() => undefined);
   await run('tmux', [
     'new-session',
@@ -1025,14 +1025,15 @@ async function launchWebsite({
     });
     process.env.SITEFORGE_ACTIVE_PREVIEW_DIRECTORY = directory;
   }
-  if (nextEnvironmentSource) {
-    const generatedDevelopmentSource = nextEnvironmentSource.replace(
+  if (committedNextEnvironmentSource) {
+    const normalizedNextEnvironmentSource = `${committedNextEnvironmentSource}\n`;
+    const generatedDevelopmentSource = normalizedNextEnvironmentSource.replace(
       './.next/types/routes.d.ts',
       './.next/dev/types/routes.d.ts',
     );
     const currentSource = await readFile(nextEnvironmentPath, 'utf8').catch(() => undefined);
     if (currentSource === generatedDevelopmentSource) {
-      await writeFile(nextEnvironmentPath, nextEnvironmentSource);
+      await writeFile(nextEnvironmentPath, normalizedNextEnvironmentSource);
     }
   }
   finish({
