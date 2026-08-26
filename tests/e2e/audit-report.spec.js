@@ -20,7 +20,7 @@ async function seedReviewedAudit(page) {
     const now = '2099-08-18T12:00:00.000Z';
 
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open('siteforge-os', 8);
+      const request = indexedDB.open('siteforge-os', 9);
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
         const database = request.result;
@@ -179,7 +179,7 @@ async function failResponsiveSpecialist(page) {
   await page.evaluate(
     () =>
       new Promise((resolve, reject) => {
-        const request = indexedDB.open('siteforge-os', 8);
+        const request = indexedDB.open('siteforge-os', 9);
         request.onerror = () => reject(request.error);
         request.onsuccess = () => {
           const database = request.result;
@@ -225,6 +225,76 @@ async function failResponsiveSpecialist(page) {
   );
 }
 
+async function seedVerifiedEditedWebsite(page) {
+  await page.evaluate(
+    () =>
+      new Promise((resolve, reject) => {
+        const request = indexedDB.open('siteforge-os', 9);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const database = request.result;
+          const transaction = database.transaction(
+            ['buildManifests', 'builderRuns', 'sourceReleaseAttestations'],
+            'readwrite',
+          );
+          transaction.onerror = () => reject(transaction.error);
+          transaction.oncomplete = () => {
+            database.close();
+            resolve();
+          };
+          const businessId = 'business-demo-local-services';
+          const manifestId = 'manifest-report-e2e';
+          const builderRunId = 'builder-report-e2e';
+          const now = '2099-08-18T13:00:00.000Z';
+          transaction.objectStore('buildManifests').put({
+            id: manifestId,
+            businessId,
+            status: 'ready',
+            createdAt: now,
+            updatedAt: now,
+          });
+          transaction.objectStore('builderRuns').put({
+            id: builderRunId,
+            businessId,
+            buildManifestId: manifestId,
+            buildMode: 'full_site',
+            status: 'ready',
+            createdAt: now,
+            updatedAt: now,
+          });
+          transaction.objectStore('sourceReleaseAttestations').put({
+            id: 'release-report-e2e',
+            attestationId: 'a'.repeat(64),
+            businessId,
+            sourceBuilderRunId: builderRunId,
+            sourceManifestId: manifestId,
+            sourceRepositoryUrl: 'https://github.com/made-solid/demo-local-services',
+            sourceCommit: 'b'.repeat(40),
+            sourceTree: 'c'.repeat(40),
+            sourceBranch: 'main',
+            sourceEditVersion: 3,
+            verificationProfile: 'made-solid-edited-site-release-v1',
+            verifiedAt: now,
+            checks: [
+              ['source-verification', 'Source verification'],
+              ['responsive-layout', 'Responsive layout'],
+              ['responsive-navigation', 'Responsive navigation'],
+              ['accessibility', 'Accessibility'],
+            ].map(([id, label]) => ({
+              id,
+              label,
+              detail: `${label} passed for the exact edited website.`,
+              status: 'passed',
+            })),
+            sourceBuilderStatus: 'ready',
+            sourceBuilderQualitySummary: { status: 'passed' },
+            createdAt: now,
+          });
+        };
+      }),
+  );
+}
+
 test('shows specialist completion and durable worker errors on the Audit screen', async ({
   page,
 }) => {
@@ -235,7 +305,7 @@ test('shows specialist completion and durable worker errors on the Audit screen'
   await expect(page.getByRole('heading', { name: 'Audit version 4' })).toBeVisible();
   await expect(page.getByText('6 of 6 complete')).toBeVisible();
   await expect(page.getByText('2 observations are ready')).toBeVisible();
-  const reportLink = page.getByRole('link', { name: 'Review report findings' });
+  const reportLink = page.getByRole('link', { name: 'Open automated report' });
   await expect(reportLink).toHaveAttribute(
     'href',
     '#/prospects/business-demo-local-services/report',
@@ -266,82 +336,108 @@ test('shows specialist completion and durable worker errors on the Audit screen'
   });
 });
 
-test('reviews current-run specialist evidence and freezes a report version', async ({ page }) => {
+test('automatically selects supported report evidence and shows the single remaining prerequisite', async ({
+  page,
+}, testInfo) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await seedReviewedAudit(page);
   await page.goto('/#/prospects/business-demo-local-services/report');
 
   await expect(
-    page.getByRole('heading', { name: 'Website findings for Demo Local Services' }),
+    page.getByRole('heading', { name: 'Demo Local Services website report' }),
   ).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Specialist coverage' })).toBeVisible();
-  await expect(page.getByText('6 tasks')).toBeVisible();
-  const platformTheme = page.getByRole('button', {
-    name: /The current site uses Wix runtime services/,
-  });
-  await expect(platformTheme).toBeVisible();
+  await expect(page.getByText('No manual review is required.')).toBeVisible();
+  await expect(page.getByText('Website verification required')).toBeVisible();
+  const verifyWebsite = page.getByRole('link', { name: 'Verify current edited website' });
+  await expect(verifyWebsite).toHaveAttribute(
+    'href',
+    '#/prospects/business-demo-local-services/editing',
+  );
+  if (testInfo.project.name === 'mobile') {
+    const actionBox = await verifyWebsite.boundingBox();
+    expect(actionBox && actionBox.y + actionBox.height).toBeLessThanOrEqual(812);
+  }
+  await expect(page.getByText(/1 supported case will become up to 1 client theme/i)).toBeVisible();
+  await expect(page.getByRole('button', { name: /Approve/i })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Exclude/i })).toHaveCount(0);
 
   const documentWidth = await page.evaluate(() => document.documentElement.scrollWidth);
   expect(documentWidth).toBeLessThanOrEqual(page.viewportSize().width);
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
-  await expect(page).toHaveScreenshot('audit-report-review.png', {
+  await expect(page).toHaveScreenshot('automated-report-verification-required.png', {
     fullPage: true,
     animations: 'disabled',
   });
 
-  await page
-    .getByRole('heading', { name: 'The mobile enquiry route is hard to reach', exact: true })
-    .scrollIntoViewIfNeeded();
-  await expect(page).toHaveScreenshot('audit-report-findings.png', {
-    animations: 'disabled',
-  });
+  const automaticSelection = page.getByText('What Studio selected automatically');
+  await automaticSelection.click();
+  await expect(page.getByText('Mobile experience')).toBeVisible();
+  await expect(page.getByText('Platform', { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+    page.viewportSize().width,
+  );
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+});
 
-  const approve = page.getByRole('button', { name: 'Approve for report' }).first();
-  await approve.focus();
-  await page.keyboard.press('Enter');
-  await expect(page.getByRole('button', { name: 'Approved for report' })).toBeVisible();
-  await expect(page.getByText('1 unselected observation stays private.')).toBeVisible();
-  const approveAll = page.getByRole('button', { name: 'Approve all recommended (1)' });
-  await expect(approveAll).toBeEnabled();
-  await approveAll.click();
-  await expect(page.getByLabel('Review summary')).toContainText('2Client themes selected');
+test('generates one current report automatically when the verified edit is ready', async ({
+  page,
+}, testInfo) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await seedReviewedAudit(page);
+  await seedVerifiedEditedWebsite(page);
+  await page.goto('/#/prospects/business-demo-local-services/report');
 
-  const createReport = page.getByRole('button', {
-    name: 'Create report from 2 selected themes',
-  });
-  await expect(createReport).toBeEnabled();
-  await createReport.click();
-  await expect(page.getByText('Report version 1 created')).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Report version 1 is ready' })).toBeVisible();
-  await expect(page.getByText('Saved in report history')).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Demo Local Services website report' }),
+  ).toBeVisible();
+  await expect(page.getByText('Value report v1 is current')).toBeVisible();
+  await expect(page.getByText(/Edit v3 passed release checks/i)).toBeVisible();
   const previewReport = page.getByRole('link', { name: 'Preview client report' });
   await expect(previewReport).toHaveAttribute(
     'href',
     '#/prospects/business-demo-local-services/report-preview',
   );
-  await expect(page.getByRole('link', { name: 'Continue to handoff' })).toHaveAttribute(
-    'href',
-    '#/prospects/business-demo-local-services/handoff',
+  if (testInfo.project.name === 'mobile') {
+    const actionBox = await previewReport.boundingBox();
+    expect(actionBox && actionBox.y + actionBox.height).toBeLessThanOrEqual(812);
+  }
+  await expect(page.getByRole('button', { name: /Approve/i })).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByText('Value report v1 is current')).toBeVisible();
+  const savedReportCount = await page.evaluate(
+    () =>
+      new Promise((resolve, reject) => {
+        const request = indexedDB.open('siteforge-os', 9);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const database = request.result;
+          const transaction = database.transaction('reportVersions', 'readonly');
+          const count = transaction.objectStore('reportVersions').count();
+          count.onerror = () => reject(count.error);
+          count.onsuccess = () => {
+            database.close();
+            resolve(count.result);
+          };
+        };
+      }),
   );
-  await expect(page.getByRole('button', { name: 'Create updated report version' })).toBeVisible();
-  await previewReport.click();
-  await expect(page).toHaveURL(/#\/prospects\/business-demo-local-services\/report-preview$/);
-  await expect(page.getByText('Private Studio preview', { exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: /website report/i, level: 1 })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Back to report' })).toHaveAttribute(
-    'href',
-    '#/prospects/business-demo-local-services/report',
-  );
-  await expect(page.getByRole('link', { name: 'Continue to handoff' })).toHaveAttribute(
-    'href',
-    '#/prospects/business-demo-local-services/handoff',
-  );
+  expect(savedReportCount).toBe(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
     page.viewportSize().width,
   );
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
-  await expect(page).toHaveScreenshot('audit-report-client-preview.png', {
+  await expect(page).toHaveScreenshot('automated-report-ready.png', {
     fullPage: true,
     animations: 'disabled',
   });
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      320,
+    );
+    await expect(page).toHaveScreenshot('automated-report-ready-compact-mobile.png', {
+      fullPage: true,
+      animations: 'disabled',
+    });
+  }
 });

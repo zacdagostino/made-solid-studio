@@ -1,103 +1,26 @@
-import { ArrowLeft, ArrowRight, ExternalLink, LoaderCircle, LockKeyhole } from 'lucide-react';
-import type { Audit, DecisionReport, ReportPreviewJob } from '../lib/domain';
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  ExternalLink,
+  LoaderCircle,
+  LockKeyhole,
+  RefreshCcw,
+  ShieldCheck,
+  Sparkles,
+} from 'lucide-react';
+import type {
+  Audit,
+  DecisionReport,
+  ReportPreviewJob,
+  SourceReleaseAttestation,
+} from '../lib/domain';
+import {
+  prospectValueReportView,
+  reportUsesProspectValueContract,
+} from '../lib/prospect-value-report';
 import { Button, ButtonGroup, ButtonLink, StatusBadge } from './ui';
 import styles from './ClientReportPreview.module.css';
-
-type ReportFinding = {
-  id: string;
-  area: string;
-  severity: 'high' | 'medium' | 'low';
-  title: string;
-  observation: string;
-  impact: string;
-  recommendation: string;
-  sourceUrls: string[];
-  evidenceArtifactId?: string;
-  evidenceCaption?: string;
-  viewport?: string;
-};
-
-type ActionStage = { id: string; label: string; items: string[] };
-
-export type FrozenReportView = {
-  title: string;
-  summary: string;
-  findings: ReportFinding[];
-  actionPlan: ActionStage[];
-  methodology: string[];
-  limitations: string[];
-  nextStep: string;
-  platform?: { name: string; summary: string; tradeoffs: string[]; recommendation: string };
-};
-
-function record(value: unknown) {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function text(value: unknown) {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function textList(value: unknown) {
-  return Array.isArray(value) ? value.map(text).filter(Boolean) : [];
-}
-
-export function frozenReportView(report: DecisionReport): FrozenReportView {
-  const data = record(report.data);
-  const findings = Array.isArray(data.findings)
-    ? data.findings.slice(0, 8).map((raw, index) => {
-        const finding = record(raw);
-        const evidence = record(finding.evidence);
-        const viewport = record(evidence.viewport);
-        const severity = text(finding.severity || finding.priority);
-        const width = typeof viewport.width === 'number' ? viewport.width : undefined;
-        const height = typeof viewport.height === 'number' ? viewport.height : undefined;
-        return {
-          id: text(finding.id) || `finding-${index + 1}`,
-          area: text(finding.area) || 'Website experience',
-          severity: severity === 'low' || severity === 'medium' ? severity : 'high',
-          title: text(finding.title) || 'Website experience opportunity',
-          observation: text(finding.observation || finding.finding),
-          impact: text(finding.impact || finding.customerImpact),
-          recommendation: text(finding.recommendation),
-          sourceUrls: textList(finding.sourceUrls),
-          evidenceArtifactId: text(evidence.artifactId) || undefined,
-          evidenceCaption: text(evidence.caption) || undefined,
-          viewport: width && height ? `${width} × ${height}` : undefined,
-        } satisfies ReportFinding;
-      })
-    : [];
-  const actionPlan = Array.isArray(data.actionPlan)
-    ? data.actionPlan.map((raw, index) => {
-        const stage = record(raw);
-        return {
-          id: text(stage.id) || `stage-${index + 1}`,
-          label: text(stage.label) || `Stage ${index + 1}`,
-          items: textList(stage.items),
-        };
-      })
-    : [];
-  const platform = record(data.platform);
-  return {
-    title: text(data.title) || 'Website experience report',
-    summary: text(data.summary) || report.summary,
-    findings,
-    actionPlan,
-    methodology: textList(data.methodology),
-    limitations: textList(data.limitations),
-    nextStep: text(data.nextStep),
-    platform: Object.keys(platform).length
-      ? {
-          name: text(platform.name) || 'Current website platform',
-          summary: text(platform.summary),
-          tradeoffs: textList(platform.tradeoffs),
-          recommendation: text(platform.recommendation),
-        }
-      : undefined,
-  };
-}
 
 export function previewReportIsCurrent(
   report: DecisionReport | undefined,
@@ -118,6 +41,7 @@ export function ClientReportPreview({
   audit,
   clientName,
   evidenceUrls,
+  latestReleaseAttestation,
   onRequestRemotePreview,
   remoteJob,
   report,
@@ -127,13 +51,14 @@ export function ClientReportPreview({
   audit?: Audit;
   clientName: string;
   evidenceUrls: Record<string, string>;
+  latestReleaseAttestation?: SourceReleaseAttestation;
   onRequestRemotePreview: (reportVersionId: string) => Promise<void>;
   remoteJob?: ReportPreviewJob;
   report?: DecisionReport;
   reportPreviewWorkerAvailable: boolean;
 }) {
   const current = previewReportIsCurrent(report, audit, activeCaptureRunId) ? report : undefined;
-  const view = current ? frozenReportView(current) : undefined;
+  const view = current ? prospectValueReportView(current) : undefined;
   const active = remoteJob?.status === 'queued' || remoteJob?.status === 'running';
   const ready = Boolean(
     remoteJob?.status === 'ready' &&
@@ -141,6 +66,63 @@ export function ClientReportPreview({
     remoteJob.previewExpiresAt &&
     new Date(remoteJob.previewExpiresAt).valueOf() > Date.now(),
   );
+  const websiteChangedSinceReport = Boolean(
+    current &&
+    view &&
+    latestReleaseAttestation &&
+    (view.redesign.attestationId !== latestReleaseAttestation.attestationId ||
+      view.redesign.sourceCommit !== latestReleaseAttestation.sourceCommit),
+  );
+
+  if (report && !reportUsesProspectValueContract(report)) {
+    return (
+      <section className={styles.legacy} role="alert">
+        <span aria-hidden="true" className={styles.legacyIcon}>
+          <RefreshCcw size={24} />
+        </span>
+        <div>
+          <p className={styles.kicker}>Previous report format</p>
+          <h2>This report needs to be regenerated</h2>
+          <p>
+            Version {report.version} uses an earlier report contract. It does not use the current
+            automatic evidence-selection rules for the exact verified edited website, so it should
+            not be used with the client.
+          </p>
+          <p>
+            Return to Report. Studio will create an updated value report automatically after the
+            current edited website has passed release verification. The older version stays in
+            history.
+          </p>
+        </div>
+        <ButtonLink href={`#/prospects/${report.businessId}/report`} variant="primary">
+          <RefreshCcw aria-hidden="true" size={17} /> Regenerate report
+        </ButtonLink>
+      </section>
+    );
+  }
+
+  if (current && view && websiteChangedSinceReport) {
+    return (
+      <section className={styles.legacy} role="alert">
+        <span aria-hidden="true" className={styles.legacyIcon}>
+          <RefreshCcw size={24} />
+        </span>
+        <div>
+          <p className={styles.kicker}>Website changed after this report</p>
+          <h2>Regenerate the report for the current edited website</h2>
+          <p>
+            Report version {current.version} is tied to commit{' '}
+            <code>{view.redesign.sourceCommit.slice(0, 8)}</code>, but the latest verified website
+            is commit <code>{latestReleaseAttestation?.sourceCommit.slice(0, 8)}</code>. The report
+            stays in history and must not be presented as current.
+          </p>
+        </div>
+        <ButtonLink href={`#/prospects/${current.businessId}/report`} variant="primary">
+          <RefreshCcw aria-hidden="true" size={17} /> Create current report
+        </ButtonLink>
+      </section>
+    );
+  }
 
   if (!current || !view) {
     return (
@@ -186,128 +168,147 @@ export function ClientReportPreview({
 
       <article className={styles.report}>
         <header className={styles.hero}>
-          <p>Made Solid · Website experience review</p>
+          <p>Made Solid · Website value report</p>
           <h1>{view.title}</h1>
           <p className={styles.lede}>{view.summary}</p>
           <div className={styles.reportMeta}>
             <span>Prepared for {clientName}</span>
-            <span>Reviewed report · Version {current.version}</span>
+            <span>Verified redesign · Edit v{view.redesign.sourceEditVersion}</span>
+            <span>Report version {current.version}</span>
           </div>
         </header>
 
-        <section className={styles.intro} aria-labelledby="findings-title">
+        <section className={styles.intro} aria-labelledby="foundation-title">
           <div>
-            <p className={styles.kicker}>The clearest opportunities</p>
-            <h2 id="findings-title">What currently makes the website harder to use</h2>
+            <p className={styles.kicker}>The outcome</p>
+            <h2 id="foundation-title">A stronger digital foundation is ready</h2>
           </div>
           <p>
-            These are the reviewed themes frozen into this report—not every technical test result.
-            They focus on what a visitor can understand, navigate and act on.
+            This is not a list of hypothetical fixes. It connects supported evidence from the
+            original website to the completed, release-verified redesign prepared for {clientName}.
           </p>
         </section>
 
-        <div className={styles.findings}>
-          {view.findings.map((finding, index) => (
-            <section className={styles.finding} key={finding.id}>
-              <header>
-                <span>{String(index + 1).padStart(2, '0')}</span>
-                <div>
-                  <p>{finding.area}</p>
-                  <h3>{finding.title}</h3>
-                </div>
-                <StatusBadge
-                  tone={
-                    finding.severity === 'high'
-                      ? 'danger'
-                      : finding.severity === 'medium'
-                        ? 'warning'
-                        : 'neutral'
-                  }
-                >
-                  {finding.severity === 'high'
-                    ? 'Fix first'
-                    : finding.severity === 'medium'
-                      ? 'Improve next'
-                      : 'Future opportunity'}
-                </StatusBadge>
-              </header>
-              {finding.evidenceArtifactId && evidenceUrls[finding.evidenceArtifactId] ? (
-                <figure>
-                  <img
-                    alt={`Current website evidence for ${finding.title}`}
-                    src={evidenceUrls[finding.evidenceArtifactId]}
-                  />
-                  <figcaption>
-                    {finding.evidenceCaption || 'Current website screenshot'}
-                    {finding.viewport ? ` · ${finding.viewport}` : ''}
-                  </figcaption>
-                </figure>
-              ) : null}
-              <div className={styles.findingCopy}>
-                <div>
-                  <h4>What we observed</h4>
-                  <p>{finding.observation}</p>
-                </div>
-                <div>
-                  <h4>Why it matters</h4>
-                  <p>{finding.impact}</p>
-                </div>
-                <div className={styles.recommendation}>
-                  <h4>A clearer approach</h4>
-                  <p>{finding.recommendation}</p>
-                </div>
-              </div>
-            </section>
-          ))}
-        </div>
-
-        {view.actionPlan.length ? (
-          <section className={styles.actionPlan} aria-labelledby="action-plan-title">
-            <p className={styles.kicker}>A practical order of work</p>
-            <h2 id="action-plan-title">Where to begin</h2>
+        {view.strengths.length ? (
+          <section className={styles.strengths} aria-labelledby="strengths-title">
             <div>
-              {view.actionPlan.map((stage) => (
-                <section key={stage.id}>
-                  <h3>{stage.label}</h3>
-                  <ul>
-                    {stage.items.map((item) => (
-                      <li key={item}>{item}</li>
-                    ))}
-                  </ul>
-                </section>
+              <p className={styles.kicker}>What is already working in your favour</p>
+              <h2 id="strengths-title">A foundation worth building on</h2>
+            </div>
+            <div className={styles.strengthGrid}>
+              {view.strengths.map((strength) => (
+                <article key={strength.id}>
+                  <Sparkles aria-hidden="true" size={20} />
+                  <h3>{strength.title}</h3>
+                  <p>{strength.detail}</p>
+                </article>
               ))}
             </div>
           </section>
         ) : null}
 
-        {view.platform ? (
-          <section className={styles.platform} aria-labelledby="platform-title">
-            <p className={styles.kicker}>Platform context</p>
-            <h2 id="platform-title">{view.platform.name}</h2>
-            <p>{view.platform.summary}</p>
-            {view.platform.tradeoffs.length ? (
-              <ul>
-                {view.platform.tradeoffs.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            ) : null}
-            {view.platform.recommendation ? (
-              <p>
-                <strong>Recommendation:</strong> {view.platform.recommendation}
-              </p>
-            ) : null}
-          </section>
-        ) : null}
+        <section className={styles.themes} aria-labelledby="themes-title">
+          <div className={styles.sectionHeading}>
+            <p className={styles.kicker}>The value of the redesign</p>
+            <h2 id="themes-title">Where the old experience lost clarity—and what changed</h2>
+            <p>
+              Repeated technical cases are combined into a small number of visitor-focused themes.
+            </p>
+          </div>
+          <div className={styles.findings}>
+            {view.themes.map((theme, index) => (
+              <article className={styles.finding} key={theme.id}>
+                <header>
+                  <span>{String(index + 1).padStart(2, '0')}</span>
+                  <div>
+                    <p>{theme.area}</p>
+                    <h3>{theme.title}</h3>
+                  </div>
+                  <StatusBadge tone="neutral">
+                    {theme.occurrenceCount === 1
+                      ? '1 supported case'
+                      : `${theme.occurrenceCount} supported cases`}
+                  </StatusBadge>
+                </header>
+                {theme.evidenceArtifactId && evidenceUrls[theme.evidenceArtifactId] ? (
+                  <figure>
+                    <img
+                      alt={`Original website evidence for ${theme.title}`}
+                      src={evidenceUrls[theme.evidenceArtifactId]}
+                    />
+                    <figcaption>
+                      {theme.evidenceCaption || 'Original website evidence'}
+                      {theme.viewport ? ` · ${theme.viewport}` : ''}
+                    </figcaption>
+                  </figure>
+                ) : null}
+                <div className={styles.findingCopy}>
+                  <div>
+                    <h4>Before: the visitor experience</h4>
+                    <p>{theme.before}</p>
+                  </div>
+                  <div className={styles.recommendation}>
+                    <h4>What the redesign changes</h4>
+                    <p>{theme.redesignResponse}</p>
+                  </div>
+                  <div>
+                    <h4>The value this creates</h4>
+                    <p>{theme.value}</p>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className={styles.proof} aria-labelledby="proof-title">
+          <div>
+            <p className={styles.kicker}>Delivered and checked</p>
+            <h2 id="proof-title">Confidence in the website you are reviewing</h2>
+            <p>
+              These checks belong to edit v{view.redesign.sourceEditVersion}, commit{' '}
+              <code>{view.redesign.sourceCommit.slice(0, 8)}</code>—not the earlier generated
+              baseline.
+            </p>
+          </div>
+          <ul>
+            {view.deliveredWork.map((proof) => (
+              <li key={proof.id}>
+                <Check aria-hidden="true" size={18} />
+                <span>
+                  <strong>{proof.label}</strong>
+                  {proof.detail}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <details>
+            <summary>Verification record</summary>
+            <dl>
+              <div>
+                <dt>Edited website</dt>
+                <dd>v{view.redesign.sourceEditVersion}</dd>
+              </div>
+              <div>
+                <dt>Verified</dt>
+                <dd>{new Date(view.redesign.verifiedAt).toLocaleString('en-AU')}</dd>
+              </div>
+              <div>
+                <dt>Source commit</dt>
+                <dd>
+                  <code>{view.redesign.sourceCommit}</code>
+                </dd>
+              </div>
+            </dl>
+          </details>
+        </section>
 
         <footer className={styles.footer}>
           <div>
             <p className={styles.kicker}>Next step</p>
-            <h2>
-              {view.nextStep ||
-                'Talk through the improvements that best fit the business and its customers.'}
-            </h2>
+            <h2>{view.nextStep}</h2>
           </div>
+          <ShieldCheck aria-hidden="true" size={32} />
           <details>
             <summary>How this report was prepared</summary>
             <ul>

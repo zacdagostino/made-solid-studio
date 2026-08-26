@@ -5,24 +5,29 @@ import test from 'node:test';
 const root = new URL('../../', import.meta.url);
 
 test('moves only an exact committed edit through a protected persisted handoff', async () => {
-  const [app, domain, cloud, worker, migration, fixMigration, supervisor] = await Promise.all([
-    readFile(new URL('src/App.tsx', root), 'utf8'),
-    readFile(new URL('src/lib/domain.ts', root), 'utf8'),
-    readFile(new URL('src/lib/cloud-repository.ts', root), 'utf8'),
-    readFile(new URL('worker/made-solid-handoff-worker.mjs', root), 'utf8'),
-    readFile(
-      new URL('supabase/migrations/20260811110000_made_solid_source_handoffs.sql', root),
-      'utf8',
-    ),
-    readFile(
-      new URL(
-        'supabase/migrations/20260811180000_made_solid_handoff_repository_column_fix.sql',
-        root,
+  const [app, domain, cloud, worker, migration, fixMigration, releaseMigration, supervisor] =
+    await Promise.all([
+      readFile(new URL('src/App.tsx', root), 'utf8'),
+      readFile(new URL('src/lib/domain.ts', root), 'utf8'),
+      readFile(new URL('src/lib/cloud-repository.ts', root), 'utf8'),
+      readFile(new URL('worker/made-solid-handoff-worker.mjs', root), 'utf8'),
+      readFile(
+        new URL('supabase/migrations/20260811110000_made_solid_source_handoffs.sql', root),
+        'utf8',
       ),
-      'utf8',
-    ),
-    readFile(new URL('worker/supervisor.mjs', root), 'utf8'),
-  ]);
+      readFile(
+        new URL(
+          'supabase/migrations/20260811180000_made_solid_handoff_repository_column_fix.sql',
+          root,
+        ),
+        'utf8',
+      ),
+      readFile(
+        new URL('supabase/migrations/20260826170000_exact_commit_release_attestations.sql', root),
+        'utf8',
+      ),
+      readFile(new URL('worker/supervisor.mjs', root), 'utf8'),
+    ]);
 
   assert.match(app, /Push committed edit to Made Solid/);
   assert.match(app, /Open in Made Solid/);
@@ -45,6 +50,20 @@ test('moves only an exact committed edit through a protected persisted handoff',
   assert.match(worker, /sourceCommit: job\.source_commit/);
   assert.match(worker, /pricingSnapshot: job\.pricing_snapshot/);
   assert.match(worker, /verifyExactSourceWorkspace/);
+  assert.match(worker, /verifyReleaseAttestation/);
+  assert.match(worker, /persistReleaseAttestation/);
+  assert.match(worker, /loadVerifiedValueReport/);
+  assert.match(worker, /Create a current value report for this exact verified edit/);
+  assert.match(worker, /report,/);
+  assert.match(worker, /release-attestations/);
+  assert.match(worker, /made-solid-edited-site-release-v1/);
+  assert.match(worker, /'source-verification'/);
+  assert.match(worker, /'responsive-layout'/);
+  assert.match(worker, /'responsive-navigation'/);
+  assert.match(worker, /'accessibility'/);
+  assert.match(worker, /runWorkspaceCommand\('git', \['rev-parse', 'HEAD\^\{tree\}'\]/);
+  assert.match(worker, /createHash\('sha256'\)/);
+  assert.match(worker, /releaseAttestation,/);
   assert.match(worker, /deployExactSource/);
   assert.doesNotMatch(worker, /'deploy',\s*'--prod'/);
   assert.doesNotMatch(worker, /assignProspectDomain/);
@@ -97,6 +116,17 @@ test('moves only an exact committed edit through a protected persisted handoff',
   assert.match(migration, /target_publication\.github_repository_url/);
   assert.doesNotMatch(migration, /target_publication\.repository_url/);
   assert.match(fixMigration, /target_publication\.github_repository_url/);
+  assert.match(releaseMigration, /create table public\.source_release_attestations/);
+  assert.match(releaseMigration, /source_builder_status text not null/);
+  assert.match(releaseMigration, /source_builder_quality_summary jsonb/);
+  assert.match(releaseMigration, /attestation_id text not null/);
+  assert.match(releaseMigration, /release_attestation_id uuid/);
+  assert.match(releaseMigration, /guard_made_solid_handoff_release_attestation/);
+  assert.match(releaseMigration, /status <> 'ready' and new\.website_handoff_id is null/);
+  assert.match(
+    releaseMigration,
+    /A passed release attestation for this exact committed edit is required/,
+  );
   assert.match(
     migration,
     /Cancellation requested\. The worker will stop at the next safe checkpoint/,

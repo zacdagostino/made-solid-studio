@@ -29,3 +29,21 @@ test('requires a source-aware approved quote locked to the exact revision before
   assert.match(pricing, /'managed-24-month'/);
   assert.match(domain, /pricingSnapshot: import\('\.\/pricing'\)\.PricingQuoteSnapshot/);
 });
+
+test('keeps original build quality history alongside the edited-commit release proof', async () => {
+  const [migration, worker, domain] = await Promise.all([
+    readFile(
+      new URL('supabase/migrations/20260826170000_exact_commit_release_attestations.sql', root),
+      'utf8',
+    ),
+    readFile(new URL('worker/made-solid-handoff-worker.mjs', root), 'utf8'),
+    readFile(new URL('src/lib/domain.ts', root), 'utf8'),
+  ]);
+
+  assert.match(migration, /source_builder_status text not null/);
+  assert.match(migration, /source_builder_quality_summary jsonb/);
+  assert.match(migration, /unique \(attestation_digest\)/);
+  assert.match(worker, /\.select\('status, quality_summary'\)/);
+  assert.match(worker, /release_attestation_id: saved\.id/);
+  assert.match(domain, /releaseAttestationId\?: string/);
+});

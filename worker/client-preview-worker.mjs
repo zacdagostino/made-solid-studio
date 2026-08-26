@@ -103,31 +103,30 @@ async function createPrivateReviewAccess(job) {
 }
 
 async function loadReviewedDecisionReport(businessId) {
-  const versionResult = await supabase
+  const { data, error } = await supabase
     .from('decision_report_versions')
-    .select('id, version, review_state, summary, data, created_at')
+    .select('id, version, schema_version, review_state, summary, data, created_at')
     .eq('business_id', businessId)
+    .eq('schema_version', 5)
     .eq('review_state', 'approved')
     .order('version', { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (!versionResult.error) return versionResult.data;
-
-  // Keep older protected workspaces usable while the specialist-audit migration is rolling out.
-  const legacyResult = await supabase
-    .from('decision_reports')
-    .select('id, version, status, summary, updated_at')
-    .eq('business_id', businessId)
-    .eq('status', 'approved')
-    .order('version', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (legacyResult.error) throw legacyResult.error;
-  return legacyResult.data;
+  if (error) throw error;
+  if (
+    !data ||
+    data.data?.reportKind !== 'verified_redesign_value' ||
+    data.data?.redesign?.status !== 'passed'
+  ) {
+    throw new Error(
+      'Create a current verified value report before publishing this website to Clientspace.',
+    );
+  }
+  return data;
 }
 
 async function loadReportMedia(reportData) {
-  const findings = Array.isArray(reportData?.findings) ? reportData.findings : [];
+  const findings = Array.isArray(reportData?.valueThemes) ? reportData.valueThemes : [];
   const references = findings
     .map((finding) => finding?.evidence)
     .filter(
@@ -164,7 +163,7 @@ async function sendClientspaceHandoff(job, deploymentUrl) {
     report?.data && typeof report.data === 'object' && !Array.isArray(report.data)
       ? report.data
       : {};
-  const reportMedia = report ? await loadReportMedia(reportData) : [];
+  const reportMedia = await loadReportMedia(reportData);
   const response = await fetch(clientspaceHandoffUrl, {
     method: 'POST',
     headers: {
@@ -179,15 +178,13 @@ async function sendClientspaceHandoff(job, deploymentUrl) {
       clientEmail: job.client_email,
       projectName: job.project_name,
       previewUrl: deploymentUrl,
-      report: report
-        ? {
-            ...reportData,
-            title: `${job.project_name} website report`,
-            summary: report.summary,
-            version: report.version,
-            reviewedAt: report.created_at || report.updated_at,
-          }
-        : null,
+      report: {
+        ...reportData,
+        summary: report.summary,
+        version: report.version,
+        schemaVersion: report.schema_version,
+        reviewedAt: report.created_at,
+      },
       reportMedia,
       finalBalanceCents: job.final_balance_cents,
       pricingSnapshot: job.pricing_snapshot,

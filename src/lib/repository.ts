@@ -36,6 +36,7 @@ import type {
   ResearchCapture,
   RedesignBrief,
   RedesignConcept,
+  SourceReleaseAttestation,
   Task,
   TaxExpense,
   TaxExpenseInput,
@@ -203,7 +204,7 @@ export type WorkspaceRepository = {
 };
 
 const databaseName = 'siteforge-os';
-const databaseVersion = 8;
+const databaseVersion = 9;
 const legacyStorageKey = 'siteforge-os.records.v2';
 const localAgentPackageKey = 'agent-package-v6';
 const localCreativePackageId = 'agent-package-local-v6-1-creative-composition';
@@ -432,6 +433,21 @@ const localFocusedProspectPreviewModesPackageId =
   'agent-package-local-v22-1-focused-prospect-preview-modes';
 const localReliableCodexEphemeralThreadsPackageId =
   'agent-package-local-v22-2-reliable-codex-ephemeral-threads';
+const localResumeAwareCodexProgressPackageId =
+  'agent-package-local-v22-3-resume-aware-codex-progress';
+const localQueueableWorkingCodexMessagesPackageId =
+  'agent-package-local-v22-4-queueable-working-codex-messages';
+const localResponsiveDevelopmentRuntimePackageId =
+  'agent-package-local-v22-5-responsive-development-runtime';
+const localExactEditedSiteReleasePackageId = 'agent-package-local-v22-6-exact-edited-site-release';
+const localUnambiguousWebsiteEditingPackageId =
+  'agent-package-local-v22-7-unambiguous-website-editing';
+const localEditorOnlyClientChatScopePackageId =
+  'agent-package-local-v22-8-editor-only-client-chat-scope';
+const localCodexConversationStatusIndicatorsPackageId =
+  'agent-package-local-v22-9-codex-conversation-status-indicators';
+const localContextualQuickQuestionsPackageId =
+  'agent-package-local-v23-0-contextual-auto-read-quick-questions';
 
 type StoreName =
   | 'activities'
@@ -452,6 +468,7 @@ type StoreName =
   | 'outreachCompliance'
   | 'reports'
   | 'reportVersions'
+  | 'sourceReleaseAttestations'
   | 'tasks'
   | 'taxExpenses'
   | 'websites';
@@ -500,6 +517,7 @@ function openDatabase() {
           'concepts',
           'reports',
           'reportVersions',
+          'sourceReleaseAttestations',
           'tasks',
           'taxExpenses',
           'activities',
@@ -3491,10 +3509,154 @@ export class SiteforgeRepository {
         'Removes two chat dead ends without weakening corrupt-history isolation or persisting temporary questions.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localResumeAwareCodexProgressPackage: AgentPackage = {
+      ...localReliableCodexEphemeralThreadsPackage,
+      id: localResumeAwareCodexProgressPackageId,
+      version: 22.3,
+      basePackageId: localReliableCodexEphemeralThreadsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v22.3',
+      contractAddendum:
+        'A newly created Codex conversation starts with an empty activity timeline and cannot display progress from the previously selected conversation. A mounted chat refreshes its selected-thread status immediately when the document becomes visible, the page is shown, the browser regains focus, or the network returns, without waiting for a suspended polling interval.',
+      instructionsAddendum:
+        'Clear messages, activities, agents, and queue state together when selecting a newly created conversation. Keep status rendering scoped to that selected thread. Retain bounded active and idle polling, but also request current selected-thread status after visibilitychange to visible, pageshow, window focus, and online events; ignore hidden-page events and preserve stale-response sequencing so an older request cannot replace the resumed state.',
+      summary:
+        'Resume-aware Codex progress test package: prevents previous-chat progress flashes and refreshes loading conversations automatically after a phone, tab, browser, or network resumes.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps conversation progress truthful at chat creation and across mobile browser suspension without requiring a manual refresh.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localQueueableWorkingCodexMessagesPackage: AgentPackage = {
+      ...localResumeAwareCodexProgressPackage,
+      id: localQueueableWorkingCodexMessagesPackageId,
+      version: 22.4,
+      basePackageId: localResumeAwareCodexProgressPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v22.4',
+      contractAddendum:
+        'While a selected Codex conversation is working, its empty composer shows Stop Codex. Entering trimmed text or attaching at least one ready image immediately replaces Stop with Send so the reviewer can enqueue another message; clearing all draft content restores Stop.',
+      instructionsAddendum:
+        'Derive the working composer action from ready draft content. Keep Stop available only while the selected turn is working and the composer has neither trimmed text nor a ready image. Show the existing Send action as soon as either content type is present, retain all model, reasoning, image-preparation, transition, and delivery guards, and enqueue through the existing thread-scoped message path. Preserve a stopping action once it has begun so its pending control cannot become Send mid-request.',
+      summary:
+        'Queueable working Codex messages test package: changes Stop back to Send when text or an image is ready so follow-ups can be queued during active work.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Lets reviewers compose and queue the next instruction without waiting for the active Codex turn to finish or giving up access to Stop when the composer is empty.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localResponsiveDevelopmentRuntimePackage: AgentPackage = {
+      ...localQueueableWorkingCodexMessagesPackage,
+      id: localResponsiveDevelopmentRuntimePackageId,
+      version: 22.5,
+      basePackageId: localQueueableWorkingCodexMessagesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v22.5',
+      contractAddendum:
+        'The development Studio reveals the authenticated prospect index as soon as its lightweight business query succeeds, while full workspace detail continues hydrating in place. Codex status polling keeps at most one ordinary request in flight, status reads do not wait for the periodic durable maintenance pass, and the server reuses one healthy app-server connection until that socket actually closes.',
+      instructionsAddendum:
+        'Start the complete prospect hydration concurrently with the lightweight business index. Dismiss the initial cover once that index is saved, show the existing hydration status while details load, and retain the retry/error boundary when even the index is unavailable. Coalesce timer and browser-resume Codex status requests while preserving explicit conversation transitions and stale-response sequencing. Run durable maintenance on its existing server interval rather than in the status response path. Share the initialized Codex app-server transport across bridge operations, invalidate it on close, reconnect on the next operation, and close it deliberately when the bridge reloads or the server stops.',
+      summary:
+        'Responsive development runtime test package: reveals the prospect index before full hydration and removes repeated Codex handshakes, overlapping polls, and status-path maintenance waits.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Shortens authenticated development startup and keeps long Codex conversations responsive through transient transport loss without changing production Studio or workspace boundaries.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localExactEditedSiteReleasePackage: AgentPackage = {
+      ...localResponsiveDevelopmentRuntimePackage,
+      id: localExactEditedSiteReleasePackageId,
+      version: 22.6,
+      basePackageId: localResponsiveDevelopmentRuntimePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v22.6',
+      contractAddendum:
+        'The generated full-site build remains an immutable baseline after an editable repository is created. The current edited website is identified by its exact Git commit and receives a separate release attestation only after exact-source, responsive-layout, compact-navigation, and accessibility checks pass. Historical builder failures never appear as current edited-site results, and Made Solid handoff remains blocked without a matching passed attestation.',
+      instructionsAddendum:
+        'Label completed builder output as the generated baseline once editing exists. Preserve its original quality evidence unchanged. Bind edited-site release verification to the exact business, builder run, manifest, commit, tree, branch and edit version. Run the versioned release suite in an immutable worktree, invalidate the result when the commit changes, and require the matching passed attestation at every handoff and Clientspace boundary.',
+      summary:
+        'Exact edited-site release test package: separates immutable baseline failures from the current edited commit and requires exact-commit verification before handoff.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes build history understandable and prevents an edited website from reaching Made Solid or Clientspace on lineage alone.',
+      stagedBehaviourIds: ['client-url-release-contract'],
+    };
+    const localUnambiguousWebsiteEditingPackage: AgentPackage = {
+      ...localExactEditedSiteReleasePackage,
+      id: localUnambiguousWebsiteEditingPackageId,
+      version: 22.7,
+      basePackageId: localExactEditedSiteReleasePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v22.7',
+      contractAddendum:
+        'Website editing presents one client-named current website editor. The private source repository and local preview runtime are separate supporting controls and must never be described as another editor or an ambiguous editable workspace.',
+      instructionsAddendum:
+        'Name the exact client website in the editing page and focused editor. Use Open [client] editor only for the combined preview and client-scoped Codex surface. Label repository and runtime actions as website source controls and Start local website preview, explain that they power the editor rather than replace it, and keep those technical actions visually secondary.',
+      summary:
+        'Unambiguous website editing test package: names the client editor and separates it clearly from source repository and local preview controls.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Removes the false impression that Studio exposes two editors while preserving private source, preview runtime, and refinement-ledger operations.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localEditorOnlyClientChatScopePackage: AgentPackage = {
+      ...localUnambiguousWebsiteEditingPackage,
+      id: localEditorOnlyClientChatScopePackageId,
+      version: 22.8,
+      basePackageId: localUnambiguousWebsiteEditingPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v22.8',
+      contractAddendum:
+        'Client-only Codex scope is active only inside the dedicated website editor. Prospect review and website-editing control pages retain the Universal Studio chat even when they refer to a specific client.',
+      instructionsAddendum:
+        'Bind a client workspace directory only to the Codex instance rendered within the dedicated /website-editor route. Keep the persistent Studio chat universal on prospect tabs, including Website editing, so merely reviewing or preparing a client website never presents an editing-only notice or hides other Studio conversations.',
+      summary:
+        'Editor-only client chat scope test package: limits the editing-only Codex notice and client workspace boundary to the dedicated website editor.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the chat scope match the surface the reviewer actually opened and prevents an ordinary prospect page from looking like a live website-editing session.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localCodexConversationStatusIndicatorsPackage: AgentPackage = {
+      ...localEditorOnlyClientChatScopePackage,
+      id: localCodexConversationStatusIndicatorsPackageId,
+      version: 22.9,
+      basePackageId: localEditorOnlyClientChatScopePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v22.9',
+      contractAddendum:
+        'Every conversation in the Codex chat selector exposes its current activity state. Working conversations show a loading indicator, while a finished conversation that has not been viewed since completion shows an unread notification indicator until selected. Interrupted conversations remain explicitly interrupted and do not receive the finished indicator.',
+      instructionsAddendum:
+        'Derive conversation activity and unread completion state from persisted lifecycle evidence for every selector row, not only the selected conversation. Animate the loading indicator with a reduced-motion alternative, give status icons accessible text, and clear the unread completion indicator only when the user views that finished conversation.',
+      summary:
+        'Codex conversation status indicators test package: shows working chats and unread finished chats across the conversation selector.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes concurrent chat progress and unseen completions visible before a reviewer opens each conversation.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localContextualQuickQuestionsPackage: AgentPackage = {
+      ...localCodexConversationStatusIndicatorsPackage,
+      id: localContextualQuickQuestionsPackageId,
+      version: 23,
+      basePackageId: localCodexConversationStatusIndicatorsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v23.0',
+      contractAddendum:
+        'A Quick question about selected Codex output inherits the complete selected conversation through its latest completed turn without adding the question or answer to that conversation. The temporary answer follows the saved Auto-read Codex preference and exposes in-dialog read, pause, resume, and stop controls.',
+      instructionsAddendum:
+        'Bind selected text to its exact conversation, completed turn, and assistant message. Authorize that source thread against the active universal or client workspace, verify the excerpt against the saved assistant message, then create an ephemeral native fork in an empty temporary directory with no workspace roots and read-only thread and turn sandboxes. Answer from the inherited conversation, delete the fork and directory on every outcome, and never mutate the source thread. When Auto-read Codex is enabled, read each returned answer once with the saved voice, style, language, and speed; keep manual speech priority and stop temporary speech when the dialog closes or resets.',
+      summary:
+        'Contextual auto-read Quick questions test package: answers from the whole selected conversation in an isolated fork and reads temporary answers with the saved voice preference.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes a precise follow-up useful without losing the surrounding conversation or requiring the reviewer to read the temporary answer manually.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localContextualQuickQuestionsPackage,
+          localCodexConversationStatusIndicatorsPackage,
+          localEditorOnlyClientChatScopePackage,
+          localUnambiguousWebsiteEditingPackage,
+          localExactEditedSiteReleasePackage,
+          localResponsiveDevelopmentRuntimePackage,
+          localQueueableWorkingCodexMessagesPackage,
+          localResumeAwareCodexProgressPackage,
           localReliableCodexEphemeralThreadsPackage,
           localFocusedProspectPreviewModesPackage,
           localResilientDevelopmentStudioRuntimePackage,
@@ -3665,6 +3827,14 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localContextualQuickQuestionsPackage,
+          localCodexConversationStatusIndicatorsPackage,
+          localEditorOnlyClientChatScopePackage,
+          localUnambiguousWebsiteEditingPackage,
+          localExactEditedSiteReleasePackage,
+          localResponsiveDevelopmentRuntimePackage,
+          localQueueableWorkingCodexMessagesPackage,
+          localResumeAwareCodexProgressPackage,
           localReliableCodexEphemeralThreadsPackage,
           localFocusedProspectPreviewModesPackage,
           localResilientDevelopmentStudioRuntimePackage,
@@ -3838,6 +4008,14 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localContextualQuickQuestionsPackage,
+            localCodexConversationStatusIndicatorsPackage,
+            localEditorOnlyClientChatScopePackage,
+            localUnambiguousWebsiteEditingPackage,
+            localExactEditedSiteReleasePackage,
+            localResponsiveDevelopmentRuntimePackage,
+            localQueueableWorkingCodexMessagesPackage,
+            localResumeAwareCodexProgressPackage,
             localReliableCodexEphemeralThreadsPackage,
             localFocusedProspectPreviewModesPackage,
             localResilientDevelopmentStudioRuntimePackage,
@@ -4176,6 +4354,7 @@ export class SiteforgeRepository {
       concepts,
       reports,
       reportVersions,
+      sourceReleaseAttestations,
       tasks,
       activity,
       outreachCompliance,
@@ -4195,6 +4374,7 @@ export class SiteforgeRepository {
       this.getAllForBusiness<RedesignConcept>('concepts', businessId),
       this.getAllForBusiness<DecisionReport>('reports', businessId),
       this.getAllForBusiness<DecisionReport>('reportVersions', businessId),
+      this.getAllForBusiness<SourceReleaseAttestation>('sourceReleaseAttestations', businessId),
       this.getAllForBusiness<Task>('tasks', businessId),
       this.getAllForBusiness<Activity>('activities', businessId),
       this.getAllForBusiness<OutreachCompliance>('outreachCompliance', businessId),
@@ -4276,6 +4456,9 @@ export class SiteforgeRepository {
       concept: concepts[0],
       report: orderedReportVersions[0] ?? reports[0],
       reportVersions: orderedReportVersions,
+      sourceReleaseAttestations: sourceReleaseAttestations.sort((left, right) =>
+        right.verifiedAt.localeCompare(left.verifiedAt),
+      ),
       reportPreviewJobs: [],
       reportPreviewWorkerAvailable: false,
       tasks: tasks.sort((left, right) => left.state.localeCompare(right.state)),
@@ -4634,106 +4817,277 @@ export class SiteforgeRepository {
     });
   }
 
-  async createDecisionReport(businessId: string, auditId: string) {
-    const audit = await this.get<Audit>('audits', auditId);
-    const allObservations = (
-      await this.getAllForBusiness<AuditObservation>('auditObservations', businessId)
-    ).filter((observation) => observation.auditId === auditId);
-    const observations = allObservations.filter(
-      (observation) => observation.reviewState === 'approved',
-    );
-    const tasks = (
-      await this.getAllForBusiness<AuditSpecialistTask>('auditSpecialistTasks', businessId)
-    ).filter((task) => task.auditId === auditId);
-    const latestCapture = (await this.getAllForBusiness<ResearchCapture>('crawlRuns', businessId))
-      .filter((capture) => capture.status === 'ready')
-      .sort((left, right) => right.requestedAt.localeCompare(left.requestedAt))[0];
-    if (!audit || audit.status !== 'ready' || audit.crawlRunId !== latestCapture?.id) {
-      throw new Error('A completed specialist audit for the current capture is required.');
-    }
-    if (tasks.length !== 6 || tasks.some((task) => task.status !== 'ready')) {
-      throw new Error('Every required specialist section must complete before preparing a report.');
-    }
-    if (!observations.length) {
-      throw new Error(
-        'Approve at least one evidence-linked observation before preparing a report.',
-      );
-    }
-    if (observations.some((observation) => observation.confidence === 'low')) {
-      throw new Error('Low-confidence observations need stronger evidence or exclusion.');
-    }
-    const [facts, artifacts, business] = await Promise.all([
+  async createDecisionReport(
+    businessId: string,
+    auditId: string,
+  ): Promise<DecisionReport | undefined> {
+    const [
+      business,
+      audits,
+      captures,
+      specialistTasks,
+      observations,
+      facts,
+      artifacts,
+      buildManifests,
+      builderRuns,
+      releaseAttestations,
+      reportVersions,
+    ] = await Promise.all([
+      this.get<Business>('businesses', businessId),
+      this.getAllForBusiness<Audit>('audits', businessId),
+      this.getAllForBusiness<ResearchCapture>('crawlRuns', businessId),
+      this.getAllForBusiness<AuditSpecialistTask>('auditSpecialistTasks', businessId),
+      this.getAllForBusiness<AuditObservation>('auditObservations', businessId),
       this.getAllForBusiness<EvidenceFact>('facts', businessId),
       this.getAllForBusiness<ResearchArtifact>('artifacts', businessId),
-      this.get<Business>('businesses', businessId),
+      this.getAllForBusiness<BuildManifest>('buildManifests', businessId),
+      this.getAllForBusiness<BuilderRun>('builderRuns', businessId),
+      this.getAllForBusiness<SourceReleaseAttestation>('sourceReleaseAttestations', businessId),
+      this.getAllForBusiness<DecisionReport>('reportVersions', businessId),
     ]);
-    const currentEvidenceIds = new Set([
-      ...facts.filter((fact) => fact.crawlRunId === audit.crawlRunId).map((fact) => fact.id),
-      ...artifacts
-        .filter((artifact) => artifact.crawlRunId === audit.crawlRunId)
-        .map((artifact) => artifact.id),
-    ]);
-    if (
-      observations.some((observation) =>
-        [...observation.evidenceFactIds, ...observation.evidenceArtifactIds].every(
-          (evidenceId) => !currentEvidenceIds.has(evidenceId),
-        ),
-      )
-    ) {
-      throw new Error('Every approved observation needs evidence from the current capture.');
+    const audit = audits.find((candidate) => candidate.id === auditId);
+    if (!business || !audit || audit.status !== 'ready' || !audit.crawlRunId) {
+      throw new Error('A completed specialist audit is required.');
     }
-    const existing = await this.getAllForBusiness<DecisionReport>('reportVersions', businessId);
+    const latestCapture = captures
+      .filter((capture) => capture.status === 'ready')
+      .sort((left, right) => right.requestedAt.localeCompare(left.requestedAt))[0];
+    if (!latestCapture || latestCapture.id !== audit.crawlRunId) {
+      throw new Error('The specialist audit must reference the latest completed website capture.');
+    }
+    const release = releaseAttestations
+      .filter(
+        (candidate) =>
+          /^[a-f0-9]{40}$/.test(candidate.sourceCommit) &&
+          candidate.sourceEditVersion > 0 &&
+          candidate.checks.length > 0 &&
+          candidate.checks.every((check) => check.status === 'passed'),
+      )
+      .sort((left, right) => right.verifiedAt.localeCompare(left.verifiedAt))[0];
+    if (!release) {
+      throw new Error('Verify the exact current edited website before creating its value report.');
+    }
+    const sourceBuilder = builderRuns.find(
+      (run) =>
+        run.id === release.sourceBuilderRunId &&
+        run.buildManifestId === release.sourceManifestId &&
+        run.buildMode === 'full_site',
+    );
+    const sourceManifest = buildManifests.find(
+      (manifest) => manifest.id === release.sourceManifestId && manifest.businessId === businessId,
+    );
+    if (!sourceBuilder || !sourceManifest) {
+      throw new Error(
+        'The verified edited website does not have complete full-site build lineage.',
+      );
+    }
+    const reportTasks = specialistTasks.filter((task) => task.auditId === audit.id);
+    if (
+      reportTasks.length !== 6 ||
+      reportTasks.some((task) => task.status !== 'ready' || task.crawlRunId !== audit.crawlRunId)
+    ) {
+      throw new Error(
+        'All six required specialist sections must complete against the report capture.',
+      );
+    }
+    const existing = reportVersions
+      .filter(
+        (report) =>
+          report.auditId === audit.id &&
+          report.crawlRunId === audit.crawlRunId &&
+          report.schemaVersion === 5 &&
+          report.data?.reportKind === 'verified_redesign_value' &&
+          (report.data?.redesign as Record<string, unknown> | undefined)?.attestationRowId ===
+            release.id,
+      )
+      .sort((left, right) => right.version - left.version)[0];
+    if (existing) return existing;
+
+    const taskIds = new Set(reportTasks.map((task) => task.id));
+    const evidenceFactIds = new Set(
+      facts.filter((fact) => fact.crawlRunId === audit.crawlRunId).map((fact) => fact.id),
+    );
+    const evidenceArtifacts = artifacts.filter(
+      (artifact) => artifact.crawlRunId === audit.crawlRunId,
+    );
+    const evidenceArtifactIds = new Set(evidenceArtifacts.map((artifact) => artifact.id));
+    const eligible = observations.filter(
+      (observation) =>
+        observation.auditId === audit.id &&
+        observation.crawlRunId === audit.crawlRunId &&
+        observation.area !== 'Platform' &&
+        observation.confidence !== 'low' &&
+        observation.reviewState !== 'blocked' &&
+        Boolean(observation.observation.trim()) &&
+        Boolean(observation.recommendation.trim()) &&
+        Boolean(observation.customerImpact.trim()) &&
+        taskIds.has(observation.specialistTaskId) &&
+        (observation.evidenceFactIds.some((factId) => evidenceFactIds.has(factId)) ||
+          observation.evidenceArtifactIds.some((artifactId) =>
+            evidenceArtifactIds.has(artifactId),
+          )),
+    );
+    if (eligible.length === 0) {
+      throw new Error(
+        'The current audit has no evidence-backed, client-safe observations to report.',
+      );
+    }
+
+    const severityRank = { high: 1, medium: 2, low: 3 } as const;
+    const priorityScore = (observation: AuditObservation) => {
+      const score = observation.measurement.priorityScore;
+      return typeof score === 'number' && Number.isFinite(score) ? score : 0;
+    };
+    const ordered = [...eligible].sort(
+      (left, right) =>
+        severityRank[left.severity] - severityRank[right.severity] ||
+        priorityScore(right) - priorityScore(left) ||
+        left.createdAt.localeCompare(right.createdAt) ||
+        left.id.localeCompare(right.id),
+    );
+    const grouped = new Map<AuditObservation['area'], AuditObservation[]>();
+    ordered.forEach((observation) => {
+      grouped.set(observation.area, [...(grouped.get(observation.area) ?? []), observation]);
+    });
+    const groups = [...grouped.entries()]
+      .sort(
+        ([leftArea, left], [rightArea, right]) =>
+          severityRank[left[0].severity] - severityRank[right[0].severity] ||
+          right.length - left.length ||
+          leftArea.localeCompare(rightArea),
+      )
+      .slice(0, 5);
+    const themeTitle = (area: AuditObservation['area'], fallback: string) =>
+      ({
+        UI: 'A clearer, more polished interface',
+        UX: 'A more direct path through the website',
+        Mobile: 'A dependable experience on every screen',
+        Accessibility: 'A more inclusive, usable website',
+        SEO: 'Content that is easier to find and understand',
+        Performance: 'A faster, more dependable first impression',
+        Content: 'A clearer explanation of the business and its services',
+        Trust: 'Stronger confidence at the point of decision',
+        Conversion: 'Clearer paths from interest to enquiry',
+        Platform: fallback,
+      })[area];
+    const valueThemes = groups.map(([area, items], index) => {
+      const representative = items[0];
+      const sourceUrls = [...new Set(items.flatMap((item) => item.sourceUrls))].sort();
+      const artifactIds = [
+        ...new Set(
+          items
+            .flatMap((item) => item.evidenceArtifactIds)
+            .filter((id) => evidenceArtifactIds.has(id)),
+        ),
+      ].sort();
+      const evidence = evidenceArtifacts
+        .filter((artifact) => artifact.kind === 'screenshot' && artifactIds.includes(artifact.id))
+        .sort(
+          (left, right) =>
+            Number(right.id === representative.evidenceArtifactIds[0]) -
+              Number(left.id === representative.evidenceArtifactIds[0]) ||
+            left.createdAt.localeCompare(right.createdAt) ||
+            left.id.localeCompare(right.id),
+        )[0];
+      return {
+        id: `theme-${index + 1}-${area.toLowerCase()}`,
+        area,
+        title: themeTitle(area, representative.title),
+        before: representative.observation,
+        redesignResponse: representative.recommendation,
+        value: representative.customerImpact,
+        occurrenceCount: items.length,
+        sourceObservationIds: items.map((item) => item.id),
+        sourceUrls,
+        evidenceArtifactIds: artifactIds,
+        evidence: evidence
+          ? {
+              artifactId: evidence.id,
+              storageBucket: evidence.storageBucket,
+              storagePath: evidence.storagePath,
+              caption: evidence.label,
+              viewport: evidence.metadata.viewport,
+              sourceUrl: evidence.metadata.sourceUrl,
+            }
+          : undefined,
+      };
+    });
+    const nextVersion = Math.max(0, ...reportVersions.map((report) => report.version)) + 1;
     const now = new Date().toISOString();
+    const deliveredWork = release.checks.map((check) => ({
+      id: check.id,
+      label:
+        (
+          {
+            'source-verification': 'The complete website source passed verification',
+            'responsive-layout': 'Every generated route was checked across required screen sizes',
+            'responsive-navigation': 'Mobile and tablet navigation interactions were checked',
+            accessibility: 'Automated accessibility checks passed across responsive views',
+          } as Record<string, string>
+        )[check.id] ?? check.label,
+      detail: check.detail.slice(0, 600),
+      status: 'passed',
+    }));
     const report: DecisionReport = {
-      id: id('report-version'),
+      id: `report-version-${audit.id}-${release.id}`,
       businessId,
-      auditId,
+      auditId: audit.id,
       crawlRunId: audit.crawlRunId,
       status: 'approved',
-      version: Math.max(0, ...existing.map((candidate) => candidate.version)) + 1,
-      schemaVersion: 1,
+      version: nextVersion,
+      schemaVersion: 5,
       reviewState: 'approved',
-      summary: `${observations.length} approved website ${observations.length === 1 ? 'finding' : 'findings'} frozen in this reviewed report.`,
+      summary: `${eligible.length} evidence-backed cases automatically consolidated into ${valueThemes.length} value themes and tied to verified edit v${release.sourceEditVersion}.`,
       data: {
-        schemaVersion: 1,
-        auditId,
+        schemaVersion: 5,
+        reportKind: 'verified_redesign_value',
+        auditId: audit.id,
         crawlRunId: audit.crawlRunId,
         generatedAt: now,
-        title: `${business?.name ?? 'Client'} website report`,
-        summary:
-          'A practical, evidence-led review of the current website experience and the improvements worth prioritising.',
-        scope: [
-          'Responsive UI at 375 x 812, 768 x 1024, and 1440 x 900',
-          'Accessibility and keyboard-relevant structure',
-          'Performance engineering and page delivery',
-          'Technical SEO and content structure',
-          'Conversion journeys and visible trust',
-          'Platform and integration signals',
+        version: nextVersion,
+        title: `A stronger digital foundation for ${business.name}`,
+        summary: `${business.name} now has a complete, verified website redesign grounded in evidence from the original site. This report shows what changed, why it matters to visitors, and the value of the work already delivered.`,
+        strengths: [
+          {
+            id: 'evidence-led-foundation',
+            title: 'The useful parts of the existing website were treated as evidence',
+            detail:
+              'Captured source content and business facts informed the new website, so the redesign builds on what the organisation already knows.',
+          },
+          {
+            id: 'working-redesign',
+            title: 'There is already a complete website to review',
+            detail: `The proposed solution is a working edited website, verified at commit ${release.sourceCommit.slice(0, 8)}—not a mock-up or a list of future recommendations.`,
+          },
         ],
-        findings: observations.map((observation) => ({
-          id: observation.id,
-          area: observation.area,
-          priority: observation.severity,
-          title: observation.title,
-          observation: observation.observation,
-          impact: observation.customerImpact,
-          recommendation: observation.recommendation,
-          sourceUrls: observation.sourceUrls,
-          evidenceFactIds: observation.evidenceFactIds,
-          evidenceArtifactIds: observation.evidenceArtifactIds,
-          viewport: observation.viewport,
-          measurement: observation.measurement,
-          confidence: observation.confidence,
-        })),
+        valueThemes,
+        deliveredWork,
+        redesign: {
+          status: 'passed',
+          attestationRowId: release.id,
+          attestationId: release.attestationId,
+          sourceBuilderRunId: release.sourceBuilderRunId,
+          sourceManifestId: release.sourceManifestId,
+          sourceCommit: release.sourceCommit,
+          sourceTree: release.sourceTree,
+          sourceBranch: release.sourceBranch,
+          sourceEditVersion: release.sourceEditVersion,
+          verificationProfile: release.verificationProfile,
+          verifiedAt: release.verifiedAt,
+          checks: release.checks,
+        },
         methodology: [
-          'One bounded public-site capture supplied the immutable evidence used by independent specialist checks.',
-          'Every client-facing finding was approved by a human reviewer before this report version was frozen.',
-          'Unselected observations remain private audit material and are not presented to the client.',
+          'The original website themes are curated automatically from current-capture observations with resolvable evidence and high or medium confidence.',
+          'Explicitly blocked, low-confidence, unsupported and stale observations are excluded automatically.',
+          'Repeated page and viewport cases are consolidated into visitor-focused themes while their source observation IDs and URLs remain frozen in this version.',
+          'The delivered-work claims come from the release attestation for the exact edited Git commit named in this report.',
         ],
         limitations: [
-          'The review does not include private analytics, authenticated pages, submitted forms, or claims about future traffic, rankings, or revenue.',
+          'The report does not claim guaranteed traffic, rankings, enquiries or revenue. Those outcomes depend on launch, ongoing content, marketing and customer behaviour.',
+          'Automated verification supports release confidence but does not replace client review of business accuracy and fit.',
         ],
-        nextStep: 'Talk through which improvements best match the business and its customers.',
+        nextStep: `Review the completed ${business.name} website together, confirm it represents the business accurately, and choose the right path to launch.`,
       },
       createdAt: now,
       updatedAt: now,

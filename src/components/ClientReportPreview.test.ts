@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { Audit, DecisionReport } from '../lib/domain';
-import { frozenReportView, previewReportIsCurrent } from './ClientReportPreview';
+import {
+  prospectValueReportView,
+  reportUsesProspectValueContract,
+} from '../lib/prospect-value-report';
+import { previewReportIsCurrent } from './ClientReportPreview';
 
 const report = (overrides: Partial<DecisionReport> = {}): DecisionReport => ({
   id: 'report-1',
@@ -9,20 +13,45 @@ const report = (overrides: Partial<DecisionReport> = {}): DecisionReport => ({
   crawlRunId: 'crawl-1',
   status: 'approved',
   version: 2,
+  schemaVersion: 5,
   summary: 'Frozen summary',
   data: {
-    title: 'Client website report',
-    summary: 'Frozen client summary',
-    findings: Array.from({ length: 10 }, (_, index) => ({
-      id: `finding-${index}`,
-      area: 'UX',
-      severity: index === 0 ? 'high' : 'medium',
-      title: `Finding ${index}`,
-      observation: 'Observed problem',
-      impact: 'Visitor impact',
-      recommendation: 'Recommended improvement',
-      evidence: { artifactId: `artifact-${index}`, viewport: { width: 375, height: 812 } },
-    })),
+    schemaVersion: 5,
+    reportKind: 'verified_redesign_value',
+    title: 'A stronger digital foundation for Client',
+    summary: 'Frozen client value summary',
+    strengths: [{ id: 'identity', title: 'Established identity', detail: 'Approved identity.' }],
+    valueThemes: [
+      {
+        id: 'theme-1',
+        area: 'UX',
+        title: 'A clearer journey',
+        before: 'The original journey was unclear.',
+        redesignResponse: 'The edited website provides a direct path.',
+        value: 'Visitors can find the right next action.',
+        occurrenceCount: 4,
+        sourceUrls: ['https://example.com'],
+        evidence: { artifactId: 'artifact-1', viewport: { width: 375, height: 812 } },
+      },
+    ],
+    deliveredWork: [
+      {
+        id: 'responsive-layout',
+        label: 'Responsive layouts checked',
+        detail: 'Passed all routes.',
+        status: 'passed',
+      },
+    ],
+    redesign: {
+      status: 'passed',
+      attestationId: 'a'.repeat(64),
+      sourceBuilderRunId: 'builder-1',
+      sourceManifestId: 'manifest-1',
+      sourceCommit: 'b'.repeat(40),
+      sourceEditVersion: 3,
+      verifiedAt: '2026-08-26T00:00:00.000Z',
+      verificationProfile: 'made-solid-edited-site-release-v1',
+    },
   },
   createdAt: '2026-08-19T00:00:00.000Z',
   updatedAt: '2026-08-19T00:00:00.000Z',
@@ -51,14 +80,16 @@ describe('ClientReportPreview frozen report boundary', () => {
     expect(previewReportIsCurrent(report({ status: 'draft' }), audit, 'crawl-1')).toBe(false);
   });
 
-  it('renders frozen wording and defensively limits the client shortlist to eight', () => {
-    const view = frozenReportView(report());
-    expect(view.title).toBe('Client website report');
-    expect(view.summary).toBe('Frozen client summary');
-    expect(view.findings).toHaveLength(8);
-    expect(view.findings[0]).toMatchObject({
-      evidenceArtifactId: 'artifact-0',
+  it('requires exact redesign lineage and renders the frozen value themes', () => {
+    const view = prospectValueReportView(report());
+    expect(reportUsesProspectValueContract(report())).toBe(true);
+    expect(view?.title).toBe('A stronger digital foundation for Client');
+    expect(view?.summary).toBe('Frozen client value summary');
+    expect(view?.themes).toHaveLength(1);
+    expect(view?.themes[0]).toMatchObject({
+      evidenceArtifactId: 'artifact-1',
       viewport: '375 × 812',
     });
+    expect(reportUsesProspectValueContract(report({ schemaVersion: 4 }))).toBe(false);
   });
 });

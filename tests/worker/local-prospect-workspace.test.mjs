@@ -29,6 +29,10 @@ const studioRuntimeUrl = new URL('../../src/lib/studio-runtime.ts', import.meta.
 const appUrl = new URL('../../src/App.tsx', import.meta.url);
 const localDevUrl = new URL('../../worker/local-dev.mjs', import.meta.url);
 const finaliseUrl = new URL('../../scripts/finalize-prospect-workspace.mjs', import.meta.url);
+const releaseVerificationUrl = new URL(
+  '../../scripts/verify-prospect-release.mjs',
+  import.meta.url,
+);
 
 test('limits popup-free screenshots to validated local workspace ports', () => {
   assert.equal(
@@ -324,9 +328,10 @@ test('reads a committed learning bundle through the validated local workspace se
 });
 
 test('exposes a validated, staged final-edit checkpoint for the prospect repository', async () => {
-  const [pluginSource, finaliseSource, appSource] = await Promise.all([
+  const [pluginSource, finaliseSource, releaseVerificationSource, appSource] = await Promise.all([
     readFile(vitePluginUrl, 'utf8'),
     readFile(finaliseUrl, 'utf8'),
+    readFile(releaseVerificationUrl, 'utf8'),
     readFile(appUrl, 'utf8'),
   ]);
   const rejected = await readFinalEditState('../lecegroup');
@@ -338,11 +343,24 @@ test('exposes a validated, staged final-edit checkpoint for the prospect reposit
     assert.ok(Array.isArray(current.versions));
     assert.ok(Number.isInteger(current.workingVersion));
     assert.equal(typeof current.sourceBuild?.buildId, 'string');
+    assert.equal(typeof current.businessId, 'string');
+    assert.ok(['missing', 'stale', 'failed', 'passed'].includes(current.releaseStatus));
+    if (current.releaseStatus === 'passed') {
+      assert.equal(current.releaseAttestation.sourceCommit, current.commit.toLowerCase());
+      assert.equal(current.releaseAttestation.sourceBuilderRunId, current.sourceBuild.buildId);
+      assert.equal(
+        current.releaseAttestation.checks.every((check) => check.status === 'passed'),
+        true,
+      );
+    }
   }
   assert.match(pluginSource, /\/__made-solid\/final-edit/);
   assert.match(pluginSource, /finalize-prospect-workspace\.mjs/);
   assert.match(pluginSource, /application\/x-ndjson/);
   assert.match(pluginSource, /\/__made-solid\/committed-preview/);
+  assert.match(pluginSource, /\/__made-solid\/release-verification/);
+  assert.match(pluginSource, /verify-prospect-release\.mjs/);
+  assert.match(pluginSource, /made-solid-edited-site-release-v1/);
   assert.match(pluginSource, /editVersionHistory/);
   assert.match(pluginSource, /git', \['worktree', 'add', '--detach'/);
   assert.match(pluginSource, /Choose a committed Made Solid edit version/);
@@ -372,7 +390,21 @@ test('exposes a validated, staged final-edit checkpoint for the prospect reposit
   assert.match(finaliseSource, /delete githubEnvironment\.GITHUB_TOKEN/);
   assert.match(finaliseSource, /'gh', \['auth', 'setup-git'\]/);
   assert.doesNotMatch(finaliseSource, /emit\([^)]*remote/s);
+  assert.match(releaseVerificationSource, /git', \['worktree', 'add', '--detach'/);
+  assert.match(releaseVerificationSource, /source-verification/);
+  assert.match(releaseVerificationSource, /responsive-layout/);
+  assert.match(releaseVerificationSource, /responsive-navigation/);
+  assert.match(releaseVerificationSource, /accessibility/);
+  assert.match(releaseVerificationSource, /sourceCommit: commit/);
+  assert.match(releaseVerificationSource, /sourceTree: tree/);
+  assert.match(
+    releaseVerificationSource,
+    /checks\.every\(\(check\) => check\.status === 'passed'\)/,
+  );
   assert.match(appSource, /Commit website edit/);
+  assert.match(appSource, /Generated baseline/);
+  assert.match(appSource, /Current edited website/);
+  assert.match(appSource, /Run release verification/);
   assert.match(appSource, /Made Solid handoff/);
   assert.match(appSource, /Push committed edit to Made Solid/);
   assert.match(appSource, /Made Solid handoff is not connected/);

@@ -105,6 +105,15 @@ async function loadFrozenReport(job) {
   if (report.review_state !== 'approved') {
     throw new Error('The selected report version is not an approved frozen report.');
   }
+  if (
+    report.schema_version !== 5 ||
+    report.data?.reportKind !== 'verified_redesign_value' ||
+    report.data?.redesign?.status !== 'passed'
+  ) {
+    throw new Error(
+      'This earlier report format must be regenerated before it can reach Clientspace.',
+    );
+  }
   if (!report.audit_id || !report.crawl_run_id || report.business_id !== job.business_id) {
     throw new Error('The frozen report does not have complete audit and capture lineage.');
   }
@@ -118,11 +127,36 @@ async function loadFrozenReport(job) {
     .maybeSingle();
   if (auditError) throw auditError;
   if (!audit) throw new Error('The frozen report no longer has matching completed audit lineage.');
+  const redesign = report.data.redesign;
+  const { data: attestation, error: attestationError } = await supabase
+    .from('source_release_attestations')
+    .select(
+      'id, attestation_id, business_id, source_builder_run_id, source_manifest_id, source_commit, source_edit_version, checks',
+    )
+    .eq('id', redesign.attestationRowId)
+    .eq('business_id', job.business_id)
+    .eq('attestation_id', redesign.attestationId)
+    .eq('source_builder_run_id', redesign.sourceBuilderRunId)
+    .eq('source_manifest_id', redesign.sourceManifestId)
+    .eq('source_commit', redesign.sourceCommit)
+    .eq('source_edit_version', redesign.sourceEditVersion)
+    .maybeSingle();
+  if (attestationError) throw attestationError;
+  if (
+    !attestation ||
+    !Array.isArray(attestation.checks) ||
+    attestation.checks.length < 4 ||
+    attestation.checks.some((check) => check?.status !== 'passed')
+  ) {
+    throw new Error(
+      'The report does not match a passed release attestation for its exact edited website.',
+    );
+  }
   return { report, business };
 }
 
 async function loadReportMedia(reportData, job, report) {
-  const findings = Array.isArray(reportData?.findings) ? reportData.findings : [];
+  const findings = Array.isArray(reportData?.valueThemes) ? reportData.valueThemes : [];
   const artifactIds = findings
     .map((finding) => finding?.evidence)
     .map((evidence) => (typeof evidence?.artifactId === 'string' ? evidence.artifactId : ''))

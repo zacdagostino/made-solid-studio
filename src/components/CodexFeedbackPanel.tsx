@@ -263,14 +263,18 @@ type ConversationTransition = {
   kind: 'branch' | 'create' | 'switch';
   label: string;
 };
-type CodexExcerpt = { messageId: string; text: string };
+type CodexExcerpt = { messageId: string; text: string; turnId?: string };
 type TemporaryQuestion = {
   answer?: string;
   error?: string;
   excerpt: string;
+  messageId: string;
   model?: string;
   phase: 'compose' | 'loading' | 'answer';
   question: string;
+  speechId: string;
+  threadId: string;
+  turnId?: string;
 };
 type Point = { x: number; y: number };
 type Selection = { start: Point; end: Point };
@@ -287,6 +291,7 @@ const browserCaptureSource = 'made-solid-browser-capture';
 const codexPreferencesKey = 'made-solid-codex-preferences-v1';
 const codexDraftKey = 'made-solid-codex-draft-v1';
 const codexChatSessionKey = 'made-solid-codex-chat-session-v1';
+const codexConversationLifecycleKey = 'made-solid-codex-conversation-lifecycle-v1';
 const maximumPhotoBytes = 15 * 1024 * 1024;
 const maximumDraftAttachments = 5;
 const supportedPhotoTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -395,12 +400,21 @@ type CodexChatSession = {
   selectedThreadScope?: CodexThread['scope'];
 };
 
+type CodexConversationLifecycle = {
+  unseenCompletionThreadIds: string[];
+  workingByThread: Record<string, boolean>;
+};
+
 function scopedStorageKey(base: string, workspaceDirectory?: string) {
   return workspaceDirectory ? `${base}:client:${workspaceDirectory}` : base;
 }
 
 function readCodexChatSession(workspaceDirectory?: string): CodexChatSession {
-  const fallback = { isOpen: false, positions: {}, selectedThreadId: '' };
+  const fallback: CodexChatSession = {
+    isOpen: false,
+    positions: {},
+    selectedThreadId: '',
+  };
   if (typeof window === 'undefined') return fallback;
   try {
     const stored = JSON.parse(
@@ -420,6 +434,41 @@ function readCodexChatSession(workspaceDirectory?: string): CodexChatSession {
     };
   } catch {
     return fallback;
+  }
+}
+
+function readCodexConversationLifecycle(): CodexConversationLifecycle {
+  const fallback = { unseenCompletionThreadIds: [], workingByThread: {} };
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const stored = JSON.parse(
+      window.localStorage.getItem(codexConversationLifecycleKey) || '{}',
+    ) as Partial<CodexConversationLifecycle>;
+    return {
+      unseenCompletionThreadIds: Array.isArray(stored.unseenCompletionThreadIds)
+        ? stored.unseenCompletionThreadIds
+            .filter((threadId): threadId is string => typeof threadId === 'string')
+            .slice(0, 100)
+        : [],
+      workingByThread:
+        stored.workingByThread && typeof stored.workingByThread === 'object'
+          ? Object.fromEntries(
+              Object.entries(stored.workingByThread)
+                .filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean')
+                .slice(0, 100),
+            )
+          : {},
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function writeCodexConversationLifecycle(lifecycle: CodexConversationLifecycle) {
+  try {
+    window.localStorage.setItem(codexConversationLifecycleKey, JSON.stringify(lifecycle));
+  } catch {
+    // Conversation indicators remain usable when browser storage is unavailable or full.
   }
 }
 
@@ -1136,8 +1185,14 @@ export function CodexFeedbackPanel({
   const chatPreferencesTriggerRef = useRef<HTMLButtonElement>(null);
   const conversationPickerRef = useRef<HTMLDivElement>(null);
   const conversationTransitionIdRef = useRef(0);
+  const conversationTransitionRef = useRef<ConversationTransition>();
+  const statusRefreshInFlightRef = useRef(0);
   const initialChatSessionRef = useRef(readCodexChatSession(workspaceDirectory));
-  const previousWorkingRef = useRef(false);
+  const initialConversationLifecycleRef = useRef(readCodexConversationLifecycle());
+  const workingByThreadRef = useRef(initialConversationLifecycleRef.current.workingByThread);
+  const unseenCompletionThreadIdsRef = useRef(
+    new Set(initialConversationLifecycleRef.current.unseenCompletionThreadIds),
+  );
   const knownTimelineIdsRef = useRef(new Set<string>());
   const knownTimelineThreadRef = useRef('');
   const timelineAnimationTimerRef = useRef<number>();
@@ -1213,7 +1268,9 @@ export function CodexFeedbackPanel({
   const [error, setError] = useState<string>();
   const [browserCaptureAvailable, setBrowserCaptureAvailable] = useState(false);
   const [clock, setClock] = useState(() => Date.now());
-  const [hasUnseenCompletion, setHasUnseenCompletion] = useState(false);
+  const [unseenCompletionThreadIds, setUnseenCompletionThreadIds] = useState(
+    () => new Set(initialConversationLifecycleRef.current.unseenCompletionThreadIds),
+  );
   const [pendingChatMessage, setPendingChatMessage] = useState<{
     id: string;
     text: string;
@@ -1972,6 +2029,82 @@ export function CodexFeedbackPanel({
     [workspaceDirectory],
   );
 
+  const saveConversationLifecycle = useCallback(
+    (workingByThread: Record<string, boolean>, unseenThreadIds: Set<string>) => {
+      workingByThreadRef.current = workingByThread;
+      unseenCompletionThreadIdsRef.current = unseenThreadIds;
+      setUnseenCompletionThreadIds(unseenThreadIds);
+      writeCodexConversationLifecycle({
+        unseenCompletionThreadIds: [...unseenThreadIds],
+        workingByThread,
+      });
+    },
+    [],
+  );
+
+  const markConversationViewed = useCallback(
+    (threadId: string | undefined) => {
+      if (!threadId || !unseenCompletionThreadIdsRef.current.has(threadId)) return;
+      const nextUnseenThreadIds = new Set(unseenCompletionThreadIdsRef.current);
+      nextUnseenThreadIds.delete(threadId);
+      saveConversationLifecycle(workingByThreadRef.current, nextUnseenThreadIds);
+    },
+    [saveConversationLifecycle],
+  );
+
+  const recordConversationLifecycle = useCallback(
+    (nextStatus: CodexStatus, viewedThreadId?: string) => {
+      const threads = new Map(nextStatus.threads.map((thread) => [thread.id, thread]));
+      if (nextStatus.thread) threads.set(nextStatus.thread.id, nextStatus.thread);
+      const lifecycleThreads = [...threads.values()].slice(0, 100);
+      const retainedThreadIds = [
+        ...new Set([
+          ...lifecycleThreads.map((thread) => thread.id),
+          ...Object.keys(workingByThreadRef.current),
+        ]),
+      ].slice(0, 100);
+      const retainedThreadIdSet = new Set(retainedThreadIds);
+      const nextWorkingByThread = Object.fromEntries(
+        retainedThreadIds.map((threadId) => [threadId, workingByThreadRef.current[threadId]]),
+      ) as Record<string, boolean>;
+      const nextUnseenThreadIds = new Set(
+        [...unseenCompletionThreadIdsRef.current].filter((threadId) =>
+          retainedThreadIdSet.has(threadId),
+        ),
+      );
+
+      for (const thread of lifecycleThreads) {
+        const working = thread.working === true;
+        if (
+          workingByThreadRef.current[thread.id] === true &&
+          !working &&
+          !thread.interrupted &&
+          thread.lastTurnStatus !== 'interrupted' &&
+          thread.id !== viewedThreadId
+        ) {
+          nextUnseenThreadIds.add(thread.id);
+        }
+        nextWorkingByThread[thread.id] = working;
+      }
+
+      if (viewedThreadId) nextUnseenThreadIds.delete(viewedThreadId);
+      const workingChanged =
+        Object.keys(nextWorkingByThread).length !==
+          Object.keys(workingByThreadRef.current).length ||
+        Object.entries(nextWorkingByThread).some(
+          ([threadId, working]) => workingByThreadRef.current[threadId] !== working,
+        );
+      const unseenChanged =
+        nextUnseenThreadIds.size !== unseenCompletionThreadIdsRef.current.size ||
+        ![...nextUnseenThreadIds].every((threadId) =>
+          unseenCompletionThreadIdsRef.current.has(threadId),
+        );
+      if (!workingChanged && !unseenChanged) return;
+      saveConversationLifecycle(nextWorkingByThread, nextUnseenThreadIds);
+    },
+    [saveConversationLifecycle],
+  );
+
   const saveChatPosition = useCallback(
     (threadIdOverride?: string) => {
       const log = mountedChatLog;
@@ -2044,7 +2177,17 @@ export function CodexFeedbackPanel({
   );
 
   const refreshStatus = useCallback(
-    async (threadIdOverride?: string, threadScopeOverride?: CodexThread['scope']) => {
+    async (
+      threadIdOverride?: string,
+      threadScopeOverride?: CodexThread['scope'],
+      allowDuringConversationTransition = false,
+    ) => {
+      if (conversationTransitionRef.current && !allowDuringConversationTransition) return false;
+      const explicitRefresh = Boolean(
+        threadIdOverride || threadScopeOverride || allowDuringConversationTransition,
+      );
+      if (!explicitRefresh && statusRefreshInFlightRef.current > 0) return false;
+      statusRefreshInFlightRef.current += 1;
       const requestSequence = ++statusRequestSequenceRef.current;
       const requestedThreadId = threadIdOverride ?? selectedThreadIdRef.current;
       try {
@@ -2074,6 +2217,10 @@ export function CodexFeedbackPanel({
         const nextStatus = (await response.json()) as CodexStatus;
         setIsSupported(true);
         if (requestedThreadId !== selectedThreadIdRef.current) return false;
+        recordConversationLifecycle(
+          nextStatus,
+          phase !== 'closed' ? nextStatus.thread?.id : undefined,
+        );
         setStatus(nextStatus);
         if (
           nextStatus.thread &&
@@ -2100,9 +2247,19 @@ export function CodexFeedbackPanel({
         if (requestSequence !== statusRequestSequenceRef.current) return false;
         setIsSupported((current) => (current === undefined ? false : current));
         return false;
+      } finally {
+        statusRefreshInFlightRef.current = Math.max(0, statusRefreshInFlightRef.current - 1);
       }
     },
-    [effortPreferences, selectConversation, selectedEffort, selectedModelId, workspaceDirectory],
+    [
+      effortPreferences,
+      phase,
+      recordConversationLifecycle,
+      selectConversation,
+      selectedEffort,
+      selectedModelId,
+      workspaceDirectory,
+    ],
   );
 
   const changeBillingMode = useCallback(async () => {
@@ -2134,6 +2291,7 @@ export function CodexFeedbackPanel({
   const pollingActiveTurnId = status?.thread?.activeTurnId;
   const pollingActiveWork =
     status?.thread?.working === true ||
+    status?.threads.some((thread) => thread.working) === true ||
     (Boolean(pollingActiveTurnId) &&
       status?.agents?.some(
         (agent) =>
@@ -2151,8 +2309,28 @@ export function CodexFeedbackPanel({
   }, [pollingActiveWork, refreshStatus]);
 
   useEffect(() => {
+    const refreshVisibleChat = () => {
+      if (document.visibilityState === 'hidden') return;
+      void refreshStatus();
+    };
+    const refreshAfterVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refreshVisibleChat();
+    };
+    document.addEventListener('visibilitychange', refreshAfterVisibilityChange);
+    window.addEventListener('pageshow', refreshVisibleChat);
+    window.addEventListener('focus', refreshVisibleChat);
+    window.addEventListener('online', refreshVisibleChat);
+    return () => {
+      document.removeEventListener('visibilitychange', refreshAfterVisibilityChange);
+      window.removeEventListener('pageshow', refreshVisibleChat);
+      window.removeEventListener('focus', refreshVisibleChat);
+      window.removeEventListener('online', refreshVisibleChat);
+    };
+  }, [refreshStatus]);
+
+  useEffect(() => {
     const openPanel = () => {
-      setHasUnseenCompletion(false);
+      markConversationViewed(selectedThreadIdRef.current || status?.thread?.id);
       restoredChatThreadRef.current = '';
       updateChatSession({ isOpen: true });
       setPhase('compose');
@@ -2161,7 +2339,7 @@ export function CodexFeedbackPanel({
     };
     window.addEventListener(openCodexPanelEvent, openPanel);
     return () => window.removeEventListener(openCodexPanelEvent, openPanel);
-  }, [refreshStatus, updateChatSession]);
+  }, [markConversationViewed, refreshStatus, status?.thread?.id, updateChatSession]);
 
   useEffect(() => {
     void browserCaptureRequest('ping', 1_000)
@@ -2175,7 +2353,7 @@ export function CodexFeedbackPanel({
     const receiveWorkspaceContext = (event: MessageEvent) => {
       if (event.source !== window.parent || event.data?.source !== 'made-solid-codex-host') return;
       if (event.data.action === 'open') {
-        setHasUnseenCompletion(false);
+        markConversationViewed(selectedThreadIdRef.current || status?.thread?.id);
         restoredChatThreadRef.current = '';
         updateChatSession({ isOpen: true });
         setPhase('compose');
@@ -2201,7 +2379,7 @@ export function CodexFeedbackPanel({
     };
     window.addEventListener('message', receiveWorkspaceContext);
     return () => window.removeEventListener('message', receiveWorkspaceContext);
-  }, [embedded, refreshStatus, updateChatSession]);
+  }, [embedded, markConversationViewed, refreshStatus, status?.thread?.id, updateChatSession]);
 
   useEffect(() => {
     const log = mountedChatLog;
@@ -2445,13 +2623,16 @@ export function CodexFeedbackPanel({
       }
       const messageId = anchorMessage.dataset.messageId;
       if (!messageId) return;
+      const turnId = status?.messages.find((message) => message.id === messageId)?.turnId;
       setSelectedExcerpt((current) =>
-        current?.messageId === messageId && current.text === text ? current : { messageId, text },
+        current?.messageId === messageId && current.text === text && current.turnId === turnId
+          ? current
+          : { messageId, text, turnId },
       );
     };
     document.addEventListener('selectionchange', captureSelectedExcerpt);
     return () => document.removeEventListener('selectionchange', captureSelectedExcerpt);
-  }, [mountedChatLog, phase]);
+  }, [mountedChatLog, phase, status?.messages]);
 
   useEffect(() => setSelectedExcerpt(undefined), [selectedThreadId]);
 
@@ -2628,6 +2809,7 @@ export function CodexFeedbackPanel({
       )
     : [];
   const isCodexWorking = status?.thread?.working === true || currentActiveAgents.length > 0;
+  const hasUnseenCompletion = unseenCompletionThreadIds.size > 0;
   const hasActiveTeam = currentActiveAgents.length > 0;
   const anyConversationWorking = status?.threads.some((thread) => thread.working) === true;
   const queuedCount = status?.queuedCount ?? 0;
@@ -2684,13 +2866,6 @@ export function CodexFeedbackPanel({
     document.addEventListener('pointerdown', closeOnOutsidePointer);
     return () => document.removeEventListener('pointerdown', closeOnOutsidePointer);
   }, [conversationPickerOpen]);
-
-  useEffect(() => {
-    if (previousWorkingRef.current && !isCodexWorking && phase === 'closed') {
-      setHasUnseenCompletion(true);
-    }
-    previousWorkingRef.current = isCodexWorking;
-  }, [isCodexWorking, phase]);
 
   useEffect(() => {
     if (!embedded || window.parent === window) return;
@@ -2836,11 +3011,23 @@ export function CodexFeedbackPanel({
     }
   };
 
+  const beginConversationTransition = (transition: ConversationTransition) => {
+    conversationTransitionRef.current = transition;
+    setConversationTransition(transition);
+  };
+
+  const finishConversationTransition = (transitionId: number) => {
+    if (conversationTransitionRef.current?.id === transitionId) {
+      conversationTransitionRef.current = undefined;
+    }
+    setConversationTransition((current) => (current?.id === transitionId ? undefined : current));
+  };
+
   const createConversation = async () => {
     if (!selectedModel || !selectedEffort || isCreatingThread || conversationTransition) return;
     const transitionId = conversationTransitionIdRef.current + 1;
     conversationTransitionIdRef.current = transitionId;
-    setConversationTransition({ id: transitionId, kind: 'create', label: 'New chat' });
+    beginConversationTransition({ id: transitionId, kind: 'create', label: 'New chat' });
     setIsCreatingThread(true);
     setError(undefined);
     try {
@@ -2875,6 +3062,7 @@ export function CodexFeedbackPanel({
                 ...current.threads.filter((thread) => thread.id !== newThread.id),
               ],
               messages: [],
+              activities: [],
               agents: [],
               queuedCount: 0,
               interruptingCount: 0,
@@ -2890,7 +3078,7 @@ export function CodexFeedbackPanel({
       );
     } finally {
       setIsCreatingThread(false);
-      setConversationTransition((current) => (current?.id === transitionId ? undefined : current));
+      finishConversationTransition(transitionId);
     }
   };
 
@@ -2908,7 +3096,7 @@ export function CodexFeedbackPanel({
       return;
     const transitionId = conversationTransitionIdRef.current + 1;
     conversationTransitionIdRef.current = transitionId;
-    setConversationTransition({ id: transitionId, kind: 'branch', label: 'Branched chat' });
+    beginConversationTransition({ id: transitionId, kind: 'branch', label: 'Branched chat' });
     setError(undefined);
     try {
       const response = await studioRuntimeFetch(branchEndpoint, {
@@ -2928,10 +3116,10 @@ export function CodexFeedbackPanel({
       }
       const branchedThread = result.thread;
       selectConversation(branchedThread.id, branchedThread.scope);
-      const loaded = await refreshStatus(branchedThread.id, branchedThread.scope);
+      const loaded = await refreshStatus(branchedThread.id, branchedThread.scope, true);
       if (!loaded && selectedThreadIdRef.current === branchedThread.id) {
         selectConversation(sourceThreadId, sourceThreadScope);
-        await refreshStatus(sourceThreadId, sourceThreadScope);
+        await refreshStatus(sourceThreadId, sourceThreadScope, true);
         throw new Error(
           'The branch was created but could not be opened. Your original chat is still selected.',
         );
@@ -2947,7 +3135,7 @@ export function CodexFeedbackPanel({
         cause instanceof Error ? cause.message : 'The Codex conversation could not be branched.',
       );
     } finally {
-      setConversationTransition((current) => (current?.id === transitionId ? undefined : current));
+      finishConversationTransition(transitionId);
     }
   };
 
@@ -2962,19 +3150,19 @@ export function CodexFeedbackPanel({
     const previousThreadScope = selectedThread?.scope;
     const transitionId = conversationTransitionIdRef.current + 1;
     conversationTransitionIdRef.current = transitionId;
-    setConversationTransition({
+    beginConversationTransition({
       id: transitionId,
       kind: 'switch',
       label: threadTitle(thread),
     });
     setError(undefined);
     selectConversation(thread.id, thread.scope);
-    const loaded = await refreshStatus(thread.id, thread.scope);
+    const loaded = await refreshStatus(thread.id, thread.scope, true);
     if (!loaded && selectedThreadIdRef.current === thread.id) {
       selectConversation(previousThreadId, previousThreadScope);
       setError('That conversation could not be loaded. Your previous chat is still available.');
     }
-    setConversationTransition((current) => (current?.id === transitionId ? undefined : current));
+    finishConversationTransition(transitionId);
   };
 
   const continueInterruptedConversation = async () => {
@@ -3519,15 +3707,19 @@ export function CodexFeedbackPanel({
   };
 
   const openTemporaryQuestion = () => {
-    if (!selectedExcerpt) return;
+    if (!selectedExcerpt || !selectedThread?.id) return;
     if (selectedExcerpt.text.length > 3_000) {
       setError('Select a shorter excerpt for a quick question.');
       return;
     }
     setTemporaryQuestion({
       excerpt: selectedExcerpt.text,
+      messageId: selectedExcerpt.messageId,
       phase: 'compose',
       question: '',
+      speechId: `quick-answer-${selectedExcerpt.messageId}`,
+      threadId: selectedThread.id,
+      turnId: selectedExcerpt.turnId,
     });
     clearSelectedExcerpt();
     window.requestAnimationFrame(() => temporaryQuestionTextareaRef.current?.focus());
@@ -3536,6 +3728,10 @@ export function CodexFeedbackPanel({
   const closeTemporaryQuestion = () => {
     temporaryQuestionAbortRef.current?.abort();
     temporaryQuestionAbortRef.current = undefined;
+    setAutoReadPending((current) =>
+      current?.id === temporaryQuestion?.speechId ? undefined : current,
+    );
+    if (speechMessageIdRef.current === temporaryQuestion?.speechId) stopCodexSpeech(false);
     setTemporaryQuestion(undefined);
   };
 
@@ -3554,9 +3750,12 @@ export function CodexFeedbackPanel({
         body: JSON.stringify({
           action: 'temporary-question',
           excerpt: temporaryQuestion.excerpt,
+          messageId: temporaryQuestion.messageId,
           question: temporaryQuestion.question.trim(),
           model: temporaryQuestionModel.id,
+          threadId: temporaryQuestion.threadId,
           threadScope: selectedThread?.scope || (workspaceDirectory ? 'client' : 'universal'),
+          turnId: temporaryQuestion.turnId,
           workspace: workspaceDirectory,
         }),
         signal: controller.signal,
@@ -3569,6 +3768,7 @@ export function CodexFeedbackPanel({
       if (!response.ok || !result.answer) {
         throw new Error(result.detail || 'Codex could not answer that temporary question.');
       }
+      if (temporaryQuestionAbortRef.current !== controller) return;
       setTemporaryQuestion((current) =>
         current
           ? {
@@ -3580,6 +3780,14 @@ export function CodexFeedbackPanel({
             }
           : current,
       );
+      if (autoReadCodex && speechSupported) {
+        setAutoReadPending({
+          id: temporaryQuestion.speechId,
+          phase: 'final',
+          text: result.answer,
+          turnId: temporaryQuestion.turnId,
+        });
+      }
     } catch (cause) {
       if (controller.signal.aborted) return;
       setTemporaryQuestion((current) =>
@@ -3632,7 +3840,7 @@ export function CodexFeedbackPanel({
                     : 'Chat with Codex'
           }
           onClick={() => {
-            setHasUnseenCompletion(false);
+            markConversationViewed(selectedThreadIdRef.current || status?.thread?.id);
             restoredChatThreadRef.current = '';
             updateChatSession({ isOpen: true });
             setPhase('compose');
@@ -3880,6 +4088,7 @@ export function CodexFeedbackPanel({
                         {group.threads.length ? (
                           group.threads.map((thread) => {
                             const selected = thread.id === (selectedThreadId || status?.thread?.id);
+                            const unseenCompletion = unseenCompletionThreadIds.has(thread.id);
                             const lastUsedAt = threadLastUsedAt(thread);
                             const usedAt = timestampMilliseconds(lastUsedAt);
                             return (
@@ -3898,11 +4107,13 @@ export function CodexFeedbackPanel({
                                 variant="quiet"
                               >
                                 <span
-                                  className="codex-conversation-picker__state"
+                                  className={`codex-conversation-picker__state${unseenCompletion && !thread.working ? ' is-unread' : ''}`}
                                   aria-hidden="true"
                                 >
                                   {thread.working ? (
                                     <LoaderCircle className="is-spinning" size={16} />
+                                  ) : unseenCompletion ? (
+                                    <BellRing size={15} />
                                   ) : selected ? (
                                     <Check size={16} />
                                   ) : (
@@ -3915,9 +4126,11 @@ export function CodexFeedbackPanel({
                                     <span>
                                       {thread.working
                                         ? 'Working'
-                                        : thread.interrupted
-                                          ? 'Interrupted'
-                                          : 'Ready'}
+                                        : unseenCompletion
+                                          ? 'Finished · Unread'
+                                          : thread.interrupted
+                                            ? 'Interrupted'
+                                            : 'Ready'}
                                     </span>
                                     <time
                                       dateTime={usedAt ? new Date(usedAt).toISOString() : undefined}
@@ -4247,10 +4460,16 @@ export function CodexFeedbackPanel({
                                         disabled={
                                           phase === 'sending-chat' ||
                                           Boolean(conversationTransition) ||
-                                          !temporaryQuestionModel
+                                          !temporaryQuestionModel ||
+                                          !canBranchCodexMessage(
+                                            message,
+                                            status?.thread,
+                                            status?.messages || [],
+                                          )
                                         }
                                         onClick={openTemporaryQuestion}
                                         size="small"
+                                        title="Ask with the whole conversation after this reply is complete"
                                         variant="quiet"
                                       >
                                         <Zap aria-hidden="true" size={15} />
@@ -4756,7 +4975,9 @@ export function CodexFeedbackPanel({
                 >
                   <Settings aria-hidden="true" size={18} />
                 </IconButton>
-                {phase !== 'sending-chat' && (isStoppingTurn || isCodexWorking) ? (
+                {phase !== 'sending-chat' &&
+                (isStoppingTurn ||
+                  (isCodexWorking && !prompt.trim() && draftAttachments.length === 0)) ? (
                   <IconButton
                     disabled={
                       Boolean(conversationTransition) ||
@@ -5297,7 +5518,7 @@ export function CodexFeedbackPanel({
               <span>
                 <Dialog.Title>Quick question</Dialog.Title>
                 <Dialog.Description id="codex-quick-question-description">
-                  Temporary answer · not added to this conversation
+                  Uses this conversation · temporary and read-only
                 </Dialog.Description>
               </span>
               <Dialog.Close asChild>
@@ -5322,12 +5543,98 @@ export function CodexFeedbackPanel({
                     >
                       <header>
                         <span>
-                          <small>Temporary response</small>
+                          <small>
+                            {autoReadCodex && speechSupported
+                              ? 'Temporary response · auto-read on'
+                              : 'Temporary response'}
+                          </small>
                           <strong id="codex-quick-answer-title">Quick answer</strong>
                         </span>
                         <CircleCheck aria-hidden="true" size={18} />
                       </header>
-                      <MarkdownContent>{temporaryQuestion.answer}</MarkdownContent>
+                      <MarkdownContent
+                        speech={
+                          speechSupported
+                            ? {
+                                activeWordIndex:
+                                  speechMessageId === temporaryQuestion.speechId
+                                    ? speechActiveWordIndex
+                                    : undefined,
+                                onWordSelect: (wordIndex) => {
+                                  setAutoReadPending(undefined);
+                                  readCodexReply(
+                                    temporaryQuestion.speechId,
+                                    temporaryQuestion.answer || '',
+                                    wordIndex,
+                                  );
+                                },
+                                words: codexSpeechWords(
+                                  temporaryQuestion.answer,
+                                  selectedSpeechStyle,
+                                ),
+                              }
+                            : undefined
+                        }
+                      >
+                        {temporaryQuestion.answer}
+                      </MarkdownContent>
+                      {speechSupported ? (
+                        <ButtonGroup className="codex-quick-question-dialog__speech-actions">
+                          <Button
+                            disabled={
+                              speechMessageId === temporaryQuestion.speechId &&
+                              speechPlaybackState === 'loading'
+                            }
+                            onClick={() => {
+                              if (
+                                speechMessageId === temporaryQuestion.speechId &&
+                                speechPlaybackState === 'playing'
+                              ) {
+                                pauseCodexSpeech();
+                              } else if (
+                                speechMessageId === temporaryQuestion.speechId &&
+                                speechPlaybackState === 'paused'
+                              ) {
+                                resumeCodexSpeech();
+                              } else {
+                                setAutoReadPending(undefined);
+                                readCodexReply(
+                                  temporaryQuestion.speechId,
+                                  temporaryQuestion.answer || '',
+                                );
+                              }
+                            }}
+                            size="small"
+                            variant="quiet"
+                          >
+                            {speechMessageId === temporaryQuestion.speechId &&
+                            speechPlaybackState === 'loading' ? (
+                              <LoaderCircle aria-hidden="true" className="is-spinning" size={15} />
+                            ) : speechMessageId === temporaryQuestion.speechId &&
+                              speechPlaybackState === 'playing' ? (
+                              <Pause aria-hidden="true" size={15} />
+                            ) : (
+                              <Volume2 aria-hidden="true" size={15} />
+                            )}
+                            {speechMessageId === temporaryQuestion.speechId &&
+                            speechPlaybackState === 'loading'
+                              ? 'Preparing'
+                              : speechMessageId === temporaryQuestion.speechId &&
+                                  speechPlaybackState === 'playing'
+                                ? 'Pause reading'
+                                : speechMessageId === temporaryQuestion.speechId &&
+                                    speechPlaybackState === 'paused'
+                                  ? 'Resume reading'
+                                  : 'Read answer'}
+                          </Button>
+                          {speechMessageId === temporaryQuestion.speechId ? (
+                            <Button onClick={() => stopCodexSpeech()} size="small" variant="quiet">
+                              <Square aria-hidden="true" size={14} />
+                              Stop
+                            </Button>
+                          ) : null}
+                        </ButtonGroup>
+                      ) : null}
                       <small>
                         {temporaryQuestion.model
                           ? `${temporaryQuestion.model} · discarded when closed`
@@ -5340,8 +5647,8 @@ export function CodexFeedbackPanel({
                     <div className="codex-quick-question-dialog__loading" role="status">
                       <LoaderCircle aria-hidden="true" className="is-spinning" size={18} />
                       <span>
-                        <strong>Answering from this excerpt</strong>
-                        <small>No files or conversation history are being changed.</small>
+                        <strong>Answering with this conversation</strong>
+                        <small>The saved conversation and workspace files stay unchanged.</small>
                       </span>
                     </div>
                   ) : null}
@@ -5385,6 +5692,12 @@ export function CodexFeedbackPanel({
                   {temporaryQuestion.phase === 'answer' ? (
                     <Button
                       onClick={() => {
+                        setAutoReadPending((current) =>
+                          current?.id === temporaryQuestion.speechId ? undefined : current,
+                        );
+                        if (speechMessageIdRef.current === temporaryQuestion.speechId) {
+                          stopCodexSpeech(false);
+                        }
                         setTemporaryQuestion((current) =>
                           current
                             ? {

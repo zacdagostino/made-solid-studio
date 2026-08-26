@@ -10,6 +10,30 @@ async function mockDevelopmentWorkspace(page) {
   await page.addInitScript(() => {
     window.__MADE_SOLID_STUDIO_SURFACE__ = 'development';
   });
+  await page.route('**/__made-solid/final-edit?*', async (route) => {
+    await route.fulfill({
+      body: JSON.stringify({
+        status: 'ready',
+        detail: 'The current website source is clean and ready to edit.',
+        branch: 'main',
+        commit: 'd5e37351969f9503a8e0d9bde323f23f547483b6',
+        synced: true,
+        finalCommit: false,
+        changedFiles: [],
+        bundleReady: true,
+        refinementCount: 0,
+        businessId,
+        sourceBuild: {
+          buildId: 'f906bbf7-a333-4bfa-bcfb-f667e7f1259b',
+          manifestId: 'manifest-1',
+        },
+        releaseStatus: 'missing',
+        versions: [],
+        workingVersion: 1,
+      }),
+      contentType: 'application/json',
+    });
+  });
   await page.route('**/__made-solid/workspace-preview-access?*', async (route) => {
     const request = new URL(route.request().url());
     expect(request.searchParams.get('directory')).toBe(directory);
@@ -34,12 +58,40 @@ async function mockDevelopmentWorkspace(page) {
   });
 }
 
+async function mockCodexStatus(page) {
+  await page.route('**/__made-solid/codex-status*', async (route) => {
+    const workspace = new URL(route.request().url()).searchParams.get('workspace');
+    await route.fulfill({
+      body: JSON.stringify({
+        status: 'ready',
+        detail: workspace ? 'Connected to the client website editor.' : 'Connected to Studio.',
+        messages: [],
+        activities: [],
+        agents: [],
+        models: [],
+        threads: [],
+        queuedCount: 0,
+        queuedMessages: [],
+      }),
+      contentType: 'application/json',
+    });
+  });
+}
+
 async function openDevelopmentEditor(page) {
   await mockDevelopmentWorkspace(page);
   await page.goto(`/${editingHash}`);
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
   await expect(page.locator('.development-surface-badge:visible')).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Open website editor' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Edit Demo Local Services website' }),
+  ).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open Demo Local Services editor' })).toBeVisible();
+  const sourceControls = page.getByTestId('local-development-publication');
+  await expect(
+    sourceControls.getByRole('heading', { name: 'Demo Local Services source controls' }),
+  ).toBeVisible();
+  await expect(sourceControls).toContainText('This is not a second editor.');
 }
 
 async function openFocusedEditor(page) {
@@ -55,6 +107,28 @@ async function openFocusedEditor(page) {
       }),
   ).toBeVisible();
 }
+
+test('keeps client-only Codex scope inside the dedicated website editor', async ({
+  page,
+}, testInfo) => {
+  await mockCodexStatus(page);
+  await openDevelopmentEditor(page);
+
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const studioChat = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await expect(studioChat.getByText('Universal Studio chats')).toBeVisible();
+  await expect(studioChat.getByText(/Editing only/)).toHaveCount(0);
+  await studioChat.getByRole('button', { name: 'Close Codex chat' }).click();
+
+  await openFocusedEditor(page);
+  if (testInfo.project.name === 'mobile') {
+    await page.getByRole('button', { name: 'Codex' }).click();
+  }
+  const editorChat = page.getByRole('dialog', {
+    name: 'Demo Local Services website editor',
+  });
+  await expect(editorChat.getByText('Editing only Demo Local Services')).toBeAttached();
+});
 
 test('bare Workspace opens Studio without restoring a selected client', async ({
   page,
@@ -87,7 +161,7 @@ test('opens the exact client preview and scoped Codex in a dedicated editor tab'
   await openDevelopmentEditor(page);
 
   await expect(page).toHaveURL(new RegExp(`${editingHash.replaceAll('/', '\\/')}$`));
-  const editorLink = page.getByRole('link', { name: 'Open website editor' });
+  const editorLink = page.getByRole('link', { name: 'Open Demo Local Services editor' });
   await expect(editorLink).toHaveAttribute('href', `#/website-editor/${businessId}`);
   await expect(editorLink).toHaveAttribute('target', '_blank');
   await expect(page.getByRole('button', { name: 'All prospects' })).toBeVisible();
@@ -105,7 +179,12 @@ test('opens the exact client preview and scoped Codex in a dedicated editor tab'
   await openFocusedEditor(page);
   await expect(page).toHaveURL(new RegExp(`/#/website-editor/${businessId}$`));
   await expect(
-    page.getByTestId('client-development-editor').getByText('Editing only Demo Local Services'),
+    page.getByRole('heading', { name: 'Demo Local Services website', exact: true }),
+  ).toBeVisible();
+  await expect(
+    page
+      .getByTestId('client-development-editor')
+      .getByText('Editing Demo Local Services website only'),
   ).toBeVisible();
   if (testInfo.project.name === 'mobile') {
     await expect(page.getByLabel('Demo Local Services Codex chat')).toBeHidden();
@@ -147,7 +226,9 @@ test('opens the exact client preview and scoped Codex in a dedicated editor tab'
   await expect(editor).toHaveClass(/is-full-preview/);
   await expect(page.getByLabel('Demo Local Services Codex chat')).toBeHidden();
   await expect(
-    page.getByTestId('client-development-editor').getByText('Editing only Demo Local Services'),
+    page
+      .getByTestId('client-development-editor')
+      .getByText('Editing Demo Local Services website only'),
   ).toBeHidden();
   await expect(editor).toHaveScreenshot('workspace-development-full-desktop-preview.png');
   await page.getByRole('button', { name: 'Exit full preview' }).click();

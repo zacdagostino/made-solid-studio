@@ -543,19 +543,19 @@ async function mountLocalDevelopmentPublication(page) {
       <section class="card workspace-panel local-development" data-testid="local-development-publication">
         <div class="local-development__header">
           <div>
-            <p class="eyebrow">Editable workspace</p>
-            <h2>Work in a local prospect workspace</h2>
-            <p class="muted-copy">Keep each editable prospect repository in this Studio Codespace under an ignored local directory, with approved assets, build origin, and refinement history intact.</p>
+            <p class="eyebrow">Website source &amp; local preview</p>
+            <h2>LECE Group source controls</h2>
+            <p class="muted-copy">These controls prepare the private source repository and run the local website preview used by the editor above. This is not a second editor.</p>
           </div>
           <span class="status-badge status-badge--success">Ready to export</span>
         </div>
         <section class="local-development__ready" aria-labelledby="local-workspace-ready">
           <span aria-hidden="true">▣</span>
           <div>
-            <h3 id="local-workspace-ready">Editable source is ready</h3>
-            <p>Build f906bbf7 can become a separate private workspace with editable source, approved assets, setup notes, and the Made Solid refinement ledger.</p>
+            <h3 id="local-workspace-ready">LECE Group website source is ready</h3>
+            <p>Prepare or refresh the local source from Build f906bbf7 inside <code>prospect-workspaces</code>, then run the preview used by the current website editor.</p>
             <p class="local-development__quality-note">Quality review still has findings. That does not block private development, but it still blocks client publishing.</p>
-            <button aria-label="Open local prospect workspace" class="button button--primary" type="button">Open local workspace</button>
+            <button aria-label="Start LECE Group local website preview" class="button button--secondary" type="button">Start local website preview</button>
             <section class="local-refinement-ledger" aria-labelledby="local-refinement-ledger-title">
               <header>
                 <div><span class="local-refinement-ledger__icon" aria-hidden="true">✓</span><div><h4 id="local-refinement-ledger-title">Refinement ledger</h4><p>Open the local workspace to start its live refinement ledger.</p></div></div>
@@ -576,7 +576,7 @@ async function mountLocalDevelopmentPublication(page) {
         <form class="local-development__form">
           <div class="local-development__form-heading">
             <span aria-hidden="true">◉</span>
-            <div><h3>Create the private editing workspace</h3><p>Studio has filled in the destination. One click creates the separate private repository and pushes the complete editable handoff.</p></div>
+            <div><h3>Create LECE Group private source repository</h3><p>Studio has filled in the destination. One click creates the private repository used to sync this website’s editable source.</p></div>
           </div>
           <p class="local-development__target">Private destination: <strong>zacdagostino/lecegroup</strong></p>
           <details class="local-development__destination-settings">
@@ -588,7 +588,7 @@ async function mountLocalDevelopmentPublication(page) {
             </div>
           </details>
           <p class="local-development__privacy"><span aria-hidden="true">◇</span>Private only. Studio never exposes the GitHub token to this browser, never creates a public repository, and never changes the Made Solid Studio repository from this action.</p>
-          <button class="button button--primary" type="submit">Create editable workspace</button>
+          <button class="button button--primary" type="submit">Create private source repository</button>
         </form>
       </section>
     </div>
@@ -640,14 +640,14 @@ async function mountEditableWorkspaceCreation(page) {
     <main style="height: auto">
       <section class="card workspace-panel local-development" data-testid="editable-workspace-creation">
         <div class="local-development__header">
-          <div><p class="eyebrow">Editable workspace</p><h2>Work in a local prospect workspace</h2></div>
+          <div><p class="eyebrow">Website source &amp; local preview</p><h2>LECE Group source controls</h2></div>
           <span class="status-badge status-badge--warning">running</span>
         </div>
         <section class="local-development__progress" aria-labelledby="editable-workspace-progress-title" aria-live="polite">
           <div class="local-development__progress-header">
             <span class="local-development__progress-icon" aria-hidden="true">◌</span>
             <div>
-              <p class="eyebrow">Creating editable workspace</p>
+              <p class="eyebrow">Creating private source repository</p>
               <h3 id="editable-workspace-progress-title">Preparing zacdagostino/lecegroup</h3>
               <p>Studio is turning the finished website into a separate private development repository. You can leave this page; persisted status will still be here when you return.</p>
             </div>
@@ -656,7 +656,7 @@ async function mountEditableWorkspaceCreation(page) {
             <div aria-label="creating private repository" aria-valuetext="Creating the private GitHub repository zacdagostino/lecegroup." class="indeterminate-progress__track" role="progressbar"><span class="indeterminate-progress__bar"></span></div>
             <span>Creating the private GitHub repository zacdagostino/lecegroup.</span>
           </div>
-          <ol class="local-development__progress-stages" aria-label="Workspace creation stages">${stages}</ol>
+          <ol class="local-development__progress-stages" aria-label="Private source repository creation stages">${stages}</ol>
           <dl class="local-development__progress-facts">
             <div><dt>Destination</dt><dd>zacdagostino/lecegroup</dd></div>
             <div><dt>Visibility</dt><dd>Private only</dd></div>
@@ -664,7 +664,7 @@ async function mountEditableWorkspaceCreation(page) {
             <div><dt>Files and setup items</dt><dd>124 of 126 prepared</dd></div>
           </dl>
           <p class="local-development__progress-note"><span aria-hidden="true">◇</span>The protected worker performs these steps server-side. It will not alter the Made Solid Studio repository, publish the website, or make the client repository public.</p>
-          <button class="button button--secondary" type="button">Cancel workspace creation</button>
+          <button class="button button--secondary" type="button">Cancel repository creation</button>
         </section>
       </section>
     </main>
@@ -680,19 +680,19 @@ async function mountReadyEditableWorkspace(page) {
       <section class="card workspace-panel local-development" data-testid="editable-workspace-ready">
         <div class="local-development__header">
           <div>
-            <p class="eyebrow">Editable workspace</p>
-            <h2>Work in a local prospect workspace</h2>
-            <p class="muted-copy">The private client repository is stored in an ignored directory inside this Studio Codespace.</p>
+            <p class="eyebrow">Website source &amp; local preview</p>
+            <h2>LECE Group source controls</h2>
+            <p class="muted-copy">These controls prepare the private source repository and run the local website preview used by the editor above. This is not a second editor.</p>
           </div>
           <span class="status-badge status-badge--success">Repository ready</span>
         </div>
         <section class="local-development__ready" aria-labelledby="local-workspace-ready">
           <span aria-hidden="true">◉</span>
           <div>
-            <h3 id="local-workspace-ready">Editable source is ready</h3>
-            <p>Build f906bbf7 can become a private repository and a local folder inside <code>prospect-workspaces</code>, with its Made Solid refinement ledger.</p>
+            <h3 id="local-workspace-ready">LECE Group website source is ready</h3>
+            <p>Prepare or refresh the local source from Build f906bbf7 inside <code>prospect-workspaces</code>, then run the preview used by the current website editor.</p>
             <div class="button-group local-development__repository-actions">
-              <button aria-label="Open local prospect workspace" class="button button--primary" type="button">Open local workspace</button>
+              <button aria-label="Start LECE Group local website preview" class="button button--secondary" type="button">Start local website preview</button>
             </div>
             <div class="local-workspace-setup local-workspace-setup--complete" hidden role="status" aria-live="polite">
               <strong class="local-workspace-setup__detail"></strong>
@@ -741,7 +741,7 @@ async function mountReadyEditableWorkspace(page) {
         <section class="local-development__repository" aria-labelledby="github-repository-ready">
           <span aria-hidden="true">◉</span>
           <div>
-            <h3 id="github-repository-ready">Local prospect workspace</h3>
+            <h3 id="github-repository-ready">LECE Group private source repository</h3>
             <p><strong>made-solid-studio/lece-electrical-website</strong> is ready on <code>main</code>.</p>
             <p class="local-development__separation-note">Use <code>prospect-workspaces/lece-electrical-website</code> inside this Codespace.</p>
             <div class="button-group local-development__repository-actions">
@@ -754,43 +754,46 @@ async function mountReadyEditableWorkspace(page) {
   `);
   await page.addStyleTag({ path: studioStyles.pathname });
   await page.addStyleTag({ content: 'body { height: auto; overflow: auto; }' });
-  await page.getByRole('button', { name: 'Open local prospect workspace' }).evaluate((button) => {
-    button.addEventListener('click', async () => {
-      button.setAttribute('disabled', '');
-      button.textContent = 'Preparing local workspace';
-      const setup = document.querySelector('.local-workspace-setup');
-      const detail = document.querySelector('.local-workspace-setup__detail');
-      if (setup instanceof HTMLElement) setup.hidden = false;
-      if (detail) detail.textContent = 'Connecting to the local Studio workspace service.';
-      const response = await fetch('/__made-solid/local-workspace', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          repository: 'made-solid-studio/lece-electrical-website',
-        }),
+  await page
+    .getByRole('button', { name: 'Start LECE Group local website preview' })
+    .evaluate((button) => {
+      button.addEventListener('click', async () => {
+        button.setAttribute('disabled', '');
+        button.textContent = 'Starting local website preview';
+        const setup = document.querySelector('.local-workspace-setup');
+        const detail = document.querySelector('.local-workspace-setup__detail');
+        if (setup instanceof HTMLElement) setup.hidden = false;
+        if (detail) detail.textContent = 'Connecting to the local Studio workspace service.';
+        const response = await fetch('/__made-solid/local-workspace', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            repository: 'made-solid-studio/lece-electrical-website',
+          }),
+        });
+        const events = (await response.text())
+          .trim()
+          .split(/\r?\n/)
+          .map((line) => JSON.parse(line));
+        const finalEvent = events.at(-1);
+        if (detail) detail.textContent = finalEvent.detail;
+        setup?.querySelectorAll('li').forEach((item) => {
+          item.className = 'is-complete';
+          const marker = item.firstElementChild;
+          if (marker) marker.textContent = '✓';
+        });
+        if (finalEvent.previewUrl) {
+          const previewLink = document.createElement('a');
+          previewLink.className = 'button button--secondary';
+          previewLink.href = '#/website-editor/lecegroup';
+          previewLink.textContent = 'Open LECE Group editor';
+          setup?.after(previewLink);
+        }
+        button.setAttribute('aria-label', 'Restart LECE Group local website preview');
+        button.textContent = 'Restart local website preview';
+        button.removeAttribute('disabled');
       });
-      const events = (await response.text())
-        .trim()
-        .split(/\r?\n/)
-        .map((line) => JSON.parse(line));
-      const finalEvent = events.at(-1);
-      if (detail) detail.textContent = finalEvent.detail;
-      setup?.querySelectorAll('li').forEach((item) => {
-        item.className = 'is-complete';
-        const marker = item.firstElementChild;
-        if (marker) marker.textContent = '✓';
-      });
-      if (finalEvent.previewUrl) {
-        const previewLink = document.createElement('a');
-        previewLink.className = 'button button--secondary';
-        previewLink.href = finalEvent.previewUrl;
-        previewLink.textContent = 'Open website preview';
-        setup?.after(previewLink);
-      }
-      button.textContent = 'Website launched';
-      button.removeAttribute('disabled');
     });
-  });
 }
 
 async function mountBrandIntro(page) {
@@ -1319,6 +1322,8 @@ test('keeps generation, website editing, and Made Solid handoff in separate rout
   test.setTimeout(60_000);
   const businessId = 'business-demo-local-services';
   const commit = 'd5e37351969f9503a8e0d9bde323f23f547483b6';
+  const sourceBuildId = 'f906bbf7-a333-4bfa-bcfb-f667e7f1259b';
+  const sourceManifestId = 'manifest-1';
   const committedPreviewUrl =
     'https://preview.madesolid.com.au/__made-solid/workspace-frame/demo-local-services/payload.signature/';
   let committedPreviewRequest;
@@ -1335,7 +1340,49 @@ test('keeps generation, website editing, and Made Solid handoff in separate rout
         changedFiles: [],
         bundleReady: true,
         refinementCount: 4,
-        sourceBuild: { buildId: 'f906bbf7-a333-4bfa-bcfb-f667e7f1259b' },
+        businessId,
+        sourceBuild: { buildId: sourceBuildId, manifestId: sourceManifestId },
+        releaseStatus: 'passed',
+        releaseAttestation: {
+          schemaVersion: 1,
+          id: 'release-attestation-demo',
+          status: 'passed',
+          businessId,
+          sourceBuilderRunId: sourceBuildId,
+          sourceManifestId,
+          sourceCommit: commit,
+          sourceTree: '3b8f9c99408f9f7362980b4a7f28c8a0049692db',
+          sourceBranch: 'main',
+          sourceEditVersion: 1,
+          verificationProfile: 'made-solid-edited-site-release-v1',
+          verifiedAt: '2026-08-10T17:00:00Z',
+          checks: [
+            {
+              id: 'source-verification',
+              label: 'Exact source verification',
+              status: 'passed',
+              detail: 'Exact source passed.',
+            },
+            {
+              id: 'responsive-layout',
+              label: 'Responsive layout and route output',
+              status: 'passed',
+              detail: 'Required routes and viewports passed.',
+            },
+            {
+              id: 'responsive-navigation',
+              label: 'Responsive navigation interaction',
+              status: 'passed',
+              detail: 'Compact navigation passed.',
+            },
+            {
+              id: 'accessibility',
+              label: 'Automated accessibility',
+              status: 'passed',
+              detail: 'Automated accessibility passed.',
+            },
+          ],
+        },
         versions: [
           {
             version: 1,
@@ -1427,6 +1474,13 @@ test('keeps generation, website editing, and Made Solid handoff in separate rout
   await page.goto(`/#/prospects/${businessId}/editing`);
   await expectWorkspaceSectionSelected(page, 'Website editing');
   await expect(page.getByTestId('website-editing-page')).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Current edited website is committed as v1' }),
+  ).toBeVisible();
+  await expect(page.getByText('Generated baseline', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Current edited website', { exact: true }).first()).toBeVisible();
+  await expect(page.getByTestId('release-verification')).toContainText('Release verified');
+  await expect(page.getByTestId('release-verification')).toContainText('d5e37351');
   await expect(page.getByText('Editing version').locator('..')).toContainText('v2');
   await expect(page.getByText('Current committed', { exact: true }).locator('..')).toContainText(
     'v1',
@@ -1498,6 +1552,136 @@ test('keeps generation, website editing, and Made Solid handoff in separate rout
     () => document.documentElement.scrollWidth > window.innerWidth,
   );
   expect(hasHorizontalOverflow).toBe(false);
+});
+
+test('separates the generated baseline from the exact verified edited website', async ({
+  page,
+}, testInfo) => {
+  const businessId = 'business-demo-local-services';
+  const sourceBuilderRunId = 'f906bbf7-a333-4bfa-bcfb-f667e7f1259b';
+  const sourceManifestId = '91f62af2-2af3-4523-9f73-883628fcd478';
+  const sourceCommit = '923b61b9d1d81e0c36243e3a21418b7ea7ca8f29';
+  const checks = [
+    ['source-verification', 'Exact source verification', 'Exact source passed.'],
+    ['responsive-layout', 'Responsive layout and route output', '47 routes passed.'],
+    ['responsive-navigation', 'Responsive navigation interaction', 'Compact navigation passed.'],
+    ['accessibility', 'Automated accessibility', 'WCAG checks passed.'],
+  ].map(([id, label, detail]) => ({ id, label, detail, status: 'passed' }));
+  await page.route('**/__made-solid/final-edit?*', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'finalised',
+        detail: 'The exact edited commit is verified and synced.',
+        businessId,
+        branch: 'main',
+        commit: sourceCommit,
+        synced: true,
+        finalCommit: true,
+        changedFiles: [],
+        bundleReady: true,
+        refinementCount: 34,
+        sourceBuild: { buildId: sourceBuilderRunId, manifestId: sourceManifestId },
+        releaseStatus: 'passed',
+        releaseAttestation: {
+          schemaVersion: 1,
+          id: '462ad1a7179ef6e0ff2519c10d39175ae654c951d7455f695f0e94b7f05ca4bf',
+          status: 'passed',
+          businessId,
+          sourceBuilderRunId,
+          sourceManifestId,
+          sourceCommit,
+          sourceTree: '0f4b388c6943704c5c4014ca18b98a529a6218dd',
+          sourceBranch: 'main',
+          sourceEditVersion: 3,
+          verificationProfile: 'made-solid-edited-site-release-v1',
+          verifiedAt: '2026-08-26T03:56:55.654Z',
+          checks,
+        },
+        versions: [
+          {
+            version: 3,
+            commit: sourceCommit,
+            committedAt: '2026-08-26T03:56:55.654Z',
+            subject: 'Exact edited-site release verification',
+          },
+        ],
+        committedVersion: {
+          version: 3,
+          commit: sourceCommit,
+          committedAt: '2026-08-26T03:56:55.654Z',
+          subject: 'Exact edited-site release verification',
+        },
+        workingVersion: 4,
+      }),
+    });
+  });
+
+  await page.goto(`/#/prospects/${businessId}/editing`);
+  await expectWorkspaceSectionSelected(page, 'Website editing');
+  const relationship = page.getByRole('region', { name: 'Website source relationship' });
+  await expect(relationship).toContainText('Generated baseline');
+  await expect(relationship).toContainText('Build f906bbf7');
+  await expect(relationship).toContainText('Current edited website');
+  await expect(relationship).toContainText('Commit 923b61b9');
+
+  const release = page.getByTestId('release-verification');
+  await expect(release).toContainText('Release verified');
+  await expect(release.getByRole('listitem')).toHaveCount(4);
+  await expect(release).toHaveScreenshot('edited-site-release-verification.png');
+  const accessibility = await new AxeBuilder({ page })
+    .include('.website-version-relationship')
+    .include('[data-testid="release-verification"]')
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  expect(testInfo.project.name).toMatch(/mobile|tablet|desktop/);
+});
+
+test('identifies a stale Studio runtime instead of blaming the edited commit', async ({ page }) => {
+  const businessId = 'business-demo-local-services';
+  await page.route('**/__made-solid/final-edit?*', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'ready',
+        detail: 'The repository is clean but has not been marked as the final edit.',
+        branch: 'main',
+        commit: '923b61b9d1d81e0c36243e3a21418b7ea7ca8f29',
+        synced: true,
+        finalCommit: false,
+        changedFiles: [],
+        bundleReady: true,
+        refinementCount: 34,
+        sourceBuild: {
+          buildId: 'f906bbf7-a333-4bfa-bcfb-f667e7f1259b',
+          manifestId: '91f62af2-2af3-4523-9f73-883628fcd478',
+        },
+        releaseStatus: 'missing',
+        versions: [],
+        workingVersion: 3,
+      }),
+    });
+  });
+
+  await page.goto(`/#/prospects/${businessId}/editing`);
+  await expectWorkspaceSectionSelected(page, 'Website editing');
+  const release = page.getByTestId('release-verification');
+  await expect(release).toContainText('Studio restart required');
+  await expect(release).toContainText(
+    'Studio’s verification service was updated after this development runtime started.',
+  );
+  await expect(release).not.toContainText('Commit and sync every change');
+  await expect(release.getByRole('button', { name: 'Run release verification' })).toBeDisabled();
+  const accessibility = await new AxeBuilder({ page })
+    .include('[data-testid="release-verification"]')
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
 });
 
 test('keeps committed learning handoffs in a dedicated Agent Studio inbox', async ({ page }) => {
@@ -3532,11 +3716,11 @@ test('shows a truthful responsive local-development and private GitHub handoff',
 }) => {
   await mountLocalDevelopmentPublication(page);
   const panel = page.getByTestId('local-development-publication');
+  await expect(panel.getByRole('heading', { name: 'LECE Group source controls' })).toBeVisible();
+  await expect(panel.getByText('LECE Group website source is ready')).toBeVisible();
   await expect(
-    panel.getByRole('heading', { name: 'Work in a local prospect workspace' }),
+    panel.getByRole('button', { name: 'Create private source repository' }),
   ).toBeVisible();
-  await expect(panel.getByText('Editable source is ready')).toBeVisible();
-  await expect(panel.getByRole('button', { name: 'Create editable workspace' })).toBeVisible();
   await expect(panel).toContainText('Private destination: zacdagostino/lecegroup');
   await expect(panel.getByLabel('GitHub account or organization')).toBeHidden();
   await panel.getByText('Change GitHub destination', { exact: true }).click();
@@ -3545,7 +3729,9 @@ test('shows a truthful responsive local-development and private GitHub handoff',
   await expect(panel.getByLabel('GitHub account or organization')).toBeHidden();
   await expect(panel).toContainText('Private only.');
   await expect(panel).toContainText('never changes the Made Solid Studio repository');
-  await expect(panel.getByRole('button', { name: 'Open local prospect workspace' })).toBeVisible();
+  await expect(
+    panel.getByRole('button', { name: 'Start LECE Group local website preview' }),
+  ).toBeVisible();
   const localFallback = panel.getByText('Manual command fallback', { exact: true });
   await localFallback.click();
   await expect(panel.getByRole('button', { name: 'Copy local workspace command' })).toBeVisible();
@@ -3562,7 +3748,7 @@ test('shows a truthful responsive local-development and private GitHub handoff',
   await expect(panel).toHaveScreenshot('local-development-publication.png');
 });
 
-test('opens a finished editable workspace inside the ignored Studio workspace directory', async ({
+test('starts the local website preview from the private source controls', async ({
   page,
 }, testInfo) => {
   await page.route('**/__made-solid/local-workspace', async (route) => {
@@ -3609,7 +3795,9 @@ test('opens a finished editable workspace inside the ignored Studio workspace di
   });
   await mountReadyEditableWorkspace(page);
   const panel = page.getByTestId('editable-workspace-ready');
-  const openWorkspace = panel.getByRole('button', { name: 'Open local prospect workspace' });
+  const openWorkspace = panel.getByRole('button', {
+    name: 'Start LECE Group local website preview',
+  });
   await expect(openWorkspace).toBeVisible();
   await expect(panel).toContainText('prospect-workspaces/lece-electrical-website');
   await expect(panel.getByRole('link', { name: 'Open GitHub repository' })).toHaveAttribute(
@@ -3617,21 +3805,21 @@ test('opens a finished editable workspace inside the ignored Studio workspace di
     'https://github.com/made-solid-studio/lece-electrical-website',
   );
   await openWorkspace.click();
-  await expect(panel.getByRole('button', { name: 'Open local prospect workspace' })).toContainText(
-    'Preparing local workspace',
-  );
+  await expect(
+    panel.getByRole('button', { name: 'Start LECE Group local website preview' }),
+  ).toContainText('Starting local website preview');
   await expect(panel.getByRole('list', { name: 'Local workspace setup stages' })).toBeVisible();
   await expect(panel.locator('.local-workspace-setup .is-current')).toHaveCount(1);
-  await expect(panel.getByRole('button', { name: 'Open local prospect workspace' })).toContainText(
-    'Website launched',
-  );
+  await expect(
+    panel.getByRole('button', { name: 'Restart LECE Group local website preview' }),
+  ).toContainText('Restart local website preview');
   const stages = panel.getByRole('list', { name: 'Local workspace setup stages' });
   await expect(stages.getByRole('listitem')).toHaveCount(6);
   await expect(stages.locator('.is-complete')).toHaveCount(6);
   await expect(panel).toContainText('The website is running from prospect-workspaces');
-  await expect(panel.getByRole('link', { name: 'Open website preview' })).toHaveAttribute(
+  await expect(panel.getByRole('link', { name: 'Open LECE Group editor' })).toHaveAttribute(
     'href',
-    'https://example.test/lece-electrical-website',
+    '#/website-editor/lecegroup',
   );
   await expect(panel.getByRole('heading', { name: 'Refinement ledger' })).toBeVisible();
   await expect(panel).toContainText('Resources appear immediately');
@@ -3659,7 +3847,7 @@ test('opens a finished editable workspace inside the ignored Studio workspace di
   }
 });
 
-test('shows comprehensive persisted progress while creating an editable workspace', async ({
+test('shows comprehensive persisted progress while creating a private source repository', async ({
   page,
 }, testInfo) => {
   await mountEditableWorkspaceCreation(page);
@@ -3672,7 +3860,7 @@ test('shows comprehensive persisted progress while creating an editable workspac
     'Creating the private GitHub repository zacdagostino/lecegroup.',
   );
   const stages = panel
-    .getByRole('list', { name: 'Workspace creation stages' })
+    .getByRole('list', { name: 'Private source repository creation stages' })
     .getByRole('listitem');
   await expect(stages).toHaveCount(5);
   await expect(panel.locator('.local-development__progress-stages .is-complete')).toHaveCount(3);
@@ -3681,7 +3869,7 @@ test('shows comprehensive persisted progress while creating an editable workspac
   await expect(panel).toContainText('124 of 126 prepared');
   await expect(panel).toContainText('Private only');
   await expect(panel).toContainText('will not alter the Made Solid Studio repository');
-  const cancel = panel.getByRole('button', { name: 'Cancel workspace creation' });
+  const cancel = panel.getByRole('button', { name: 'Cancel repository creation' });
   await expect(cancel).toBeVisible();
   const cancelBox = await cancel.boundingBox();
   expect(cancelBox?.height).toBeGreaterThanOrEqual(44);
@@ -3704,7 +3892,7 @@ test('shows comprehensive persisted progress while creating an editable workspac
   }
 });
 
-test('keeps long editable-workspace values contained at 320px', async ({ page }, testInfo) => {
+test('keeps long private-source values contained at 320px', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'mobile');
   await page.setViewportSize({ width: 320, height: 568 });
   await mountLocalDevelopmentPublication(page);
@@ -3716,7 +3904,9 @@ test('keeps long editable-workspace values contained at 320px', async ({ page },
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
     .toBe(true);
-  await expect(page.getByRole('button', { name: 'Create editable workspace' })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Create private source repository' }),
+  ).toBeVisible();
 });
 
 test('shows one pending-feature count beside the current production agent version', async ({
@@ -3813,8 +4003,16 @@ test('displays the newest test package above retained package versions', async (
 
   const packagePicker = page.getByLabel('Test agent package');
   await expect(packagePicker).toHaveValue(
-    'agent-package-local-v22-2-reliable-codex-ephemeral-threads',
+    'agent-package-local-v23-0-contextual-auto-read-quick-questions',
   );
+  await expect(packagePicker).toContainText('v23.0 · Approved test');
+  await expect(packagePicker).toContainText('v22.9 · Approved test');
+  await expect(packagePicker).toContainText('v22.8 · Approved test');
+  await expect(packagePicker).toContainText('v22.7 · Approved test');
+  await expect(packagePicker).toContainText('v22.6 · Approved test');
+  await expect(packagePicker).toContainText('v22.5 · Approved test');
+  await expect(packagePicker).toContainText('v22.4 · Approved test');
+  await expect(packagePicker).toContainText('v22.3 · Approved test');
   await expect(packagePicker).toContainText('v22.2 · Approved test');
   await expect(packagePicker).toContainText('v22.1 · Approved test');
   await expect(packagePicker).toContainText('v22.0 · Approved test');
@@ -3983,6 +4181,14 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v23.0', 'Contextual auto-read Quick questions'],
+    ['v22.9', 'Codex conversation status indicators'],
+    ['v22.8', 'Editor-only client chat scope'],
+    ['v22.7', 'Unambiguous website editing'],
+    ['v22.6', 'Exact edited-site release'],
+    ['v22.5', 'Responsive development runtime'],
+    ['v22.4', 'Queueable working Codex messages'],
+    ['v22.3', 'Resume-aware Codex progress'],
     ['v22.2', 'Reliable Codex ephemeral chats'],
     ['v22.1', 'Focused prospect preview modes'],
     ['v22.0', 'Resilient development Studio runtime'],
@@ -4311,10 +4517,10 @@ test('makes prospect build failures and identity obvious while keeping replaceme
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const prospectBuilder = page.locator('.builder-run').filter({
-    has: page.getByRole('heading', { name: 'Latest full-site build' }),
+    has: page.getByRole('heading', { name: 'Generated website baseline' }),
   });
-  const identity = prospectBuilder.getByRole('region', { name: 'Current build identity' });
-  await expect(identity).toContainText('Build f906bbf7');
+  const identity = prospectBuilder.getByRole('region', { name: 'Generated baseline identity' });
+  await expect(identity).toContainText('Baseline f906bbf7');
   await expect(identity).toContainText('f906bbf7-a333-4bfa-bcfb-f667e7f1259b');
 
   const attention = prospectBuilder.getByRole('alert');

@@ -1,0 +1,502 @@
+#!/usr/bin/env node
+
+import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { createServer } from 'node:http';
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+  mkdirSync,
+  renameSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, extname, join, relative, resolve, sep } from 'node:path';
+import AxeBuilder from '@axe-core/playwright';
+import { createClient } from '@supabase/supabase-js';
+import { chromium } from 'playwright';
+
+const directoryPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+const shaPattern = /^[0-9a-f]{40}$/i;
+const verificationProfile = 'made-solid-edited-site-release-v1';
+const arguments_ = process.argv.slice(2);
+const directoryIndex = arguments_.indexOf('--directory');
+const directory = directoryIndex >= 0 ? arguments_[directoryIndex + 1]?.trim() : '';
+
+function emit(status, phase, detail, extra = {}) {
+  process.stdout.write(`${JSON.stringify({ status, phase, detail, ...extra })}\n`);
+}
+
+function git(workspace, ...gitArguments) {
+  return execFileSync('git', gitArguments, {
+    cwd: workspace,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+}
+
+function run(command, commandArguments, cwd, environment = process.env) {
+  const result = spawnSync(command, commandArguments, {
+    cwd,
+    env: environment,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (result.status === 0) return;
+  const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
+  const useful = output.split(/\r?\n/).filter(Boolean).slice(-18).join(' ');
+  throw new Error(useful || `${command} exited with code ${result.status}.`);
+}
+
+function gitDirectory(workspace) {
+  const resolved = git(workspace, 'rev-parse', '--git-dir');
+  return realpathSync(resolve(workspace, resolved));
+}
+
+function writeJsonAtomically(path, value) {
+  mkdirSync(dirname(path), { recursive: true });
+  const temporaryPath = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  renameSync(temporaryPath, path);
+}
+
+function repositoryUrl(workspace) {
+  const remote = git(workspace, 'remote', 'get-url', 'origin');
+  const sshMatch = remote.match(/^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/i);
+  if (sshMatch) return `https://github.com/${sshMatch[1]}/${sshMatch[2].replace(/\.git$/i, '')}`;
+  return remote.replace(/\.git$/i, '');
+}
+
+async function persistReleaseForReporting(workspace, record) {
+  const supabaseUrl = process.env.SITEFORGE_SUPABASE_URL?.trim();
+  const serviceRoleKey = process.env.SITEFORGE_SUPABASE_SERVICE_ROLE_KEY?.trim();
+  if (!supabaseUrl || !serviceRoleKey) return { status: 'unavailable' };
+
+  const supabase = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const { data: sourceRun, error: sourceRunError } = await supabase
+    .from('builder_runs')
+    .select('organization_id, business_id, build_manifest_id, status, quality_summary')
+    .eq('id', record.sourceBuilderRunId)
+    .eq('business_id', record.businessId)
+    .eq('build_manifest_id', record.sourceManifestId)
+    .single();
+  if (sourceRunError || !sourceRun) {
+    throw new Error(
+      'The verified edit passed, but its source build lineage could not be recorded.',
+    );
+  }
+
+  const digest = createHash('sha256').update(JSON.stringify(record)).digest('hex');
+  const attestation = { ...record, digest };
+  const cloudRecord = {
+    attestation_id: record.id,
+    organization_id: sourceRun.organization_id,
+    business_id: record.businessId,
+    source_builder_run_id: record.sourceBuilderRunId,
+    source_manifest_id: record.sourceManifestId,
+    source_repository_url: repositoryUrl(workspace),
+    source_commit: record.sourceCommit,
+    source_tree: record.sourceTree,
+    source_branch: record.sourceBranch,
+    source_edit_version: record.sourceEditVersion,
+    verification_profile: record.verificationProfile,
+    verified_at: record.verifiedAt,
+    checks: record.checks,
+    attestation,
+    attestation_digest: digest,
+    source_builder_status: sourceRun.status,
+    source_builder_quality_summary: sourceRun.quality_summary,
+  };
+  const { error: insertError } = await supabase
+    .from('source_release_attestations')
+    .upsert(cloudRecord, { onConflict: 'attestation_digest', ignoreDuplicates: true });
+  if (insertError) {
+    throw new Error(
+      'The verified edit passed, but its release record could not be saved for reporting.',
+    );
+  }
+  const { data: saved, error: savedError } = await supabase
+    .from('source_release_attestations')
+    .select('id, attestation_id, attestation_digest')
+    .eq('attestation_digest', digest)
+    .single();
+  if (
+    savedError ||
+    !saved ||
+    saved.attestation_id !== record.id ||
+    saved.attestation_digest !== digest
+  ) {
+    throw new Error('The exact verified edit could not be confirmed for report generation.');
+  }
+  return { status: 'saved', id: saved.id };
+}
+
+function contentType(path) {
+  const extension = extname(path).toLowerCase();
+  if (extension === '.html') return 'text/html; charset=utf-8';
+  if (extension === '.css') return 'text/css; charset=utf-8';
+  if (extension === '.js' || extension === '.mjs') return 'text/javascript; charset=utf-8';
+  if (extension === '.svg') return 'image/svg+xml';
+  if (extension === '.png') return 'image/png';
+  if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg';
+  if (extension === '.webp') return 'image/webp';
+  if (extension === '.woff2') return 'font/woff2';
+  return 'application/octet-stream';
+}
+
+async function startStaticServer(root) {
+  const resolvedRoot = resolve(root);
+  const server = createServer((request, response) => {
+    let pathname;
+    try {
+      pathname = decodeURIComponent(new URL(request.url || '/', 'http://localhost').pathname);
+    } catch {
+      response.writeHead(400).end('Bad request');
+      return;
+    }
+    const relativePath = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
+    let target = resolve(resolvedRoot, relativePath);
+    if (target !== resolvedRoot && !target.startsWith(`${resolvedRoot}${sep}`)) {
+      response.writeHead(403).end('Forbidden');
+      return;
+    }
+    if (existsSync(target) && lstatSync(target).isDirectory()) target = join(target, 'index.html');
+    if (!existsSync(target) && !extname(target)) target = join(target, 'index.html');
+    if (!existsSync(target) || !lstatSync(target).isFile()) {
+      response.writeHead(404).end('Not found');
+      return;
+    }
+    response.writeHead(200, { 'cache-control': 'no-store', 'content-type': contentType(target) });
+    response.end(readFileSync(target));
+  });
+  await new Promise((resolveServer, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolveServer);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string')
+    throw new Error('Could not start the release server.');
+  return { server, url: `http://127.0.0.1:${address.port}` };
+}
+
+function outputRoutes(root) {
+  const routes = [];
+  const visit = (directoryPath) => {
+    for (const entry of readdirSync(directoryPath, { withFileTypes: true })) {
+      const path = join(directoryPath, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (entry.name === 'index.html') {
+        const parent = relative(root, dirname(path)).split(sep).join('/');
+        if (
+          (!parent || !parent.startsWith('_next')) &&
+          parent !== '404' &&
+          parent !== '_not-found'
+        ) {
+          routes.push(parent ? `/${parent}/` : '/');
+        }
+      }
+    }
+  };
+  visit(root);
+  return [...new Set(routes)].sort((left, right) => left.localeCompare(right));
+}
+
+async function checkResponsiveLayout(browser, baseUrl, routes) {
+  const viewports = [
+    { width: 320, height: 568 },
+    { width: 375, height: 812 },
+    { width: 768, height: 1024 },
+    { width: 1440, height: 900 },
+  ];
+  for (const viewport of viewports) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    const checkedRoutes = viewport.width === 375 ? routes : ['/'];
+    for (const route of checkedRoutes) {
+      const response = await page.goto(`${baseUrl}${route}`, {
+        waitUntil: 'networkidle',
+      });
+      if (!response?.ok())
+        throw new Error(`${route} returned ${response?.status() ?? 'no response'}.`);
+      const result = await page.evaluate(() => ({
+        overflow:
+          globalThis.document.documentElement.scrollWidth -
+          globalThis.document.documentElement.clientWidth,
+        main: globalThis.document.querySelectorAll('main').length,
+        h1: globalThis.document.querySelectorAll('h1').length,
+      }));
+      if (result.overflow > 1)
+        throw new Error(`${route} overflows by ${result.overflow}px at ${viewport.width}px.`);
+      if (result.main !== 1)
+        throw new Error(`${route} must have one main landmark; found ${result.main}.`);
+      if (result.h1 !== 1) throw new Error(`${route} must have one H1; found ${result.h1}.`);
+    }
+    await context.close();
+  }
+  return `Checked ${routes.length} routes at mobile and the homepage at 320, 375, 768 and 1440 pixels.`;
+}
+
+async function checkResponsiveNavigation(browser, baseUrl) {
+  for (const viewport of [
+    { width: 320, height: 568 },
+    { width: 375, height: 812 },
+    { width: 768, height: 1024 },
+  ]) {
+    const context = await browser.newContext({ reducedMotion: 'reduce', viewport });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: 'networkidle' });
+    const trigger = page.locator('[data-siteforge-menu-trigger]:visible').first();
+    if (!(await trigger.count()))
+      throw new Error(`No compact navigation trigger was found at ${viewport.width}px.`);
+    const targetSize = await trigger.boundingBox();
+    if (!targetSize || targetSize.width < 44 || targetSize.height < 44) {
+      throw new Error(
+        `The compact navigation trigger is smaller than 44×44 at ${viewport.width}px.`,
+      );
+    }
+    const surface = page.locator('[data-siteforge-navigation-dialog]');
+    await trigger.click();
+    await page.waitForFunction(
+      (selector) =>
+        globalThis.document.querySelector(selector)?.getAttribute('aria-expanded') === 'true',
+      '[data-siteforge-menu-trigger]',
+    );
+    await surface.waitFor({ state: 'visible' });
+    const links = surface.locator('a:visible');
+    const linkCount = await links.count();
+    if (linkCount < 2)
+      throw new Error(`Compact navigation exposes fewer than two routes at ${viewport.width}px.`);
+    const positions = await links.evaluateAll((items) =>
+      items.map((item) => item.getBoundingClientRect().top),
+    );
+    if (new Set(positions.map((value) => Math.round(value))).size !== positions.length) {
+      throw new Error(
+        `Compact navigation links are not vertically stacked at ${viewport.width}px.`,
+      );
+    }
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(
+      (selector) =>
+        globalThis.document.querySelector(selector)?.getAttribute('aria-expanded') === 'false',
+      '[data-siteforge-menu-trigger]',
+    );
+    if (!(await trigger.evaluate((element) => element === globalThis.document.activeElement))) {
+      throw new Error(`Compact navigation did not restore focus at ${viewport.width}px.`);
+    }
+    await trigger.click();
+    await page.waitForFunction(
+      (selector) =>
+        globalThis.document.querySelector(selector)?.getAttribute('aria-expanded') === 'true',
+      '[data-siteforge-menu-trigger]',
+    );
+    await context.close();
+  }
+  return 'Compact navigation opened twice under reduced motion, stacked routes, dismissed with Escape and restored focus.';
+}
+
+async function checkAccessibility(browser, baseUrl) {
+  for (const viewport of [
+    { width: 375, height: 812 },
+    { width: 768, height: 1024 },
+    { width: 1440, height: 900 },
+  ]) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    await page.goto(baseUrl, { waitUntil: 'networkidle' });
+    const results = await new AxeBuilder({ page })
+      .withTags(['wcag2a', 'wcag2aa', 'wcag22aa'])
+      .analyze();
+    if (results.violations.length) {
+      throw new Error(
+        `${results.violations.length} accessibility violation${results.violations.length === 1 ? '' : 's'} at ${viewport.width}px: ${results.violations.map((item) => item.id).join(', ')}.`,
+      );
+    }
+    await context.close();
+  }
+  return 'Homepage passed axe WCAG A/AA checks at mobile, tablet and desktop.';
+}
+
+async function runCheck(id, label, action) {
+  try {
+    const detail = await action();
+    return { id, label, status: 'passed', detail };
+  } catch (error) {
+    return {
+      id,
+      label,
+      status: 'failed',
+      detail: error instanceof Error ? error.message : `${label} failed.`,
+    };
+  }
+}
+
+let verificationRoot;
+let verificationWorkspace;
+let sourceWorkspace;
+let attemptPath;
+let browser;
+let staticServer;
+try {
+  if (!directory || !directoryPattern.test(directory))
+    throw new Error('A valid prospect workspace directory is required.');
+  const studioWorkspace = process.env.SITEFORGE_STUDIO_WORKSPACE_DIR?.trim();
+  const prospectRoot = studioWorkspace
+    ? resolve(studioWorkspace, 'prospect-workspaces')
+    : resolve(process.env.SITEFORGE_PROSPECT_WORKSPACES_DIR?.trim() || 'prospect-workspaces');
+  sourceWorkspace = resolve(prospectRoot, directory);
+  if (!existsSync(join(sourceWorkspace, '.git')))
+    throw new Error('Open the prospect workspace before release verification.');
+  if (git(sourceWorkspace, 'status', '--porcelain'))
+    throw new Error('Commit or discard pending edits before release verification.');
+  const branch = git(sourceWorkspace, 'branch', '--show-current');
+  const commit = git(sourceWorkspace, 'rev-parse', 'HEAD').toLowerCase();
+  const tree = git(sourceWorkspace, 'rev-parse', 'HEAD^{tree}').toLowerCase();
+  const upstream = git(sourceWorkspace, 'rev-parse', '@{upstream}').toLowerCase();
+  if (!shaPattern.test(commit) || commit !== upstream)
+    throw new Error('The exact release commit must be synced to its upstream branch.');
+  const origin = JSON.parse(
+    readFileSync(join(sourceWorkspace, '.made-solid', 'origin.json'), 'utf8'),
+  );
+  if (!origin.businessId || !origin.studioBuildId || !origin.buildManifestId)
+    throw new Error('The editable repository has incomplete Studio build lineage.');
+  const checkpointCount = Number(
+    git(sourceWorkspace, 'log', '--format=%s')
+      .split(/\r?\n/)
+      .filter((subject) => /^(?:Finalize Made Solid edit:|Made Solid edit v\d+)/.test(subject))
+      .length,
+  );
+  const currentSubject = git(sourceWorkspace, 'log', '-1', '--pretty=%s');
+  const editVersion = /^(?:Finalize Made Solid edit:|Made Solid edit v\d+)/.test(currentSubject)
+    ? Math.max(1, checkpointCount)
+    : checkpointCount + 1;
+  const gitRoot = gitDirectory(sourceWorkspace);
+  const storageDirectory = join(gitRoot, 'made-solid', 'release-attestations');
+  attemptPath = join(storageDirectory, 'latest-attempt.json');
+  verificationRoot = mkdtempSync(join(tmpdir(), 'made-solid-release-'));
+  verificationWorkspace = join(verificationRoot, directory);
+  emit(
+    'running',
+    'preparing',
+    `Preparing immutable commit ${commit.slice(0, 8)} for release verification.`,
+  );
+  run('git', ['worktree', 'add', '--detach', verificationWorkspace, commit], sourceWorkspace);
+  symlinkSync(
+    join(sourceWorkspace, 'node_modules'),
+    join(verificationWorkspace, 'node_modules'),
+    'dir',
+  );
+  const checks = [];
+  emit(
+    'running',
+    'source_verification',
+    'Running formatting, lint, type checks, build and project quality gates.',
+  );
+  checks.push(
+    await runCheck('source-verification', 'Exact source verification', async () => {
+      run('npm', ['run', 'verify'], verificationWorkspace, {
+        ...process.env,
+        NEXT_TELEMETRY_DISABLED: '1',
+        NODE_ENV: 'production',
+      });
+      return 'The exact committed source passed its complete npm verification command.';
+    }),
+  );
+  if (checks.at(-1).status === 'passed') {
+    const outputDirectory = join(verificationWorkspace, 'out');
+    if (!existsSync(join(outputDirectory, 'index.html')))
+      throw new Error('Verification did not create a static website output.');
+    const routes = outputRoutes(outputDirectory);
+    staticServer = await startStaticServer(outputDirectory);
+    browser = await chromium.launch({ headless: true });
+    emit(
+      'running',
+      'responsive_layout',
+      `Checking ${routes.length} compiled routes and required viewports.`,
+    );
+    checks.push(
+      await runCheck('responsive-layout', 'Responsive layout and route output', () =>
+        checkResponsiveLayout(browser, staticServer.url, routes),
+      ),
+    );
+    emit(
+      'running',
+      'responsive_navigation',
+      'Checking compact navigation interaction, reduced motion and focus restoration.',
+    );
+    checks.push(
+      await runCheck('responsive-navigation', 'Responsive navigation interaction', () =>
+        checkResponsiveNavigation(browser, staticServer.url),
+      ),
+    );
+    emit(
+      'running',
+      'accessibility',
+      'Running automated accessibility checks at mobile, tablet and desktop.',
+    );
+    checks.push(
+      await runCheck('accessibility', 'Automated accessibility', () =>
+        checkAccessibility(browser, staticServer.url),
+      ),
+    );
+  }
+  const verifiedAt = new Date().toISOString();
+  const passed = checks.length === 4 && checks.every((check) => check.status === 'passed');
+  const identity = `${origin.businessId}:${origin.studioBuildId}:${commit}:${verificationProfile}`;
+  const record = {
+    schemaVersion: 1,
+    id: createHash('sha256').update(identity).digest('hex'),
+    status: passed ? 'passed' : 'failed',
+    businessId: String(origin.businessId),
+    sourceBuilderRunId: String(origin.studioBuildId),
+    sourceManifestId: String(origin.buildManifestId),
+    sourceCommit: commit,
+    sourceTree: tree,
+    sourceBranch: branch,
+    sourceEditVersion: editVersion,
+    verificationProfile,
+    verifiedAt,
+    checks,
+  };
+  writeJsonAtomically(attemptPath, record);
+  if (!passed) {
+    const failed = checks.filter((check) => check.status === 'failed');
+    throw new Error(
+      `${failed.length} release check${failed.length === 1 ? '' : 's'} failed: ${failed.map((check) => check.label).join(', ')}.`,
+    );
+  }
+  emit(
+    'running',
+    'preparing',
+    'Saving the exact verified edit so Studio can generate its value report.',
+  );
+  const reportRelease = await persistReleaseForReporting(sourceWorkspace, record);
+  writeJsonAtomically(join(dirname(attemptPath), `${commit}.json`), record);
+  emit(
+    'complete',
+    'ready',
+    `Commit ${commit.slice(0, 8)} passed every edited-site release check.`,
+    { attestation: record, reportRelease },
+  );
+} catch (error) {
+  emit('failed', 'failed', error instanceof Error ? error.message : 'Release verification failed.');
+  process.exitCode = 1;
+} finally {
+  await browser?.close().catch(() => undefined);
+  await new Promise((resolveClose) => staticServer?.server.close(resolveClose) ?? resolveClose());
+  if (verificationWorkspace && sourceWorkspace && existsSync(verificationWorkspace)) {
+    try {
+      run('git', ['worktree', 'remove', '--force', verificationWorkspace], sourceWorkspace);
+    } catch {
+      rmSync(verificationWorkspace, { recursive: true, force: true });
+    }
+  }
+  if (verificationRoot) rmSync(verificationRoot, { recursive: true, force: true });
+}

@@ -34,9 +34,12 @@ test('publishes only an expiring private review capability through the Clientspa
   assert.match(source, /sourceProjectId: job\.business_id/);
   assert.match(source, /pricingSnapshot: job\.pricing_snapshot/);
   assert.match(source, /\.from\('decision_report_versions'\)/);
+  assert.match(source, /\.eq\('schema_version', 5\)/);
   assert.match(source, /\.eq\('review_state', 'approved'\)/);
+  assert.match(source, /verified_redesign_value/);
   assert.match(source, /\.\.\.reportData/);
-  assert.match(source, /reviewedAt: report\.created_at \|\| report\.updated_at/);
+  assert.match(source, /reviewedAt: report\.created_at/);
+  assert.match(source, /schemaVersion: report\.schema_version/);
   assert.match(source, /loadReportMedia/);
   assert.match(source, /\.slice\(0, 8\)/);
   assert.match(source, /reportMedia/);

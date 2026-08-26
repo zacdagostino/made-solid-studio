@@ -389,6 +389,30 @@ test('discovers ChatGPT models, image support, efforts, and the active Studio th
   assert.deepEqual(status.agents, []);
 });
 
+test('reuses one healthy app-server connection across status inspections', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-shared-connection-'));
+  const state = { busy: false, turns: [] };
+  const createConnection = fakeConnection(state);
+  let connections = 0;
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    reuseConnection: true,
+    connect: async () => {
+      connections += 1;
+      return createConnection();
+    },
+  });
+
+  await bridge.inspect({ threadId: 'thread-1' });
+  await bridge.inspect({ threadId: 'thread-1' });
+
+  assert.equal(connections, 1);
+  assert.equal(state.closedConnections, undefined);
+  bridge.close();
+  assert.equal(state.closedConnections, 1);
+});
+
 test('does not report a completed turn as working from lagging active thread status', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-completed-status-'));
   const state = {
@@ -1419,7 +1443,7 @@ test('creates and returns a new persistent repository-scoped Codex conversation'
   ]);
 });
 
-test('answers a temporary excerpt question in an ephemeral read-only thread without a queue record', async () => {
+test('answers a quick question from the whole conversation in an ephemeral read-only fork', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-temporary-question-'));
   const state = {
     busy: false,
@@ -1434,31 +1458,38 @@ test('answers a temporary excerpt question in an ephemeral read-only thread with
   });
 
   const result = await bridge.temporaryQuestion({
-    excerpt: 'The implementation is complete.',
+    excerpt: 'The Studio page is ready.',
     question: 'What does this mean?',
     model: 'gpt-image-capable',
+    threadId: 'thread-1',
+    turnId: 'turn-active',
+    messageId: 'message-agent',
   });
 
   assert.equal(result.status, 'complete');
   assert.equal(result.answer, state.temporaryAnswer);
   assert.equal(result.model, 'Image capable');
-  assert.equal(state.threadStarts[0].ephemeral, true);
-  assert.equal(state.threadStarts[0].sandbox, 'read-only');
-  assert.match(state.threadStarts[0].cwd, /made-solid-codex-question-/);
-  assert.notEqual(state.threadStarts[0].cwd, '/workspaces/siteforge-os');
-  assert.deepEqual(state.threadStarts[0].runtimeWorkspaceRoots, []);
+  assert.equal(state.threadForks[0].threadId, 'thread-1');
+  assert.equal(state.threadForks[0].lastTurnId, 'turn-active');
+  assert.equal(state.threadForks[0].ephemeral, true);
+  assert.equal(state.threadForks[0].sandbox, 'read-only');
+  assert.match(state.threadForks[0].cwd, /made-solid-codex-question-/);
+  assert.notEqual(state.threadForks[0].cwd, '/workspaces/siteforge-os');
+  assert.deepEqual(state.threadForks[0].runtimeWorkspaceRoots, []);
   assert.equal(state.turns[0].sandboxPolicy.type, 'readOnly');
-  assert.equal(state.turns[0].cwd, state.threadStarts[0].cwd);
+  assert.equal(state.turns[0].threadId, 'thread-fork-1');
+  assert.equal(state.turns[0].cwd, state.threadForks[0].cwd);
   assert.deepEqual(state.turns[0].runtimeWorkspaceRoots, []);
   assert.equal(state.turns[0].effort, 'low');
   assert.equal(state.turns[0].serviceTier, 'priority');
+  assert.match(state.turns[0].input[0].text, /complete inherited conversation as context/);
   assert.match(state.turns[0].input[0].text, /Do not inspect files, browse, call tools/);
-  assert.deepEqual(state.watchedTurns, [{ threadId: 'thread-new-1', turnId: 'turn-1' }]);
+  assert.deepEqual(state.threadReads, [{ threadId: 'thread-1', includeTurns: true }]);
+  assert.deepEqual(state.watchedTurns, [{ threadId: 'thread-fork-1', turnId: 'turn-1' }]);
   assert.equal(state.closedTurnWatchers, 1);
-  assert.deepEqual(state.threadReads || [], []);
-  assert.deepEqual(state.deletedThreads, ['thread-new-1']);
+  assert.deepEqual(state.deletedThreads, ['thread-fork-1']);
   assert.deepEqual(await bridge.readRecords(), []);
-  await assert.rejects(access(state.threadStarts[0].cwd), { code: 'ENOENT' });
+  await assert.rejects(access(state.threadForks[0].cwd), { code: 'ENOENT' });
 });
 
 test('validates temporary excerpt questions before connecting to Codex', async () => {
@@ -1490,7 +1521,14 @@ test('validates temporary excerpt questions before connecting to Codex', async (
     /within 800 characters/,
   );
   await assert.rejects(
-    bridge.temporaryQuestion({ excerpt: 'Ready.', question: 'Why?', model: '../../unsafe' }),
+    bridge.temporaryQuestion({
+      excerpt: 'Ready.',
+      question: 'Why?',
+      model: '../../unsafe',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      messageId: 'message-1',
+    }),
     /Choose an available Codex model/,
   );
   assert.equal(connections, 0);

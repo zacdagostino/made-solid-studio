@@ -815,6 +815,7 @@ export type MadeSolidHandoff = {
   cancelRequestedAt?: string;
   websiteHandoffId?: string;
   websiteAdminUrl?: string;
+  releaseAttestationId?: string;
   errorSummary?: string;
   createdAt: string;
   completedAt?: string;
@@ -1034,6 +1035,30 @@ export type DecisionReport = {
   updatedAt: string;
 };
 
+export type SourceReleaseAttestation = {
+  id: string;
+  attestationId: string;
+  businessId: string;
+  sourceBuilderRunId: string;
+  sourceManifestId: string;
+  sourceRepositoryUrl: string;
+  sourceCommit: string;
+  sourceTree: string;
+  sourceBranch: string;
+  sourceEditVersion: number;
+  verificationProfile: string;
+  verifiedAt: string;
+  checks: Array<{
+    id: string;
+    label: string;
+    detail: string;
+    status: 'passed';
+  }>;
+  sourceBuilderStatus: string;
+  sourceBuilderQualitySummary?: Record<string, unknown>;
+  createdAt: string;
+};
+
 export type ReportPreviewJobStatus = 'queued' | 'running' | 'ready' | 'failed' | 'cancelled';
 
 export type ReportPreviewJob = {
@@ -1115,6 +1140,7 @@ export type ProspectWorkspace = {
   concept?: RedesignConcept;
   report?: DecisionReport;
   reportVersions?: DecisionReport[];
+  sourceReleaseAttestations: SourceReleaseAttestation[];
   reportPreviewJobs: ReportPreviewJob[];
   reportPreviewWorkerAvailable: boolean;
   tasks: Task[];

@@ -34,6 +34,7 @@ const workspaceCodexEndpoint = '/__made-solid/workspace-codex';
 const refinementLedgerEndpoint = '/__made-solid/refinement-ledger';
 const learningBundleEndpoint = '/__made-solid/learning-bundle';
 const finalEditEndpoint = '/__made-solid/final-edit';
+const releaseVerificationEndpoint = '/__made-solid/release-verification';
 const committedPreviewEndpoint = '/__made-solid/committed-preview';
 const codexFeedbackEndpoint = '/__made-solid/codex-feedback';
 const codexBranchEndpoint = '/__made-solid/codex-branch';
@@ -585,10 +586,11 @@ export async function readFinalEditState(directory) {
       detail: 'Open the local prospect workspace before creating its final edit checkpoint.',
     };
   }
-  const [ledger, branch, commit, subject, changedSource, originSource] = await Promise.all([
+  const [ledger, branch, commit, tree, subject, changedSource, originSource] = await Promise.all([
     readRefinementLedger(directory),
     Promise.resolve(gitOutput(workspace, 'branch', '--show-current')),
     Promise.resolve(gitOutput(workspace, 'rev-parse', 'HEAD')),
+    Promise.resolve(gitOutput(workspace, 'rev-parse', 'HEAD^{tree}')),
     Promise.resolve(gitOutput(workspace, 'log', '-1', '--pretty=%s')),
     Promise.resolve(gitStatusOutput(workspace)),
     readFile(resolve(workspace, '.made-solid', 'origin.json'), 'utf8').catch(() => '{}'),
@@ -603,12 +605,73 @@ export async function readFinalEditState(directory) {
     ...version,
     commitUrl: githubCommitUrl(workspace, version.commit),
   }));
-  const committedVersion = versions.at(-1);
   const finalCommit =
     subject.startsWith('Finalize Made Solid edit:') || subject.startsWith('Made Solid edit v');
   const synced = Boolean(commit && upstreamCommit && commit === upstreamCommit);
-  const finalised = finalCommit && changedFiles.length === 0 && synced;
+  const taggedFinalised = finalCommit && changedFiles.length === 0 && synced;
+  let origin;
+  try {
+    origin = JSON.parse(originSource);
+  } catch {
+    origin = {};
+  }
+  const releaseDirectory = resolve(
+    workspace,
+    gitOutput(workspace, 'rev-parse', '--git-dir'),
+    'made-solid',
+    'release-attestations',
+  );
+  const releaseRecord = async (path) => {
+    try {
+      return JSON.parse(await readFile(path, 'utf8'));
+    } catch {
+      return undefined;
+    }
+  };
+  const [matchingAttestation, latestAttempt] = await Promise.all([
+    releaseRecord(resolve(releaseDirectory, `${commit.toLowerCase()}.json`)),
+    releaseRecord(resolve(releaseDirectory, 'latest-attempt.json')),
+  ]);
+  const recordMatches = (record) =>
+    record?.schemaVersion === 1 &&
+    record?.verificationProfile === 'made-solid-edited-site-release-v1' &&
+    record?.businessId === String(origin.businessId || '') &&
+    record?.sourceBuilderRunId === String(origin.studioBuildId || '') &&
+    record?.sourceManifestId === String(origin.buildManifestId || '') &&
+    record?.sourceCommit === commit.toLowerCase() &&
+    record?.sourceTree === tree.toLowerCase();
+  const releaseAttestation =
+    recordMatches(matchingAttestation) &&
+    matchingAttestation.status === 'passed' &&
+    matchingAttestation.checks?.every((check) => check.status === 'passed')
+      ? matchingAttestation
+      : undefined;
+  const matchingFailedAttempt =
+    recordMatches(latestAttempt) && latestAttempt.status === 'failed' ? latestAttempt : undefined;
+  const releaseStatus = releaseAttestation
+    ? 'passed'
+    : matchingFailedAttempt
+      ? 'failed'
+      : latestAttempt?.sourceCommit && latestAttempt.sourceCommit !== commit.toLowerCase()
+        ? 'stale'
+        : 'missing';
+  const finalised =
+    taggedFinalised || Boolean(releaseAttestation && changedFiles.length === 0 && synced);
+  const releaseVersion =
+    releaseAttestation &&
+    !versions.some((version) => version.commit === releaseAttestation.sourceCommit)
+      ? {
+          version: releaseAttestation.sourceEditVersion,
+          commit: releaseAttestation.sourceCommit,
+          committedAt: releaseAttestation.verifiedAt,
+          subject: 'Exact edited-site release verification',
+          commitUrl: githubCommitUrl(workspace, releaseAttestation.sourceCommit),
+        }
+      : undefined;
+  const effectiveVersions = releaseVersion ? [...versions, releaseVersion] : versions;
+  const committedVersion = effectiveVersions.at(-1);
   const baseState = {
+    releaseVerificationAvailable: true,
     status: finalised ? 'finalised' : changedFiles.length ? 'changes_pending' : 'ready',
     detail: finalised
       ? 'The verified final edit is committed and synced to the prospect repository.'
@@ -622,23 +685,28 @@ export async function readFinalEditState(directory) {
     changedFiles,
     bundleReady,
     refinementCount: ledger.entries.length,
-    sourceBuild: (() => {
-      try {
-        const origin = JSON.parse(originSource);
-        return {
+    businessId: String(origin.businessId || ''),
+    sourceBuild: origin.studioBuildId
+      ? {
           buildId: String(origin.studioBuildId || ''),
           manifestId: String(origin.buildManifestId || ''),
+          agentPackageId: String(origin.agentPackageId || ''),
           agentPackageVersion:
             typeof origin.agentPackageVersion === 'number' ? origin.agentPackageVersion : undefined,
+          buildMode: typeof origin.buildMode === 'string' ? origin.buildMode : undefined,
+          templateVersion:
+            typeof origin.templateVersion === 'string' ? origin.templateVersion : undefined,
+          baselineCommit:
+            typeof origin.baselineCommit === 'string' ? origin.baselineCommit : undefined,
           exportedAt: typeof origin.exportedAt === 'string' ? origin.exportedAt : undefined,
-        };
-      } catch {
-        return undefined;
-      }
-    })(),
-    versions,
+        }
+      : undefined,
+    releaseStatus,
+    releaseAttestation,
+    releaseAttempt: matchingFailedAttempt,
+    versions: effectiveVersions,
     committedVersion,
-    workingVersion: versions.length + 1,
+    workingVersion: Math.max(effectiveVersions.length + 1, (committedVersion?.version ?? 0) + 1),
     updatedAt: new Date().toISOString(),
   };
   return {
@@ -1054,6 +1122,7 @@ export function localWorkspacePlugin() {
           if (activeCodexFeedbackBridge?.startedThreads) {
             nextBridge.startedThreads = activeCodexFeedbackBridge.startedThreads;
           }
+          activeCodexFeedbackBridge?.close();
           activeCodexFeedbackBridge = nextBridge;
           activeCodexFeedbackBridgeModifiedAt = modifiedAt;
           return nextBridge;
@@ -1121,6 +1190,7 @@ export function localWorkspacePlugin() {
     feedbackFlush.unref();
     server.httpServer?.once('close', () => {
       clearInterval(feedbackFlush);
+      activeCodexFeedbackBridge?.close();
       void captureBrowserPromise?.then((browser) => browser.close()).catch(() => undefined);
     });
     server.middlewares.use(async (request, response, next) => {
@@ -1544,7 +1614,6 @@ export function localWorkspacePlugin() {
               return;
             }
             const bridge = await codexFeedbackBridge();
-            await bridge.maintain();
             const inspected = await bridge.inspect({
               threadId: requestUrl.searchParams.get('threadId') || undefined,
               workspace,
@@ -1753,6 +1822,63 @@ export function localWorkspacePlugin() {
           if (!response.writableEnded) {
             response.write(
               `${JSON.stringify({ status: 'failed', phase: 'failed', detail: 'Studio could not start the final-edit process.' })}\n`,
+            );
+            response.end();
+          }
+        });
+        child.once('exit', () => {
+          if (!response.writableEnded) response.end();
+        });
+        return;
+      }
+      if (requestUrl.pathname === releaseVerificationEndpoint) {
+        const fetchSite = request.headers['sec-fetch-site'];
+        if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
+          response.statusCode = 403;
+          response.end('This action is only available from Made Solid Studio.');
+          return;
+        }
+        if (request.method !== 'POST') {
+          response.statusCode = 405;
+          response.end('Method not allowed');
+          return;
+        }
+        let directory;
+        try {
+          const body = JSON.parse(await readRequestBody(request));
+          directory = typeof body.directory === 'string' ? body.directory.trim() : '';
+        } catch {
+          sendJson(response, 400, {
+            status: 'failed',
+            phase: 'failed',
+            detail: 'A valid release-verification request is required.',
+          });
+          return;
+        }
+        if (!directoryPattern.test(directory)) {
+          sendJson(response, 400, {
+            status: 'failed',
+            phase: 'failed',
+            detail: 'A valid prospect workspace directory is required.',
+          });
+          return;
+        }
+        response.writeHead(200, {
+          'Cache-Control': 'no-store',
+          'Content-Type': 'application/x-ndjson; charset=utf-8',
+          'X-Content-Type-Options': 'nosniff',
+        });
+        const child = spawn(
+          process.execPath,
+          [resolve('scripts/verify-prospect-release.mjs'), '--directory', directory],
+          { cwd: process.cwd(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'] },
+        );
+        child.stdout.pipe(response, { end: false });
+        child.stderr.resume();
+        child.once('error', () => {
+          if (!response.writableEnded) {
+            response.write(
+              `${JSON.stringify({ status: 'failed', phase: 'failed', detail: 'Studio could not start release verification.' })}\n`,
             );
             response.end();
           }

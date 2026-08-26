@@ -45,6 +45,7 @@ import {
   SearchCheck,
   Settings,
   ShieldAlert,
+  ShieldCheck,
   Sparkles,
   SlidersHorizontal,
   Tablet,
@@ -93,8 +94,12 @@ import { TaxExpensesPage } from './components/TaxExpensesPage';
 import { PricingCalculator } from './components/PricingCalculator';
 import { OutreachReadinessPanel } from './components/OutreachReadinessPanel';
 import { ClientEmailDesk } from './components/ClientEmailDesk';
-import { AuditReportPanel } from './components/AuditReportPanel';
+import {
+  AutomatedReportPanel,
+  observationIsEligibleForAutomaticReport,
+} from './components/AutomatedReportPanel';
 import { ClientReportPreview } from './components/ClientReportPreview';
+import { prospectValueReportView } from './lib/prospect-value-report';
 import {
   WorkspaceDevelopmentAccess,
   workspaceDevelopmentReturnPath,
@@ -120,7 +125,6 @@ import {
   type Audit,
   type Business,
   type AuditFinding,
-  type AuditObservation,
   type AuditSpecialistTask,
   type AssetAnnotation,
   type AssetAnalysisStatus,
@@ -1169,7 +1173,7 @@ function ProspectsPage({
         </div>
 
         {visibleBusinesses.length ? (
-          <div className="prospect-table" role="list">
+          <div className="prospect-table">
             {visibleBusinesses.map((business) => {
               const workspace = workspaces.find((item) => item.business.id === business.id);
               return (
@@ -8764,6 +8768,7 @@ function WebsiteToneControl({
 
 function BuilderRunPanel({
   workspace,
+  editedWebsite,
   buildKind,
   agentPackages = [],
   onRequestBuild,
@@ -8780,6 +8785,7 @@ function BuilderRunPanel({
   onRequestProposal,
 }: {
   workspace: ProspectWorkspace;
+  editedWebsite?: FinalEditState;
   buildKind: 'test' | 'prospect';
   agentPackages?: AgentPackage[];
   onRequestBuild: (
@@ -8812,6 +8818,14 @@ function BuilderRunPanel({
     isTestBuild ? candidate.buildMode !== 'full_site' : candidate.buildMode === 'full_site',
   );
   const run = runs[0];
+  const isEditedWebsiteDescendant = Boolean(
+    !isTestBuild &&
+    run &&
+    editedWebsite?.sourceBuild?.buildId === run.id &&
+    editedWebsite.status !== 'loading' &&
+    editedWebsite.status !== 'unavailable' &&
+    editedWebsite.status !== 'failed',
+  );
   const runHasUsage = Boolean(
     run &&
     workspace.aiUsageRecords.some(
@@ -8909,19 +8923,19 @@ function BuilderRunPanel({
             id: 'client-url-release-contract',
             title: 'Client URL and release contract',
             detail:
-              'Generated tests use private /test links, complete builds use private /build links, and approved Clientspace review uses an expiring /review capability. Live website editing stays in the selected client route on dev.studio.madesolid.com.au. Every committed edit preview remains bound to its exact Git revision. A Made Solid source handoff creates review material only: it never deploys production or attaches a client domain. Production remains a separate confirmed release action.',
-            revision: `v${selectedAgentPackage.version}.2`,
+              'Generated tests use private /test links, complete builds use private /build links, and approved Clientspace review uses an expiring /review capability. A generated full-site build remains an immutable baseline after editing begins. Live website editing stays in the selected client route on dev.studio.madesolid.com.au, and the current edited website is bound to its exact Git revision. Made Solid handoff requires a matching exact-commit release attestation and creates review material only: it never deploys production or attaches a client domain. Production remains a separate confirmed release action.',
+            revision: `v${selectedAgentPackage.version}.3`,
             change:
-              'Latest edit: an already-ready private client review can now be revoked immediately, which disables its active review capability without deleting the completed build or changing production.',
+              'Latest edit: generated baseline failures now remain historical while the current edited commit receives its own responsive release verification; handoff stays blocked until that exact commit passes.',
           },
           {
             id: 'visual-codex-feedback',
             title: 'Codex Workspace Agent and visual feedback',
             detail:
-              'The Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy, available as both a persistent popup and a dedicated Studio page. It defaults to included ChatGPT subscription access and gives only the authenticated Studio owner a disclosed, reversible switch to separately billed OpenAI API credits for all Studio AI work when subscription allowance is exhausted. Production Studio stays on its exact reviewed release, while an authenticated dev.studio.madesolid.com.au visit opens the full Studio UI from the persistent editable checkout with immediate source updates; workspace.madesolid.com.au remains a compatibility entry during the staged migration. A client website editor remains a clean route inside that development Studio and shows chats for that client plus clearly labelled universal Studio chats, hides every other client, and starts new client chats with only that website repository available to edit. Reviewers can send text, images, or both, choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. While Codex is working, the primary Send control becomes a Stop Codex control that interrupts the selected supervisor and active attached agents without clearing the unsent draft. Stop follows the exact selected turn, disappears promptly on completion, and is a separate control from Send so a completion or server-version race cannot submit a stop click as a message. Model, Reasoning, and Agent team stay together in compact Run setup, while usage, billing, Fast, and voice preferences sit behind a separate Chat settings cog. A completed final Codex reply can branch into a separately selected conversation that preserves native context, clean prompts, image evidence, and the same client or universal workspace boundary while leaving the original chat unchanged. Voice reading offers saved Natural or Literal interpretation and three speeds, explicit preview and manual Read, opt-in chat-scoped auto-read, progressive private Google audio with device fallback, and a persistent read-along dock with active-word restart, exact seeking where available, five-second skipping, pause, resume, and stop. Natural reading says “then” for right-arrow icons and keeps a verification introduction while it skips its long technical results list. Selecting text inside one Codex reply offers a temporary read-only quick question, appending the quote to the draft, immediate sending without replacing that draft, or dismissal on both popup and page chat. An explicit per-phone Web Push opt-in sends generic private alerts only after a tracked Studio Codex supervisor turn completes successfully, including while Studio is closed. Studio source edits apply in place without restarting the workspace, and a compact top status announces the brief update while the current route, popup, draft, and conversation remain mounted. The launcher is present during startup checks, and a refresh restores the open selected conversation and its exact transcript reading position without changing the active prospect route. Exact-client preview capabilities stay private and out of the clean development URL. Observable activity and queue state appears without invented progress.',
-            revision: `v${selectedAgentPackage.version}.93`,
+              'The Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy, available as both a persistent popup and a dedicated Studio page. Every conversation in the selector shows when it is working, and a finished conversation shows an unread notification until the reviewer opens it. It defaults to included ChatGPT subscription access and gives only the authenticated Studio owner a disclosed, reversible switch to separately billed OpenAI API credits for all Studio AI work when subscription allowance is exhausted. Production Studio stays on its exact reviewed release, while an authenticated dev.studio.madesolid.com.au visit opens the full Studio UI from the persistent editable checkout with immediate source updates; workspace.madesolid.com.au remains a compatibility entry during the staged migration. Each prospect has one client-named website editor that combines the current preview with client-scoped Codex; the private source repository and local preview runtime are separately labelled supporting controls, not a second editor. Reviewers can send text, images, or both, choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. While Codex is working and the composer is empty, the primary Send control becomes a Stop Codex control that interrupts the selected supervisor and active attached agents. Typing text or attaching an image immediately restores Send so another message can be queued; clearing the draft restores Stop. Stop follows the exact selected turn, disappears promptly on completion, and is a separate control from Send so a completion or server-version race cannot submit a stop click as a message. Model, Reasoning, and Agent team stay together in compact Run setup, while usage, billing, Fast, and voice preferences sit behind a separate Chat settings cog. A completed final Codex reply can branch into a separately selected conversation that preserves native context, clean prompts, image evidence, and the same client or universal workspace boundary while leaving the original chat unchanged. Voice reading offers saved Natural or Literal interpretation and three speeds, explicit preview and manual Read, opt-in chat-scoped auto-read, progressive private Google audio with device fallback, and a persistent read-along dock with active-word restart, exact seeking where available, five-second skipping, pause, resume, and stop. Natural reading says “then” for right-arrow icons and keeps a verification introduction while it skips its long technical results list. Selecting text inside one completed Codex reply offers a temporary read-only quick question that inherits the whole selected conversation, follows the saved auto-read preference, and never changes the original chat or workspace; the same excerpt can instead be appended to the draft, sent immediately without replacing that draft, or dismissed on both popup and page chat. An explicit per-phone Web Push opt-in sends generic private alerts only after a tracked Studio Codex supervisor turn completes successfully, including while Studio is closed. Studio source edits apply in place without restarting the workspace, and a compact top status announces the brief update while the current route, popup, draft, and conversation remain mounted. The launcher is present during startup checks, and a refresh restores the open selected conversation and its exact transcript reading position without changing the active prospect route. Exact-client preview capabilities stay private and out of the clean development URL. Observable activity and queue state appears without invented progress.',
+            revision: `v${selectedAgentPackage.version}.100`,
             change:
-              'Latest edit: a newly added empty chat now stays safely selectable before its first message, and the dark Quick Question popup completes temporary answers from live Codex turn events without adding them to conversation history.',
+              'Latest edit: Quick questions now inherit the complete selected conversation in an isolated read-only fork and automatically read the answer when Auto-read Codex is enabled.',
           },
           {
             id: 'inbound-client-email-review',
@@ -9712,34 +9726,46 @@ function BuilderRunPanel({
     <section className="builder-run" aria-labelledby="builder-run-title">
       <div className="brief-panel__header">
         <div>
-          <Eyebrow>{isTestBuild ? 'Private test build' : 'Private prospect build'}</Eyebrow>
+          <Eyebrow>
+            {isTestBuild
+              ? 'Private test build'
+              : run
+                ? 'Generated baseline'
+                : 'Private prospect build'}
+          </Eyebrow>
           {isTestBuild ? (
             <h3 id="builder-run-title">Codex test builder</h3>
           ) : (
-            <h2 id="builder-run-title">{run ? 'Latest full-site build' : 'Build website'}</h2>
+            <h2 id="builder-run-title">{run ? 'Generated website baseline' : 'Build website'}</h2>
           )}
           <p className="muted-copy">
             {isTestBuild
               ? 'Tests one approved page or one feature across a moved whole-site source, then saves a private draft and logs for agent refinement. It does not publish or contact anyone.'
               : run
-                ? 'Review this build’s readiness, repair blocking findings, or inspect its private preview. Nothing here publishes or contacts the prospect.'
+                ? isEditedWebsiteDescendant
+                  ? `This immutable output became the starting point for the current edited website at commit ${editedWebsite?.commit?.slice(0, 8) ?? 'unknown'}. Its original checks remain here as historical evidence.`
+                  : 'Review this build’s readiness, repair blocking findings, or inspect its private preview. Nothing here publishes or contacts the prospect.'
                 : 'Create this prospect’s complete private website from its approved build inputs, then review the generated source and browser checks.'}
           </p>
         </div>
         {run ? (
           <StatusBadge tone={builderRunTone(run.status)}>
             {run.status === 'review_required' && failedQualityChecks.length
-              ? 'Build checks failed'
+              ? isEditedWebsiteDescendant
+                ? 'Baseline checks failed'
+                : 'Build checks failed'
               : builderRunLabel(run.status)}
           </StatusBadge>
         ) : null}
       </div>
 
       {run ? (
-        <section className="builder-run-identity" aria-label="Current build identity">
+        <section className="builder-run-identity" aria-label="Generated baseline identity">
           <div className="builder-run-identity__primary">
-            <Eyebrow>Latest {isTestBuild ? 'test' : 'full-site'} build</Eyebrow>
-            <strong>Build {run.id.slice(0, 8)}</strong>
+            <Eyebrow>{isTestBuild ? 'Latest test build' : 'Immutable baseline build'}</Eyebrow>
+            <strong>
+              {isTestBuild ? 'Build' : 'Baseline'} {run.id.slice(0, 8)}
+            </strong>
             <code title={run.id}>{run.id}</code>
           </div>
           <dl>
@@ -9767,14 +9793,17 @@ function BuilderRunPanel({
         <section
           aria-labelledby={`builder-attention-${buildKind}-title`}
           className="builder-run-attention"
-          role="alert"
+          role={isEditedWebsiteDescendant ? 'region' : 'alert'}
         >
           <header>
             <span className="builder-run-attention__icon">
               <ShieldAlert aria-hidden="true" size={22} />
             </span>
             <div>
-              <Eyebrow>Action required · Build {run.id.slice(0, 8)}</Eyebrow>
+              <Eyebrow>
+                {isEditedWebsiteDescendant ? 'Historical baseline evidence' : 'Action required'} ·
+                Build {run.id.slice(0, 8)}
+              </Eyebrow>
               {isTestBuild ? (
                 <h4 id={`builder-attention-${buildKind}-title`}>
                   {failedQualityChecks.length
@@ -9789,11 +9818,14 @@ function BuilderRunPanel({
                 </h3>
               )}
               <p>
-                This build remains private and is not ready for client handoff. Repair these
-                findings in a linked run, then verify the replacement.
+                {isEditedWebsiteDescendant
+                  ? `These checks failed on the generated baseline. They do not describe the current edited commit ${editedWebsite?.commit?.slice(0, 8) ?? ''}; that website has its own release verification below.`
+                  : 'This build remains private and is not ready for client handoff. Repair these findings in a linked run, then verify the replacement.'}
               </p>
             </div>
-            <StatusBadge tone="danger">Not client-ready</StatusBadge>
+            <StatusBadge tone={isEditedWebsiteDescendant ? 'neutral' : 'danger'}>
+              {isEditedWebsiteDescendant ? 'Superseded baseline' : 'Not client-ready'}
+            </StatusBadge>
           </header>
           <ul aria-label="Quality findings that need attention">
             {[...failedQualityChecks, ...reviewQualityChecks].map((check) => (
@@ -9807,7 +9839,20 @@ function BuilderRunPanel({
             ))}
           </ul>
           <ButtonGroup className="builder-run-attention__actions">
-            {onMoveToAgentStudio ? (
+            {isEditedWebsiteDescendant ? (
+              <ButtonLink
+                href={hrefForRoute({
+                  page: 'prospects',
+                  businessId: workspace.business.id,
+                  tab: 'editing',
+                })}
+                variant="primary"
+              >
+                <Laptop aria-hidden="true" size={16} />
+                Open current edited website
+              </ButtonLink>
+            ) : null}
+            {!isEditedWebsiteDescendant && onMoveToAgentStudio ? (
               run.agentStudioSourceAt ? (
                 <ButtonLink
                   href={`#/agent-studio/refine/${workspace.business.id}`}
@@ -16072,6 +16117,10 @@ function BuildManifestPanel({
   const latestFullSiteBuild = workspace.builderRuns.find(
     (candidate) => candidate.buildMode === 'full_site',
   );
+  const { state: editedWebsite } = useFinalEditState(workspace);
+  const editedWebsiteMatchesBaseline = Boolean(
+    latestFullSiteBuild && editedWebsite.sourceBuild?.buildId === latestFullSiteBuild.id,
+  );
 
   async function prepareManifest() {
     setIsPreparing(true);
@@ -16175,18 +16224,62 @@ function BuildManifestPanel({
       ) : null}
 
       {latestFullSiteBuild ? (
-        <BuilderRunPanel
-          agentPackages={agentPackages}
-          buildKind="prospect"
-          onCancelBuild={onCancelBuild}
-          onDeleteBuild={onDeleteBuild}
-          onLoadBuildEvidence={onLoadBuildEvidence}
-          onMoveToAgentStudio={onMoveToAgentStudio}
-          onOpenPreview={onOpenPreview}
-          onResumeBuild={onResumeBuild}
-          onRequestBuild={onRequestBuild}
-          workspace={workspace}
-        />
+        <>
+          {editedWebsiteMatchesBaseline &&
+          editedWebsite.status !== 'loading' &&
+          editedWebsite.status !== 'unavailable' &&
+          editedWebsite.status !== 'failed' ? (
+            <section
+              className="website-version-relationship website-version-relationship--current"
+              aria-labelledby="current-edited-website-title"
+            >
+              <div className="website-version-relationship__source">
+                <Eyebrow>Current website</Eyebrow>
+                <h2 id="current-edited-website-title">Current edited website</h2>
+                <p>
+                  Commit <code>{editedWebsite.commit?.slice(0, 8) ?? 'not committed'}</code> was
+                  derived from baseline {latestFullSiteBuild.id.slice(0, 8)}. Edits never change the
+                  baseline evidence below.
+                </p>
+              </div>
+              <div className="website-version-relationship__status">
+                <StatusBadge
+                  tone={editedWebsite.releaseStatus === 'passed' ? 'success' : 'warning'}
+                >
+                  {editedWebsite.releaseStatus === 'passed'
+                    ? 'Release verified'
+                    : editedWebsite.releaseStatus === 'failed'
+                      ? 'Release checks failed'
+                      : 'Release verification required'}
+                </StatusBadge>
+                <ButtonLink
+                  href={hrefForRoute({
+                    page: 'prospects',
+                    businessId: workspace.business.id,
+                    tab: 'editing',
+                  })}
+                  variant="primary"
+                >
+                  <Laptop aria-hidden="true" size={16} />
+                  Open current website
+                </ButtonLink>
+              </div>
+            </section>
+          ) : null}
+          <BuilderRunPanel
+            agentPackages={agentPackages}
+            buildKind="prospect"
+            editedWebsite={editedWebsite}
+            onCancelBuild={onCancelBuild}
+            onDeleteBuild={onDeleteBuild}
+            onLoadBuildEvidence={onLoadBuildEvidence}
+            onMoveToAgentStudio={onMoveToAgentStudio}
+            onOpenPreview={onOpenPreview}
+            onResumeBuild={onResumeBuild}
+            onRequestBuild={onRequestBuild}
+            workspace={workspace}
+          />
+        </>
       ) : null}
 
       <Dialog.Root onOpenChange={setIsManifestOpen} open={isManifestOpen}>
@@ -16474,9 +16567,33 @@ type LearningBundleState = {
   entries: LearningBundleEntry[];
 };
 
+type ReleaseVerificationCheck = {
+  id: string;
+  label: string;
+  status: 'passed' | 'failed';
+  detail: string;
+};
+
+type WebsiteReleaseAttestation = {
+  schemaVersion: 1;
+  id: string;
+  status: 'passed' | 'failed';
+  businessId: string;
+  sourceBuilderRunId: string;
+  sourceManifestId: string;
+  sourceCommit: string;
+  sourceTree: string;
+  sourceBranch: string;
+  sourceEditVersion: number;
+  verificationProfile: 'made-solid-edited-site-release-v1';
+  verifiedAt: string;
+  checks: ReleaseVerificationCheck[];
+};
+
 type FinalEditState = {
   status: 'loading' | 'unavailable' | 'changes_pending' | 'ready' | 'finalised' | 'failed';
   detail: string;
+  releaseVerificationAvailable?: boolean;
   branch?: string;
   commit?: string;
   synced?: boolean;
@@ -16484,12 +16601,20 @@ type FinalEditState = {
   changedFiles?: string[];
   bundleReady?: boolean;
   refinementCount?: number;
+  businessId?: string;
   sourceBuild?: {
     buildId: string;
     manifestId: string;
+    agentPackageId?: string;
     agentPackageVersion?: number;
+    buildMode?: string;
+    templateVersion?: string;
+    baselineCommit?: string;
     exportedAt?: string;
   };
+  releaseStatus?: 'missing' | 'stale' | 'failed' | 'passed';
+  releaseAttestation?: WebsiteReleaseAttestation;
+  releaseAttempt?: WebsiteReleaseAttestation;
   versions?: EditVersion[];
   committedVersion?: EditVersion;
   workingVersion?: number;
@@ -16518,6 +16643,21 @@ type FinalEditProgress = {
   detail: string;
   branch?: string;
   commit?: string;
+};
+
+type ReleaseVerificationProgress = {
+  status: 'idle' | 'running' | 'complete' | 'failed';
+  phase:
+    | 'idle'
+    | 'preparing'
+    | 'source_verification'
+    | 'responsive_layout'
+    | 'responsive_navigation'
+    | 'accessibility'
+    | 'ready'
+    | 'failed';
+  detail: string;
+  attestation?: WebsiteReleaseAttestation;
 };
 
 const finalEditStages = [
@@ -17057,11 +17197,11 @@ function LocalDevelopmentPublicationPanel({
     <Card className="workspace-panel local-development" data-testid="local-development-publication">
       <div className="local-development__header">
         <div>
-          <Eyebrow>Editable workspace</Eyebrow>
-          <h2>Work in a local prospect workspace</h2>
+          <Eyebrow>Website source &amp; local preview</Eyebrow>
+          <h2>{workspace.business.name} source controls</h2>
           <p className="muted-copy">
-            Keep each editable prospect repository in this Studio Codespace under an ignored local
-            directory, with approved assets, build origin, and refinement history intact.
+            These controls prepare the private source repository and run the local website preview
+            used by the editor above. This is not a second editor.
           </p>
         </div>
         <StatusBadge tone={statusTone}>{statusLabel}</StatusBadge>
@@ -17071,10 +17211,11 @@ function LocalDevelopmentPublicationPanel({
         <section className="local-development__ready" aria-labelledby="local-workspace-ready">
           <Laptop aria-hidden="true" size={24} />
           <div>
-            <h3 id="local-workspace-ready">Editable source is ready</h3>
+            <h3 id="local-workspace-ready">{workspace.business.name} website source is ready</h3>
             <p>
-              Build {completedBuild.id.slice(0, 8)} can become a private repository and a local
-              folder inside <code>prospect-workspaces</code>, with its Made Solid refinement ledger.
+              Prepare or refresh the local source from Build {completedBuild.id.slice(0, 8)} inside{' '}
+              <code>prospect-workspaces</code>, then run the preview used by the current website
+              editor.
             </p>
             {completedBuild.status === 'review_required' ? (
               <p className="local-development__quality-note">
@@ -17083,10 +17224,16 @@ function LocalDevelopmentPublicationPanel({
               </p>
             ) : null}
             <Button
-              aria-label="Open local prospect workspace"
+              aria-label={`${
+                localWorkspaceSetup.status === 'running'
+                  ? 'Starting'
+                  : localWorkspaceSetup.status === 'complete'
+                    ? 'Restart'
+                    : 'Start'
+              } ${workspace.business.name} local website preview`}
               disabled={localWorkspaceSetup.status === 'running'}
               onClick={() => void openLocalWorkspace()}
-              variant="primary"
+              variant="secondary"
             >
               {localWorkspaceSetup.status === 'running' ? (
                 <LoaderCircle aria-hidden="true" className="spin" size={16} />
@@ -17096,14 +17243,10 @@ function LocalDevelopmentPublicationPanel({
                 <FolderTree aria-hidden="true" size={16} />
               )}
               {localWorkspaceSetup.status === 'running'
-                ? 'Preparing local workspace'
+                ? 'Starting local website preview'
                 : localWorkspaceSetup.status === 'complete'
-                  ? developmentSurface
-                    ? 'Live editor ready'
-                    : 'Development Workspace ready'
-                  : developmentSurface
-                    ? 'Start live editor'
-                    : 'Open in Development Workspace'}
+                  ? 'Restart local website preview'
+                  : 'Start local website preview'}
             </Button>
             {localWorkspaceSetup.status !== 'idle' ? (
               <div
@@ -17151,7 +17294,7 @@ function LocalDevelopmentPublicationPanel({
                 variant="secondary"
               >
                 <ExternalLink aria-hidden="true" size={16} />
-                Open Development Workspace
+                Open {workspace.business.name} editor
               </ButtonLink>
             ) : null}
             <section
@@ -17245,7 +17388,7 @@ function LocalDevelopmentPublicationPanel({
           <div>
             <strong>
               {latestCompletedBuild
-                ? 'Editable source package unavailable'
+                ? 'Website source package unavailable'
                 : 'Complete a full website first'}
             </strong>
             <p>
@@ -17264,7 +17407,9 @@ function LocalDevelopmentPublicationPanel({
         >
           <Github aria-hidden="true" size={24} />
           <div>
-            <h3 id="github-repository-ready">Local prospect workspace</h3>
+            <h3 id="github-repository-ready">
+              {workspace.business.name} private source repository
+            </h3>
             <p>
               <strong>
                 {publication.fullName ??
@@ -17303,7 +17448,7 @@ function LocalDevelopmentPublicationPanel({
               <LoaderCircle className="spin" size={22} />
             </span>
             <div>
-              <Eyebrow>Creating editable workspace</Eyebrow>
+              <Eyebrow>Creating private source repository</Eyebrow>
               <h3 id="editable-workspace-progress-title">
                 {publication.cancelRequestedAt
                   ? 'Stopping at a safe checkpoint'
@@ -17312,7 +17457,7 @@ function LocalDevelopmentPublicationPanel({
               <p>
                 {publication.cancelRequestedAt
                   ? 'Studio has acknowledged the cancellation. The worker will stop before its next independent step and preserve anything already completed.'
-                  : 'Studio is turning the finished website into a separate private development repository. You can leave this page; persisted status will still be here when you return.'}
+                  : `Studio is putting ${workspace.business.name}’s website source into a separate private repository. You can leave this page; persisted status will still be here when you return.`}
               </p>
             </div>
           </div>
@@ -17320,7 +17465,10 @@ function LocalDevelopmentPublicationPanel({
             detail={publication.progressDetail || 'Preparing the private development repository.'}
             label={publication.progressPhase.replaceAll('_', ' ')}
           />
-          <ol className="local-development__progress-stages" aria-label="Workspace creation stages">
+          <ol
+            className="local-development__progress-stages"
+            aria-label="Private source repository creation stages"
+          >
             {githubWorkspaceCreationStages.map((stage, index) => {
               const currentStageIndex = githubWorkspaceStageIndex(publication.progressPhase);
               const state =
@@ -17391,8 +17539,8 @@ function LocalDevelopmentPublicationPanel({
           >
             <Ban aria-hidden="true" size={16} />
             {cancelling || publication.cancelRequestedAt
-              ? 'Stopping workspace creation'
-              : 'Cancel workspace creation'}
+              ? 'Stopping repository creation'
+              : 'Cancel repository creation'}
           </Button>
         </section>
       ) : (
@@ -17400,10 +17548,10 @@ function LocalDevelopmentPublicationPanel({
           <div className="local-development__form-heading">
             <Github aria-hidden="true" size={22} />
             <div>
-              <h3>Create the private editing workspace</h3>
+              <h3>Create {workspace.business.name} private source repository</h3>
               <p>
-                Studio has filled in the destination. One click creates the separate private
-                repository and pushes the complete editable handoff.
+                Studio has filled in the destination. One click creates the private repository used
+                to sync this website’s editable source.
               </p>
             </div>
           </div>
@@ -17479,10 +17627,10 @@ function LocalDevelopmentPublicationPanel({
           <Button disabled={!canPublish || submitting} type="submit">
             <Github aria-hidden="true" size={16} />
             {submitting
-              ? 'Creating editable workspace'
+              ? 'Creating private source repository'
               : publication?.status === 'failed'
-                ? 'Retry editable workspace'
-                : 'Create editable workspace'}
+                ? 'Retry private source repository'
+                : 'Create private source repository'}
           </Button>
           {!completedBuild ? (
             <small>
@@ -17635,11 +17783,9 @@ function ClientDevelopmentEditor({
     >
       <header className="client-development-editor__header">
         <div>
-          <Eyebrow>Development Workspace</Eyebrow>
-          <h2 id="client-development-editor-title">{clientName} live website editor</h2>
-          <p>
-            Changes appear here immediately while Studio navigation and client context stay open.
-          </p>
+          <Eyebrow>Current edited website</Eyebrow>
+          <h2 id="client-development-editor-title">{clientName} website preview</h2>
+          <p>This preview shows the exact website source being edited for {clientName}.</p>
         </div>
         <div className="client-development-editor__actions">
           <span className="client-development-editor__live">
@@ -17664,7 +17810,7 @@ function ClientDevelopmentEditor({
       <div className="client-development-editor__scope" role="status">
         <Laptop aria-hidden="true" size={17} />
         <span>
-          <strong>Editing only {clientName}</strong>
+          <strong>Editing {clientName} website only</strong>
           <small>
             Client chats can edit this website only. Universal Studio chats remain available.
           </small>
@@ -17768,8 +17914,8 @@ function FocusedWebsiteEditor({ workspace }: { workspace: ProspectWorkspace }) {
           </ButtonLink>
           <span aria-hidden="true" className="focused-website-editor__divider" />
           <div>
-            <h1>{workspace.business.name}</h1>
-            <small>Live website editor · client-scoped Codex</small>
+            <h1>{workspace.business.name} website</h1>
+            <small>Current edited website · preview and client-scoped Codex</small>
           </div>
         </div>
         <div className="focused-website-editor__controls">
@@ -17849,7 +17995,7 @@ function FocusedWebsiteEditor({ workspace }: { workspace: ProspectWorkspace }) {
       </header>
       <div className="focused-website-editor__workspace">
         <section
-          aria-label={`${workspace.business.name} website preview`}
+          aria-label={`${workspace.business.name} editor preview pane`}
           className={`focused-website-editor__preview${mobileSurface === 'preview' ? ' is-active' : ''}`}
         >
           <ClientDevelopmentEditor
@@ -17895,9 +18041,59 @@ function WebsiteEditingPage({
     phase: 'idle',
     detail: '',
   });
+  const [releaseProgress, setReleaseProgress] = useState<ReleaseVerificationProgress>({
+    status: 'idle',
+    phase: 'idle',
+    detail: '',
+  });
   const [error, setError] = useState('');
   const isRunning = progress.status === 'running';
-  const canFinalise = state.status === 'changes_pending' || state.status === 'ready';
+  const releaseIsRunning = releaseProgress.status === 'running';
+  const canFinalise = state.status === 'changes_pending';
+  const staleVerificationRuntime =
+    state.releaseVerificationAvailable === undefined && state.businessId === undefined;
+  const releaseVerificationAvailable =
+    state.releaseVerificationAvailable ?? Boolean(state.businessId);
+  const releaseVerificationBlocker = !releaseVerificationAvailable
+    ? staleVerificationRuntime
+      ? 'Studio’s verification service was updated after this development runtime started. Restart Workspace Studio; this page will reconnect and recognise any existing verification automatically.'
+      : 'The exact-commit verification service is unavailable in this Studio runtime.'
+    : state.status === 'changes_pending'
+      ? `Commit edit v${state.workingVersion ?? 1} before verifying it.`
+      : !state.commit
+        ? 'Create a website commit before running release verification.'
+        : !state.synced
+          ? `Push commit ${state.commit.slice(0, 8)} to its upstream branch before verifying it.`
+          : !state.sourceBuild?.buildId || !state.businessId
+            ? 'This editable workspace is missing its verified prospect and generated-build lineage. Recreate it from the prospect’s Build & preview page.'
+            : state.status !== 'ready' && state.status !== 'finalised'
+              ? 'Resolve the current website workspace status before running release verification.'
+              : undefined;
+  const canVerifyRelease = Boolean(!isRunning && !releaseIsRunning && !releaseVerificationBlocker);
+  const editingTitle =
+    state.status === 'loading'
+      ? 'Loading the current website'
+      : state.status === 'unavailable'
+        ? 'Create the current edited website'
+        : state.status === 'changes_pending'
+          ? `Working edit v${state.workingVersion ?? 1} has ${state.changedFiles?.length ?? 0} uncommitted change${state.changedFiles?.length === 1 ? '' : 's'}`
+          : state.status === 'finalised'
+            ? `Current edited website is committed as v${state.committedVersion?.version ?? 1}`
+            : state.status === 'failed'
+              ? 'Editing status needs attention'
+              : `Current edited website is synced at ${state.commit?.slice(0, 8) ?? 'the latest commit'}`;
+  const editingStatusLabel =
+    state.status === 'loading'
+      ? 'Loading'
+      : state.status === 'unavailable'
+        ? 'Workspace required'
+        : state.status === 'changes_pending'
+          ? `${state.changedFiles?.length ?? 0} changes pending`
+          : state.status === 'finalised'
+            ? 'Committed & synced'
+            : state.status === 'failed'
+              ? 'Status unavailable'
+              : 'Clean & synced';
 
   async function finalise() {
     if (!canFinalise || isRunning) return;
@@ -17946,23 +18142,78 @@ function WebsiteEditingPage({
     }
   }
 
+  async function verifyRelease() {
+    if (!canVerifyRelease) return;
+    setError('');
+    setReleaseProgress({
+      status: 'running',
+      phase: 'preparing',
+      detail: `Preparing commit ${state.commit?.slice(0, 8)} for release verification.`,
+    });
+    try {
+      const response = await studioRuntimeFetch('/__made-solid/release-verification', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ directory }),
+      });
+      if (!response.ok || !response.body) {
+        throw new Error((await response.text()) || 'Release verification is unavailable.');
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffered = '';
+      let lastEvent: ReleaseVerificationProgress | undefined;
+      while (true) {
+        const { done, value } = await reader.read();
+        buffered += decoder.decode(value, { stream: !done });
+        const lines = buffered.split(/\r?\n/);
+        buffered = lines.pop() ?? '';
+        if (done && buffered.trim()) lines.push(buffered);
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          lastEvent = JSON.parse(line) as ReleaseVerificationProgress;
+          setReleaseProgress(lastEvent);
+        }
+        if (done) break;
+      }
+      if (!lastEvent || lastEvent.status === 'failed') {
+        throw new Error(
+          lastEvent?.detail || 'The current website did not pass release verification.',
+        );
+      }
+      await refresh();
+    } catch (caught) {
+      const detail =
+        caught instanceof Error ? caught.message : 'Release verification could not complete.';
+      setError(detail);
+      setReleaseProgress({ status: 'failed', phase: 'failed', detail });
+      await refresh();
+    }
+  }
+
   const currentStage = finalEditStages.findIndex((stage) => stage.phase === progress.phase);
   return (
     <div className="workspace-content-stack editing-workflow" data-testid="website-editing-page">
       <section className="workflow-overview" aria-labelledby="editing-workflow-title">
         <div className="workflow-overview__heading">
           <div>
-            <Eyebrow>Website editing</Eyebrow>
-            <h2 id="editing-workflow-title">Take the generated build through its final edit</h2>
+            <Eyebrow>{workspace.business.name} · Website editing</Eyebrow>
+            <h2 id="editing-workflow-title">{editingTitle}</h2>
             <p>
-              Launch the real prospect source, inspect every saved refinement, then create one
-              verified Git checkpoint for handoff.
+              The generated baseline is an immutable reference. This page tracks the separate,
+              current website source and verifies the exact commit that would move forward.
             </p>
           </div>
-          <StatusBadge tone={state.status === 'finalised' ? 'success' : 'warning'}>
-            {state.status === 'finalised'
-              ? `Edit v${state.committedVersion?.version ?? 1} committed`
-              : `Editing v${state.workingVersion ?? 1}`}
+          <StatusBadge
+            tone={
+              state.status === 'finalised' || state.status === 'ready'
+                ? 'success'
+                : state.status === 'failed'
+                  ? 'danger'
+                  : 'warning'
+            }
+          >
+            {editingStatusLabel}
           </StatusBadge>
         </div>
         <ol className="workflow-overview__steps" aria-label="Website editing workflow">
@@ -17989,14 +18240,42 @@ function WebsiteEditingPage({
           </li>
         </ol>
       </section>
-      {isDevelopmentStudio() ? (
+      {state.sourceBuild?.buildId ? (
+        <section className="website-version-relationship" aria-label="Website source relationship">
+          <div className="website-version-relationship__source website-version-relationship__source--baseline">
+            <Eyebrow>Generated baseline</Eyebrow>
+            <strong>Build {state.sourceBuild.buildId.slice(0, 8)}</strong>
+            <small>Immutable build evidence</small>
+          </div>
+          <div className="website-version-relationship__connector" aria-hidden="true">
+            <ArrowRight size={18} />
+            <span>Derived into</span>
+          </div>
+          <div className="website-version-relationship__source website-version-relationship__source--working">
+            <Eyebrow>Current edited website</Eyebrow>
+            <strong>Commit {state.commit?.slice(0, 8) ?? 'not committed'}</strong>
+            <small>
+              {state.status === 'changes_pending'
+                ? `Working edit v${state.workingVersion ?? 1}`
+                : state.committedVersion
+                  ? `Committed edit v${state.committedVersion.version}`
+                  : 'Clean working source'}
+            </small>
+          </div>
+        </section>
+      ) : null}
+      {state.status !== 'loading' &&
+      state.status !== 'unavailable' &&
+      state.status !== 'failed' &&
+      isDevelopmentStudio() ? (
         <section className="development-workspace-handoff" aria-labelledby="website-editor-title">
           <div>
-            <Eyebrow>Development Workspace</Eyebrow>
-            <h2 id="website-editor-title">Open the full website editor</h2>
+            <Eyebrow>Current website editor</Eyebrow>
+            <h2 id="website-editor-title">Edit {workspace.business.name} website</h2>
             <p>
-              Work in a dedicated tab with the latest live website and this client’s Codex chat
-              together. Studio’s review and checkpoint controls stay here.
+              This is the one editing view for {workspace.business.name}: its current website
+              preview and client-scoped Codex chat together. Source and local preview controls are
+              below.
             </p>
           </div>
           <ButtonLink
@@ -18006,10 +18285,12 @@ function WebsiteEditingPage({
             variant="primary"
           >
             <ExternalLink aria-hidden="true" size={17} />
-            Open website editor
+            Open {workspace.business.name} editor
           </ButtonLink>
         </section>
-      ) : (
+      ) : state.status !== 'loading' &&
+        state.status !== 'unavailable' &&
+        state.status !== 'failed' ? (
         <section
           className="development-workspace-handoff"
           aria-labelledby="development-workspace-title"
@@ -18034,12 +18315,123 @@ function WebsiteEditingPage({
             Open in Development Workspace
           </ButtonLink>
         </section>
-      )}
+      ) : null}
       <LocalDevelopmentPublicationPanel
         onCancel={onCancel}
         onPublish={onPublish}
+        onWorkspaceReady={() => void refresh()}
         workspace={workspace}
       />
+      {state.status !== 'loading' && state.status !== 'unavailable' && state.status !== 'failed' ? (
+        <Card className="workspace-panel release-verification" data-testid="release-verification">
+          <div className="release-verification__header">
+            <div>
+              <Eyebrow>Current website release gate</Eyebrow>
+              <h2>Verify the exact edited commit</h2>
+              <p>
+                This is separate from Build {state.sourceBuild?.buildId.slice(0, 8) ?? 'unknown'}’s
+                original checks. It verifies commit{' '}
+                <code>{state.commit?.slice(0, 8) ?? 'not committed'}</code> as the current website.
+              </p>
+            </div>
+            <StatusBadge
+              tone={
+                staleVerificationRuntime
+                  ? 'danger'
+                  : state.releaseStatus === 'passed'
+                    ? 'success'
+                    : state.releaseStatus === 'failed'
+                      ? 'danger'
+                      : 'warning'
+              }
+            >
+              {staleVerificationRuntime
+                ? 'Studio restart required'
+                : state.releaseStatus === 'passed'
+                  ? 'Release verified'
+                  : state.releaseStatus === 'failed'
+                    ? 'Checks failed'
+                    : state.releaseStatus === 'stale'
+                      ? 'Verification stale'
+                      : 'Verification required'}
+            </StatusBadge>
+          </div>
+          {releaseProgress.status === 'running' ? (
+            <IndeterminateProgress
+              detail={releaseProgress.detail}
+              label={releaseProgress.phase.replaceAll('_', ' ')}
+            />
+          ) : null}
+          {state.releaseAttestation ? (
+            <>
+              <p className="form-message" role="status">
+                Commit <code>{state.releaseAttestation.sourceCommit.slice(0, 8)}</code> passed at{' '}
+                {formatDateTime(state.releaseAttestation.verifiedAt)}.
+              </p>
+              <ul className="release-verification__checks" aria-label="Passed release checks">
+                {state.releaseAttestation.checks.map((check) => (
+                  <li key={check.id}>
+                    <CheckCircle2 aria-hidden="true" size={17} />
+                    <span>
+                      <strong>{check.label}</strong>
+                      <small>{check.detail}</small>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : state.releaseAttempt?.checks?.length ? (
+            <ul className="release-verification__checks" aria-label="Failed release checks">
+              {state.releaseAttempt.checks.map((check) => (
+                <li key={check.id}>
+                  {check.status === 'passed' ? (
+                    <CheckCircle2 aria-hidden="true" size={17} />
+                  ) : (
+                    <CircleAlert aria-hidden="true" size={17} />
+                  )}
+                  <span>
+                    <strong>{check.label}</strong>
+                    <small>{check.detail}</small>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted-copy">
+              Local source checks may already pass, but client-ready status stays pending until this
+              exact commit passes responsive layout, compact navigation and accessibility
+              verification.
+            </p>
+          )}
+          <Button
+            disabled={!canVerifyRelease}
+            onClick={() => void verifyRelease()}
+            type="button"
+            variant="primary"
+          >
+            {releaseIsRunning ? (
+              <LoaderCircle aria-hidden="true" className="spin" size={16} />
+            ) : (
+              <ShieldCheck aria-hidden="true" size={16} />
+            )}
+            {releaseIsRunning
+              ? 'Verifying exact commit'
+              : state.releaseStatus === 'passed'
+                ? 'Run release verification again'
+                : 'Run release verification'}
+          </Button>
+          {releaseVerificationBlocker && !releaseIsRunning ? (
+            <p
+              className={
+                staleVerificationRuntime ? 'form-message form-message--error' : 'muted-copy'
+              }
+              role={staleVerificationRuntime ? 'alert' : undefined}
+            >
+              {releaseVerificationBlocker}
+            </p>
+          ) : null}
+        </Card>
+      ) : null}
       <Card className="workspace-panel final-edit" data-testid="final-edit-checkpoint">
         <div className="final-edit__header">
           <div>
@@ -18140,7 +18532,10 @@ function WebsiteEditingPage({
         ) : null}
         {state.status === 'finalised' && state.commit ? (
           <p className="form-message" role="status">
-            Current commit <code>{state.commit.slice(0, 8)}</code> is synced and ready for handoff.
+            Current commit <code>{state.commit.slice(0, 8)}</code> is committed and synced.
+            {state.releaseStatus === 'passed'
+              ? ' Its exact release verification also passed.'
+              : ' Handoff remains blocked until its exact release verification passes.'}
           </p>
         ) : null}
         <section className="final-edit__versions" aria-labelledby="editing-version-history-title">
@@ -18481,6 +18876,13 @@ function MadeSolidHandoffPage({
     ? workspace.githubWorkspacePublications.find((item) => item.builderRunId === completedBuild.id)
     : undefined;
   const finalised = state.status === 'finalised';
+  const releaseVerified = Boolean(
+    state.releaseStatus === 'passed' &&
+    state.releaseAttestation?.status === 'passed' &&
+    state.releaseAttestation.sourceCommit === state.commit &&
+    state.releaseAttestation.sourceBuilderRunId === state.sourceBuild?.buildId &&
+    state.releaseAttestation.businessId === workspace.business.id,
+  );
   const preferredContact = workspace.contacts.find((contact) => Boolean(contact.email));
   const capturedClientEmail = capturedPublicEmail(workspace.researchPacket);
   const initialClientEmail = preferredContact?.email?.trim() || capturedClientEmail;
@@ -18503,6 +18905,7 @@ function MadeSolidHandoffPage({
   const active = handoff?.status === 'queued' || handoff?.status === 'running';
   const canPush = Boolean(
     finalised &&
+    releaseVerified &&
     state.synced &&
     state.commit?.match(/^[a-f0-9]{40}$/i) &&
     state.committedVersion &&
@@ -18570,8 +18973,8 @@ function MadeSolidHandoffPage({
               record tied together.
             </p>
           </div>
-          <StatusBadge tone={finalised ? 'success' : 'warning'}>
-            {finalised ? 'Source ready' : 'Waiting for final edit'}
+          <StatusBadge tone={finalised && releaseVerified ? 'success' : 'warning'}>
+            {finalised && releaseVerified ? 'Release verified' : 'Release verification required'}
           </StatusBadge>
         </div>
         {workspace.report?.status === 'approved' &&
@@ -18607,8 +19010,8 @@ function MadeSolidHandoffPage({
             <Eyebrow>Readiness</Eyebrow>
             <h2>Final source checkpoint</h2>
           </div>
-          <StatusBadge tone={finalised ? 'success' : 'warning'}>
-            {finalised ? 'Passed' : 'Blocked'}
+          <StatusBadge tone={finalised && releaseVerified ? 'success' : 'warning'}>
+            {finalised && releaseVerified ? 'Passed' : 'Blocked'}
           </StatusBadge>
         </div>
         <dl className="final-edit__facts">
@@ -18619,6 +19022,10 @@ function MadeSolidHandoffPage({
           <div>
             <dt>Remote sync</dt>
             <dd>{state.synced ? 'Synced' : 'Required'}</dd>
+          </div>
+          <div>
+            <dt>Exact release verification</dt>
+            <dd>{releaseVerified ? 'Passed' : 'Required'}</dd>
           </div>
           <div>
             <dt>Commit</dt>
@@ -18810,11 +19217,13 @@ function MadeSolidHandoffPage({
                 <ShieldAlert aria-hidden="true" size={18} />
                 {!finalised
                   ? 'Commit the final edit on Website editing first.'
-                  : !repository?.repositoryUrl
-                    ? 'Create and sync the private editable source repository first.'
-                    : !workspace.madeSolidHandoffWorkerAvailable
-                      ? 'Made Solid handoff is not connected. Start the protected handoff worker first.'
-                      : 'The exact commit and source lineage must be verified before handoff.'}
+                  : !releaseVerified
+                    ? `Run release verification for commit ${state.commit?.slice(0, 8) ?? 'the current source'} on Website editing first.`
+                    : !repository?.repositoryUrl
+                      ? 'Create and sync the private editable source repository first.'
+                      : !workspace.madeSolidHandoffWorkerAvailable
+                        ? 'Made Solid handoff is not connected. Start the protected handoff worker first.'
+                        : 'The exact commit and source lineage must be verified before handoff.'}
               </p>
             ) : null}
             {handoff?.status === 'failed' && handoff.errorSummary ? (
@@ -19609,7 +20018,7 @@ function AuditPanel({
                 </p>
               </div>
               <ButtonLink href={`#/prospects/${workspace.business.id}/report`} variant="primary">
-                Review report findings
+                Open automated report
               </ButtonLink>
             </section>
           ) : null}
@@ -19656,67 +20065,24 @@ function AuditReportWorkspacePanel({
   workspace,
   onPrepareReport,
   onRetryAudit,
-  onReviewObservation,
 }: {
   workspace: ProspectWorkspace;
   onPrepareReport: () => Promise<void>;
   onRetryAudit: () => Promise<void>;
-  onReviewObservation: (
-    observationId: string,
-    reviewState: AuditObservation['reviewState'],
-  ) => Promise<void>;
 }) {
-  const screenshotArtifacts = workspace.artifacts.filter(
-    (artifact) => artifact.kind === 'screenshot',
-  );
-  const { urls: screenshotUrls, loadError } = usePrivateArtifactUrls(
-    screenshotArtifacts,
-    'Some private UX screenshots could not be loaded. Refresh the report review before approving those themes.',
-  );
-  const reportEvidence = [
-    ...workspace.facts,
-    ...workspace.artifacts.map((artifact) => {
-      const viewport = screenshotViewport(artifact);
-      return {
-        id: artifact.id,
-        crawlRunId: artifact.crawlRunId,
-        label: artifact.label || `${artifact.kind.replaceAll('_', ' ')} evidence`,
-        detail:
-          typeof artifact.metadata.observation === 'string'
-            ? artifact.metadata.observation
-            : undefined,
-        sourceUrl: artifactSourceUrl(artifact),
-        capturedAt: artifact.createdAt,
-        viewport: viewport ? `${viewport.width} × ${viewport.height}` : undefined,
-        kind: artifact.kind.replaceAll('_', ' '),
-        evidenceKind:
-          typeof artifact.metadata.evidenceKind === 'string'
-            ? artifact.metadata.evidenceKind
-            : undefined,
-        imageUrl: screenshotUrls[artifact.id],
-      };
-    }),
-  ];
-
   return (
     <Card className="workspace-panel">
-      <AuditReportPanel
+      <AutomatedReportPanel
         activeCaptureRunId={workspace.latestCapture?.id}
         audit={workspace.audit}
         clientName={workspace.business.name}
-        evidence={reportEvidence}
         observations={workspace.auditObservations ?? []}
         onPrepareReport={onPrepareReport}
         onRetryAudit={onRetryAudit}
-        onReviewObservation={onReviewObservation}
+        releaseAttestation={workspace.sourceReleaseAttestations[0]}
         report={workspace.report}
         tasks={workspace.auditSpecialistTasks ?? []}
       />
-      {loadError ? (
-        <p className="form-message form-message--error" role="alert">
-          {loadError}
-        </p>
-      ) : null}
     </Card>
   );
 }
@@ -19729,7 +20095,12 @@ function ClientReportPreviewWorkspace({
   onRequestReportPreview: (reportVersionId: string) => Promise<void>;
 }) {
   const data = workspace.report?.data;
-  const findings = data && Array.isArray(data.findings) ? data.findings : [];
+  const findings =
+    data && Array.isArray(data.valueThemes)
+      ? data.valueThemes
+      : data && Array.isArray(data.findings)
+        ? data.findings
+        : [];
   const evidenceArtifactIds = new Set(
     findings.flatMap((finding) => {
       if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return [];
@@ -19760,6 +20131,7 @@ function ClientReportPreviewWorkspace({
         audit={workspace.audit}
         clientName={workspace.business.name}
         evidenceUrls={urls}
+        latestReleaseAttestation={workspace.sourceReleaseAttestations[0]}
         onRequestRemotePreview={onRequestReportPreview}
         remoteJob={currentJob}
         report={workspace.report}
@@ -19850,7 +20222,6 @@ function WorkspaceContent({
   cancelMadeSolidHandoff,
   approveAllAuditFindings,
   updateAuditFinding,
-  updateAuditObservation,
   createDecisionReport,
   requestReportPreview,
   requestAgentLearningProposal,
@@ -19953,10 +20324,6 @@ function WorkspaceContent({
   updateAuditFinding: (
     finding: AuditFinding,
     patch: Pick<AuditFinding, 'title' | 'finding' | 'recommendation' | 'severity' | 'reviewState'>,
-  ) => Promise<void>;
-  updateAuditObservation: (
-    observationId: string,
-    reviewState: AuditObservation['reviewState'],
   ) => Promise<void>;
   createDecisionReport: () => Promise<void>;
   requestReportPreview: (reportVersionId: string) => Promise<void>;
@@ -20187,7 +20554,6 @@ function WorkspaceContent({
       <AuditReportWorkspacePanel
         onPrepareReport={createDecisionReport}
         onRetryAudit={requestWebsiteAudit}
-        onReviewObservation={updateAuditObservation}
         workspace={workspace}
       />
     );
@@ -20283,7 +20649,6 @@ function WorkspacePage({
   onCancelMadeSolidHandoff,
   onApproveAllAuditFindings,
   onUpdateAuditFinding,
-  onUpdateAuditObservation,
   onCreateDecisionReport,
   onRequestReportPreview,
   onRequestAgentLearningProposal,
@@ -20391,10 +20756,6 @@ function WorkspacePage({
   onUpdateAuditFinding: (
     finding: AuditFinding,
     patch: Pick<AuditFinding, 'title' | 'finding' | 'recommendation' | 'severity' | 'reviewState'>,
-  ) => Promise<void>;
-  onUpdateAuditObservation: (
-    observationId: string,
-    reviewState: AuditObservation['reviewState'],
   ) => Promise<void>;
   onCreateDecisionReport: () => Promise<void>;
   onRequestReportPreview: (reportVersionId: string) => Promise<void>;
@@ -20585,7 +20946,6 @@ function WorkspacePage({
           tab={tab}
           toggleTask={onToggleTask}
           updateAuditFinding={onUpdateAuditFinding}
-          updateAuditObservation={onUpdateAuditObservation}
           createDecisionReport={onCreateDecisionReport}
           requestReportPreview={onRequestReportPreview}
           updateAssetAnnotation={onUpdateAssetAnnotation}
@@ -20644,6 +21004,7 @@ function WorkspaceApp({
   const pendingLogoDeletionsRef = useRef(
     new Map<string, { onUndo: () => void; timeout: ReturnType<typeof setTimeout> }>(),
   );
+  const automaticReportAttemptsRef = useRef(new Set<string>());
   routeRef.current = route;
 
   useEffect(() => {
@@ -20841,6 +21202,7 @@ function WorkspaceApp({
 
   useEffect(() => {
     let active = true;
+    let presentedProspectIndex = false;
     async function loadWorkspaceData() {
       await repository.bootstrap();
       const activeRoute = routeRef.current;
@@ -20869,11 +21231,29 @@ function WorkspaceApp({
           return true;
         }
       }
-      const [nextWorkspaces, nextAgentPackages, nextAgentPackageProposals] = await Promise.all([
-        repository.listWorkspaces(),
+      const workspacePromise = repository.listWorkspaces().then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      if (activeRoute.page === 'prospects') {
+        const nextBusinesses = await repository.listBusinesses();
+        if (!active) return false;
+        presentedProspectIndex = true;
+        setBusinesses(nextBusinesses);
+        setLoading(false);
+        setLoadingPresentation(false);
+        setIsHydrating(true);
+      }
+      const [workspaceResult, nextAgentPackages, nextAgentPackageProposals] = await Promise.all([
+        workspacePromise,
         repository.listAgentPackages(),
         repository.listAgentPackageProposals(),
       ]);
+      if (!workspaceResult.ok) throw workspaceResult.error;
+      if (!workspaceResult.value) {
+        throw new Error('The prospect workspace list returned no result.');
+      }
+      const nextWorkspaces = workspaceResult.value;
       if (!active) return false;
       const nextBusinesses = nextWorkspaces.map((workspace) => workspace.business);
       setBusinesses(nextBusinesses);
@@ -20983,12 +21363,15 @@ function WorkspaceApp({
           'Made Solid Studio workspace load failed after automatic retries.',
           finalError,
         );
-        if (restoredCachedWorkspace) {
+        if (restoredCachedWorkspace || presentedProspectIndex) {
           setNotice({
             id: crypto.randomUUID(),
-            title: 'Using the last saved workspace',
-            detail:
-              'Live organization data could not be refreshed. Your saved view remains usable.',
+            title: restoredCachedWorkspace
+              ? 'Using the last saved workspace'
+              : 'Prospect details are still unavailable',
+            detail: restoredCachedWorkspace
+              ? 'Live organization data could not be refreshed. Your saved view remains usable.'
+              : 'The prospect list is available, but its detailed workspace data could not be refreshed.',
             tone: 'warning',
           });
         } else {
@@ -20998,6 +21381,7 @@ function WorkspaceApp({
         }
       }
       setLoading(false);
+      setIsHydrating(false);
       if (!finalError && needsGlobalHydration) {
         window.setTimeout(() => void refreshData({ full: true }).catch(() => undefined), 0);
       }
@@ -21087,6 +21471,72 @@ function WorkspaceApp({
           };
         })()
       : baseWorkspace;
+
+  useEffect(() => {
+    for (const candidate of workspaces) {
+      const audit = candidate.audit;
+      const captureId = candidate.latestCapture?.id;
+      const release = candidate.sourceReleaseAttestations[0];
+      if (
+        !audit ||
+        !captureId ||
+        audit.crawlRunId !== captureId ||
+        audit.status !== 'ready' ||
+        !release
+      )
+        continue;
+      const specialistTasks = (candidate.auditSpecialistTasks ?? []).filter(
+        (task) => task.auditId === audit.id && task.crawlRunId === captureId,
+      );
+      if (specialistTasks.length !== 6 || specialistTasks.some((task) => task.status !== 'ready'))
+        continue;
+      if (
+        !(candidate.auditObservations ?? []).some(
+          (observation) =>
+            observation.auditId === audit.id &&
+            observation.crawlRunId === captureId &&
+            observationIsEligibleForAutomaticReport(observation),
+        )
+      )
+        continue;
+      const currentReport =
+        candidate.report?.auditId === audit.id && candidate.report.crawlRunId === captureId
+          ? candidate.report
+          : undefined;
+      const currentView = currentReport ? prospectValueReportView(currentReport) : undefined;
+      if (
+        currentView?.redesign.attestationId === release.attestationId &&
+        currentView.redesign.sourceCommit === release.sourceCommit
+      )
+        continue;
+      const attemptKey = `${candidate.business.id}:${audit.id}:${release.attestationId}`;
+      if (automaticReportAttemptsRef.current.has(attemptKey)) continue;
+      automaticReportAttemptsRef.current.add(attemptKey);
+      void repository
+        .createDecisionReport(candidate.business.id, audit.id)
+        .then(async (created) => {
+          if (!created) throw new Error('The automatic report did not return a saved version.');
+          await refreshData();
+          setNotice({
+            id: crypto.randomUUID(),
+            title: `${candidate.business.name} report generated`,
+            detail: `Value report v${created.version} is tied to verified edit v${release.sourceEditVersion}.`,
+            tone: 'success',
+          });
+        })
+        .catch((caught) => {
+          setNotice({
+            id: crypto.randomUUID(),
+            title: `${candidate.business.name} report needs attention`,
+            detail:
+              caught instanceof Error
+                ? caught.message
+                : 'The automatic value report could not be generated.',
+            tone: 'danger',
+          });
+        });
+    }
+  }, [refreshData, repository, workspaces]);
 
   const activeCapture = captureIsActive(workspace?.latestCapture);
   const activeAudit =
@@ -21282,23 +21732,16 @@ function WorkspaceApp({
     await refreshData();
   }
 
-  async function updateAuditObservation(
-    observationId: string,
-    reviewState: AuditObservation['reviewState'],
-  ) {
-    await repository.updateAuditObservation(observationId, reviewState);
-    await refreshData();
-  }
-
   async function createDecisionReport() {
     if (!workspace?.audit) throw new Error('Complete a website audit before creating a report.');
     const report = await repository.createDecisionReport(workspace.business.id, workspace.audit.id);
-    if (!report) throw new Error('The reviewed report could not be created.');
+    if (!report) throw new Error('The automatic value report could not be created.');
     await refreshData();
     setNotice({
       id: crypto.randomUUID(),
-      title: `Report version ${report.version} created`,
-      detail: 'Only approved, current-run observations were frozen into this report version.',
+      title: `Report version ${report.version} generated`,
+      detail:
+        'Studio selected supported current-run evidence automatically and tied it to the verified edited website.',
       tone: 'success',
     });
   }
@@ -22357,7 +22800,6 @@ function WorkspaceApp({
             }
             tab={route.tab ?? 'overview'}
             onUpdateAuditFinding={updateAuditFinding}
-            onUpdateAuditObservation={updateAuditObservation}
             onCreateDecisionReport={createDecisionReport}
             onRequestReportPreview={requestReportPreview}
             onRequestAgentLearningProposal={requestAgentPackageProposal}
@@ -22380,24 +22822,7 @@ function WorkspaceApp({
         )}
       </AppShell>
       {route.page !== 'codex' && route.page !== 'website-editor' ? (
-        <CodexFeedbackPanel
-          key={
-            isDevelopmentStudio() &&
-            route.page === 'prospects' &&
-            route.tab === 'editing' &&
-            workspace
-              ? editableWorkspaceDirectoryName(workspace)
-              : 'universal'
-          }
-          workspaceDirectory={
-            isDevelopmentStudio() &&
-            route.page === 'prospects' &&
-            route.tab === 'editing' &&
-            workspace
-              ? editableWorkspaceDirectoryName(workspace)
-              : undefined
-          }
-        />
+        <CodexFeedbackPanel key="universal" />
       ) : null}
       {loadingPresentation ? (
         <WorkspaceLoadingOverlay

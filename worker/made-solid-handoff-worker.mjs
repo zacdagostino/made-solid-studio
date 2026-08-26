@@ -1,7 +1,9 @@
 import { hostname } from 'node:os';
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createClient } from '@supabase/supabase-js';
 
 const pollMs = Math.max(1_000, Number(process.env.SITEFORGE_HANDOFF_POLL_MS || 5_000));
@@ -37,6 +39,15 @@ const reservedHostnameLabels = new Set([
   'build',
 ]);
 const dnsLabelPattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const commitPattern = /^[a-f0-9]{40}$/;
+const attestationIdPattern = /^[a-f0-9]{64}$/;
+const releaseVerificationProfile = 'made-solid-edited-site-release-v1';
+const requiredReleaseCheckIds = new Set([
+  'source-verification',
+  'responsive-layout',
+  'responsive-navigation',
+  'accessibility',
+]);
 
 function requiredEnvironment(name) {
   const value = process.env[name]?.trim();
@@ -130,10 +141,18 @@ async function runWorkspaceCommand(command, args, cwd, timeout = 60_000) {
 
 async function verifyExactSourceWorkspace(job) {
   const cwd = deploymentWorkspace(job);
-  const [{ stdout: commit }, { stdout: status }, { stdout: remote }] = await Promise.all([
+  const [
+    { stdout: commit },
+    { stdout: tree },
+    { stdout: status },
+    { stdout: remote },
+    { stdout: gitDirectory },
+  ] = await Promise.all([
     runWorkspaceCommand('git', ['rev-parse', 'HEAD'], cwd),
+    runWorkspaceCommand('git', ['rev-parse', 'HEAD^{tree}'], cwd),
     runWorkspaceCommand('git', ['status', '--porcelain'], cwd),
     runWorkspaceCommand('git', ['remote', 'get-url', 'origin'], cwd),
+    runWorkspaceCommand('git', ['rev-parse', '--git-dir'], cwd),
   ]);
   if (commit.trim().toLowerCase() !== job.source_commit.toLowerCase()) {
     throw new Error('The local deployment workspace is not on the handed-off commit.');
@@ -146,7 +165,180 @@ async function verifyExactSourceWorkspace(job) {
   if (actual !== expected) {
     throw new Error('The local deployment workspace belongs to a different repository.');
   }
-  return cwd;
+  const sourceTree = tree.trim().toLowerCase();
+  if (!commitPattern.test(sourceTree)) {
+    throw new Error('The local deployment workspace has no valid Git tree identity.');
+  }
+  return { cwd, gitDirectory: resolve(cwd, gitDirectory.trim()), sourceTree };
+}
+
+function requiredAttestationText(attestation, field) {
+  const value = attestation?.[field];
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`The release attestation has no valid ${field}.`);
+  }
+  return value.trim();
+}
+
+async function verifyReleaseAttestation(job, workspace) {
+  const attestationPath = join(
+    workspace.gitDirectory,
+    'made-solid',
+    'release-attestations',
+    `${job.source_commit.toLowerCase()}.json`,
+  );
+  const source = await readFile(attestationPath).catch((error) => {
+    throw new Error('The exact commit has no passed release attestation.', { cause: error });
+  });
+  if (source.byteLength > 128 * 1024) {
+    throw new Error('The release attestation exceeds the allowed size.');
+  }
+  let attestation;
+  try {
+    attestation = JSON.parse(source.toString('utf8'));
+  } catch (error) {
+    throw new Error('The release attestation is not valid JSON.', { cause: error });
+  }
+
+  const sourceCommit = requiredAttestationText(attestation, 'sourceCommit').toLowerCase();
+  const sourceTree = requiredAttestationText(attestation, 'sourceTree').toLowerCase();
+  if (
+    attestation.schemaVersion !== 1 ||
+    attestation.status !== 'passed' ||
+    attestation.verificationProfile !== releaseVerificationProfile ||
+    !attestationIdPattern.test(requiredAttestationText(attestation, 'id')) ||
+    requiredAttestationText(attestation, 'businessId') !== job.business_id ||
+    requiredAttestationText(attestation, 'sourceBuilderRunId') !== job.builder_run_id ||
+    requiredAttestationText(attestation, 'sourceManifestId') !== job.source_manifest_id ||
+    sourceCommit !== job.source_commit.toLowerCase() ||
+    !commitPattern.test(sourceCommit) ||
+    sourceTree !== workspace.sourceTree ||
+    !commitPattern.test(sourceTree) ||
+    requiredAttestationText(attestation, 'sourceBranch') !== job.source_branch ||
+    attestation.sourceEditVersion !== job.source_edit_version ||
+    !Number.isFinite(Date.parse(requiredAttestationText(attestation, 'verifiedAt')))
+  ) {
+    throw new Error('The release attestation does not match the exact handed-off source revision.');
+  }
+
+  if (!Array.isArray(attestation.checks) || attestation.checks.length === 0) {
+    throw new Error('The release attestation contains no verification checks.');
+  }
+  const seenCheckIds = new Set();
+  for (const check of attestation.checks) {
+    if (
+      !check ||
+      typeof check.id !== 'string' ||
+      typeof check.label !== 'string' ||
+      !check.label.trim() ||
+      check.status !== 'passed' ||
+      typeof check.detail !== 'string' ||
+      !check.detail.trim() ||
+      seenCheckIds.has(check.id)
+    ) {
+      throw new Error('The release attestation contains an invalid or failed verification check.');
+    }
+    seenCheckIds.add(check.id);
+  }
+  if ([...requiredReleaseCheckIds].some((checkId) => !seenCheckIds.has(checkId))) {
+    throw new Error('The release attestation is missing a required release check.');
+  }
+
+  return {
+    ...attestation,
+    sourceCommit,
+    sourceTree,
+    digest: createHash('sha256').update(source).digest('hex'),
+  };
+}
+
+async function persistReleaseAttestation(job, releaseAttestation) {
+  const { data: sourceRun, error: sourceRunError } = await supabase
+    .from('builder_runs')
+    .select('status, quality_summary')
+    .eq('id', job.builder_run_id)
+    .single();
+  if (sourceRunError || !sourceRun) {
+    throw new Error('The source builder history could not be recorded for release.', {
+      cause: sourceRunError,
+    });
+  }
+
+  const record = {
+    attestation_id: releaseAttestation.id,
+    organization_id: job.organization_id,
+    business_id: job.business_id,
+    source_builder_run_id: job.builder_run_id,
+    source_manifest_id: job.source_manifest_id,
+    source_repository_url: job.source_repository_url,
+    source_commit: releaseAttestation.sourceCommit,
+    source_tree: releaseAttestation.sourceTree,
+    source_branch: releaseAttestation.sourceBranch,
+    source_edit_version: releaseAttestation.sourceEditVersion,
+    verification_profile: releaseAttestation.verificationProfile,
+    verified_at: releaseAttestation.verifiedAt,
+    checks: releaseAttestation.checks,
+    attestation: releaseAttestation,
+    attestation_digest: releaseAttestation.digest,
+    source_builder_status: sourceRun.status,
+    source_builder_quality_summary: sourceRun.quality_summary,
+  };
+  const { error: insertError } = await supabase
+    .from('source_release_attestations')
+    .upsert(record, { onConflict: 'attestation_digest', ignoreDuplicates: true });
+  if (insertError) throw insertError;
+
+  const { data: saved, error: savedError } = await supabase
+    .from('source_release_attestations')
+    .select('id, attestation_id, attestation_digest')
+    .eq('attestation_digest', releaseAttestation.digest)
+    .single();
+  if (
+    savedError ||
+    !saved ||
+    saved.attestation_id !== releaseAttestation.id ||
+    saved.attestation_digest !== releaseAttestation.digest
+  ) {
+    throw new Error('The exact release attestation could not be persisted immutably.', {
+      cause: savedError,
+    });
+  }
+  await updateJob(job, { release_attestation_id: saved.id });
+}
+
+async function loadVerifiedValueReport(job, releaseAttestation) {
+  const { data: report, error } = await supabase
+    .from('decision_report_versions')
+    .select('id, version, schema_version, review_state, summary, data, created_at')
+    .eq('business_id', job.business_id)
+    .eq('schema_version', 5)
+    .eq('review_state', 'approved')
+    .order('version', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  const redesign = report?.data?.redesign;
+  if (
+    !report ||
+    report.data?.reportKind !== 'verified_redesign_value' ||
+    redesign?.status !== 'passed' ||
+    redesign?.attestationId !== releaseAttestation.id ||
+    redesign?.sourceBuilderRunId !== job.builder_run_id ||
+    redesign?.sourceManifestId !== job.source_manifest_id ||
+    redesign?.sourceCommit?.toLowerCase() !== job.source_commit.toLowerCase() ||
+    redesign?.sourceEditVersion !== job.source_edit_version
+  ) {
+    throw new Error(
+      'Create a current value report for this exact verified edit before Made Solid handoff.',
+    );
+  }
+  return {
+    ...report.data,
+    summary: report.summary,
+    version: report.version,
+    schemaVersion: report.schema_version,
+    reviewedAt: report.created_at,
+  };
 }
 
 function vercelArgs(...args) {
@@ -170,8 +362,7 @@ async function ensureVercelProject(projectName, cwd) {
   }
 }
 
-async function deployExactSource(job) {
-  const cwd = await verifyExactSourceWorkspace(job);
+async function deployExactSource(job, cwd) {
   const projectName = deploymentProjectName(job);
   await ensureVercelProject(projectName, cwd);
   const { stdout } = await runWorkspaceCommand(
@@ -234,7 +425,11 @@ async function processJob(job) {
       completed_items: 0,
       lease_expires_at: new Date(Date.now() + 20 * 60_000).toISOString(),
     });
-    const deployment = await deployExactSource(job);
+    const workspace = await verifyExactSourceWorkspace(job);
+    const releaseAttestation = await verifyReleaseAttestation(job, workspace);
+    await persistReleaseAttestation(job, releaseAttestation);
+    const report = await loadVerifiedValueReport(job, releaseAttestation);
+    const deployment = await deployExactSource(job, workspace.cwd);
     await updateJob(job, {
       progress_phase: 'preview_ready',
       progress_detail:
@@ -266,6 +461,8 @@ async function processJob(job) {
         sourceEditVersion: job.source_edit_version,
         sourceManifestId: job.source_manifest_id,
         sourceAgentPackageId: job.source_agent_package_id,
+        releaseAttestation,
+        report,
         clientName: job.client_name,
         contactName: job.contact_name,
         clientEmail: job.client_email,

@@ -35,6 +35,7 @@ import type {
   Business,
   Contact,
   DecisionReport,
+  SourceReleaseAttestation,
   ReportPreviewJob,
   EvidenceFact,
   ProspectWorkspace,
@@ -861,10 +862,45 @@ function madeSolidHandoffFromRow(row: DatabaseRow): MadeSolidHandoff {
     cancelRequestedAt: readOptionalString(row, 'cancel_requested_at'),
     websiteHandoffId: readOptionalString(row, 'website_handoff_id'),
     websiteAdminUrl: readOptionalString(row, 'website_admin_url'),
+    releaseAttestationId: readOptionalString(row, 'release_attestation_id'),
     errorSummary: readOptionalString(row, 'error_summary'),
     createdAt: readString(row, 'created_at'),
     completedAt: readOptionalString(row, 'completed_at'),
     updatedAt: readString(row, 'updated_at'),
+  };
+}
+
+function sourceReleaseAttestationFromRow(row: DatabaseRow): SourceReleaseAttestation {
+  const checks = Array.isArray(row.checks)
+    ? row.checks.flatMap((raw) => {
+        const check = recordValue(raw);
+        const id = readString(check, 'id');
+        const label = readString(check, 'label');
+        const detail = readString(check, 'detail');
+        return id && label && detail && check.status === 'passed'
+          ? [{ id, label, detail, status: 'passed' as const }]
+          : [];
+      })
+    : [];
+  return {
+    id: readString(row, 'id'),
+    attestationId: readString(row, 'attestation_id'),
+    businessId: readString(row, 'business_id'),
+    sourceBuilderRunId: readString(row, 'source_builder_run_id'),
+    sourceManifestId: readString(row, 'source_manifest_id'),
+    sourceRepositoryUrl: readString(row, 'source_repository_url'),
+    sourceCommit: readString(row, 'source_commit'),
+    sourceTree: readString(row, 'source_tree'),
+    sourceBranch: readString(row, 'source_branch'),
+    sourceEditVersion: readNumber(row, 'source_edit_version'),
+    verificationProfile: readString(row, 'verification_profile'),
+    verifiedAt: readString(row, 'verified_at'),
+    checks,
+    sourceBuilderStatus: readString(row, 'source_builder_status'),
+    sourceBuilderQualitySummary: Object.keys(recordValue(row.source_builder_quality_summary)).length
+      ? recordValue(row.source_builder_quality_summary)
+      : undefined,
+    createdAt: readString(row, 'created_at'),
   };
 }
 
@@ -1382,6 +1418,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       reports,
       reportVersions,
       reportPreviewJobs,
+      sourceReleaseAttestations,
       tasks,
       activity,
       aiUsageRecords,
@@ -1460,6 +1497,11 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         .eq('business_id', businessId)
         .order('created_at', { ascending: false }),
       this.client
+        .from('source_release_attestations')
+        .select('*')
+        .eq('business_id', businessId)
+        .order('verified_at', { ascending: false }),
+      this.client
         .from('tasks')
         .select('*')
         .eq('business_id', businessId)
@@ -1515,6 +1557,10 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       clientPreviewPublications,
     ].forEach((result) => throwIfError(result.error));
     warnOptionalIntegrationError('Private report preview history', reportPreviewJobs.error);
+    warnOptionalIntegrationError(
+      'Edited website release verification',
+      sourceReleaseAttestations.error,
+    );
     warnOptionalIntegrationError(
       'Private report preview worker status',
       reportPreviewWorkerAvailable.error,
@@ -1917,6 +1963,9 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
           ? reportFromRow((reports.data ?? [])[0] as DatabaseRow)
           : undefined,
       reportVersions: ((reportVersions.data ?? []) as DatabaseRow[]).map(reportFromRow),
+      sourceReleaseAttestations: ((sourceReleaseAttestations.data ?? []) as DatabaseRow[]).map(
+        sourceReleaseAttestationFromRow,
+      ),
       tasks: ((tasks.data ?? []) as DatabaseRow[]).map(taskFromRow),
       activity: ((activity.data ?? []) as DatabaseRow[]).map(activityFromRow),
     };

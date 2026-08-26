@@ -14,7 +14,7 @@ const teamDelegationInstruction =
 const progressUpdateInstruction =
   'During longer work, keep the user oriented with concise commentary at meaningful transitions: explain what you are checking, what you learned or changed, and what remains. When a website search, tool, file change, or check produces a meaningful verified result, include that result in the next commentary and explain how it affects the remaining work. Send an update before a long tool run. Do not narrate routine actions, repeat yourself, expose hidden reasoning, or claim unverified progress.';
 const temporaryQuestionInstruction =
-  'This is a temporary, read-only question about the quoted excerpt. Answer directly and concisely using only the excerpt and the question. Do not inspect files, browse, call tools, change workspace state, create tasks, or provide progress commentary. If the excerpt does not support an answer, say what is missing. Return only the answer.';
+  'This is a temporary, read-only question about the quoted excerpt within the inherited conversation. Answer directly and concisely using the complete inherited conversation as context, with the quoted excerpt as the focus. Do not inspect files, browse, call tools, change workspace state, create tasks, or provide progress commentary. If the conversation does not support an answer, say what is missing. Return only the answer.';
 const supportedImageTypes = new Map([
   ['image/png', '.png'],
   ['image/jpeg', '.jpg'],
@@ -54,6 +54,11 @@ export async function connectCodexAppServer({
     throw new Error('This Node runtime does not provide WebSocket support.');
   const socket = new WebSocketImplementation(serverUrl);
   await waitForOpen(socket);
+  let socketClosed = false;
+  let resolveClosed;
+  const whenClosed = new Promise((resolveClose) => {
+    resolveClosed = resolveClose;
+  });
   let nextId = 1;
   const pending = new Map();
   const notificationListeners = new Set();
@@ -83,10 +88,12 @@ export async function connectCodexAppServer({
   };
   socket.addEventListener('message', handleMessage);
   socket.addEventListener('close', () => {
+    socketClosed = true;
     for (const pendingRequest of pending.values()) {
       pendingRequest.reject(new Error('The local Codex connection closed unexpectedly.'));
     }
     pending.clear();
+    resolveClosed();
   });
   await request('initialize', {
     clientInfo: {
@@ -101,6 +108,10 @@ export async function connectCodexAppServer({
   socket.send(JSON.stringify({ method: 'initialized', params: {} }));
   return {
     request,
+    isClosed() {
+      return socketClosed;
+    },
+    whenClosed,
     watchTurn(threadId) {
       const turns = new Map();
       const stateFor = (turnId) => {
@@ -161,7 +172,7 @@ export async function connectCodexAppServer({
       };
     },
     close() {
-      socket.close();
+      if (!socketClosed) socket.close();
     },
   };
 }
@@ -1014,6 +1025,7 @@ export class CodexFeedbackBridge {
     resolveClientWorkspace,
     notifyCompletion,
     connect = connectCodexAppServer,
+    reuseConnection = connect === connectCodexAppServer,
     threadReadTimeoutMs = defaultThreadReadTimeoutMs,
   } = {}) {
     this.cwd = resolve(cwd);
@@ -1032,12 +1044,53 @@ export class CodexFeedbackBridge {
     this.resolveClientWorkspace = resolveClientWorkspace;
     this.notifyCompletion = notifyCompletion;
     this.connect = connect;
+    this.reuseConnection = reuseConnection;
     this.threadReadTimeoutMs = threadReadTimeoutMs;
     this.flushRequested = false;
     this.flushPromise = undefined;
     this.flushRetryTimer = undefined;
     this.startedThreads = new Map();
     this.maintenancePromise = undefined;
+    this.sharedClient = undefined;
+    this.sharedConnectionPromise = undefined;
+  }
+
+  async openClient() {
+    if (!this.reuseConnection) return this.connect();
+    if (this.sharedClient && !this.sharedClient.connection.isClosed?.()) {
+      return this.sharedClient.lease;
+    }
+    if (!this.sharedConnectionPromise) {
+      const connectionPromise = this.connect()
+        .then((connection) => {
+          const shared = {
+            connection,
+            lease: {
+              request: (...arguments_) => connection.request(...arguments_),
+              watchTurn: (...arguments_) => connection.watchTurn(...arguments_),
+              close() {},
+            },
+          };
+          this.sharedClient = shared;
+          void connection.whenClosed?.then(() => {
+            if (this.sharedClient === shared) this.sharedClient = undefined;
+          });
+          return shared.lease;
+        })
+        .finally(() => {
+          if (this.sharedConnectionPromise === connectionPromise) {
+            this.sharedConnectionPromise = undefined;
+          }
+        });
+      this.sharedConnectionPromise = connectionPromise;
+    }
+    return this.sharedConnectionPromise;
+  }
+
+  close() {
+    this.sharedClient?.connection.close();
+    this.sharedClient = undefined;
+    this.sharedConnectionPromise = undefined;
   }
 
   async readThreadForStatus(client, params) {
@@ -1105,7 +1158,7 @@ export class CodexFeedbackBridge {
   async assertExactThreadScope(threadId, scope) {
     let thread = this.startedThreads.get(String(threadId));
     if (!thread) {
-      const client = await this.connect();
+      const client = await this.openClient();
       try {
         const result = await client.request('thread/read', { threadId, includeTurns: false });
         thread = result?.thread;
@@ -1129,7 +1182,7 @@ export class CodexFeedbackBridge {
     if (requestedScope === 'client' && scope.scope !== 'client') {
       throw new Error('Choose a valid client website workspace.');
     }
-    const client = await this.connect();
+    const client = await this.openClient();
     try {
       const [accountResult, rateLimitResult, modelResult, threadResult] = await Promise.all([
         client.request('account/read', {}),
@@ -1490,19 +1543,31 @@ export class CodexFeedbackBridge {
   }
 
   async temporaryQuestion(input) {
-    this.workspaceScope(input);
+    const scope = this.workspaceScope(input);
     const excerpt = typeof input.excerpt === 'string' ? input.excerpt.trim() : '';
     const question = typeof input.question === 'string' ? input.question.trim() : '';
+    const sourceThreadId = typeof input.threadId === 'string' ? input.threadId.trim() : '';
+    const sourceTurnId = typeof input.turnId === 'string' ? input.turnId.trim() : '';
+    const sourceMessageId = typeof input.messageId === 'string' ? input.messageId.trim() : '';
     if (!excerpt) throw new Error('Select a Codex excerpt first.');
     if (!question) throw new Error('Ask a question about the selected excerpt.');
     if (excerpt.length > 3_000) throw new Error('Shorten the selected excerpt and try again.');
     if (question.length > 800) throw new Error('Keep the quick question within 800 characters.');
+    if (!/^[A-Za-z0-9-]{1,100}$/.test(sourceThreadId)) {
+      throw new Error('Choose a valid conversation for the quick question.');
+    }
+    if (!/^[A-Za-z0-9-]{1,100}$/.test(sourceTurnId)) {
+      throw new Error('Choose a completed Codex reply for the quick question.');
+    }
+    if (!/^[A-Za-z0-9-]{1,100}$/.test(sourceMessageId)) {
+      throw new Error('Choose a valid Codex reply for the quick question.');
+    }
     const requestedModel = typeof input.model === 'string' ? input.model.trim() : '';
     if (!/^[A-Za-z0-9._-]{1,100}$/.test(requestedModel)) {
       throw new Error('Choose an available Codex model.');
     }
 
-    const client = await this.connect();
+    const client = await this.openClient();
     let temporaryDirectory;
     let threadId;
     let turnId;
@@ -1522,15 +1587,54 @@ export class CodexFeedbackBridge {
       const serviceTier = model.serviceTiers.some((candidate) => candidate.id === 'priority')
         ? 'priority'
         : 'default';
+      const sourceResult = await client.request('thread/read', {
+        threadId: sourceThreadId,
+        includeTurns: true,
+      });
+      const sourceThread = sourceResult?.thread;
+      if (!sourceThread?.id) throw new Error('That conversation is unavailable.');
+      if (this.assertThreadScope(sourceThread, scope) !== scope.scope) {
+        throw new Error('That conversation belongs to a different workspace.');
+      }
+      const sourceTurns = Array.isArray(sourceThread.turns) ? sourceThread.turns : [];
+      const selectedTurnIndex = sourceTurns.findIndex(
+        (turn) => String(turn?.id || '') === sourceTurnId,
+      );
+      const selectedTurn = sourceTurns[selectedTurnIndex];
+      if (!selectedTurn) {
+        throw new Error('That Codex reply is no longer available in this conversation.');
+      }
+      if (selectedTurn.status !== 'completed') {
+        throw new Error('Wait for this Codex reply to finish before asking a quick question.');
+      }
+      const sourceMessage = (Array.isArray(selectedTurn.items) ? selectedTurn.items : []).find(
+        (item) => item?.type === 'agentMessage' && String(item?.id || '') === sourceMessageId,
+      );
+      const normalizeSelectedText = (value) =>
+        String(value || '')
+          .replace(/\s+/g, ' ')
+          .trim();
+      if (
+        !sourceMessage ||
+        !normalizeSelectedText(sourceMessage.text).includes(normalizeSelectedText(excerpt))
+      ) {
+        throw new Error('That selected text is no longer available in this Codex reply.');
+      }
+      const latestCompletedTurn = [...sourceTurns]
+        .reverse()
+        .find((turn) => turn?.status === 'completed' && typeof turn?.id === 'string');
+      if (!latestCompletedTurn) {
+        throw new Error('Wait for this conversation to finish before asking a quick question.');
+      }
       temporaryDirectory = await mkdtemp(join(tmpdir(), 'made-solid-codex-question-'));
-      const threadResult = await client.request('thread/start', {
+      const threadResult = await client.request('thread/fork', {
+        threadId: sourceThreadId,
+        lastTurnId: latestCompletedTurn.id,
         cwd: temporaryDirectory,
         ...temporaryQuestionThreadSettings([]),
-        model: model.id,
-        serviceTier,
-        config: { model_reasoning_effort: effort },
+        deferGoalContinuation: true,
         ephemeral: true,
-        sessionStartSource: 'clear',
+        threadSource: 'user',
       });
       threadId = String(threadResult.thread?.id || '');
       if (!threadId) throw new Error('Codex did not start the temporary question.');
@@ -1574,7 +1678,7 @@ export class CodexFeedbackBridge {
     if (!/^[A-Za-z0-9._-]{1,100}$/.test(model) || !/^[A-Za-z0-9_-]{1,30}$/.test(effort)) {
       throw new Error('Choose an available Codex model and reasoning level.');
     }
-    const client = await this.connect();
+    const client = await this.openClient();
     try {
       const modelResult = await client.request('model/list', {
         limit: 100,
@@ -1625,7 +1729,7 @@ export class CodexFeedbackBridge {
     if (!/^[A-Za-z0-9-]{1,100}$/.test(turnId)) {
       throw new Error('Choose a completed Codex reply to branch from.');
     }
-    const client = await this.connect();
+    const client = await this.openClient();
     try {
       const sourceResult = await client.request('thread/read', {
         threadId,
@@ -1709,7 +1813,7 @@ export class CodexFeedbackBridge {
     if (!/^[A-Za-z0-9._-]{1,100}$/.test(model) || !/^[A-Za-z0-9_-]{1,30}$/.test(effort)) {
       throw new Error('Choose an available Codex model and reasoning level.');
     }
-    const client = await this.connect();
+    const client = await this.openClient();
     try {
       const [modelResult, threadResult] = await Promise.all([
         client.request('model/list', { limit: 100, includeHidden: false }),
@@ -1849,7 +1953,7 @@ export class CodexFeedbackBridge {
 
   async interruptActiveTurn(threadId, scopeInput = {}, { includeDescendants = false } = {}) {
     const scope = this.workspaceScope(scopeInput);
-    const client = await this.connect();
+    const client = await this.openClient();
     try {
       const threadCandidates = await this.listedThreads(client, scope);
       let thread = threadId
@@ -2050,7 +2154,7 @@ export class CodexFeedbackBridge {
     if (queued.some((record) => String(record.threadId || '') === threadId)) {
       return { status: 'retained', deleted: false, detail: 'The conversation has queued work.' };
     }
-    const client = await this.connect();
+    const client = await this.openClient();
     try {
       let result;
       try {
@@ -2160,7 +2264,7 @@ export class CodexFeedbackBridge {
           );
           continue;
         }
-        const client = await this.connect().catch(() => undefined);
+        const client = await this.openClient().catch(() => undefined);
         if (!client) return;
         try {
           const [modelResult, threadResult] = await Promise.all([
@@ -2378,7 +2482,7 @@ export class CodexFeedbackBridge {
       return;
     }
     const queued = records.filter((record) => record.status === 'queued');
-    const client = await this.connect().catch(() => undefined);
+    const client = await this.openClient().catch(() => undefined);
     if (!client) return;
     try {
       for (const record of running) {

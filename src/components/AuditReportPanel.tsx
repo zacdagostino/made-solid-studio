@@ -15,7 +15,12 @@ import type {
   AuditObservation,
   AuditStatus,
   DecisionReport,
+  SourceReleaseAttestation,
 } from '../lib/domain';
+import {
+  prospectValueReportView,
+  reportUsesProspectValueContract,
+} from '../lib/prospect-value-report';
 import { Button, ButtonGroup, ButtonLink, IndeterminateProgress, StatusBadge } from './ui';
 import styles from './AuditReportPanel.module.css';
 
@@ -69,6 +74,7 @@ export type AuditReportPanelProps = {
   activeCaptureRunId?: string;
   audit?: Audit;
   report?: DecisionReport;
+  releaseAttestation?: SourceReleaseAttestation;
   observations?: AuditObservation[];
   evidence: AuditReportEvidence[];
   tasks?: AuditReportSpecialistTask[];
@@ -585,6 +591,7 @@ export function AuditReportPanel({
   activeCaptureRunId,
   audit,
   report,
+  releaseAttestation,
   observations,
   evidence,
   tasks = [],
@@ -665,8 +672,23 @@ export function AuditReportPanel({
     )
     .slice(0, Math.max(0, 8 - approvedGroupCount));
   const incompleteTaskCount = currentTasks.filter((task) => task.status !== 'ready').length;
+  const verifiedReleaseReady = Boolean(
+    releaseAttestation &&
+    releaseAttestation.checks.length >= 4 &&
+    releaseAttestation.checks.every((check) => check.status === 'passed'),
+  );
+  const currentReportUsesValueContract = reportUsesProspectValueContract(currentReport);
+  const currentReportView = currentReport ? prospectValueReportView(currentReport) : undefined;
+  const currentReportMatchesRelease = Boolean(
+    currentReportUsesValueContract &&
+    currentReportView &&
+    releaseAttestation &&
+    currentReportView.redesign.attestationId === releaseAttestation.attestationId &&
+    currentReportView.redesign.sourceCommit === releaseAttestation.sourceCommit,
+  );
   const reportReady =
     currentAudit?.status === 'ready' &&
+    verifiedReleaseReady &&
     currentTasks.length > 0 &&
     incompleteTaskCount === 0 &&
     summary.approved > 0 &&
@@ -800,41 +822,91 @@ export function AuditReportPanel({
           {currentReport ? (
             <section
               aria-labelledby="created-report-title"
-              className={styles.reportSuccess}
+              className={`${styles.reportSuccess} ${currentReportMatchesRelease ? '' : styles.reportLegacy}`}
               role="status"
             >
               <span aria-hidden="true" className={styles.reportSuccessIcon}>
                 <Check size={22} strokeWidth={2.5} />
               </span>
               <div>
-                <p className={styles.eyebrow}>Report created</p>
-                <h3 id="created-report-title">Report version {currentReport.version} is ready</h3>
+                <p className={styles.eyebrow}>
+                  {currentReportMatchesRelease
+                    ? 'Value report ready'
+                    : currentReportUsesValueContract
+                      ? 'Website changed after this report'
+                      : 'Previous report format'}
+                </p>
+                <h3 id="created-report-title">
+                  {currentReportMatchesRelease
+                    ? `Report version ${currentReport.version} is ready`
+                    : `Report version ${currentReport.version} needs to be regenerated`}
+                </h3>
                 <p>
-                  The approved shortlist is frozen and saved. Review the exact client-facing page
-                  privately before deciding whether to continue to handoff.
+                  {currentReportMatchesRelease
+                    ? 'This version connects the original evidence to the exact edited website that passed release verification. Review the client-facing page privately before continuing.'
+                    : currentReportUsesValueContract
+                      ? 'A newer edited website has passed release verification. This report remains immutable history, but it must be regenerated before it can represent the current website.'
+                      : 'This older audit-only report does not show the current redesign, completed work, or exact-commit verification. Keep it as history, then create an updated value report before using it with the client.'}
                 </p>
                 <small>Saved in report history · {currentReport.summary}</small>
-                <p className={styles.previewPrivacy}>
-                  Private Studio preview — not shared with the client.
-                </p>
+                {currentReportMatchesRelease ? (
+                  <p className={styles.previewPrivacy}>
+                    Private Studio preview — not shared with the client.
+                  </p>
+                ) : (
+                  <p className={styles.previewPrivacy}>
+                    Do not use this version for client handoff.
+                  </p>
+                )}
               </div>
               <ButtonGroup className={styles.reportSuccessActions}>
-                <ButtonLink
-                  href={`#/prospects/${currentReport.businessId}/report-preview`}
-                  size="small"
-                  variant="primary"
-                >
-                  Preview client report
-                  <FileSearch aria-hidden="true" size={16} />
-                </ButtonLink>
-                <ButtonLink
-                  href={`#/prospects/${currentReport.businessId}/handoff`}
-                  size="small"
-                  variant="secondary"
-                >
-                  Continue to handoff
-                  <ArrowRight aria-hidden="true" size={16} />
-                </ButtonLink>
+                {currentReportMatchesRelease ? (
+                  <>
+                    <ButtonLink
+                      href={`#/prospects/${currentReport.businessId}/report-preview`}
+                      size="small"
+                      variant="primary"
+                    >
+                      Preview value report
+                      <FileSearch aria-hidden="true" size={16} />
+                    </ButtonLink>
+                    <ButtonLink
+                      href={`#/prospects/${currentReport.businessId}/handoff`}
+                      size="small"
+                      variant="secondary"
+                    >
+                      Continue to handoff
+                      <ArrowRight aria-hidden="true" size={16} />
+                    </ButtonLink>
+                  </>
+                ) : (
+                  <>
+                    {reportReady && onPrepareReport ? (
+                      <Button
+                        disabled={preparing}
+                        onClick={prepareReport}
+                        size="small"
+                        variant="primary"
+                      >
+                        {preparing ? (
+                          <LoaderCircle aria-hidden="true" className={styles.spinner} size={16} />
+                        ) : (
+                          <FileSearch aria-hidden="true" size={16} />
+                        )}
+                        {preparing ? 'Regenerating…' : 'Regenerate current value report'}
+                      </Button>
+                    ) : (
+                      <ButtonLink
+                        href={`#/prospects/${currentReport.businessId}/editing`}
+                        size="small"
+                        variant="secondary"
+                      >
+                        Verify edited website
+                        <ArrowRight aria-hidden="true" size={16} />
+                      </ButtonLink>
+                    )}
+                  </>
+                )}
               </ButtonGroup>
             </section>
           ) : null}
@@ -855,7 +927,7 @@ export function AuditReportPanel({
           <div className={styles.summary} aria-label="Review summary">
             <div>
               <strong>{approvedGroupCount}</strong>
-              <span>Client themes selected</span>
+              <span>Reviewed cases selected</span>
             </div>
             <div>
               <strong>
@@ -922,8 +994,11 @@ export function AuditReportPanel({
             <div className={styles.reviewWorkspace}>
               <nav aria-label="UX finding themes" className={styles.findingQueue}>
                 <div className={styles.queueHeading}>
-                  <h3>UX review queue</h3>
-                  <span>Select no more than eight client themes</span>
+                  <h3>Evidence review queue</h3>
+                  <span>
+                    Select up to eight evidence-backed cases. Repeated areas consolidate into no
+                    more than five client themes.
+                  </span>
                 </div>
                 <ul>
                   {visibleGroups.map((group) => (
@@ -997,17 +1072,19 @@ export function AuditReportPanel({
               <p>
                 {reportReady
                   ? `${approvedGroupCount} evidence-backed ${approvedGroupCount === 1 ? 'theme is' : 'themes are'} selected. ${summary.needsReview} unselected ${summary.needsReview === 1 ? 'observation stays' : 'observations stay'} private.`
-                  : incompleteTaskCount > 0
-                    ? `${incompleteTaskCount} required specialist ${incompleteTaskCount === 1 ? 'section has' : 'sections have'} not completed successfully.`
-                    : summary.needsReview > 0
-                      ? `Review or exclude ${summary.needsReview} remaining ${summary.needsReview === 1 ? 'finding' : 'findings'}.`
-                      : approvedGroupCount > 8
-                        ? `Reduce the client shortlist to eight themes or fewer. ${approvedGroupCount} themes are currently selected.`
-                        : summary.approvedWithoutEvidence > 0
-                          ? `${summary.approvedWithoutEvidence} approved ${summary.approvedWithoutEvidence === 1 ? 'finding needs' : 'findings need'} evidence from this capture.`
-                          : summary.approvedLowConfidence > 0
-                            ? `${summary.approvedLowConfidence} approved ${summary.approvedLowConfidence === 1 ? 'finding needs' : 'findings need'} stronger corroboration or exclusion.`
-                            : 'Approve at least one evidence-backed finding after the audit is ready.'}
+                  : !verifiedReleaseReady
+                    ? 'Verify the exact current edited website first. The new report will use that passed commit as proof of what has already been delivered.'
+                    : incompleteTaskCount > 0
+                      ? `${incompleteTaskCount} required specialist ${incompleteTaskCount === 1 ? 'section has' : 'sections have'} not completed successfully.`
+                      : summary.needsReview > 0
+                        ? `Review or exclude ${summary.needsReview} remaining ${summary.needsReview === 1 ? 'finding' : 'findings'}.`
+                        : approvedGroupCount > 8
+                          ? `Reduce the reviewed shortlist to eight cases or fewer. ${approvedGroupCount} cases are currently selected.`
+                          : summary.approvedWithoutEvidence > 0
+                            ? `${summary.approvedWithoutEvidence} approved ${summary.approvedWithoutEvidence === 1 ? 'finding needs' : 'findings need'} evidence from this capture.`
+                            : summary.approvedLowConfidence > 0
+                              ? `${summary.approvedLowConfidence} approved ${summary.approvedLowConfidence === 1 ? 'finding needs' : 'findings need'} stronger corroboration or exclusion.`
+                              : 'Approve at least one evidence-backed finding after the audit is ready.'}
               </p>
               {prepareError ? (
                 <p className={styles.reviewError} role="alert">
@@ -1015,7 +1092,7 @@ export function AuditReportPanel({
                 </p>
               ) : null}
             </div>
-            {onPrepareReport ? (
+            {onPrepareReport && !currentReport ? (
               <Button disabled={!reportReady || preparing} onClick={prepareReport}>
                 {preparing ? (
                   <LoaderCircle aria-hidden="true" className={styles.spinner} size={17} />
@@ -1024,9 +1101,7 @@ export function AuditReportPanel({
                 )}
                 {preparing
                   ? 'Creating report…'
-                  : currentReport
-                    ? `Create updated report version`
-                    : `Create report from ${approvedGroupCount} selected ${approvedGroupCount === 1 ? 'theme' : 'themes'}`}
+                  : `Create report from ${approvedGroupCount} selected ${approvedGroupCount === 1 ? 'case' : 'cases'}`}
               </Button>
             ) : null}
           </footer>

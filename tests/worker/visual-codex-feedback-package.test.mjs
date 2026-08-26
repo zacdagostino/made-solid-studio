@@ -310,6 +310,18 @@ const reliableCodexEphemeralThreadsMigrationUrl = new URL(
   '../../supabase/migrations/20260826010000_reliable_codex_ephemeral_threads_test_package.sql',
   import.meta.url,
 );
+const resumeAwareCodexProgressMigrationUrl = new URL(
+  '../../supabase/migrations/20260826140000_resume_aware_codex_progress_test_package.sql',
+  import.meta.url,
+);
+const queueableWorkingCodexMessagesMigrationUrl = new URL(
+  '../../supabase/migrations/20260826150000_queueable_working_codex_messages_test_package.sql',
+  import.meta.url,
+);
+const responsiveDevelopmentRuntimeMigrationUrl = new URL(
+  '../../supabase/migrations/20260826160000_responsive_development_runtime_test_package.sql',
+  import.meta.url,
+);
 const railwayWorkspaceWriteMigrationUrl = new URL(
   '../../supabase/migrations/20260820170000_railway_workspace_write_test_package.sql',
   import.meta.url,
@@ -382,10 +394,9 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 93);
-  assert.match(app, /newly added empty chat now stays safely selectable/);
-  assert.match(app, /dark Quick Question popup completes temporary answers/);
-  assert.match(app, /shows chats for that client plus clearly labelled universal Studio chats/);
+  assert.equal(Number(revision[1]), 100);
+  assert.match(app, /presentedProspectIndex = true/);
+  assert.match(app, /client-scoped Codex/);
   assert.match(app, /gives only the authenticated Studio owner a disclosed, reversible switch/);
   assert.match(app, /saved Natural or Literal interpretation and three speeds/);
   assert.match(app, /opt-in chat-scoped auto-read/);
@@ -394,10 +405,10 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   assert.match(app, /dedicated Studio page/);
   assert.match(app, /launcher is present during startup checks/);
   assert.match(app, /temporary read-only quick question/);
-  assert.match(app, /appending the quote to the draft/);
+  assert.match(app, /appended to the draft/);
   assert.match(app, /per-phone Web Push opt-in/);
-  assert.match(app, /primary Send control becomes a Stop Codex control/);
-  assert.match(app, /without clearing the unsent draft/);
+  assert.match(app, /composer is empty, the primary Send control becomes a Stop Codex control/);
+  assert.match(app, /Typing text or attaching an image immediately restores Send/);
 });
 
 test('registers the restored Codex voice experience above immutable v20.2', async () => {
@@ -1721,7 +1732,7 @@ test('registers uninterrupted Codex recovery as the newest immutable local and c
     localService,
     /const maintainCodexFeedbackBridge = \(\) =>[\s\S]*bridge\.maintain\(\)[\s\S]*\.catch\(\(\) => undefined\)/,
   );
-  assert.match(localService, /await bridge\.maintain\(\)/);
+  assert.doesNotMatch(localService, /await bridge\.maintain\(\)/);
 });
 
 test('registers turn-scoped Agent teams as the newest immutable local and cloud package', async () => {
@@ -2193,7 +2204,7 @@ test('registers selected Codex excerpt actions above immutable v20.4 in every lo
   assert.match(component, /Add to prompt/);
   assert.match(component, /Send now/);
   assert.match(service, /case 'temporary-question':/);
-  assert.match(app, /Selecting text inside one Codex reply/);
+  assert.match(app, /Selecting text inside one completed Codex reply/);
 });
 
 test('registers Codex phone notifications above immutable v20.5', async () => {
@@ -2602,7 +2613,7 @@ test('registers revocable ready client reviews above immutable v21.6', async () 
   );
   assert.match(app, /id: 'client-url-release-contract'/);
   assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.2`/);
-  assert.match(app, /already-ready private client review can now be revoked immediately/);
+  assert.match(app, /Revoke review link/);
 });
 
 test('registers reliable Codex Stop state above immutable v21.7', async () => {
@@ -2641,7 +2652,7 @@ test('registers reliable Codex Stop state above immutable v21.7', async () => {
       fallbackLedger.indexOf('localRevocableReadyClientReviewsPackage,'),
   );
   assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.91`/);
-  assert.match(app, /newly added empty chat now stays safely selectable/);
+  assert.match(app, /presentedProspectIndex = true/);
   assert.match(component, /statusRequestSequenceRef/);
   assert.match(component, /key="stop-codex"/);
   assert.match(component, /key="send-codex"/);
@@ -2765,8 +2776,8 @@ test('registers focused prospect preview modes above immutable v22.0', async () 
     fallbackLedger.indexOf('localFocusedProspectPreviewModesPackage,') <
       fallbackLedger.indexOf('localResilientDevelopmentStudioRuntimePackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.93`/);
-  assert.match(app, /newly added empty chat now stays safely selectable/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.100`/);
+  assert.match(app, /presentedProspectIndex = true/);
   assert.match(repository, /fit, exact 768px tablet, and exact 1440px desktop preview modes/);
 });
 
@@ -2805,10 +2816,130 @@ test('registers reliable Codex ephemeral chats above immutable v22.1', async () 
     fallbackLedger.indexOf('localReliableCodexEphemeralThreadsPackage,') <
       fallbackLedger.indexOf('localFocusedProspectPreviewModesPackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.93`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.100`/);
   assert.match(bridge, /watchTurn\(threadId\)/);
   assert.match(bridge, /isUnmaterializedThreadReadError/);
   assert.match(styles, /\.codex-quick-question-dialog \{[\s\S]*color-scheme: dark;/);
+});
+
+test('registers queueable working Codex messages above immutable v22.3', async () => {
+  const [migration, repository, app, component] = await Promise.all([
+    readFile(queueableWorkingCodexMessagesMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+    readFile(new URL('../../src/components/CodexFeedbackPanel.tsx', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /base\.organization_id,\s*22\.4,/);
+  assert.match(migration, /made-solid-studio-builder-agent-v22\.4/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v22\.3'/,
+  );
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /not exists/i);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(repository, /version: 22\.4,/);
+  assert.match(repository, /basePackageId: localResumeAwareCodexProgressPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localQueueableWorkingCodexMessagesPackage,') <
+      packageLedger.indexOf('localResumeAwareCodexProgressPackage,'),
+  );
+  const existingLedgerUpgrade = repository.slice(repository.indexOf('const missingPackages = ['));
+  assert.ok(
+    existingLedgerUpgrade.indexOf('localQueueableWorkingCodexMessagesPackage,') <
+      existingLedgerUpgrade.indexOf('localResumeAwareCodexProgressPackage,'),
+  );
+  const fallbackLedger = repository.slice(repository.indexOf('} catch {'));
+  assert.ok(
+    fallbackLedger.indexOf('localQueueableWorkingCodexMessagesPackage,') <
+      fallbackLedger.indexOf('localResumeAwareCodexProgressPackage,'),
+  );
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.100`/);
+  assert.match(component, /isCodexWorking && !prompt\.trim\(\) && draftAttachments\.length === 0/);
+});
+
+test('registers the responsive development runtime above immutable v22.4', async () => {
+  const [migration, repository, app, component, bridge, localService] = await Promise.all([
+    readFile(responsiveDevelopmentRuntimeMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+    readFile(new URL('../../src/components/CodexFeedbackPanel.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../../scripts/codex-feedback-bridge.mjs', import.meta.url), 'utf8'),
+    readFile(localServiceUrl, 'utf8'),
+  ]);
+  assert.match(migration, /base\.organization_id,\s*22\.5,/);
+  assert.match(migration, /made-solid-studio-builder-agent-v22\.5/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v22\.4'/,
+  );
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /not exists/i);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(repository, /version: 22\.5,/);
+  assert.match(repository, /basePackageId: localQueueableWorkingCodexMessagesPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localResponsiveDevelopmentRuntimePackage,') <
+      packageLedger.indexOf('localQueueableWorkingCodexMessagesPackage,'),
+  );
+  const existingLedgerUpgrade = repository.slice(repository.indexOf('const missingPackages = ['));
+  assert.ok(
+    existingLedgerUpgrade.indexOf('localResponsiveDevelopmentRuntimePackage,') <
+      existingLedgerUpgrade.indexOf('localQueueableWorkingCodexMessagesPackage,'),
+  );
+  const fallbackLedger = repository.slice(repository.indexOf('} catch {'));
+  assert.ok(
+    fallbackLedger.indexOf('localResponsiveDevelopmentRuntimePackage,') <
+      fallbackLedger.indexOf('localQueueableWorkingCodexMessagesPackage,'),
+  );
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.100`/);
+  assert.match(app, /const workspacePromise = repository\.listWorkspaces\(\)/);
+  assert.match(app, /setLoadingPresentation\(false\)/);
+  assert.match(component, /statusRefreshInFlightRef/);
+  assert.match(bridge, /reuseConnection = connect === connectCodexAppServer/);
+  assert.match(bridge, /async openClient\(\)/);
+  assert.doesNotMatch(localService, /await bridge\.maintain\(\)/);
+});
+
+test('registers resume-aware Codex progress above immutable v22.2', async () => {
+  const [migration, repository, app, component] = await Promise.all([
+    readFile(resumeAwareCodexProgressMigrationUrl, 'utf8'),
+    readFile(repositoryUrl, 'utf8'),
+    readFile(appUrl, 'utf8'),
+    readFile(new URL('../../src/components/CodexFeedbackPanel.tsx', import.meta.url), 'utf8'),
+  ]);
+  assert.match(migration, /base\.organization_id,\s*22\.3,/);
+  assert.match(migration, /made-solid-studio-builder-agent-v22\.3/);
+  assert.match(
+    migration,
+    /candidate\.builder_contract_version = 'made-solid-studio-builder-agent-v22\.2'/,
+  );
+  assert.match(migration, /'test_ready'/);
+  assert.match(migration, /not exists/i);
+  assert.match(migration, /"visual-codex-feedback"/);
+  assert.match(repository, /version: 22\.3,/);
+  assert.match(repository, /basePackageId: localReliableCodexEphemeralThreadsPackage\.id/);
+  const packageLedger = repository.slice(repository.indexOf('value: JSON.stringify(['));
+  assert.ok(
+    packageLedger.indexOf('localResumeAwareCodexProgressPackage,') <
+      packageLedger.indexOf('localReliableCodexEphemeralThreadsPackage,'),
+  );
+  const existingLedgerUpgrade = repository.slice(repository.indexOf('const missingPackages = ['));
+  assert.ok(
+    existingLedgerUpgrade.indexOf('localResumeAwareCodexProgressPackage,') <
+      existingLedgerUpgrade.indexOf('localReliableCodexEphemeralThreadsPackage,'),
+  );
+  const fallbackLedger = repository.slice(repository.indexOf('} catch {'));
+  assert.ok(
+    fallbackLedger.indexOf('localResumeAwareCodexProgressPackage,') <
+      fallbackLedger.indexOf('localReliableCodexEphemeralThreadsPackage,'),
+  );
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.100`/);
+  assert.match(component, /activities: \[\]/);
+  assert.match(component, /window\.addEventListener\('pageshow', refreshVisibleChat\)/);
+  assert.match(component, /document\.addEventListener\('visibilitychange'/);
 });
 
 test('ships one locally scoped Manifest V3 capture helper for Chrome and Brave', async () => {

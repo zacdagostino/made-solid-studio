@@ -76,6 +76,16 @@
   padding: var(--space-4);
 }
 
+.reportLegacy {
+  background: color-mix(in srgb, var(--color-warning) 8%, var(--color-panel));
+  border-color: color-mix(in srgb, var(--color-warning) 55%, var(--color-line));
+}
+
+.reportLegacy .reportSuccessIcon {
+  background: var(--color-warning);
+  color: var(--color-ink);
+}
+
 .reportSuccessIcon {
   align-items: center;
   background: var(--color-success);
