@@ -10,16 +10,30 @@ const previewWorkerUrl = new URL('../../worker/report-preview-worker.mjs', impor
 const releaseVerifierUrl = new URL('../../scripts/verify-prospect-release.mjs', import.meta.url);
 const reportParserUrl = new URL('../../src/lib/prospect-value-report.ts', import.meta.url);
 const localRepositoryUrl = new URL('../../src/lib/repository.ts', import.meta.url);
+const cloudRepositoryUrl = new URL('../../src/lib/cloud-repository.ts', import.meta.url);
+const automatedReportPanelUrl = new URL(
+  '../../src/components/AutomatedReportPanel.tsx',
+  import.meta.url,
+);
 
 test('freezes prospect reports against the exact verified edited website', async () => {
-  const [migration, previewWorker, releaseVerifier, reportParser, localRepository] =
-    await Promise.all([
-      readFile(migrationUrl, 'utf8'),
-      readFile(previewWorkerUrl, 'utf8'),
-      readFile(releaseVerifierUrl, 'utf8'),
-      readFile(reportParserUrl, 'utf8'),
-      readFile(localRepositoryUrl, 'utf8'),
-    ]);
+  const [
+    migration,
+    previewWorker,
+    releaseVerifier,
+    reportParser,
+    localRepository,
+    cloudRepository,
+    automatedReportPanel,
+  ] = await Promise.all([
+    readFile(migrationUrl, 'utf8'),
+    readFile(previewWorkerUrl, 'utf8'),
+    readFile(releaseVerifierUrl, 'utf8'),
+    readFile(reportParserUrl, 'utf8'),
+    readFile(localRepositoryUrl, 'utf8'),
+    readFile(cloudRepositoryUrl, 'utf8'),
+    readFile(automatedReportPanelUrl, 'utf8'),
+  ]);
   const reportRpc = migration.slice(
     migration.indexOf('create or replace function public.create_audit_report_version'),
     migration.indexOf('create or replace function public.request_report_preview'),
@@ -58,6 +72,8 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(releaseVerifier, /SITEFORGE_SUPABASE_SERVICE_ROLE_KEY/);
   assert.match(releaseVerifier, /source_release_attestations/);
   assert.doesNotMatch(releaseVerifier, /VITE_SITEFORGE_SUPABASE_SERVICE_ROLE_KEY/);
+  assert.doesNotMatch(releaseVerifier, /return \{ status: 'unavailable' \}/);
+  assert.match(releaseVerifier, /Studio cannot save its release record for reporting/);
 
   assert.match(reportParser, /prospectValueReportSchemaVersion = 5/);
   assert.match(reportParser, /reportUsesProspectValueContract/);
@@ -71,4 +87,11 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(localRepository, /report\.data\?\.reportKind === 'verified_redesign_value'/);
   assert.match(localRepository, /if \(existing\) return existing/);
   assert.match(localRepository, /id: `report-version-\$\{audit\.id\}-\$\{release\.id\}`/);
+
+  assert.match(cloudRepository, /sourceReleaseAttestationAvailability/);
+  assert.match(cloudRepository, /PGRST205/);
+  assert.match(cloudRepository, /schema_unavailable/);
+  assert.match(automatedReportPanel, /Studio update required/);
+  assert.match(automatedReportPanel, /not asking for another verification/);
+  assert.match(automatedReportPanel, /!releaseReady && !releaseSchemaUnavailable/);
 });

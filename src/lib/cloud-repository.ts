@@ -1243,6 +1243,15 @@ function isMissingMadeSolidHandoffSchema(error: { code?: string; message: string
   );
 }
 
+function isMissingSourceReleaseAttestationSchema(error: { code?: string; message: string } | null) {
+  if (!error) return false;
+  return (
+    error.code === 'PGRST205' ||
+    (error.message.includes('source_release_attestations') &&
+      error.message.includes('schema cache'))
+  );
+}
+
 function isDuplicateWebsiteError(error: { code?: string } | null) {
   return error?.code === '23505';
 }
@@ -1966,6 +1975,11 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       sourceReleaseAttestations: ((sourceReleaseAttestations.data ?? []) as DatabaseRow[]).map(
         sourceReleaseAttestationFromRow,
       ),
+      sourceReleaseAttestationAvailability: sourceReleaseAttestations.error
+        ? isMissingSourceReleaseAttestationSchema(sourceReleaseAttestations.error)
+          ? 'schema_unavailable'
+          : 'unavailable'
+        : 'available',
       tasks: ((tasks.data ?? []) as DatabaseRow[]).map(taskFromRow),
       activity: ((activity.data ?? []) as DatabaseRow[]).map(activityFromRow),
     };

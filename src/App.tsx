@@ -20079,6 +20079,7 @@ function AuditReportWorkspacePanel({
         onPrepareReport={onPrepareReport}
         onRetryAudit={onRetryAudit}
         releaseAttestation={workspace.sourceReleaseAttestations[0]}
+        releaseAttestationAvailability={workspace.sourceReleaseAttestationAvailability}
         report={workspace.report}
         tasks={workspace.auditSpecialistTasks ?? []}
       />

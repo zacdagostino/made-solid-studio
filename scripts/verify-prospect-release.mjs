@@ -77,7 +77,11 @@ function repositoryUrl(workspace) {
 async function persistReleaseForReporting(workspace, record) {
   const supabaseUrl = process.env.SITEFORGE_SUPABASE_URL?.trim();
   const serviceRoleKey = process.env.SITEFORGE_SUPABASE_SERVICE_ROLE_KEY?.trim();
-  if (!supabaseUrl || !serviceRoleKey) return { status: 'unavailable' };
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error(
+      'The website passed its checks, but Studio cannot save its release record for reporting.',
+    );
+  }
 
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false },

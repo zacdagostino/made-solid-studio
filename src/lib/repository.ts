@@ -4524,6 +4524,7 @@ export class SiteforgeRepository {
       sourceReleaseAttestations: sourceReleaseAttestations.sort((left, right) =>
         right.verifiedAt.localeCompare(left.verifiedAt),
       ),
+      sourceReleaseAttestationAvailability: 'available',
       reportPreviewJobs: [],
       reportPreviewWorkerAvailable: false,
       tasks: tasks.sort((left, right) => left.state.localeCompare(right.state)),

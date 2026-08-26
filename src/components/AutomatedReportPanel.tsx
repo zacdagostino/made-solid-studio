@@ -30,6 +30,7 @@ type AutomatedReportPanelProps = {
   audit?: Audit;
   report?: DecisionReport;
   releaseAttestation?: SourceReleaseAttestation;
+  releaseAttestationAvailability?: 'available' | 'schema_unavailable' | 'unavailable';
   observations: AuditObservation[];
   tasks: AuditReportSpecialistTask[];
   onPrepareReport: () => void | Promise<void>;
@@ -80,6 +81,7 @@ export function AutomatedReportPanel({
   onPrepareReport,
   onRetryAudit,
   releaseAttestation,
+  releaseAttestationAvailability = 'available',
   report,
   tasks,
 }: AutomatedReportPanelProps) {
@@ -126,6 +128,7 @@ export function AutomatedReportPanel({
     releaseAttestation.checks.length >= 4 &&
     releaseAttestation.checks.every((check) => check.status === 'passed'),
   );
+  const releaseSchemaUnavailable = releaseAttestationAvailability === 'schema_unavailable';
   const auditReady = currentAudit?.status === 'ready';
   const specialistsReady =
     currentTasks.length === 6 && currentTasks.every((task) => task.status === 'ready');
@@ -259,13 +262,15 @@ export function AutomatedReportPanel({
     ? 'Report ready'
     : preparing || (canGenerate && !prepareError)
       ? 'Generating automatically'
-      : !releaseReady
-        ? 'Website verification required'
-        : !specialistsReady
-          ? 'Analysing evidence'
-          : !evidenceReady
-            ? 'No eligible evidence'
-            : 'Ready to generate';
+      : releaseSchemaUnavailable
+        ? 'Studio update required'
+        : !releaseReady
+          ? 'Website verification required'
+          : !specialistsReady
+            ? 'Analysing evidence'
+            : !evidenceReady
+              ? 'No eligible evidence'
+              : 'Ready to generate';
 
   return (
     <section aria-labelledby="automated-report-title" className={styles.panel}>
@@ -316,7 +321,7 @@ export function AutomatedReportPanel({
         </section>
       ) : (
         <section aria-labelledby="report-progress-title" className={styles.progressState}>
-          {!releaseReady ? (
+          {!releaseReady && !releaseSchemaUnavailable ? (
             <ButtonLink href={`#/prospects/${currentAudit.businessId}/editing`} variant="primary">
               Verify current edited website <ArrowRight aria-hidden="true" size={17} />
             </ButtonLink>
@@ -326,6 +331,8 @@ export function AutomatedReportPanel({
               <LoaderCircle aria-hidden="true" className={styles.spin} size={24} />
             ) : legacyReport ? (
               <RefreshCcw aria-hidden="true" size={24} />
+            ) : releaseSchemaUnavailable ? (
+              <ShieldAlert aria-hidden="true" size={24} />
             ) : (
               <Sparkles aria-hidden="true" size={24} />
             )}
@@ -342,13 +349,15 @@ export function AutomatedReportPanel({
               <p>
                 {preparing
                   ? 'Studio is freezing a new immutable report version. You can leave this page while it completes.'
-                  : !releaseReady
-                    ? 'The current edited website must pass release verification first. Once it does, this page generates the report without a review step.'
-                    : !specialistsReady
-                      ? 'The six evidence specialists are still working. Report generation begins as soon as they finish.'
-                      : !evidenceReady
-                        ? 'The current audit did not produce a supported, non-low-confidence visitor theme. Restart the audit if the source evidence has changed.'
-                        : 'All prerequisites are ready. Studio will generate the report automatically.'}
+                  : releaseSchemaUnavailable
+                    ? 'This website is not asking for another verification. Report automation is waiting for Studio’s release-record database update.'
+                    : !releaseReady
+                      ? 'The current edited website must pass release verification first. Once it does, this page generates the report without a review step.'
+                      : !specialistsReady
+                        ? 'The six evidence specialists are still working. Report generation begins as soon as they finish.'
+                        : !evidenceReady
+                          ? 'The current audit did not produce a supported, non-low-confidence visitor theme. Restart the audit if the source evidence has changed.'
+                          : 'All prerequisites are ready. Studio will generate the report automatically.'}
               </p>
             </div>
           </div>
@@ -397,7 +406,9 @@ export function AutomatedReportPanel({
             <strong>Edited website verified</strong>
             {releaseReady
               ? `Edit v${releaseAttestation?.sourceEditVersion} passed release checks.`
-              : 'The exact edited website still needs release verification.'}
+              : releaseSchemaUnavailable
+                ? 'Studio’s release-record database needs to be updated before this verified edit can be attached to the report.'
+                : 'The exact edited website still needs release verification.'}
           </span>
         </li>
         <li data-ready={evidenceReady}>

@@ -1141,6 +1141,7 @@ export type ProspectWorkspace = {
   report?: DecisionReport;
   reportVersions?: DecisionReport[];
   sourceReleaseAttestations: SourceReleaseAttestation[];
+  sourceReleaseAttestationAvailability?: 'available' | 'schema_unavailable' | 'unavailable';
   reportPreviewJobs: ReportPreviewJob[];
   reportPreviewWorkerAvailable: boolean;
   tasks: Task[];
