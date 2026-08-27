@@ -5,6 +5,7 @@ import {
   reportUsesProspectValueContract,
 } from '../lib/prospect-value-report';
 import {
+  clientReportContractState,
   clientReportThemes,
   clientspaceCopyStatus,
   previewReportIsCurrent,
@@ -116,6 +117,16 @@ describe('ClientReportPreview frozen report boundary', () => {
       viewport: '375 × 812',
     });
     expect(reportUsesProspectValueContract(report({ schemaVersion: 4 }))).toBe(false);
+    expect(clientReportContractState(report())).toBe('ready');
+    expect(clientReportContractState(report({ schemaVersion: 4 }))).toBe('legacy');
+    expect(clientReportContractState(report({ schemaVersion: 8 }))).toBe('studio_update_required');
+    expect(
+      clientReportContractState(
+        report({
+          data: { ...report().data, valueThemes: [] },
+        }),
+      ),
+    ).toBe('invalid');
   });
 
   it('keeps the client story to three themes and prioritises themes with screenshots', () => {

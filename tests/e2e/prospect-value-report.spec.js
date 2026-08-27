@@ -471,3 +471,36 @@ test('explains that an earlier report contract must be regenerated', async ({ pa
     animations: 'disabled',
   });
 });
+
+test('does not ask for regeneration while Studio is updating to a newer report format', async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const newerReport = {
+    ...valueReport(),
+    id: 'report-newer-than-studio-e2e',
+    version: 12,
+    schemaVersion: 8,
+    data: {
+      ...valueReport().data,
+      schemaVersion: 8,
+    },
+  };
+  await seedReport(page, newerReport);
+  await page.goto(`/#/prospects/${businessId}/report-preview`);
+
+  await expect(
+    page.getByRole('heading', { name: 'Studio is updating to open report version 12' }),
+  ).toBeVisible();
+  await expect(page.getByText('The report does not need to be regenerated.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Reload updated Studio' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Regenerate report' })).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+    page.viewportSize().width,
+  );
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await expect(page).toHaveScreenshot('newer-report-studio-update.png', {
+    fullPage: true,
+    animations: 'disabled',
+  });
+});

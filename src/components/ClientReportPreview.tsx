@@ -18,6 +18,7 @@ import type {
   SourceReleaseAttestation,
 } from '../lib/domain';
 import {
+  prospectValueReportSchemaVersion,
   prospectValueReportView,
   reportUsesProspectValueContract,
 } from '../lib/prospect-value-report';
@@ -31,6 +32,18 @@ export function clientReportThemes<T extends { evidenceArtifactId?: string }>(th
         Number(Boolean(right.evidenceArtifactId)) - Number(Boolean(left.evidenceArtifactId)),
     )
     .slice(0, 3);
+}
+
+export function clientReportContractState(
+  report?: DecisionReport,
+): 'missing' | 'ready' | 'legacy' | 'studio_update_required' | 'invalid' {
+  if (!report) return 'missing';
+  if (reportUsesProspectValueContract(report)) return 'ready';
+  if (typeof report.schemaVersion === 'number') {
+    if (report.schemaVersion < prospectValueReportSchemaVersion) return 'legacy';
+    if (report.schemaVersion > prospectValueReportSchemaVersion) return 'studio_update_required';
+  }
+  return 'invalid';
 }
 
 function clientProofLabel(id: string, label: string) {
@@ -162,6 +175,7 @@ export function ClientReportPreview({
 }) {
   const current = previewReportIsCurrent(report, audit, activeCaptureRunId) ? report : undefined;
   const view = current ? prospectValueReportView(current) : undefined;
+  const contractState = clientReportContractState(report);
   const copyStatus = clientspaceCopyStatus(remoteJob);
   const active = copyStatus === 'creating';
   const ready = copyStatus === 'ready';
@@ -174,7 +188,29 @@ export function ClientReportPreview({
   );
   const clientThemes = view ? clientReportThemes(view.themes) : [];
 
-  if (report && !reportUsesProspectValueContract(report)) {
+  if (report && contractState === 'studio_update_required') {
+    return (
+      <section className={styles.legacy} role="status">
+        <span aria-hidden="true" className={styles.legacyIcon}>
+          <RefreshCcw size={24} />
+        </span>
+        <div>
+          <p className={styles.kicker}>Client report already generated</p>
+          <h2>Studio is updating to open report version {report.version}</h2>
+          <p>
+            This report uses a newer format than the Studio code currently open in this tab. The
+            report does not need to be regenerated.
+          </p>
+          <p>Once the Studio update finishes, reload this tab to open the completed report.</p>
+        </div>
+        <Button onClick={() => window.location.reload()} variant="primary">
+          <RefreshCcw aria-hidden="true" size={17} /> Reload updated Studio
+        </Button>
+      </section>
+    );
+  }
+
+  if (report && contractState === 'legacy') {
     return (
       <section className={styles.legacy} role="alert">
         <span aria-hidden="true" className={styles.legacyIcon}>
@@ -196,6 +232,28 @@ export function ClientReportPreview({
         </div>
         <ButtonLink href={`#/prospects/${report.businessId}/report`} variant="primary">
           <RefreshCcw aria-hidden="true" size={17} /> Regenerate report
+        </ButtonLink>
+      </section>
+    );
+  }
+
+  if (report && contractState === 'invalid') {
+    return (
+      <section className={styles.legacy} role="alert">
+        <span aria-hidden="true" className={styles.legacyIcon}>
+          <RefreshCcw size={24} />
+        </span>
+        <div>
+          <p className={styles.kicker}>Report generation needs attention</p>
+          <h2>Report version {report.version} could not be opened</h2>
+          <p>
+            Studio saved this report, but its verified before-and-after evidence is incomplete. This
+            is a report error, not an older report format.
+          </p>
+          <p>Open Report to see the exact error and retry the automatic generation.</p>
+        </div>
+        <ButtonLink href={`#/prospects/${report.businessId}/report`} variant="primary">
+          View report status
         </ButtonLink>
       </section>
     );
