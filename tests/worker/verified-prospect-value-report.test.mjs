@@ -191,6 +191,12 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(reportGenerationWorker, /--image/);
   assert.match(reportGenerationWorker, /arguments_\.push\('-'\)/);
   assert.match(reportGenerationWorker, /child\.stdin\.end\(prompt\)/);
+  assert.match(
+    reportGenerationWorker,
+    /Candidate records: \$\{JSON\.stringify\(candidateRecords\)\}/,
+  );
+  assert.match(reportGenerationWorker, /const maximumModelRunMs = 20 \* 60_000/);
+  assert.match(reportGenerationWorker, /Codex report selection timed out after twenty minutes/);
   assert.match(reportGenerationWorker, /billingMode: 'chatgpt_subscription'/);
   assert.doesNotMatch(reportGenerationWorker, /OPENAI_API_KEY/);
   assert.doesNotMatch(reportGenerationWorker, /SITEFORGE_REPORT_SELECTION_API_KEY/);

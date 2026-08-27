@@ -14,6 +14,7 @@ const defaultModel = 'gpt-5.6-sol';
 const reasoningEffort = 'max';
 const maximumCandidates = 20;
 const maximumImageBytes = 6 * 1024 * 1024;
+const maximumModelRunMs = 20 * 60_000;
 const agentContract = await readFile(
   new URL('./contracts/client-value-report-agent.md', import.meta.url),
   'utf8',
@@ -85,9 +86,10 @@ function errorClassification(error) {
     error instanceof Error ? error.message : 'Report generation stopped unexpectedly.';
   if (/configured|signed in|authentication|Codex executable/i.test(message))
     return ['model_configuration', message];
+  if (/model|response|structured|Codex|sandbox helper|timed out/i.test(message))
+    return ['model_request_failed', message];
   if (/candidate|evidence|screenshot|comparison|audit|attestation/i.test(message))
     return ['evidence_unavailable', message];
-  if (/model|response|structured|Codex/i.test(message)) return ['model_request_failed', message];
   if (/selection|duplicate|unsupported|client story/i.test(message))
     return ['selection_rejected', message];
   return ['report_persistence_failed', message];
@@ -374,7 +376,6 @@ async function selectThemes(job, source) {
   await assertCodexAuthentication(executable, environment);
   const directory = await mkdtemp(join(tmpdir(), 'made-solid-report-'));
   const schemaPath = join(directory, 'selection.schema.json');
-  const candidatesPath = join(directory, 'candidates.json');
   const outputPath = join(directory, 'selection.json');
   const imagePaths = [];
   const candidateRecords = source.candidates.map((candidate, index) => ({
@@ -399,10 +400,6 @@ async function selectThemes(job, source) {
       schemaPath,
       `${JSON.stringify(selectionSchema(source.candidates.map((candidate) => candidate.id)), null, 2)}\n`,
     );
-    await writeFile(
-      candidatesPath,
-      `${JSON.stringify({ prospect: source.business.name, candidates: candidateRecords }, null, 2)}\n`,
-    );
     for (const [index, candidate] of source.candidates.entries()) {
       const [original, redesign] = await Promise.all([
         loadCandidateImage(candidate.original),
@@ -418,7 +415,7 @@ async function selectThemes(job, source) {
       imagePaths.push(originalPath, redesignPath);
     }
 
-    const prompt = `${agentContract}\n\nProspect: ${source.business.name}\nRead candidates.json before making a selection. The attached images are ordered as each candidate's original website followed immediately by its verified redesign; the imagePair names in candidates.json match the filenames. Inspect both images at their recorded viewport. Return only the structured report selection required by selection.schema.json. Do not edit files or use network tools.`;
+    const prompt = `${agentContract}\n\nProspect: ${source.business.name}\nCandidate records: ${JSON.stringify(candidateRecords)}\n\nThe attached images are ordered as each candidate's original website followed immediately by its verified redesign; each imagePair name matches the attached filename. Inspect both images at their recorded viewport. Return only the structured report selection required by the supplied schema. Do not call tools, edit files, or use the network.`;
     const arguments_ = [
       '--config',
       'forced_login_method="chatgpt"',
@@ -452,6 +449,7 @@ async function selectThemes(job, source) {
     let stdoutBuffer = '';
     let stderr = '';
     let cancelled = false;
+    let timedOut = false;
     child.stdout.on('data', (chunk) => {
       stdoutBuffer += chunk.toString();
       const lines = stdoutBuffer.split('\n');
@@ -485,11 +483,21 @@ async function selectThemes(job, source) {
         })
         .catch(() => child.kill('SIGTERM'));
     }, 10_000);
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+    }, maximumModelRunMs);
     const exit = await new Promise((resolve, reject) => {
       child.once('error', reject);
       child.once('exit', (code, signal) => resolve({ code, signal }));
-    }).finally(() => clearInterval(cancellationInterval));
+    }).finally(() => {
+      clearInterval(cancellationInterval);
+      clearTimeout(timeout);
+    });
     if (cancelled) throw new ReportCancelledError('Report generation was cancelled.');
+    if (timedOut) {
+      throw new Error('Codex report selection timed out after twenty minutes.');
+    }
     if (exit.code !== 0) {
       throw new Error(
         `Codex report selection failed: ${stderr.trim().slice(-700) || exit.signal || exit.code}`,
