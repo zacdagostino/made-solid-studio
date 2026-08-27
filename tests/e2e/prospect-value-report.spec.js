@@ -246,6 +246,18 @@ test('renders the prospect-specific verified value report at every required view
   await expect(
     page.getByRole('heading', { name: 'A stronger digital foundation for Demo Local Services' }),
   ).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Client report generated and ready' }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Create a shareable Clientspace copy' }),
+  ).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Create shareable copy' })).toBeVisible();
+  await expect(
+    page.getByText(
+      'The client report above is already generated and ready. Create this separate copy only when you want to prepare it for Clientspace sharing.',
+    ),
+  ).toBeVisible();
   await expect(page.getByRole('heading', { name: 'A foundation worth building on' })).toBeVisible();
   await expect(
     page.getByRole('heading', {
@@ -286,6 +298,12 @@ test('renders the prospect-specific verified value report at every required view
     .getByRole('heading', { name: 'Your complete website is ready to review' })
     .scrollIntoViewIfNeeded();
   await expect(page).toHaveScreenshot('prospect-value-report-proof.png', {
+    animations: 'disabled',
+  });
+  await page
+    .getByRole('heading', { name: 'Create a shareable Clientspace copy' })
+    .scrollIntoViewIfNeeded();
+  await expect(page).toHaveScreenshot('prospect-value-report-delivery.png', {
     animations: 'disabled',
   });
 

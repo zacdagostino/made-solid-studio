@@ -20,6 +20,34 @@
   gap: var(--space-2);
   line-height: 1.4;
 }
+.reportStatus {
+  align-items: flex-start;
+  background: color-mix(in srgb, var(--color-success) 9%, var(--color-panel));
+  border: 1px solid color-mix(in srgb, var(--color-success) 55%, var(--color-line));
+  border-radius: var(--radius);
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: var(--space-4);
+}
+.reportStatusIcon {
+  align-items: center;
+  background: var(--color-success);
+  border-radius: 999px;
+  color: var(--color-surface);
+  display: inline-flex;
+  height: 2.25rem;
+  justify-content: center;
+  width: 2.25rem;
+}
+.reportStatus > div {
+  display: grid;
+  gap: var(--space-2);
+}
+.reportStatus h2,
+.reportStatus p {
+  margin: 0;
+}
 .report {
   background: #f8f6f0;
   border: 1px solid var(--color-line);

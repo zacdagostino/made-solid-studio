@@ -56,6 +56,23 @@ export function previewReportIsCurrent(
   );
 }
 
+export function clientspaceCopyStatus(
+  remoteJob: ReportPreviewJob | undefined,
+  now = Date.now(),
+): 'idle' | 'creating' | 'ready' | 'failed' {
+  if (remoteJob?.status === 'queued' || remoteJob?.status === 'running') return 'creating';
+  if (remoteJob?.status === 'failed') return 'failed';
+  if (
+    remoteJob?.status === 'ready' &&
+    remoteJob.previewUrl &&
+    remoteJob.previewExpiresAt &&
+    new Date(remoteJob.previewExpiresAt).valueOf() > now
+  ) {
+    return 'ready';
+  }
+  return 'idle';
+}
+
 export function ClientReportPreview({
   activeCaptureRunId,
   audit,
@@ -79,13 +96,9 @@ export function ClientReportPreview({
 }) {
   const current = previewReportIsCurrent(report, audit, activeCaptureRunId) ? report : undefined;
   const view = current ? prospectValueReportView(current) : undefined;
-  const active = remoteJob?.status === 'queued' || remoteJob?.status === 'running';
-  const ready = Boolean(
-    remoteJob?.status === 'ready' &&
-    remoteJob.previewUrl &&
-    remoteJob.previewExpiresAt &&
-    new Date(remoteJob.previewExpiresAt).valueOf() > Date.now(),
-  );
+  const copyStatus = clientspaceCopyStatus(remoteJob);
+  const active = copyStatus === 'creating';
+  const ready = copyStatus === 'ready';
   const websiteChangedSinceReport = Boolean(
     current &&
     view &&
@@ -186,6 +199,20 @@ export function ClientReportPreview({
           </ButtonLink>
         </ButtonGroup>
       </aside>
+
+      <section className={styles.reportStatus} role="status">
+        <span aria-hidden="true" className={styles.reportStatusIcon}>
+          <Check size={20} strokeWidth={2.5} />
+        </span>
+        <div>
+          <p className={styles.kicker}>Client report status</p>
+          <h2>Client report generated and ready</h2>
+          <p>
+            This is the current report for {clientName}. You can review the complete client-facing
+            report below now.
+          </p>
+        </div>
+      </section>
 
       <article className={styles.report}>
         <header className={styles.hero}>
@@ -350,25 +377,35 @@ export function ClientReportPreview({
 
       <section aria-labelledby="clientspace-preview-title" className={styles.remotePreview}>
         <div>
-          <p className={styles.kicker}>Exact Clientspace renderer</p>
+          <p className={styles.kicker}>Optional delivery step</p>
           <h2 id="clientspace-preview-title">
-            {ready ? 'Clientspace preview ready' : 'Prepare the final renderer when available'}
+            {copyStatus === 'ready'
+              ? 'Shareable Clientspace copy is ready'
+              : copyStatus === 'creating'
+                ? 'Creating the shareable Clientspace copy'
+                : copyStatus === 'failed'
+                  ? 'The shareable Clientspace copy could not be created'
+                  : 'Create a shareable Clientspace copy'}
           </h2>
           <p>
-            {ready
-              ? 'Open the same private page Clientspace will render. This still does not hand anything off.'
-              : remoteJob?.progressDetail ||
-                'The same frozen report can also be copied to the protected Clientspace preview renderer.'}
+            {copyStatus === 'ready'
+              ? 'The client report above was already generated. This separate copy lets you check how it will appear in Clientspace before handoff.'
+              : copyStatus === 'creating'
+                ? remoteJob?.progressDetail ||
+                  'The client report above is ready. Studio is creating a separate Clientspace copy for sharing.'
+                : copyStatus === 'failed'
+                  ? 'The client report above is still ready and unaffected. Retry only if you need a shareable Clientspace copy.'
+                  : 'The client report above is already generated and ready. Create this separate copy only when you want to prepare it for Clientspace sharing.'}
           </p>
-          {remoteJob?.status === 'failed' ? (
+          {copyStatus === 'failed' ? (
             <p className={styles.error} role="alert">
-              {remoteJob.errorSummary || 'The Clientspace preview stopped.'}
+              {remoteJob?.errorSummary || 'The Clientspace copy stopped before it was ready.'}
             </p>
           ) : null}
         </div>
         {ready && remoteJob?.previewUrl ? (
           <ButtonLink href={remoteJob.previewUrl} rel="noreferrer" target="_blank">
-            Open Clientspace preview <ExternalLink aria-hidden="true" size={16} />
+            Open shareable copy <ExternalLink aria-hidden="true" size={16} />
           </ButtonLink>
         ) : (
           <Button
@@ -376,13 +413,17 @@ export function ClientReportPreview({
             onClick={() => void onRequestRemotePreview(current.id)}
           >
             {active ? <LoaderCircle aria-hidden="true" className={styles.spin} size={16} /> : null}
-            {active ? 'Preparing preview…' : 'Prepare Clientspace preview'}
+            {active
+              ? 'Creating shareable copy…'
+              : copyStatus === 'failed'
+                ? 'Retry shareable copy'
+                : 'Create shareable copy'}
           </Button>
         )}
         {!reportPreviewWorkerAvailable && !ready ? (
           <small>
-            The protected renderer worker is currently offline. This Studio preview remains
-            available.
+            Clientspace copy creation is currently unavailable. The generated client report above
+            remains ready to review.
           </small>
         ) : null}
       </section>

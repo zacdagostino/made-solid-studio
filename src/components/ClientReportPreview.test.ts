@@ -4,7 +4,11 @@ import {
   prospectValueReportView,
   reportUsesProspectValueContract,
 } from '../lib/prospect-value-report';
-import { clientReportThemes, previewReportIsCurrent } from './ClientReportPreview';
+import {
+  clientReportThemes,
+  clientspaceCopyStatus,
+  previewReportIsCurrent,
+} from './ClientReportPreview';
 
 const report = (overrides: Partial<DecisionReport> = {}): DecisionReport => ({
   id: 'report-1',
@@ -116,5 +120,46 @@ describe('ClientReportPreview frozen report boundary', () => {
       'second-image',
       'third-image',
     ]);
+  });
+
+  it('keeps Clientspace copy preparation separate from client report readiness', () => {
+    const baseJob = {
+      id: 'preview-job-1',
+      reportVersionId: 'report-1',
+      businessId: 'business-1',
+      status: 'queued' as const,
+      progressPhase: 'queued',
+      progressDetail: 'Waiting for the renderer.',
+      totalItems: 1,
+      completedItems: 0,
+      createdAt: '2026-08-27T00:00:00.000Z',
+      updatedAt: '2026-08-27T00:00:00.000Z',
+    };
+
+    expect(clientspaceCopyStatus(undefined)).toBe('idle');
+    expect(clientspaceCopyStatus(baseJob)).toBe('creating');
+    expect(clientspaceCopyStatus({ ...baseJob, status: 'failed' })).toBe('failed');
+    expect(
+      clientspaceCopyStatus(
+        {
+          ...baseJob,
+          status: 'ready',
+          previewUrl: 'https://clientspace.example/report',
+          previewExpiresAt: '2026-08-27T01:00:00.000Z',
+        },
+        new Date('2026-08-27T00:30:00.000Z').valueOf(),
+      ),
+    ).toBe('ready');
+    expect(
+      clientspaceCopyStatus(
+        {
+          ...baseJob,
+          status: 'ready',
+          previewUrl: 'https://clientspace.example/report',
+          previewExpiresAt: '2026-08-27T01:00:00.000Z',
+        },
+        new Date('2026-08-27T02:00:00.000Z').valueOf(),
+      ),
+    ).toBe('idle');
   });
 });
