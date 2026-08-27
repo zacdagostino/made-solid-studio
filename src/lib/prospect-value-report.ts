@@ -1,6 +1,6 @@
 import type { DecisionReport } from './domain';
 
-export const prospectValueReportSchemaVersion = 5;
+export const prospectValueReportSchemaVersion = 6;
 export const prospectValueReportKind = 'verified_redesign_value';
 
 export type ProspectValueReportTheme = {
@@ -15,6 +15,9 @@ export type ProspectValueReportTheme = {
   evidenceArtifactId?: string;
   evidenceCaption?: string;
   viewport?: string;
+  whatToNotice?: string;
+  designPriority: string;
+  hasEditedSiteProof: boolean;
 };
 
 export type ProspectValueReportStrength = {
@@ -74,8 +77,23 @@ export function reportUsesProspectValueContract(report?: DecisionReport) {
   const redesign = record(data.redesign);
   const themes = Array.isArray(data.valueThemes) ? data.valueThemes : [];
   const deliveredWork = Array.isArray(data.deliveredWork) ? data.deliveredWork : [];
+  const themesHaveOldSiteEvidence = themes.every((raw) => {
+    const theme = record(raw);
+    const evidence = record(theme.evidence);
+    const viewport = record(evidence.viewport);
+    return Boolean(
+      text(evidence.artifactId) &&
+      text(evidence.sourceUrl) &&
+      number(viewport.width) > 0 &&
+      number(viewport.height) > 0 &&
+      text(theme.whatToNotice) &&
+      text(theme.designPriority) &&
+      text(theme.businessOpportunity || theme.value),
+    );
+  });
   return Boolean(
     data.reportKind === prospectValueReportKind &&
+    data.generatorRevision === 'high-priority-screenshot-v3' &&
     redesign.status === 'passed' &&
     text(redesign.attestationId) &&
     text(redesign.sourceBuilderRunId) &&
@@ -84,6 +102,8 @@ export function reportUsesProspectValueContract(report?: DecisionReport) {
     number(redesign.sourceEditVersion) > 0 &&
     text(redesign.verifiedAt) &&
     themes.length > 0 &&
+    themes.length <= 3 &&
+    themesHaveOldSiteEvidence &&
     deliveredWork.length > 0 &&
     deliveredWork.every((raw) => record(raw).status === 'passed'),
   );
@@ -116,22 +136,29 @@ export function prospectValueReportView(
       const height = number(viewport.height);
       const title = text(item.title);
       const before = text(item.before || item.observation);
-      const redesignResponse = text(item.redesignResponse || item.recommendation);
-      const value = text(item.value || item.customerImpact);
-      if (!title || !before || !redesignResponse || !value) return [];
+      const editedSiteProof = record(item.editedSiteProof);
+      const businessOpportunity = text(item.businessOpportunity || item.value);
+      if (!title || !before || !businessOpportunity || !text(evidence.artifactId)) return [];
       return [
         {
           id: text(item.id) || `theme-${index + 1}`,
           area: text(item.area) || 'Website experience',
           title,
           before,
-          redesignResponse,
-          value,
+          // Schema v6 does not turn an audit recommendation into a delivered-work claim. The UI
+          // may show a redesign outcome only when exact edited-site proof is frozen with the theme.
+          redesignResponse: text(editedSiteProof.clientOutcome),
+          value: businessOpportunity,
           occurrenceCount: Math.max(1, number(item.occurrenceCount)),
           sourceUrls: textList(item.sourceUrls),
           evidenceArtifactId: text(evidence.artifactId) || undefined,
           evidenceCaption: text(evidence.caption) || undefined,
           viewport: width && height ? `${width} × ${height}` : undefined,
+          whatToNotice: text(item.whatToNotice) || text(evidence.caption) || undefined,
+          designPriority: text(item.designPriority),
+          hasEditedSiteProof: Boolean(
+            text(editedSiteProof.artifactId) && text(editedSiteProof.clientOutcome),
+          ),
         } satisfies ProspectValueReportTheme,
       ];
     },

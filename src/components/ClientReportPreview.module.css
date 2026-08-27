@@ -191,13 +191,26 @@
 }
 .finding figure {
   display: grid;
-  gap: var(--space-2);
+  gap: 0;
   margin: 0;
+}
+.beforeEvidence {
+  background: #edf1ef;
+  border: 1px solid #bdc9c4;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.evidenceLabel {
+  background: #18231f;
+  color: #f8f6f0;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: var(--space-2) var(--space-3);
+  text-transform: uppercase;
 }
 .finding img {
   background: #e6ebe8;
-  border: 1px solid #bdc9c4;
-  border-radius: var(--radius);
   display: block;
   max-height: 38rem;
   object-fit: contain;
@@ -205,8 +218,30 @@
   width: 100%;
 }
 .finding figcaption {
-  color: #527068;
+  background: #fff;
+  border-top: 1px solid #bdc9c4;
+  display: grid;
+  gap: var(--space-1);
+  line-height: 1.55;
+  padding: var(--space-3);
+}
+.finding figcaption strong {
+  color: #36574e;
   font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.noEvidence {
+  background: #fff;
+  border: 1px solid #bdc9c4;
+  border-radius: var(--radius);
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4);
+}
+.noEvidence p {
+  line-height: 1.65;
+  margin: 0;
 }
 .findingCopy {
   display: grid;
@@ -233,6 +268,37 @@
   background: #e4eee8;
   border-left: 4px solid #24735d;
   padding: var(--space-3);
+}
+.internalDetails {
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius);
+  color: var(--color-muted);
+  padding: var(--space-3) var(--space-4);
+}
+.internalDetails summary {
+  align-content: center;
+  color: var(--color-text);
+  cursor: pointer;
+  font-weight: 750;
+  min-height: 44px;
+}
+.internalDetails dl {
+  display: grid;
+  gap: var(--space-2);
+}
+.internalDetails dl > div {
+  display: grid;
+  gap: var(--space-1);
+}
+.internalDetails dt {
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.internalDetails dd {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 .proof ul,
 .footer ul {
@@ -407,7 +473,7 @@
     grid-column: auto;
   }
   .findingCopy {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .proof {
     grid-template-columns: minmax(0, 0.8fr) minmax(18rem, 1.2fr);

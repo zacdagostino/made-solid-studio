@@ -106,7 +106,7 @@ async function loadFrozenReport(job) {
     throw new Error('The selected report version is not an approved frozen report.');
   }
   if (
-    report.schema_version !== 5 ||
+    report.schema_version !== 6 ||
     report.data?.reportKind !== 'verified_redesign_value' ||
     report.data?.redesign?.status !== 'passed'
   ) {

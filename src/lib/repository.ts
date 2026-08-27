@@ -4962,7 +4962,8 @@ export class SiteforgeRepository {
         (report) =>
           report.auditId === audit.id &&
           report.crawlRunId === audit.crawlRunId &&
-          report.schemaVersion === 5 &&
+          report.schemaVersion === 6 &&
+          report.data?.generatorRevision === 'high-priority-screenshot-v3' &&
           report.data?.reportKind === 'verified_redesign_value' &&
           (report.data?.redesign as Record<string, unknown> | undefined)?.attestationRowId ===
             release.id,
@@ -4983,6 +4984,7 @@ export class SiteforgeRepository {
         observation.auditId === audit.id &&
         observation.crawlRunId === audit.crawlRunId &&
         observation.area !== 'Platform' &&
+        observation.severity === 'high' &&
         observation.confidence !== 'low' &&
         observation.reviewState !== 'blocked' &&
         Boolean(observation.observation.trim()) &&
@@ -5012,71 +5014,140 @@ export class SiteforgeRepository {
         left.createdAt.localeCompare(right.createdAt) ||
         left.id.localeCompare(right.id),
     );
-    const grouped = new Map<AuditObservation['area'], AuditObservation[]>();
-    ordered.forEach((observation) => {
-      grouped.set(observation.area, [...(grouped.get(observation.area) ?? []), observation]);
+    const clientTheme = (area: AuditObservation['area']) =>
+      area === 'Content' || area === 'SEO' || area === 'Trust'
+        ? 'understand'
+        : area === 'UX' || area === 'Conversion'
+          ? 'enquire'
+          : 'impression';
+    const credibleScreenshot = (observation: AuditObservation) => {
+      const viewport = observation.viewport;
+      if (!viewport) return undefined;
+      return evidenceArtifacts
+        .filter((artifact) => {
+          if (
+            artifact.kind !== 'screenshot' ||
+            !observation.evidenceArtifactIds.includes(artifact.id)
+          ) {
+            return false;
+          }
+          const sourceUrl =
+            typeof artifact.metadata.sourceUrl === 'string' ? artifact.metadata.sourceUrl : '';
+          const artifactViewport =
+            artifact.metadata.viewport && typeof artifact.metadata.viewport === 'object'
+              ? (artifact.metadata.viewport as Record<string, unknown>)
+              : {};
+          return (
+            Boolean(sourceUrl) &&
+            observation.sourceUrls.includes(sourceUrl) &&
+            artifactViewport.width === viewport.width &&
+            artifactViewport.height === viewport.height
+          );
+        })
+        .sort(
+          (left, right) =>
+            left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+        )[0];
+    };
+    const screenshotBacked = ordered
+      .map((observation) => ({ observation, evidence: credibleScreenshot(observation) }))
+      .filter((item): item is { observation: AuditObservation; evidence: ResearchArtifact } =>
+        Boolean(item.evidence),
+      );
+    const clientGroups = new Map<string, typeof screenshotBacked>();
+    screenshotBacked.forEach((item) => {
+      const key = clientTheme(item.observation.area);
+      clientGroups.set(key, [...(clientGroups.get(key) ?? []), item]);
     });
-    const groups = [...grouped.entries()]
+    const groups = [...clientGroups.entries()]
       .sort(
         ([leftArea, left], [rightArea, right]) =>
-          severityRank[left[0].severity] - severityRank[right[0].severity] ||
+          severityRank[left[0].observation.severity] -
+            severityRank[right[0].observation.severity] ||
           right.length - left.length ||
           leftArea.localeCompare(rightArea),
       )
-      .slice(0, 5);
-    const themeTitle = (area: AuditObservation['area'], fallback: string) =>
-      ({
-        UI: 'A clearer, more polished interface',
-        UX: 'A more direct path through the website',
-        Mobile: 'A dependable experience on every screen',
-        Accessibility: 'A more inclusive, usable website',
-        SEO: 'Content that is easier to find and understand',
-        Performance: 'A faster, more dependable first impression',
-        Content: 'A clearer explanation of the business and its services',
-        Trust: 'Stronger confidence at the point of decision',
-        Conversion: 'Clearer paths from interest to enquiry',
-        Platform: fallback,
-      })[area];
-    const valueThemes = groups.map(([area, items], index) => {
-      const representative = items[0];
-      const sourceUrls = [...new Set(items.flatMap((item) => item.sourceUrls))].sort();
+      .slice(0, 3);
+    if (groups.length === 0) {
+      throw new Error(
+        'The current audit has no observations with an exact old-site screenshot, source URL and viewport match.',
+      );
+    }
+    const clientLanguage = {
+      impression: {
+        area: 'First impression',
+        title: 'Make a stronger first impression',
+        before:
+          'Important information on the existing website can be difficult to take in on the screen shown below.',
+        value:
+          'A clearer first impression helps visitors feel confident that they have found the right business.',
+        whatToNotice: 'Notice how the page makes key information harder to scan at a glance.',
+        designPriority:
+          'Keep essential messages and contact details clear and readable across screen sizes.',
+      },
+      understand: {
+        area: 'Clarity',
+        title: `Help customers understand ${business.name} faster`,
+        before:
+          'The existing website does not always make the business, its services and the next useful detail immediately clear.',
+        value:
+          'Clearer information helps suitable customers recognise the value of the business sooner.',
+        whatToNotice: 'Notice how much work a visitor must do to understand the important message.',
+        designPriority:
+          'Organise services and supporting information so visitors can understand the offer sooner.',
+      },
+      enquire: {
+        area: 'Enquiries',
+        title: 'Make it easier to take the next step',
+        before:
+          'The existing journey can make it harder than necessary for an interested visitor to know what to do next.',
+        value:
+          'A direct path to contact reduces friction between customer interest and a genuine enquiry.',
+        whatToNotice:
+          'Notice whether the next action is obvious without searching around the page.',
+        designPriority:
+          'Keep the next action visible and reduce the steps between customer interest and contact.',
+      },
+    } as const;
+    const valueThemes = groups.map(([clientArea, items], index) => {
+      const evidence = items[0].evidence;
+      const copy = clientLanguage[clientArea as keyof typeof clientLanguage];
+      const sourceUrls = [evidence.metadata.sourceUrl as string];
       const artifactIds = [
         ...new Set(
           items
-            .flatMap((item) => item.evidenceArtifactIds)
+            .flatMap((item) => item.observation.evidenceArtifactIds)
             .filter((id) => evidenceArtifactIds.has(id)),
         ),
       ].sort();
-      const evidence = evidenceArtifacts
-        .filter((artifact) => artifact.kind === 'screenshot' && artifactIds.includes(artifact.id))
-        .sort(
-          (left, right) =>
-            Number(right.id === representative.evidenceArtifactIds[0]) -
-              Number(left.id === representative.evidenceArtifactIds[0]) ||
-            left.createdAt.localeCompare(right.createdAt) ||
-            left.id.localeCompare(right.id),
-        )[0];
       return {
-        id: `theme-${index + 1}-${area.toLowerCase()}`,
-        area,
-        title: themeTitle(area, representative.title),
-        before: representative.observation,
-        redesignResponse: representative.recommendation,
-        value: representative.customerImpact,
+        id: `theme-${index + 1}-${clientArea}`,
+        area: copy.area,
+        title: copy.title,
+        before: copy.before,
+        businessOpportunity: copy.value,
+        value: copy.value,
+        whatToNotice: copy.whatToNotice,
+        designPriority: copy.designPriority,
+        editedSiteProof: null,
         occurrenceCount: items.length,
-        sourceObservationIds: items.map((item) => item.id),
+        sourceObservationIds: items.map((item) => item.observation.id),
         sourceUrls,
         evidenceArtifactIds: artifactIds,
-        evidence: evidence
-          ? {
-              artifactId: evidence.id,
-              storageBucket: evidence.storageBucket,
-              storagePath: evidence.storagePath,
-              caption: evidence.label,
-              viewport: evidence.metadata.viewport,
-              sourceUrl: evidence.metadata.sourceUrl,
-            }
-          : undefined,
+        evidence: {
+          artifactId: evidence.id,
+          storageBucket: evidence.storageBucket,
+          storagePath: evidence.storagePath,
+          caption: copy.whatToNotice,
+          viewport: evidence.metadata.viewport,
+          sourceUrl: evidence.metadata.sourceUrl,
+        },
+        internalEvidence: {
+          observationIds: items.map((item) => item.observation.id),
+          observations: items.map((item) => item.observation.observation),
+          recommendations: items.map((item) => item.observation.recommendation),
+          customerImpacts: items.map((item) => item.observation.customerImpact),
+        },
       };
     });
     const nextVersion = Math.max(0, ...reportVersions.map((report) => report.version)) + 1;
@@ -5096,24 +5167,25 @@ export class SiteforgeRepository {
       status: 'passed',
     }));
     const report: DecisionReport = {
-      id: `report-version-${audit.id}-${release.id}`,
+      id: `report-version-v6-high-priority-${audit.id}-${release.id}`,
       businessId,
       auditId: audit.id,
       crawlRunId: audit.crawlRunId,
       status: 'approved',
       version: nextVersion,
-      schemaVersion: 5,
+      schemaVersion: 6,
       reviewState: 'approved',
       summary: `${eligible.length} evidence-backed cases automatically consolidated into ${valueThemes.length} value themes and tied to verified edit v${release.sourceEditVersion}.`,
       data: {
-        schemaVersion: 5,
+        schemaVersion: 6,
+        generatorRevision: 'high-priority-screenshot-v3',
         reportKind: 'verified_redesign_value',
         auditId: audit.id,
         crawlRunId: audit.crawlRunId,
         generatedAt: now,
         version: nextVersion,
-        title: `A stronger digital foundation for ${business.name}`,
-        summary: `${business.name} now has a complete, verified website redesign grounded in evidence from the original site. This report shows what changed, why it matters to visitors, and the value of the work already delivered.`,
+        title: `A stronger website for ${business.name}`,
+        summary: `A complete new website for ${business.name} is ready to review. This report highlights the strongest screenshot-backed opportunities found on the original website and the customer value each opportunity represents.`,
         strengths: [
           {
             id: 'evidence-led-foundation',
@@ -5124,7 +5196,8 @@ export class SiteforgeRepository {
           {
             id: 'working-redesign',
             title: 'There is already a complete website to review',
-            detail: `The proposed solution is a working edited website, verified at commit ${release.sourceCommit.slice(0, 8)}—not a mock-up or a list of future recommendations.`,
+            detail:
+              'The proposed solution is a working website—not a mock-up or a list of future recommendations.',
           },
         ],
         valueThemes,
@@ -5146,8 +5219,10 @@ export class SiteforgeRepository {
         methodology: [
           'The original website themes are curated automatically from current-capture observations with resolvable evidence and high or medium confidence.',
           'Explicitly blocked, low-confidence, unsupported and stale observations are excluded automatically.',
-          'Repeated page and viewport cases are consolidated into visitor-focused themes while their source observation IDs and URLs remain frozen in this version.',
-          'The delivered-work claims come from the release attestation for the exact edited Git commit named in this report.',
+          'Repeated cases are consolidated into no more than three visitor-focused themes.',
+          'Every client theme requires an old-site screenshot from the same capture, source URL and viewport as its selected observation.',
+          'Raw technical evidence remains frozen internally and is not used as client-facing copy.',
+          'A redesign outcome is shown only when it has exact edited-site proof; otherwise the report presents the supported opportunity without claiming that specific issue is resolved.',
         ],
         limitations: [
           'The report does not claim guaranteed traffic, rankings, enquiries or revenue. Those outcomes depend on launch, ongoing content, marketing and customer behaviour.',

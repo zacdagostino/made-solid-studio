@@ -2621,16 +2621,28 @@ function usePrivateArtifactUrls(artifacts: PrivateArtifactReference[], errorMess
     .map((artifact) => `${artifact.id}:${artifact.storageBucket}:${artifact.storagePath}`)
     .join('|');
   const stableArtifacts = useMemo(() => artifacts, [artifactKey]);
+  const fixtureUrls = useMemo(
+    () =>
+      import.meta.env.VITE_SITEFORGE_E2E_FIXTURES === 'true'
+        ? Object.fromEntries(
+            stableArtifacts
+              .filter((artifact) => artifact.storageBucket === 'e2e-fixtures')
+              .map((artifact) => [artifact.id, artifact.storagePath]),
+          )
+        : {},
+    [stableArtifacts],
+  );
 
   useEffect(() => {
-    if (!client || stableArtifacts.length === 0) {
-      setUrls({});
+    const remoteArtifacts = stableArtifacts.filter((artifact) => !fixtureUrls[artifact.id]);
+    if (!client || remoteArtifacts.length === 0) {
+      setUrls(fixtureUrls);
       return;
     }
     let active = true;
     setLoadError('');
     void Promise.allSettled(
-      stableArtifacts.map(async (artifact) => {
+      remoteArtifacts.map(async (artifact) => {
         const { data, error } = await client.storage
           .from(artifact.storageBucket)
           .createSignedUrl(artifact.storagePath, 60 * 30);
@@ -2642,13 +2654,13 @@ function usePrivateArtifactUrls(artifacts: PrivateArtifactReference[], errorMess
       const entries = results.flatMap((result) =>
         result.status === 'fulfilled' ? [result.value] : [],
       );
-      setUrls(Object.fromEntries(entries));
-      if (entries.length !== stableArtifacts.length) setLoadError(errorMessage);
+      setUrls({ ...fixtureUrls, ...Object.fromEntries(entries) });
+      if (entries.length !== remoteArtifacts.length) setLoadError(errorMessage);
     });
     return () => {
       active = false;
     };
-  }, [client, errorMessage, stableArtifacts]);
+  }, [client, errorMessage, fixtureUrls, stableArtifacts]);
 
   return { urls, loadError };
 }

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="560" viewBox="0 0 900 560" role="img" aria-labelledby="title description">
+  <title id="title">Old website problem fixture</title>
+  <desc id="description">A deliberately cramped old website with clipped navigation and a hard-to-find contact action.</desc>
+  <rect width="900" height="560" fill="#e7e4dc"/>
+  <rect x="28" y="28" width="844" height="504" rx="8" fill="#fff" stroke="#464646" stroke-width="4"/>
+  <rect x="28" y="28" width="844" height="84" rx="8" fill="#313131"/>
+  <text x="58" y="81" fill="#fff" font-family="Arial, sans-serif" font-size="30" font-weight="700">OLD SITE</text>
+  <text x="425" y="79" fill="#ddd" font-family="Arial, sans-serif" font-size="18">Home   About   Services   Projects   Resources   Contact</text>
+  <rect x="58" y="152" width="520" height="44" fill="#d6d6d6"/>
+  <rect x="58" y="218" width="660" height="22" fill="#dedede"/>
+  <rect x="58" y="254" width="720" height="22" fill="#dedede"/>
+  <rect x="58" y="290" width="600" height="22" fill="#dedede"/>
+  <rect x="58" y="352" width="230" height="124" fill="#cacaca"/>
+  <rect x="312" y="352" width="230" height="124" fill="#cacaca"/>
+  <rect x="566" y="352" width="350" height="124" fill="#cacaca"/>
+  <path d="M842 26v88M780 26v88" stroke="#ff496d" stroke-width="6" stroke-dasharray="10 8"/>
+  <text x="650" y="520" fill="#a81935" font-family="Arial, sans-serif" font-size="18" font-weight="700">content clipped</text>
+</svg>

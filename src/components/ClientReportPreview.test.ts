@@ -4,7 +4,7 @@ import {
   prospectValueReportView,
   reportUsesProspectValueContract,
 } from '../lib/prospect-value-report';
-import { previewReportIsCurrent } from './ClientReportPreview';
+import { clientReportThemes, previewReportIsCurrent } from './ClientReportPreview';
 
 const report = (overrides: Partial<DecisionReport> = {}): DecisionReport => ({
   id: 'report-1',
@@ -13,10 +13,11 @@ const report = (overrides: Partial<DecisionReport> = {}): DecisionReport => ({
   crawlRunId: 'crawl-1',
   status: 'approved',
   version: 2,
-  schemaVersion: 5,
+  schemaVersion: 6,
   summary: 'Frozen summary',
   data: {
-    schemaVersion: 5,
+    schemaVersion: 6,
+    generatorRevision: 'high-priority-screenshot-v3',
     reportKind: 'verified_redesign_value',
     title: 'A stronger digital foundation for Client',
     summary: 'Frozen client value summary',
@@ -27,11 +28,20 @@ const report = (overrides: Partial<DecisionReport> = {}): DecisionReport => ({
         area: 'UX',
         title: 'A clearer journey',
         before: 'The original journey was unclear.',
-        redesignResponse: 'The edited website provides a direct path.',
-        value: 'Visitors can find the right next action.',
+        businessOpportunity: 'Visitors can find the right next action.',
+        whatToNotice: 'The next action is difficult to find.',
+        designPriority: 'Keep the next action visible and easy to understand.',
         occurrenceCount: 4,
         sourceUrls: ['https://example.com'],
-        evidence: { artifactId: 'artifact-1', viewport: { width: 375, height: 812 } },
+        evidence: {
+          artifactId: 'artifact-1',
+          sourceUrl: 'https://example.com',
+          viewport: { width: 375, height: 812 },
+        },
+        editedSiteProof: {
+          artifactId: 'edited-artifact-1',
+          clientOutcome: 'The edited website provides a direct path.',
+        },
       },
     ],
     deliveredWork: [
@@ -91,5 +101,20 @@ describe('ClientReportPreview frozen report boundary', () => {
       viewport: '375 × 812',
     });
     expect(reportUsesProspectValueContract(report({ schemaVersion: 4 }))).toBe(false);
+  });
+
+  it('keeps the client story to three themes and prioritises themes with screenshots', () => {
+    const themes = [
+      { id: 'without-image' },
+      { id: 'first-image', evidenceArtifactId: 'artifact-1' },
+      { id: 'second-image', evidenceArtifactId: 'artifact-2' },
+      { id: 'third-image', evidenceArtifactId: 'artifact-3' },
+    ];
+
+    expect(clientReportThemes(themes).map((theme) => theme.id)).toEqual([
+      'first-image',
+      'second-image',
+      'third-image',
+    ]);
   });
 });

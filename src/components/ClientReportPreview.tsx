@@ -19,8 +19,28 @@ import {
   prospectValueReportView,
   reportUsesProspectValueContract,
 } from '../lib/prospect-value-report';
-import { Button, ButtonGroup, ButtonLink, StatusBadge } from './ui';
+import { Button, ButtonGroup, ButtonLink } from './ui';
 import styles from './ClientReportPreview.module.css';
+
+export function clientReportThemes<T extends { evidenceArtifactId?: string }>(themes: T[]) {
+  return [...themes]
+    .sort(
+      (left, right) =>
+        Number(Boolean(right.evidenceArtifactId)) - Number(Boolean(left.evidenceArtifactId)),
+    )
+    .slice(0, 3);
+}
+
+function clientProofLabel(id: string, label: string) {
+  const labels: Record<string, string> = {
+    'responsive-layout': 'Reviewed across mobile, tablet and desktop',
+    'compact-navigation': 'Navigation and customer journeys tested',
+    accessibility: 'Inclusive access checks completed',
+    'complete-website': 'Complete website prepared for review',
+    'route-coverage': 'Every planned page is included',
+  };
+  return labels[id] || label;
+}
 
 export function previewReportIsCurrent(
   report: DecisionReport | undefined,
@@ -73,6 +93,7 @@ export function ClientReportPreview({
     (view.redesign.attestationId !== latestReleaseAttestation.attestationId ||
       view.redesign.sourceCommit !== latestReleaseAttestation.sourceCommit),
   );
+  const clientThemes = view ? clientReportThemes(view.themes) : [];
 
   if (report && !reportUsesProspectValueContract(report)) {
     return (
@@ -173,8 +194,7 @@ export function ClientReportPreview({
           <p className={styles.lede}>{view.summary}</p>
           <div className={styles.reportMeta}>
             <span>Prepared for {clientName}</span>
-            <span>Verified redesign · Edit v{view.redesign.sourceEditVersion}</span>
-            <span>Report version {current.version}</span>
+            <span>Complete website ready to review</span>
           </div>
         </header>
 
@@ -184,8 +204,8 @@ export function ClientReportPreview({
             <h2 id="foundation-title">A stronger digital foundation is ready</h2>
           </div>
           <p>
-            This is not a list of hypothetical fixes. It connects supported evidence from the
-            original website to the completed, release-verified redesign prepared for {clientName}.
+            We have turned the clearest problems in the original experience into practical
+            improvements that help customers understand {clientName} and take the next step.
           </p>
         </section>
 
@@ -210,13 +230,11 @@ export function ClientReportPreview({
         <section className={styles.themes} aria-labelledby="themes-title">
           <div className={styles.sectionHeading}>
             <p className={styles.kicker}>The value of the redesign</p>
-            <h2 id="themes-title">Where the old experience lost clarity—and what changed</h2>
-            <p>
-              Repeated technical cases are combined into a small number of visitor-focused themes.
-            </p>
+            <h2 id="themes-title">What held the old experience back—and where we focused</h2>
+            <p>Here are the three changes that matter most to your customers.</p>
           </div>
           <div className={styles.findings}>
-            {view.themes.map((theme, index) => (
+            {clientThemes.map((theme, index) => (
               <article className={styles.finding} key={theme.id}>
                 <header>
                   <span>{String(index + 1).padStart(2, '0')}</span>
@@ -224,35 +242,36 @@ export function ClientReportPreview({
                     <p>{theme.area}</p>
                     <h3>{theme.title}</h3>
                   </div>
-                  <StatusBadge tone="neutral">
-                    {theme.occurrenceCount === 1
-                      ? '1 supported case'
-                      : `${theme.occurrenceCount} supported cases`}
-                  </StatusBadge>
                 </header>
                 {theme.evidenceArtifactId && evidenceUrls[theme.evidenceArtifactId] ? (
-                  <figure>
+                  <figure className={styles.beforeEvidence}>
+                    <div className={styles.evidenceLabel}>Original website</div>
                     <img
-                      alt={`Original website evidence for ${theme.title}`}
+                      alt={`Original ${clientName} website showing ${theme.title}`}
                       src={evidenceUrls[theme.evidenceArtifactId]}
                     />
                     <figcaption>
-                      {theme.evidenceCaption || 'Original website evidence'}
-                      {theme.viewport ? ` · ${theme.viewport}` : ''}
+                      <strong>What to notice</strong>
+                      <span>{theme.whatToNotice || theme.before}</span>
                     </figcaption>
                   </figure>
-                ) : null}
-                <div className={styles.findingCopy}>
-                  <div>
-                    <h4>Before: the visitor experience</h4>
+                ) : (
+                  <div className={styles.noEvidence}>
+                    <strong>What customers experienced</strong>
                     <p>{theme.before}</p>
                   </div>
+                )}
+                <div className={styles.findingCopy}>
                   <div className={styles.recommendation}>
-                    <h4>What the redesign changes</h4>
-                    <p>{theme.redesignResponse}</p>
+                    <h4>
+                      {theme.hasEditedSiteProof ? 'The new experience' : 'What we focused on'}
+                    </h4>
+                    <p>
+                      {theme.hasEditedSiteProof ? theme.redesignResponse : theme.designPriority}
+                    </p>
                   </div>
                   <div>
-                    <h4>The value this creates</h4>
+                    <h4>Why this matters</h4>
                     <p>{theme.value}</p>
                   </div>
                 </div>
@@ -264,43 +283,19 @@ export function ClientReportPreview({
         <section className={styles.proof} aria-labelledby="proof-title">
           <div>
             <p className={styles.kicker}>Delivered and checked</p>
-            <h2 id="proof-title">Confidence in the website you are reviewing</h2>
-            <p>
-              These checks belong to edit v{view.redesign.sourceEditVersion}, commit{' '}
-              <code>{view.redesign.sourceCommit.slice(0, 8)}</code>—not the earlier generated
-              baseline.
-            </p>
+            <h2 id="proof-title">Your complete website is ready to review</h2>
+            <p>Key pages and customer journeys have been checked before this presentation.</p>
           </div>
           <ul>
             {view.deliveredWork.map((proof) => (
               <li key={proof.id}>
                 <Check aria-hidden="true" size={18} />
                 <span>
-                  <strong>{proof.label}</strong>
-                  {proof.detail}
+                  <strong>{clientProofLabel(proof.id, proof.label)}</strong>
                 </span>
               </li>
             ))}
           </ul>
-          <details>
-            <summary>Verification record</summary>
-            <dl>
-              <div>
-                <dt>Edited website</dt>
-                <dd>v{view.redesign.sourceEditVersion}</dd>
-              </div>
-              <div>
-                <dt>Verified</dt>
-                <dd>{new Date(view.redesign.verifiedAt).toLocaleString('en-AU')}</dd>
-              </div>
-              <div>
-                <dt>Source commit</dt>
-                <dd>
-                  <code>{view.redesign.sourceCommit}</code>
-                </dd>
-              </div>
-            </dl>
-          </details>
         </section>
 
         <footer className={styles.footer}>
@@ -309,19 +304,49 @@ export function ClientReportPreview({
             <h2>{view.nextStep}</h2>
           </div>
           <ShieldCheck aria-hidden="true" size={32} />
-          <details>
-            <summary>How this report was prepared</summary>
+        </footer>
+      </article>
+
+      <details className={styles.internalDetails}>
+        <summary>Internal Studio evidence and verification</summary>
+        <p>This information supports the report and is not part of the client presentation.</p>
+        <dl>
+          <div>
+            <dt>Edited website</dt>
+            <dd>v{view.redesign.sourceEditVersion}</dd>
+          </div>
+          <div>
+            <dt>Verified</dt>
+            <dd>{new Date(view.redesign.verifiedAt).toLocaleString('en-AU')}</dd>
+          </div>
+          <div>
+            <dt>Source commit</dt>
+            <dd>
+              <code>{view.redesign.sourceCommit}</code>
+            </dd>
+          </div>
+        </dl>
+        {view.methodology.length ? (
+          <>
+            <h3>Methodology</h3>
             <ul>
               {view.methodology.map((item) => (
                 <li key={item}>{item}</li>
               ))}
             </ul>
-            {view.limitations.map((item) => (
-              <p key={item}>{item}</p>
-            ))}
-          </details>
-        </footer>
-      </article>
+          </>
+        ) : null}
+        {view.limitations.length ? (
+          <>
+            <h3>Limitations</h3>
+            <ul>
+              {view.limitations.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </>
+        ) : null}
+      </details>
 
       <section aria-labelledby="clientspace-preview-title" className={styles.remotePreview}>
         <div>
