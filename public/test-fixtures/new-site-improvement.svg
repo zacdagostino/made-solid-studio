@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <rect width="1440" height="900" fill="#f6f3ea"/>
+  <rect width="1440" height="92" fill="#173d33"/>
+  <rect x="72" y="28" width="168" height="34" rx="8" fill="#e8ff32"/>
+  <rect x="980" y="31" width="108" height="26" rx="13" fill="#f6f3ea" opacity=".86"/>
+  <rect x="1110" y="20" width="252" height="48" rx="24" fill="#e8ff32"/>
+  <text x="76" y="215" font-family="Arial, sans-serif" font-size="24" fill="#28735e">CLEARER CUSTOMER JOURNEY</text>
+  <text x="72" y="295" font-family="Georgia, serif" font-size="64" fill="#173d33">The important message</text>
+  <text x="72" y="370" font-family="Georgia, serif" font-size="64" fill="#173d33">is easy to understand.</text>
+  <rect x="72" y="430" width="238" height="58" rx="29" fill="#173d33"/>
+  <rect x="338" y="430" width="198" height="58" rx="29" fill="none" stroke="#173d33" stroke-width="3"/>
+  <rect x="780" y="170" width="582" height="410" rx="28" fill="#dfe9e4"/>
+  <rect x="828" y="230" width="430" height="28" rx="14" fill="#7ea898"/>
+  <rect x="828" y="286" width="480" height="22" rx="11" fill="#aac3ba"/>
+  <rect x="828" y="330" width="402" height="22" rx="11" fill="#aac3ba"/>
+  <rect x="72" y="650" width="1290" height="160" rx="24" fill="#fff" stroke="#cad5d0"/>
+  <rect x="112" y="700" width="290" height="20" rx="10" fill="#7ea898"/>
+  <rect x="500" y="700" width="290" height="20" rx="10" fill="#7ea898"/>
+  <rect x="888" y="700" width="290" height="20" rx="10" fill="#7ea898"/>
+  <rect x="112" y="747" width="240" height="14" rx="7" fill="#c2d2cc"/>
+  <rect x="500" y="747" width="240" height="14" rx="7" fill="#c2d2cc"/>
+  <rect x="888" y="747" width="240" height="14" rx="7" fill="#c2d2cc"/>
+</svg>

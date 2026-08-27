@@ -14,13 +14,13 @@ function valueReport() {
     status: 'approved',
     reviewState: 'approved',
     version: 4,
-    schemaVersion: 6,
+    schemaVersion: 7,
     summary: 'Four reviewed cases consolidated into two value themes and tied to verified edit v3.',
     data: {
-      schemaVersion: 6,
-      generatorRevision: 'high-priority-screenshot-v3',
+      schemaVersion: 7,
+      generatorRevision: 'verified-design-comparison-v1',
       reportKind: 'verified_redesign_value',
-      title: 'A stronger digital foundation for Demo Local Services',
+      title: 'See the difference for Demo Local Services',
       summary:
         'Demo Local Services now has a complete, verified website redesign grounded in reviewed evidence from the original site.',
       strengths: [
@@ -59,6 +59,16 @@ function valueReport() {
             sourceUrl: 'https://demo-local-services.example/',
             viewport: { width: 375, height: 812 },
           },
+          afterEvidence: {
+            artifactId: 'new-site-mobile-screenshot',
+            sourceUrl: 'https://demo-local-services.example/',
+            generatedRoute: '/',
+            viewport: { width: 375, height: 812 },
+          },
+          comparison: {
+            whatChanged: 'The redesigned page creates a deliberate mobile hierarchy.',
+            whyBetter: 'Customers can understand the page without cropped content.',
+          },
           occurrenceCount: 3,
           sourceUrls: ['https://demo-local-services.example/'],
         },
@@ -83,6 +93,16 @@ function valueReport() {
             sourceUrl: 'https://demo-local-services.example/contact',
             viewport: { width: 768, height: 1024 },
           },
+          afterEvidence: {
+            artifactId: 'new-site-enquiry-screenshot',
+            sourceUrl: 'https://demo-local-services.example/contact',
+            generatedRoute: '/contact/',
+            viewport: { width: 768, height: 1024 },
+          },
+          comparison: {
+            whatChanged: 'The redesigned page creates a clearer enquiry journey.',
+            whyBetter: 'Customers can recognise the next step sooner.',
+          },
           occurrenceCount: 1,
           sourceUrls: ['https://demo-local-services.example/contact'],
         },
@@ -103,6 +123,16 @@ function valueReport() {
             caption: 'The original page separates proof from the information customers need.',
             sourceUrl: 'https://demo-local-services.example/about',
             viewport: { width: 1440, height: 900 },
+          },
+          afterEvidence: {
+            artifactId: 'new-site-trust-screenshot',
+            sourceUrl: 'https://demo-local-services.example/about',
+            generatedRoute: '/about/',
+            viewport: { width: 1440, height: 900 },
+          },
+          comparison: {
+            whatChanged: 'The redesign presents business proof beside relevant information.',
+            whyBetter: 'Customers receive a more confident first impression.',
           },
           occurrenceCount: 2,
           sourceUrls: ['https://demo-local-services.example/about'],
@@ -229,6 +259,34 @@ async function seedReport(page, report) {
               createdAt: '2099-08-26T02:04:00.000Z',
             });
           });
+          [
+            ['new-site-mobile-screenshot', 'https://demo-local-services.example/', 375, 812],
+            [
+              'new-site-enquiry-screenshot',
+              'https://demo-local-services.example/contact',
+              768,
+              1024,
+            ],
+            ['new-site-trust-screenshot', 'https://demo-local-services.example/about', 1440, 900],
+          ].forEach(([id, sourceUrl, width, height]) => {
+            transaction.objectStore('artifacts').put({
+              id,
+              businessId,
+              crawlRunId,
+              kind: 'screenshot',
+              label: 'Verified redesigned website',
+              storageBucket: 'e2e-fixtures',
+              storagePath: '/test-fixtures/new-site-improvement.svg',
+              contentType: 'image/svg+xml',
+              metadata: {
+                evidenceKind: 'edited-site-comparison',
+                releaseAttestationId: 'release-attestation-e2e',
+                sourceUrl,
+                viewport: { width, height },
+              },
+              createdAt: '2099-08-26T02:05:00.000Z',
+            });
+          });
           transaction.objectStore('reportVersions').put(report);
         };
       }),
@@ -244,7 +302,7 @@ test('renders the prospect-specific verified value report at every required view
   await page.goto(`/#/prospects/${businessId}/report-preview`);
 
   await expect(
-    page.getByRole('heading', { name: 'A stronger digital foundation for Demo Local Services' }),
+    page.getByRole('heading', { name: 'See the difference for Demo Local Services' }),
   ).toBeVisible();
   await expect(
     page.getByRole('heading', { name: 'Client report generated and ready' }),
@@ -253,6 +311,15 @@ test('renders the prospect-specific verified value report at every required view
     page.getByRole('heading', { name: 'Create a shareable Clientspace copy' }),
   ).toBeVisible();
   await expect(page.getByRole('button', { name: 'Create shareable copy' })).toBeVisible();
+  const comparisons = page.getByRole('slider', {
+    name: /Compare the original and redesigned/i,
+  });
+  await expect(comparisons).toHaveCount(3);
+  await expect(page.getByText('Before', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('After', { exact: true }).first()).toBeVisible();
+  await comparisons.first().focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(comparisons.first()).toHaveValue('51');
   await expect(
     page.getByText(
       'The client report above is already generated and ready. Create this separate copy only when you want to prepare it for Clientspace sharing.',
@@ -261,7 +328,7 @@ test('renders the prospect-specific verified value report at every required view
   await expect(page.getByRole('heading', { name: 'A foundation worth building on' })).toBeVisible();
   await expect(
     page.getByRole('heading', {
-      name: 'What held the old experience back—and where we focused',
+      name: "See what changed—and why it's better",
     }),
   ).toBeVisible();
   await expect(page.getByText('Complete website ready to review')).toBeVisible();
@@ -288,7 +355,7 @@ test('renders the prospect-specific verified value report at every required view
 
   await page
     .getByRole('heading', {
-      name: 'What held the old experience back—and where we focused',
+      name: "See what changed—and why it's better",
     })
     .scrollIntoViewIfNeeded();
   await expect(page).toHaveScreenshot('prospect-value-report-themes.png', {

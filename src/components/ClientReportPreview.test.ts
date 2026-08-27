@@ -17,11 +17,11 @@ const report = (overrides: Partial<DecisionReport> = {}): DecisionReport => ({
   crawlRunId: 'crawl-1',
   status: 'approved',
   version: 2,
-  schemaVersion: 6,
+  schemaVersion: 7,
   summary: 'Frozen summary',
   data: {
-    schemaVersion: 6,
-    generatorRevision: 'high-priority-screenshot-v3',
+    schemaVersion: 7,
+    generatorRevision: 'verified-design-comparison-v1',
     reportKind: 'verified_redesign_value',
     title: 'A stronger digital foundation for Client',
     summary: 'Frozen client value summary',
@@ -41,6 +41,16 @@ const report = (overrides: Partial<DecisionReport> = {}): DecisionReport => ({
           artifactId: 'artifact-1',
           sourceUrl: 'https://example.com',
           viewport: { width: 375, height: 812 },
+        },
+        afterEvidence: {
+          artifactId: 'after-artifact-1',
+          sourceUrl: 'https://example.com',
+          generatedRoute: '/',
+          viewport: { width: 375, height: 812 },
+        },
+        comparison: {
+          whatChanged: 'The redesigned page creates a clearer reading order.',
+          whyBetter: 'Customers can understand the page more quickly.',
         },
         editedSiteProof: {
           artifactId: 'edited-artifact-1',
@@ -102,6 +112,7 @@ describe('ClientReportPreview frozen report boundary', () => {
     expect(view?.themes).toHaveLength(1);
     expect(view?.themes[0]).toMatchObject({
       evidenceArtifactId: 'artifact-1',
+      afterEvidenceArtifactId: 'after-artifact-1',
       viewport: '375 × 812',
     });
     expect(reportUsesProspectValueContract(report({ schemaVersion: 4 }))).toBe(false);

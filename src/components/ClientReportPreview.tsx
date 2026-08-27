@@ -5,10 +5,12 @@ import {
   ExternalLink,
   LoaderCircle,
   LockKeyhole,
+  MoveHorizontal,
   RefreshCcw,
   ShieldCheck,
   Sparkles,
 } from 'lucide-react';
+import { useState } from 'react';
 import type {
   Audit,
   DecisionReport,
@@ -40,6 +42,68 @@ function clientProofLabel(id: string, label: string) {
     'route-coverage': 'Every planned page is included',
   };
   return labels[id] || label;
+}
+
+function BeforeAfterComparison({
+  afterUrl,
+  beforeUrl,
+  clientName,
+  notice,
+  title,
+  viewportHeight,
+  viewportWidth,
+}: {
+  afterUrl: string;
+  beforeUrl: string;
+  clientName: string;
+  notice: string;
+  title: string;
+  viewportHeight: number;
+  viewportWidth: number;
+}) {
+  const [position, setPosition] = useState(50);
+  return (
+    <figure className={styles.comparisonFigure}>
+      <div
+        className={styles.comparisonFrame}
+        style={{ aspectRatio: `${viewportWidth} / ${viewportHeight}` }}
+      >
+        <img alt={`Original ${clientName} website showing ${title}`} src={beforeUrl} />
+        <div
+          aria-hidden="true"
+          className={styles.afterLayer}
+          style={{ clipPath: `inset(0 ${100 - position}% 0 0)` }}
+        >
+          <img alt="" src={afterUrl} />
+        </div>
+        <span className={styles.beforeLabel}>Before</span>
+        <span className={styles.afterLabel}>After</span>
+        <span
+          aria-hidden="true"
+          className={styles.comparisonHandle}
+          style={{ left: `${position}%` }}
+        >
+          <MoveHorizontal size={18} />
+        </span>
+        <input
+          aria-label={`Compare the original and redesigned ${title} screenshots`}
+          max="100"
+          min="0"
+          onChange={(event) => setPosition(Number(event.currentTarget.value))}
+          type="range"
+          value={position}
+        />
+      </div>
+      <figcaption>
+        <strong>What to notice in the original</strong>
+        <span>{notice}</span>
+        <small>
+          Drag the comparison control, or use its arrow keys, to reveal the original and redesigned
+          website.
+        </small>
+      </figcaption>
+    </figure>
+  );
 }
 
 export function previewReportIsCurrent(
@@ -258,9 +322,13 @@ export function ClientReportPreview({
 
         <section className={styles.themes} aria-labelledby="themes-title">
           <div className={styles.sectionHeading}>
-            <p className={styles.kicker}>The value of the redesign</p>
-            <h2 id="themes-title">What held the old experience back—and where we focused</h2>
-            <p>Here are the three changes that matter most to your customers.</p>
+            <p className={styles.kicker}>Before and after</p>
+            <h2 id="themes-title">See what changed—and why it&apos;s better</h2>
+            <p>
+              {clientThemes.length === 1
+                ? 'Here is the strongest matched design improvement for your customers.'
+                : `Here are the ${clientThemes.length} strongest matched design improvements for your customers.`}
+            </p>
           </div>
           <div className={styles.findings}>
             {clientThemes.map((theme, index) => (
@@ -272,18 +340,18 @@ export function ClientReportPreview({
                     <h3>{theme.title}</h3>
                   </div>
                 </header>
-                {theme.evidenceArtifactId && evidenceUrls[theme.evidenceArtifactId] ? (
-                  <figure className={styles.beforeEvidence}>
-                    <div className={styles.evidenceLabel}>Original website</div>
-                    <img
-                      alt={`Original ${clientName} website showing ${theme.title}`}
-                      src={evidenceUrls[theme.evidenceArtifactId]}
-                    />
-                    <figcaption>
-                      <strong>What to notice</strong>
-                      <span>{theme.whatToNotice || theme.before}</span>
-                    </figcaption>
-                  </figure>
+                {theme.evidenceArtifactId &&
+                evidenceUrls[theme.evidenceArtifactId] &&
+                evidenceUrls[theme.afterEvidenceArtifactId] ? (
+                  <BeforeAfterComparison
+                    afterUrl={evidenceUrls[theme.afterEvidenceArtifactId]}
+                    beforeUrl={evidenceUrls[theme.evidenceArtifactId]}
+                    clientName={clientName}
+                    notice={theme.whatToNotice || theme.before}
+                    title={theme.title}
+                    viewportHeight={theme.viewportHeight}
+                    viewportWidth={theme.viewportWidth}
+                  />
                 ) : theme.evidenceArtifactId && screenshotLoadError ? (
                   <div className={styles.evidenceError} role="alert">
                     <LockKeyhole aria-hidden="true" size={20} />
@@ -300,15 +368,15 @@ export function ClientReportPreview({
                 )}
                 <div className={styles.findingCopy}>
                   <div className={styles.recommendation}>
-                    <h4>
-                      {theme.hasEditedSiteProof ? 'The new experience' : 'What we focused on'}
-                    </h4>
-                    <p>
-                      {theme.hasEditedSiteProof ? theme.redesignResponse : theme.designPriority}
-                    </p>
+                    <h4>What changed</h4>
+                    <p>{theme.whatChanged}</p>
                   </div>
                   <div>
-                    <h4>Why this matters</h4>
+                    <h4>Why it&apos;s better</h4>
+                    <p>{theme.whyBetter}</p>
+                  </div>
+                  <div>
+                    <h4>Customer value</h4>
                     <p>{theme.value}</p>
                   </div>
                 </div>

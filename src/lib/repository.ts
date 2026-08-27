@@ -4962,8 +4962,8 @@ export class SiteforgeRepository {
         (report) =>
           report.auditId === audit.id &&
           report.crawlRunId === audit.crawlRunId &&
-          report.schemaVersion === 6 &&
-          report.data?.generatorRevision === 'high-priority-screenshot-v3' &&
+          report.schemaVersion === 7 &&
+          report.data?.generatorRevision === 'verified-design-comparison-v1' &&
           report.data?.reportKind === 'verified_redesign_value' &&
           (report.data?.redesign as Record<string, unknown> | undefined)?.attestationRowId ===
             release.id,
@@ -5109,8 +5109,21 @@ export class SiteforgeRepository {
           'Keep the next action visible and reduce the steps between customer interest and contact.',
       },
     } as const;
-    const valueThemes = groups.map(([clientArea, items], index) => {
+    const valueThemes = groups.flatMap(([clientArea, items], index) => {
       const evidence = items[0].evidence;
+      const afterEvidence = evidenceArtifacts.find((artifact) => {
+        const viewport = artifact.metadata.viewport as Record<string, unknown> | undefined;
+        const oldViewport = evidence.metadata.viewport as Record<string, unknown> | undefined;
+        return (
+          artifact.kind === 'screenshot' &&
+          artifact.metadata.evidenceKind === 'edited-site-comparison' &&
+          artifact.metadata.releaseAttestationId === release.id &&
+          artifact.metadata.sourceUrl === evidence.metadata.sourceUrl &&
+          viewport?.width === oldViewport?.width &&
+          viewport?.height === oldViewport?.height
+        );
+      });
+      if (!afterEvidence) return [];
       const copy = clientLanguage[clientArea as keyof typeof clientLanguage];
       const sourceUrls = [evidence.metadata.sourceUrl as string];
       const artifactIds = [
@@ -5120,36 +5133,77 @@ export class SiteforgeRepository {
             .filter((id) => evidenceArtifactIds.has(id)),
         ),
       ].sort();
-      return {
-        id: `theme-${index + 1}-${clientArea}`,
-        area: copy.area,
-        title: copy.title,
-        before: copy.before,
-        businessOpportunity: copy.value,
-        value: copy.value,
-        whatToNotice: copy.whatToNotice,
-        designPriority: copy.designPriority,
-        editedSiteProof: null,
-        occurrenceCount: items.length,
-        sourceObservationIds: items.map((item) => item.observation.id),
-        sourceUrls,
-        evidenceArtifactIds: artifactIds,
-        evidence: {
-          artifactId: evidence.id,
-          storageBucket: evidence.storageBucket,
-          storagePath: evidence.storagePath,
-          caption: copy.whatToNotice,
-          viewport: evidence.metadata.viewport,
-          sourceUrl: evidence.metadata.sourceUrl,
+      const comparison = {
+        impression: {
+          whatChanged:
+            'The redesigned page replaces the original presentation with clearer hierarchy, spacing and responsive behaviour.',
+          whyBetter:
+            'Customers receive a calmer, clearer and more dependable first impression across screen sizes.',
         },
-        internalEvidence: {
-          observationIds: items.map((item) => item.observation.id),
-          observations: items.map((item) => item.observation.observation),
-          recommendations: items.map((item) => item.observation.recommendation),
-          customerImpacts: items.map((item) => item.observation.customerImpact),
+        understand: {
+          whatChanged:
+            'The redesigned page presents the supported information with clearer structure, spacing and emphasis.',
+          whyBetter: 'Customers can find and understand the most useful information more quickly.',
         },
-      };
+        enquire: {
+          whatChanged:
+            'The redesigned page groups decision-making content and the next action into a clearer customer journey.',
+          whyBetter:
+            'Customers can recognise the next step sooner and continue with less hesitation.',
+        },
+      }[clientArea as keyof typeof clientLanguage];
+      return [
+        {
+          id: `theme-${index + 1}-${clientArea}`,
+          area: copy.area,
+          title: copy.title,
+          before: copy.before,
+          businessOpportunity: copy.value,
+          value: copy.value,
+          whatToNotice: copy.whatToNotice,
+          designPriority: copy.designPriority,
+          editedSiteProof: null,
+          occurrenceCount: items.length,
+          sourceObservationIds: items.map((item) => item.observation.id),
+          sourceUrls,
+          evidenceArtifactIds: artifactIds,
+          evidence: {
+            artifactId: evidence.id,
+            storageBucket: evidence.storageBucket,
+            storagePath: evidence.storagePath,
+            caption: copy.whatToNotice,
+            viewport: evidence.metadata.viewport,
+            sourceUrl: evidence.metadata.sourceUrl,
+          },
+          afterEvidence: {
+            artifactId: afterEvidence.id,
+            storageBucket: afterEvidence.storageBucket,
+            storagePath: afterEvidence.storagePath,
+            caption: 'The verified redesigned website at the same page and viewport.',
+            viewport: afterEvidence.metadata.viewport,
+            sourceUrl: afterEvidence.metadata.sourceUrl,
+            generatedRoute: afterEvidence.metadata.generatedRoute,
+          },
+          comparison: {
+            ...comparison,
+            customerValue: copy.value,
+            evidenceBasis:
+              'Matched source-page provenance, matched viewport and passed exact-commit verification.',
+          },
+          internalEvidence: {
+            observationIds: items.map((item) => item.observation.id),
+            observations: items.map((item) => item.observation.observation),
+            recommendations: items.map((item) => item.observation.recommendation),
+            customerImpacts: items.map((item) => item.observation.customerImpact),
+          },
+        },
+      ];
     });
+    if (valueThemes.length === 0) {
+      throw new Error(
+        'The verified edited website has no matched comparison screenshots. Run release verification for the current commit again.',
+      );
+    }
     const nextVersion = Math.max(0, ...reportVersions.map((report) => report.version)) + 1;
     const now = new Date().toISOString();
     const deliveredWork = release.checks.map((check) => ({
@@ -5167,25 +5221,25 @@ export class SiteforgeRepository {
       status: 'passed',
     }));
     const report: DecisionReport = {
-      id: `report-version-v6-high-priority-${audit.id}-${release.id}`,
+      id: `report-version-v7-design-comparison-${audit.id}-${release.id}`,
       businessId,
       auditId: audit.id,
       crawlRunId: audit.crawlRunId,
       status: 'approved',
       version: nextVersion,
-      schemaVersion: 6,
+      schemaVersion: 7,
       reviewState: 'approved',
       summary: `${eligible.length} evidence-backed cases automatically consolidated into ${valueThemes.length} value themes and tied to verified edit v${release.sourceEditVersion}.`,
       data: {
-        schemaVersion: 6,
-        generatorRevision: 'high-priority-screenshot-v3',
+        schemaVersion: 7,
+        generatorRevision: 'verified-design-comparison-v1',
         reportKind: 'verified_redesign_value',
         auditId: audit.id,
         crawlRunId: audit.crawlRunId,
         generatedAt: now,
         version: nextVersion,
-        title: `A stronger website for ${business.name}`,
-        summary: `A complete new website for ${business.name} is ready to review. This report highlights the strongest screenshot-backed opportunities found on the original website and the customer value each opportunity represents.`,
+        title: `See the difference for ${business.name}`,
+        summary: `Compare the original ${business.name} website with the verified redesign, then see why each design decision creates a clearer customer experience.`,
         strengths: [
           {
             id: 'evidence-led-foundation',

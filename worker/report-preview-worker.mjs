@@ -106,7 +106,7 @@ async function loadFrozenReport(job) {
     throw new Error('The selected report version is not an approved frozen report.');
   }
   if (
-    report.schema_version !== 6 ||
+    report.schema_version !== 7 ||
     report.data?.reportKind !== 'verified_redesign_value' ||
     report.data?.redesign?.status !== 'passed'
   ) {
@@ -158,7 +158,7 @@ async function loadFrozenReport(job) {
 async function loadReportMedia(reportData, job, report) {
   const findings = Array.isArray(reportData?.valueThemes) ? reportData.valueThemes : [];
   const artifactIds = findings
-    .map((finding) => finding?.evidence)
+    .flatMap((finding) => [finding?.evidence, finding?.afterEvidence])
     .map((evidence) => (typeof evidence?.artifactId === 'string' ? evidence.artifactId : ''))
     .filter((artifactId, index, all) => artifactId && all.indexOf(artifactId) === index)
     .slice(0, 8);

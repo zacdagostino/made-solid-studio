@@ -144,6 +144,169 @@ async function persistReleaseForReporting(workspace, record) {
   return { status: 'saved', id: saved.id };
 }
 
+function normaliseSourceUrl(value) {
+  try {
+    const url = new URL(String(value));
+    url.hash = '';
+    url.search = '';
+    url.pathname = url.pathname.replace(/\/+$/, '') || '/';
+    return url.href.replace(/\/$/, url.pathname === '/' ? '/' : '');
+  } catch {
+    return '';
+  }
+}
+
+async function renderedSourceRoutes(browser, baseUrl, routes) {
+  const context = await browser.newContext({ viewport: { width: 375, height: 812 } });
+  const page = await context.newPage();
+  const bySource = new Map();
+  try {
+    for (const route of routes) {
+      await page.goto(`${baseUrl}${route}`, { waitUntil: 'networkidle' });
+      const sourceUrl = await page
+        .locator('meta[name="siteforge-source-url"]')
+        .getAttribute('content')
+        .catch(() => null);
+      const key = normaliseSourceUrl(sourceUrl);
+      if (key && !bySource.has(key)) bySource.set(key, route);
+    }
+  } finally {
+    await context.close();
+  }
+  return bySource;
+}
+
+async function persistDesignComparisonScreenshots(record, releaseRowId, browser, baseUrl, routes) {
+  const supabaseUrl = process.env.SITEFORGE_SUPABASE_URL?.trim();
+  const serviceRoleKey = process.env.SITEFORGE_SUPABASE_SERVICE_ROLE_KEY?.trim();
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error('Studio cannot save the redesigned comparison screenshots for reporting.');
+  }
+  const supabase = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const { data: audit, error: auditError } = await supabase
+    .from('audits')
+    .select('id, organization_id, business_id, crawl_run_id')
+    .eq('business_id', record.businessId)
+    .eq('status', 'ready')
+    .order('version', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (auditError) throw auditError;
+  if (!audit) return { saved: 0, detail: 'No completed audit is available for comparison.' };
+  const { data: observations, error: observationError } = await supabase
+    .from('audit_observations')
+    .select(
+      'id, area, severity, confidence, review_state, source_urls, evidence_artifact_ids, viewport, created_at',
+    )
+    .eq('audit_id', audit.id)
+    .eq('crawl_run_id', audit.crawl_run_id)
+    .eq('severity', 'high')
+    .neq('area', 'Platform')
+    .neq('confidence', 'low')
+    .neq('review_state', 'blocked')
+    .order('created_at', { ascending: true });
+  if (observationError) throw observationError;
+  const artifactIds = [
+    ...new Set((observations ?? []).flatMap((item) => item.evidence_artifact_ids ?? [])),
+  ];
+  if (!artifactIds.length) return { saved: 0, detail: 'No screenshot evidence was selected.' };
+  const { data: oldArtifacts, error: artifactError } = await supabase
+    .from('artifacts')
+    .select('id, storage_bucket, storage_path, metadata')
+    .in('id', artifactIds)
+    .eq('business_id', record.businessId)
+    .eq('crawl_run_id', audit.crawl_run_id)
+    .eq('kind', 'screenshot');
+  if (artifactError) throw artifactError;
+  const artifactsById = new Map((oldArtifacts ?? []).map((artifact) => [artifact.id, artifact]));
+  const sourceRoutes = await renderedSourceRoutes(browser, baseUrl, routes);
+  const candidates = [];
+  for (const observation of observations ?? []) {
+    const viewport = observation.viewport;
+    if (!viewport || !Number(viewport.width) || !Number(viewport.height)) continue;
+    const supportedSourceUrls = new Set((observation.source_urls ?? []).map(normaliseSourceUrl));
+    for (const oldArtifact of (observation.evidence_artifact_ids ?? [])
+      .map((id) => artifactsById.get(id))
+      .filter(Boolean)) {
+      const sourceUrl = normaliseSourceUrl(oldArtifact.metadata?.sourceUrl);
+      const route = sourceRoutes.get(sourceUrl);
+      if (!sourceUrl || !route || !supportedSourceUrls.has(sourceUrl)) continue;
+      const artifactViewport = oldArtifact.metadata?.viewport;
+      if (
+        artifactViewport?.width !== viewport.width ||
+        artifactViewport?.height !== viewport.height
+      ) {
+        continue;
+      }
+      const key = `${sourceUrl}:${viewport.width}x${viewport.height}`;
+      if (!candidates.some((item) => item.key === key)) {
+        candidates.push({ key, observation, oldArtifact, route, sourceUrl, viewport });
+      }
+      if (candidates.length >= 12) break;
+    }
+    if (candidates.length >= 12) break;
+  }
+  let saved = 0;
+  for (const candidate of candidates) {
+    const context = await browser.newContext({
+      viewport: { width: candidate.viewport.width, height: candidate.viewport.height },
+    });
+    const page = await context.newPage();
+    try {
+      await page.goto(`${baseUrl}${candidate.route}`, { waitUntil: 'networkidle' });
+      const image = await page.screenshot({ type: 'png' });
+      const digest = createHash('sha256').update(image).digest('hex');
+      const identity = createHash('sha256').update(candidate.key).digest('hex').slice(0, 20);
+      const storageBucket = 'siteforge-artifacts';
+      const storagePath = `${record.businessId}/release-comparisons/${record.sourceCommit}/${releaseRowId}/${identity}.png`;
+      const { error: uploadError } = await supabase.storage
+        .from(storageBucket)
+        .upload(storagePath, image, { contentType: 'image/png', upsert: true });
+      if (uploadError) throw uploadError;
+      const metadata = {
+        evidenceKind: 'edited-site-comparison',
+        releaseAttestationId: releaseRowId,
+        sourceCommit: record.sourceCommit,
+        sourceEditVersion: record.sourceEditVersion,
+        sourceUrl: candidate.sourceUrl,
+        generatedRoute: candidate.route,
+        viewport: {
+          width: candidate.viewport.width,
+          height: candidate.viewport.height,
+          label: candidate.viewport.label,
+        },
+        originalArtifactId: candidate.oldArtifact.id,
+        observationId: candidate.observation.id,
+      };
+      const { error: saveError } = await supabase.from('artifacts').upsert(
+        {
+          organization_id: audit.organization_id,
+          business_id: record.businessId,
+          crawl_run_id: audit.crawl_run_id,
+          kind: 'screenshot',
+          storage_bucket: storageBucket,
+          storage_path: storagePath,
+          content_type: 'image/png',
+          byte_size: image.length,
+          sha256: digest,
+          metadata,
+        },
+        { onConflict: 'storage_path' },
+      );
+      if (saveError) throw saveError;
+      saved += 1;
+    } finally {
+      await context.close();
+    }
+  }
+  return {
+    saved,
+    detail: `Saved ${saved} exact-commit screenshot${saved === 1 ? '' : 's'} for design comparison.`,
+  };
+}
+
 function contentType(path) {
   const extension = extname(path).toLowerCase();
   if (extension === '.html') return 'text/html; charset=utf-8';
@@ -483,12 +646,24 @@ try {
     'Saving the exact verified edit so Studio can generate its value report.',
   );
   const reportRelease = await persistReleaseForReporting(sourceWorkspace, record);
+  emit(
+    'running',
+    'comparison_evidence',
+    'Capturing like-for-like screenshots from the exact edited website for its design report.',
+  );
+  const comparisonEvidence = await persistDesignComparisonScreenshots(
+    record,
+    reportRelease.id,
+    browser,
+    staticServer.url,
+    outputRoutes(join(verificationWorkspace, 'out')),
+  );
   writeJsonAtomically(join(dirname(attemptPath), `${commit}.json`), record);
   emit(
     'complete',
     'ready',
     `Commit ${commit.slice(0, 8)} passed every edited-site release check.`,
-    { attestation: record, reportRelease },
+    { attestation: record, reportRelease, comparisonEvidence },
   );
 } catch (error) {
   emit('failed', 'failed', error instanceof Error ? error.message : 'Release verification failed.');

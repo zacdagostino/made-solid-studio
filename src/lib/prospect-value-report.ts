@@ -1,6 +1,6 @@
 import type { DecisionReport } from './domain';
 
-export const prospectValueReportSchemaVersion = 6;
+export const prospectValueReportSchemaVersion = 7;
 export const prospectValueReportKind = 'verified_redesign_value';
 
 export type ProspectValueReportTheme = {
@@ -13,10 +13,15 @@ export type ProspectValueReportTheme = {
   occurrenceCount: number;
   sourceUrls: string[];
   evidenceArtifactId?: string;
+  afterEvidenceArtifactId: string;
   evidenceCaption?: string;
   viewport?: string;
+  viewportHeight: number;
+  viewportWidth: number;
   whatToNotice?: string;
   designPriority: string;
+  whatChanged: string;
+  whyBetter: string;
   hasEditedSiteProof: boolean;
 };
 
@@ -81,6 +86,9 @@ export function reportUsesProspectValueContract(report?: DecisionReport) {
     const theme = record(raw);
     const evidence = record(theme.evidence);
     const viewport = record(evidence.viewport);
+    const afterEvidence = record(theme.afterEvidence);
+    const afterViewport = record(afterEvidence.viewport);
+    const comparison = record(theme.comparison);
     return Boolean(
       text(evidence.artifactId) &&
       text(evidence.sourceUrl) &&
@@ -88,12 +96,18 @@ export function reportUsesProspectValueContract(report?: DecisionReport) {
       number(viewport.height) > 0 &&
       text(theme.whatToNotice) &&
       text(theme.designPriority) &&
-      text(theme.businessOpportunity || theme.value),
+      text(theme.businessOpportunity || theme.value) &&
+      text(afterEvidence.artifactId) &&
+      text(afterEvidence.sourceUrl) === text(evidence.sourceUrl) &&
+      number(afterViewport.width) === number(viewport.width) &&
+      number(afterViewport.height) === number(viewport.height) &&
+      text(comparison.whatChanged) &&
+      text(comparison.whyBetter),
     );
   });
   return Boolean(
     data.reportKind === prospectValueReportKind &&
-    data.generatorRevision === 'high-priority-screenshot-v3' &&
+    data.generatorRevision === 'verified-design-comparison-v1' &&
     redesign.status === 'passed' &&
     text(redesign.attestationId) &&
     text(redesign.sourceBuilderRunId) &&
@@ -137,6 +151,8 @@ export function prospectValueReportView(
       const title = text(item.title);
       const before = text(item.before || item.observation);
       const editedSiteProof = record(item.editedSiteProof);
+      const afterEvidence = record(item.afterEvidence);
+      const comparison = record(item.comparison);
       const businessOpportunity = text(item.businessOpportunity || item.value);
       if (!title || !before || !businessOpportunity || !text(evidence.artifactId)) return [];
       return [
@@ -152,10 +168,15 @@ export function prospectValueReportView(
           occurrenceCount: Math.max(1, number(item.occurrenceCount)),
           sourceUrls: textList(item.sourceUrls),
           evidenceArtifactId: text(evidence.artifactId) || undefined,
+          afterEvidenceArtifactId: text(afterEvidence.artifactId),
           evidenceCaption: text(evidence.caption) || undefined,
           viewport: width && height ? `${width} × ${height}` : undefined,
+          viewportHeight: height,
+          viewportWidth: width,
           whatToNotice: text(item.whatToNotice) || text(evidence.caption) || undefined,
           designPriority: text(item.designPriority),
+          whatChanged: text(comparison.whatChanged),
+          whyBetter: text(comparison.whyBetter),
           hasEditedSiteProof: Boolean(
             text(editedSiteProof.artifactId) && text(editedSiteProof.clientOutcome),
           ),

@@ -228,6 +228,111 @@
   border-radius: var(--radius);
   overflow: hidden;
 }
+.comparisonFigure {
+  background: #18231f;
+  border: 1px solid #bdc9c4;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.comparisonFrame {
+  max-height: 44rem;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+.comparisonFrame > img,
+.afterLayer,
+.afterLayer img {
+  height: 100%;
+  inset: 0;
+  object-fit: cover;
+  object-position: top;
+  position: absolute;
+  width: 100%;
+}
+.afterLayer {
+  z-index: 1;
+}
+.comparisonFrame input[type='range'] {
+  appearance: none;
+  background: transparent;
+  cursor: ew-resize;
+  height: 100%;
+  inset: 0;
+  margin: 0;
+  position: absolute;
+  width: 100%;
+  z-index: 4;
+}
+.comparisonFrame input[type='range']::-webkit-slider-thumb {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  height: 52px;
+  width: 52px;
+}
+.comparisonFrame input[type='range']::-moz-range-thumb {
+  background: transparent;
+  border: 0;
+  height: 52px;
+  width: 52px;
+}
+.comparisonFrame input[type='range']:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: -4px;
+}
+.comparisonHandle {
+  align-items: center;
+  background: #f8f6f0;
+  border: 2px solid #18231f;
+  border-radius: 50%;
+  color: #18231f;
+  display: flex;
+  height: 48px;
+  justify-content: center;
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 48px;
+  z-index: 3;
+}
+.comparisonHandle::before {
+  background: #f8f6f0;
+  content: '';
+  height: 100vh;
+  left: calc(50% - 1px);
+  position: absolute;
+  top: -50vh;
+  width: 2px;
+  z-index: -1;
+}
+.beforeLabel,
+.afterLabel {
+  background: rgb(24 35 31 / 0.9);
+  border-radius: var(--radius-sm);
+  color: #f8f6f0;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: var(--space-2);
+  position: absolute;
+  text-transform: uppercase;
+  top: var(--space-3);
+  z-index: 2;
+}
+.beforeLabel {
+  right: var(--space-3);
+}
+.afterLabel {
+  left: var(--space-3);
+}
+.comparisonFigure figcaption {
+  background: #fff;
+  color: #36574e;
+  line-height: 1.55;
+  padding: var(--space-3);
+}
 .evidenceLabel {
   background: #18231f;
   color: #f8f6f0;
@@ -244,6 +349,11 @@
   object-fit: contain;
   object-position: top;
   width: 100%;
+}
+.finding .comparisonFrame > img,
+.finding .comparisonFrame .afterLayer img {
+  max-height: none;
+  object-fit: cover;
 }
 .finding figcaption {
   background: #fff;
@@ -519,7 +629,7 @@
     grid-column: auto;
   }
   .findingCopy {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
   .proof {
     grid-template-columns: minmax(0, 0.8fr) minmax(18rem, 1.2fr);

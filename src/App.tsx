@@ -20117,9 +20117,13 @@ function ClientReportPreviewWorkspace({
     findings.flatMap((finding) => {
       if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return [];
       const evidence = (finding as Record<string, unknown>).evidence;
-      if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) return [];
-      const artifactId = (evidence as Record<string, unknown>).artifactId;
-      return typeof artifactId === 'string' ? [artifactId] : [];
+      const afterEvidence = (finding as Record<string, unknown>).afterEvidence;
+      const artifactIds = [evidence, afterEvidence].flatMap((value) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+        const artifactId = (value as Record<string, unknown>).artifactId;
+        return typeof artifactId === 'string' ? [artifactId] : [];
+      });
+      return artifactIds;
     }),
   );
   const screenshotArtifacts = workspace.artifacts.filter(
