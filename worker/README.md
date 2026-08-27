@@ -56,9 +56,9 @@ The Studio Workspace Agent, Website Builder, and Test Builder default to
 those runtimes and the API-backed workers to separately billed API credits. The key remains
 server-side and the active billing mode is visible in Codex settings.
 
-The Agent Package Drafter, capability analysis, UX vision, asset vision, structured visual content
-recovery, and design-led client report generator use the separately billed OpenAI API. Enable them
-only after approving that spend, and keep the public UI flag aligned with the protected worker flag:
+The Agent Package Drafter, capability analysis, UX vision, asset vision, and structured visual
+content recovery use the separately billed OpenAI API. Enable them only after approving that
+spend, and keep the public UI flag aligned with the protected worker flag:
 
 ```bash
 SITEFORGE_OPENAI_API_ENABLED=true
@@ -66,14 +66,14 @@ VITE_SITEFORGE_OPENAI_API_ENABLED=true
 OPENAI_API_KEY=your-server-only-openai-key
 # Optional dedicated key for responsive UX vision
 SITEFORGE_UX_VISION_API_KEY=your-server-only-openai-key
-# Optional dedicated key for GPT-5.6 Sol client-report selection
-SITEFORGE_REPORT_SELECTION_API_KEY=your-server-only-openai-key
 ```
 
 Client report generation is a persisted worker job. GPT-5.6 Sol at maximum reasoning reviews one
 to twenty evidence-gated before-and-after candidates and selects the strongest natural set of one
 to four. Report and Client report preview both show the saved phase, cancellation state, failure
-code, recovery action, and retry control; an incomplete replacement never becomes current.
+code, recovery action, and retry control; an incomplete replacement never becomes current. The
+curator runs through the same forced-ChatGPT Codex authentication as the website builder, so it
+uses ChatGPT subscription access and does not require an OpenAI API key.
 
 Optional runtime settings:
 

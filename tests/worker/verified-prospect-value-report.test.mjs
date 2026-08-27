@@ -186,8 +186,12 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(agentReportMigration, /gpt-5\.6-sol-design-curation-v1/);
   assert.match(reportGenerationWorker, /const defaultModel = 'gpt-5\.6-sol'/);
   assert.match(reportGenerationWorker, /const reasoningEffort = 'max'/);
-  assert.match(reportGenerationWorker, /store: false/);
-  assert.match(reportGenerationWorker, /strict: true/);
+  assert.match(reportGenerationWorker, /forced_login_method="chatgpt"/);
+  assert.match(reportGenerationWorker, /--output-schema/);
+  assert.match(reportGenerationWorker, /--image/);
+  assert.match(reportGenerationWorker, /billingMode: 'chatgpt_subscription'/);
+  assert.doesNotMatch(reportGenerationWorker, /OPENAI_API_KEY/);
+  assert.doesNotMatch(reportGenerationWorker, /SITEFORGE_REPORT_SELECTION_API_KEY/);
   assert.match(reportGenerationWorker, /minItems: 0/);
   assert.match(reportGenerationWorker, /maxItems: 4/);
   assert.match(reportGenerationWorker, /themes\.length < 1 \|\| themes\.length > 4/);

@@ -9,12 +9,12 @@ const workerScripts = [
   ['audit-specialist-2', 'audit-specialist-worker.mjs'],
   ['audit-specialist-3', 'audit-specialist-worker.mjs'],
   ['assets', 'asset-analysis-worker.mjs'],
+  ['report-generation', 'report-generation-worker.mjs'],
 ];
 const apiWorkerScripts = [
   ['visual-content', 'visual-content-worker.mjs'],
   ['capabilities', 'capability-analysis-worker.mjs'],
   ['agent-packages', 'agent-package-worker.mjs'],
-  ['report-generation', 'report-generation-worker.mjs'],
 ];
 if (process.env.SITEFORGE_EXTERNAL_BUILDER !== '1') {
   workerScripts.push(['builder', 'builder-worker.mjs']);

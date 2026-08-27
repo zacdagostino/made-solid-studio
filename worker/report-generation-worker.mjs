@@ -1,11 +1,12 @@
-import { readFile } from 'node:fs/promises';
-import { hostname } from 'node:os';
+import { spawn } from 'node:child_process';
+import { constants as fsConstants } from 'node:fs';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { hostname, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createClient } from '@supabase/supabase-js';
-import { recordAiUsage } from './ai-usage.mjs';
-import { requireOpenAiApiKey } from './openai-api-policy.mjs';
+import { codexUsage, recordAiUsage } from './ai-usage.mjs';
 
 const workerId = `${hostname()}-${process.pid}`;
-const responseEndpoint = 'https://api.openai.com/v1/responses';
 const generatorContractVersion = 'client-value-report-agent-v1';
 const generatorRevision = 'gpt-5.6-sol-design-curation-v1';
 const schemaVersion = 9;
@@ -29,15 +30,6 @@ const supabase = createClient(
   requiredEnvironment('SITEFORGE_SUPABASE_SERVICE_ROLE_KEY'),
   { auth: { autoRefreshToken: false, persistSession: false } },
 );
-
-function outputText(response) {
-  if (typeof response?.output_text === 'string') return response.output_text;
-  return (response?.output ?? [])
-    .flatMap((item) => (Array.isArray(item?.content) ? item.content : []))
-    .filter((item) => item?.type === 'output_text' && typeof item.text === 'string')
-    .map((item) => item.text)
-    .join('');
-}
 
 function selectionSchema(candidateIds) {
   const conciseString = { type: 'string', minLength: 1, maxLength: 1200 };
@@ -91,12 +83,13 @@ function plainText(value, maximum = 1200) {
 function errorClassification(error) {
   const message =
     error instanceof Error ? error.message : 'Report generation stopped unexpectedly.';
-  if (/configured|API key|disabled/i.test(message)) return ['model_configuration', message];
+  if (/configured|signed in|authentication|Codex executable/i.test(message))
+    return ['model_configuration', message];
   if (/selection|duplicate|unsupported|client story/i.test(message))
     return ['selection_rejected', message];
   if (/candidate|evidence|screenshot|comparison|audit|attestation/i.test(message))
     return ['evidence_unavailable', message];
-  if (/model|response|structured|OpenAI/i.test(message)) return ['model_request_failed', message];
+  if (/model|response|structured|Codex/i.test(message)) return ['model_request_failed', message];
   return ['report_persistence_failed', message];
 }
 
@@ -140,8 +133,88 @@ async function loadCandidateImage(artifact) {
   if (!bytes.length || bytes.length > maximumImageBytes) {
     throw new Error('A verified report screenshot is outside the supported image size.');
   }
-  return `data:${artifact.content_type === 'image/jpeg' ? 'image/jpeg' : 'image/png'};base64,${bytes.toString('base64')}`;
+  return {
+    bytes,
+    extension: artifact.content_type === 'image/jpeg' ? 'jpg' : 'png',
+  };
 }
+
+async function executableFile(path) {
+  if (!path) return false;
+  try {
+    await access(path, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function codexBinary() {
+  const configured = process.env.SITEFORGE_CODEX_BIN?.trim();
+  if (configured) return configured;
+  for (const directory of (process.env.PATH || '').split(':').filter(Boolean)) {
+    const candidate = join(directory, 'codex');
+    if (await executableFile(candidate)) return candidate;
+  }
+  throw new Error('The Codex executable is not configured for report generation.');
+}
+
+function codexEnvironment(environment = process.env) {
+  const values = {
+    HOME: environment.HOME,
+    PATH: environment.PATH,
+    SHELL: environment.SHELL,
+    LANG: environment.LANG,
+    LC_ALL: environment.LC_ALL,
+    TERM: environment.TERM,
+    NO_COLOR: '1',
+    CODEX_HOME: environment.SITEFORGE_CODEX_HOME?.trim() || environment.CODEX_HOME?.trim(),
+  };
+  return Object.fromEntries(
+    Object.entries(values).filter(([, value]) => typeof value === 'string' && value.length > 0),
+  );
+}
+
+async function runProcess(executable, arguments_, options = {}) {
+  const child = spawn(executable, arguments_, {
+    cwd: options.cwd,
+    env: options.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk) => {
+    stdout += chunk.toString();
+  });
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk.toString();
+  });
+  const exit = await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', (code, signal) => resolve({ code, signal }));
+  });
+  if (exit.code !== 0) {
+    throw new Error(
+      `Codex authentication check failed: ${stderr.trim().slice(-500) || exit.signal || exit.code}`,
+    );
+  }
+  return { stdout, stderr };
+}
+
+async function assertCodexAuthentication(executable, environment) {
+  const result = await runProcess(
+    executable,
+    ['--config', 'forced_login_method="chatgpt"', 'login', 'status'],
+    { env: environment },
+  );
+  if (!/logged in using chatgpt/i.test(`${result.stdout}\n${result.stderr}`)) {
+    throw new Error(
+      'The report generator is not signed in with ChatGPT. Reconnect the protected Codex runtime and retry.',
+    );
+  }
+}
+
+class ReportCancelledError extends Error {}
 
 async function loadSource(job) {
   const [businessResult, auditResult, releaseResult, taskResult, observationResult] =
@@ -290,101 +363,169 @@ async function loadSource(job) {
 }
 
 async function selectThemes(job, source) {
-  const key = requireOpenAiApiKey('Client value report selection', process.env, [
-    'SITEFORGE_REPORT_SELECTION_API_KEY',
-    'OPENAI_API_KEY',
-  ]);
   const model = job.model || defaultModel;
   if (model !== defaultModel || job.reasoning_effort !== reasoningEffort) {
     throw new Error(
       'The report generation job is not configured for GPT-5.6 Sol at maximum reasoning.',
     );
   }
-  const content = [
-    { type: 'input_text', text: agentContract },
-    {
-      type: 'input_text',
-      text: `Prospect: ${source.business.name}\nCandidates: ${JSON.stringify(
-        source.candidates.map((candidate) => ({
-          candidateId: candidate.id,
-          observationId: candidate.observation.id,
-          area: candidate.observation.area,
-          severity: candidate.observation.severity,
-          confidence: candidate.observation.confidence,
-          observation: candidate.observation.observation,
-          customerImpact: candidate.observation.customer_impact,
-          recommendation: candidate.observation.recommendation,
-          sourceUrl: candidate.sourceUrl,
-          screen: candidate.viewport,
-          originalHorizontalOverflowPx: Number(
-            candidate.original.metadata?.horizontalOverflowPx ?? 0,
-          ),
-        })),
-      )}`,
+  const executable = await codexBinary();
+  const environment = codexEnvironment();
+  await assertCodexAuthentication(executable, environment);
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-report-'));
+  const schemaPath = join(directory, 'selection.schema.json');
+  const candidatesPath = join(directory, 'candidates.json');
+  const outputPath = join(directory, 'selection.json');
+  const imagePaths = [];
+  const candidateRecords = source.candidates.map((candidate, index) => ({
+    candidateId: candidate.id,
+    imagePair: {
+      original: `candidate-${String(index + 1).padStart(2, '0')}-original`,
+      redesign: `candidate-${String(index + 1).padStart(2, '0')}-redesign`,
     },
-  ];
-  for (const candidate of source.candidates) {
-    content.push({ type: 'input_text', text: `Candidate ${candidate.id} · original website` });
-    content.push({
-      type: 'input_image',
-      image_url: await loadCandidateImage(candidate.original),
-      detail: 'original',
-    });
-    content.push({ type: 'input_text', text: `Candidate ${candidate.id} · verified redesign` });
-    content.push({
-      type: 'input_image',
-      image_url: await loadCandidateImage(candidate.after),
-      detail: 'original',
-    });
-  }
-  const response = await fetch(responseEndpoint, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      store: false,
-      reasoning: { effort: reasoningEffort },
-      input: [{ role: 'user', content }],
-      text: {
-        format: {
-          type: 'json_schema',
-          name: 'client_value_report_selection',
-          strict: true,
-          schema: selectionSchema(source.candidates.map((candidate) => candidate.id)),
-        },
-      },
-    }),
-    signal: AbortSignal.timeout(240_000),
-  });
-  if (!response.ok) {
-    const requestId = response.headers.get('x-request-id');
-    throw new Error(
-      `The report selection model failed (${response.status}${requestId ? `, request ${requestId}` : ''}).`,
-    );
-  }
-  const body = await response.json();
-  const text = outputText(body);
-  if (!text) throw new Error('The report selection model returned no structured result.');
-  let selection;
+    observationId: candidate.observation.id,
+    area: candidate.observation.area,
+    severity: candidate.observation.severity,
+    confidence: candidate.observation.confidence,
+    observation: candidate.observation.observation,
+    customerImpact: candidate.observation.customer_impact,
+    recommendation: candidate.observation.recommendation,
+    sourceUrl: candidate.sourceUrl,
+    screen: candidate.viewport,
+    originalHorizontalOverflowPx: Number(candidate.original.metadata?.horizontalOverflowPx ?? 0),
+  }));
   try {
-    selection = JSON.parse(text);
-  } catch {
-    throw new Error('The report selection model returned unreadable structured output.');
+    await writeFile(
+      schemaPath,
+      `${JSON.stringify(selectionSchema(source.candidates.map((candidate) => candidate.id)), null, 2)}\n`,
+    );
+    await writeFile(
+      candidatesPath,
+      `${JSON.stringify({ prospect: source.business.name, candidates: candidateRecords }, null, 2)}\n`,
+    );
+    for (const [index, candidate] of source.candidates.entries()) {
+      const [original, redesign] = await Promise.all([
+        loadCandidateImage(candidate.original),
+        loadCandidateImage(candidate.after),
+      ]);
+      const number = String(index + 1).padStart(2, '0');
+      const originalPath = join(directory, `candidate-${number}-original.${original.extension}`);
+      const redesignPath = join(directory, `candidate-${number}-redesign.${redesign.extension}`);
+      await Promise.all([
+        writeFile(originalPath, original.bytes),
+        writeFile(redesignPath, redesign.bytes),
+      ]);
+      imagePaths.push(originalPath, redesignPath);
+    }
+
+    const prompt = `${agentContract}\n\nProspect: ${source.business.name}\nRead candidates.json before making a selection. The attached images are ordered as each candidate's original website followed immediately by its verified redesign; the imagePair names in candidates.json match the filenames. Inspect both images at their recorded viewport. Return only the structured report selection required by selection.schema.json. Do not edit files or use network tools.`;
+    const arguments_ = [
+      '--config',
+      'forced_login_method="chatgpt"',
+      'exec',
+      '--cd',
+      directory,
+      '--json',
+      '--ephemeral',
+      '--ignore-user-config',
+      '--sandbox',
+      'read-only',
+      '--skip-git-repo-check',
+      '--output-schema',
+      schemaPath,
+      '--output-last-message',
+      outputPath,
+      '--model',
+      model,
+      '--config',
+      `model_reasoning_effort="${reasoningEffort}"`,
+    ];
+    for (const path of imagePaths) arguments_.push('--image', path);
+    arguments_.push(prompt);
+    const child = spawn(executable, arguments_, {
+      cwd: directory,
+      env: environment,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const events = [];
+    let stdoutBuffer = '';
+    let stderr = '';
+    let cancelled = false;
+    child.stdout.on('data', (chunk) => {
+      stdoutBuffer += chunk.toString();
+      const lines = stdoutBuffer.split('\n');
+      stdoutBuffer = lines.pop() ?? '';
+      for (const line of lines) {
+        try {
+          if (events.length < 300) events.push(JSON.parse(line));
+        } catch {
+          // A malformed diagnostic line cannot become report evidence.
+        }
+      }
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    const cancellationInterval = setInterval(() => {
+      void supabase
+        .from('report_generation_jobs')
+        .select('cancel_requested_at')
+        .eq('id', job.id)
+        .single()
+        .then(({ data }) => {
+          if (data?.cancel_requested_at && !cancelled) {
+            cancelled = true;
+            child.kill('SIGTERM');
+            return;
+          }
+          return updateJob(job, {
+            lease_expires_at: new Date(Date.now() + 8 * 60_000).toISOString(),
+          });
+        })
+        .catch(() => child.kill('SIGTERM'));
+    }, 10_000);
+    const exit = await new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', (code, signal) => resolve({ code, signal }));
+    }).finally(() => clearInterval(cancellationInterval));
+    if (cancelled) throw new ReportCancelledError('Report generation was cancelled.');
+    if (exit.code !== 0) {
+      throw new Error(
+        `Codex report selection failed: ${stderr.trim().slice(-700) || exit.signal || exit.code}`,
+      );
+    }
+    const text = (await readFile(outputPath, 'utf8')).trim();
+    if (!text) throw new Error('The report selection model returned no structured result.');
+    let selection;
+    try {
+      selection = JSON.parse(text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
+    } catch {
+      throw new Error('The report selection model returned unreadable structured output.');
+    }
+    await recordAiUsage(supabase, {
+      organizationId: job.organization_id,
+      businessId: job.business_id,
+      source: 'client_value_report_selection',
+      model,
+      usage: codexUsage(events),
+      billingMode: 'chatgpt_subscription',
+      metadata: {
+        reportGenerationJobId: job.id,
+        generatorContractVersion,
+        reasoningEffort,
+        candidateCount: source.candidates.length,
+        authenticationMode: 'chatgpt',
+      },
+    });
+    const startedEvent = events.find((event) => event?.type === 'thread.started');
+    return {
+      selection,
+      model,
+      responseId: startedEvent?.thread_id ?? startedEvent?.threadId ?? null,
+    };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
-  await recordAiUsage(supabase, {
-    organizationId: job.organization_id,
-    businessId: job.business_id,
-    source: 'client_value_report_selection',
-    model: body.model || model,
-    usage: body.usage,
-    metadata: {
-      reportGenerationJobId: job.id,
-      generatorContractVersion,
-      reasoningEffort,
-      candidateCount: source.candidates.length,
-    },
-  });
-  return { selection, model: body.model || model, responseId: body.id };
 }
 
 function validateSelection(source, result) {
@@ -630,6 +771,10 @@ async function processJob(job) {
       completed_at: new Date().toISOString(),
     });
   } catch (error) {
+    if (error instanceof ReportCancelledError) {
+      await cancellationRequested(job).catch(() => undefined);
+      return;
+    }
     const [errorCode, errorSummary] = errorClassification(error);
     const recoveryAction =
       errorCode === 'evidence_unavailable'
