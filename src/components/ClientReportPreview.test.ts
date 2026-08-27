@@ -18,11 +18,11 @@ const report = (overrides: Partial<DecisionReport> = {}): DecisionReport => ({
   crawlRunId: 'crawl-1',
   status: 'approved',
   version: 2,
-  schemaVersion: 7,
+  schemaVersion: 8,
   summary: 'Frozen summary',
   data: {
-    schemaVersion: 7,
-    generatorRevision: 'verified-design-comparison-v1',
+    schemaVersion: 8,
+    generatorRevision: 'verified-ready-design-comparison-v2',
     reportKind: 'verified_redesign_value',
     title: 'A stronger digital foundation for Client',
     summary: 'Frozen client value summary',
@@ -48,6 +48,15 @@ const report = (overrides: Partial<DecisionReport> = {}): DecisionReport => ({
           sourceUrl: 'https://example.com',
           generatedRoute: '/',
           viewport: { width: 375, height: 812 },
+          verification: {
+            status: 'passed',
+            captureContract: 'verified-comparison-page-ready-v1',
+            pageReady: true,
+            loaderVisible: false,
+            sameViewport: true,
+            originalHorizontalOverflowPx: 240,
+            redesignedHorizontalOverflowPx: 0,
+          },
         },
         comparison: {
           whatChanged: 'The redesigned page creates a clearer reading order.',
@@ -119,7 +128,7 @@ describe('ClientReportPreview frozen report boundary', () => {
     expect(reportUsesProspectValueContract(report({ schemaVersion: 4 }))).toBe(false);
     expect(clientReportContractState(report())).toBe('ready');
     expect(clientReportContractState(report({ schemaVersion: 4 }))).toBe('legacy');
-    expect(clientReportContractState(report({ schemaVersion: 8 }))).toBe('studio_update_required');
+    expect(clientReportContractState(report({ schemaVersion: 9 }))).toBe('studio_update_required');
     expect(
       clientReportContractState(
         report({

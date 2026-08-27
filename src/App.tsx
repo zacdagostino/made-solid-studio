@@ -8935,9 +8935,9 @@ function BuilderRunPanel({
             title: 'Client URL and release contract',
             detail:
               'Generated tests use private /test links, complete builds use private /build links, and approved Clientspace review uses an expiring /review capability. A generated full-site build remains an immutable baseline after editing begins. Live website editing stays in the selected client route on dev.studio.madesolid.com.au, and the current edited website is bound to its exact Git revision. Made Solid handoff requires a matching exact-commit release attestation and creates review material only: it never deploys production or attaches a client domain. Production remains a separate confirmed release action.',
-            revision: `v${selectedAgentPackage.version}.5`,
+            revision: `v${selectedAgentPackage.version}.6`,
             change:
-              'Latest edit: the byte-exact Next.js development rewrite of next-env.d.ts is now treated as generated runtime metadata and restored automatically, while manual environment declarations and real source changes remain pending edits.',
+              'Latest edit: report comparisons now wait for the redesigned page to finish loading, verify the exact source page and viewport, reject redesigned overflow, and preserve complete phone, tablet, and desktop screenshots without cropping.',
           },
           {
             id: 'visual-codex-feedback',

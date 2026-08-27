@@ -62,6 +62,7 @@ function BeforeAfterComparison({
   beforeUrl,
   clientName,
   notice,
+  originalOverflowPx,
   title,
   viewportHeight,
   viewportWidth,
@@ -70,16 +71,23 @@ function BeforeAfterComparison({
   beforeUrl: string;
   clientName: string;
   notice: string;
+  originalOverflowPx: number;
   title: string;
   viewportHeight: number;
   viewportWidth: number;
 }) {
   const [position, setPosition] = useState(50);
+  const maximumFrameWidth = Math.round(Math.min(1120, (viewportWidth / viewportHeight) * 704));
+  const viewportLabel =
+    viewportWidth <= 480 ? 'Phone' : viewportWidth <= 900 ? 'Tablet' : 'Desktop';
   return (
     <figure className={styles.comparisonFigure}>
       <div
         className={styles.comparisonFrame}
-        style={{ aspectRatio: `${viewportWidth} / ${viewportHeight}` }}
+        style={{
+          aspectRatio: `${viewportWidth} / ${viewportHeight}`,
+          maxWidth: `min(100%, ${maximumFrameWidth}px)`,
+        }}
       >
         <img alt={`Original ${clientName} website showing ${title}`} src={beforeUrl} />
         <div
@@ -108,6 +116,14 @@ function BeforeAfterComparison({
         />
       </div>
       <figcaption>
+        <strong>
+          Verified {viewportLabel.toLowerCase()} comparison · {viewportWidth} × {viewportHeight}
+        </strong>
+        <span>
+          {originalOverflowPx > 1
+            ? `The original page was ${originalOverflowPx}px wider than this ${viewportLabel.toLowerCase()} screen. The redesigned page fits without sideways scrolling.`
+            : `Both pages were captured at the same ${viewportLabel.toLowerCase()} screen size. The redesign fits without sideways scrolling.`}
+        </span>
         <strong>What to notice in the original</strong>
         <span>{notice}</span>
         <small>
@@ -406,6 +422,7 @@ export function ClientReportPreview({
                     beforeUrl={evidenceUrls[theme.evidenceArtifactId]}
                     clientName={clientName}
                     notice={theme.whatToNotice || theme.before}
+                    originalOverflowPx={theme.originalOverflowPx}
                     title={theme.title}
                     viewportHeight={theme.viewportHeight}
                     viewportWidth={theme.viewportWidth}

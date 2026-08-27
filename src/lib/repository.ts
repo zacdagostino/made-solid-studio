@@ -4962,8 +4962,8 @@ export class SiteforgeRepository {
         (report) =>
           report.auditId === audit.id &&
           report.crawlRunId === audit.crawlRunId &&
-          report.schemaVersion === 7 &&
-          report.data?.generatorRevision === 'verified-design-comparison-v1' &&
+          report.schemaVersion === 8 &&
+          report.data?.generatorRevision === 'verified-ready-design-comparison-v2' &&
           report.data?.reportKind === 'verified_redesign_value' &&
           (report.data?.redesign as Record<string, unknown> | undefined)?.attestationRowId ===
             release.id,
@@ -5117,6 +5117,11 @@ export class SiteforgeRepository {
         return (
           artifact.kind === 'screenshot' &&
           artifact.metadata.evidenceKind === 'edited-site-comparison' &&
+          artifact.metadata.captureContract === 'verified-comparison-page-ready-v1' &&
+          artifact.metadata.captureStatus === 'passed' &&
+          artifact.metadata.pageReady === true &&
+          artifact.metadata.loaderVisible === false &&
+          Number(artifact.metadata.horizontalOverflowPx ?? 0) <= 1 &&
           artifact.metadata.releaseAttestationId === release.id &&
           artifact.metadata.sourceUrl === evidence.metadata.sourceUrl &&
           viewport?.width === oldViewport?.width &&
@@ -5124,6 +5129,7 @@ export class SiteforgeRepository {
         );
       });
       if (!afterEvidence) return [];
+      const afterViewport = (afterEvidence.metadata.viewport ?? {}) as Record<string, unknown>;
       const copy = clientLanguage[clientArea as keyof typeof clientLanguage];
       const sourceUrls = [evidence.metadata.sourceUrl as string];
       const artifactIds = [
@@ -5183,12 +5189,24 @@ export class SiteforgeRepository {
             viewport: afterEvidence.metadata.viewport,
             sourceUrl: afterEvidence.metadata.sourceUrl,
             generatedRoute: afterEvidence.metadata.generatedRoute,
+            verification: {
+              status: 'passed',
+              captureContract: afterEvidence.metadata.captureContract,
+              pageReady: true,
+              loaderVisible: false,
+              sameViewport: true,
+              originalHorizontalOverflowPx: Number(evidence.metadata.horizontalOverflowPx ?? 0),
+              redesignedHorizontalOverflowPx: Number(
+                afterEvidence.metadata.horizontalOverflowPx ?? 0,
+              ),
+            },
           },
           comparison: {
             ...comparison,
             customerValue: copy.value,
             evidenceBasis:
               'Matched source-page provenance, matched viewport and passed exact-commit verification.',
+            verificationSummary: `Verified ${String(afterViewport.label ?? 'responsive')} comparison at ${String(afterViewport.width)} × ${String(afterViewport.height)} after the page loader completed.`,
           },
           internalEvidence: {
             observationIds: items.map((item) => item.observation.id),
@@ -5221,18 +5239,18 @@ export class SiteforgeRepository {
       status: 'passed',
     }));
     const report: DecisionReport = {
-      id: `report-version-v7-design-comparison-${audit.id}-${release.id}`,
+      id: `report-version-v8-ready-design-comparison-${audit.id}-${release.id}`,
       businessId,
       auditId: audit.id,
       crawlRunId: audit.crawlRunId,
       status: 'approved',
       version: nextVersion,
-      schemaVersion: 7,
+      schemaVersion: 8,
       reviewState: 'approved',
       summary: `${eligible.length} evidence-backed cases automatically consolidated into ${valueThemes.length} value themes and tied to verified edit v${release.sourceEditVersion}.`,
       data: {
-        schemaVersion: 7,
-        generatorRevision: 'verified-design-comparison-v1',
+        schemaVersion: 8,
+        generatorRevision: 'verified-ready-design-comparison-v2',
         reportKind: 'verified_redesign_value',
         auditId: audit.id,
         crawlRunId: audit.crawlRunId,

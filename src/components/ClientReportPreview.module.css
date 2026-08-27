@@ -229,12 +229,14 @@
   overflow: hidden;
 }
 .comparisonFigure {
-  background: #18231f;
+  background: #edf1ef;
   border: 1px solid #bdc9c4;
   border-radius: var(--radius);
   overflow: hidden;
 }
 .comparisonFrame {
+  background: #18231f;
+  margin-inline: auto;
   max-height: 44rem;
   overflow: hidden;
   position: relative;
@@ -245,7 +247,7 @@
 .afterLayer img {
   height: 100%;
   inset: 0;
-  object-fit: cover;
+  object-fit: contain;
   object-position: top;
   position: absolute;
   width: 100%;
@@ -353,7 +355,7 @@
 .finding .comparisonFrame > img,
 .finding .comparisonFrame .afterLayer img {
   max-height: none;
-  object-fit: cover;
+  object-fit: contain;
 }
 .finding figcaption {
   background: #fff;

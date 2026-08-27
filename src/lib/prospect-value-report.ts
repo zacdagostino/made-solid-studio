@@ -1,6 +1,6 @@
 import type { DecisionReport } from './domain';
 
-export const prospectValueReportSchemaVersion = 7;
+export const prospectValueReportSchemaVersion = 8;
 export const prospectValueReportKind = 'verified_redesign_value';
 
 export type ProspectValueReportTheme = {
@@ -22,6 +22,9 @@ export type ProspectValueReportTheme = {
   designPriority: string;
   whatChanged: string;
   whyBetter: string;
+  comparisonProof: string;
+  originalOverflowPx: number;
+  redesignedOverflowPx: number;
   hasEditedSiteProof: boolean;
 };
 
@@ -89,6 +92,7 @@ export function reportUsesProspectValueContract(report?: DecisionReport) {
     const afterEvidence = record(theme.afterEvidence);
     const afterViewport = record(afterEvidence.viewport);
     const comparison = record(theme.comparison);
+    const verification = record(afterEvidence.verification);
     return Boolean(
       text(evidence.artifactId) &&
       text(evidence.sourceUrl) &&
@@ -102,12 +106,18 @@ export function reportUsesProspectValueContract(report?: DecisionReport) {
       number(afterViewport.width) === number(viewport.width) &&
       number(afterViewport.height) === number(viewport.height) &&
       text(comparison.whatChanged) &&
-      text(comparison.whyBetter),
+      text(comparison.whyBetter) &&
+      verification.status === 'passed' &&
+      verification.captureContract === 'verified-comparison-page-ready-v1' &&
+      verification.pageReady === true &&
+      verification.loaderVisible === false &&
+      verification.sameViewport === true &&
+      number(verification.redesignedHorizontalOverflowPx) <= 1,
     );
   });
   return Boolean(
     data.reportKind === prospectValueReportKind &&
-    data.generatorRevision === 'verified-design-comparison-v1' &&
+    data.generatorRevision === 'verified-ready-design-comparison-v2' &&
     redesign.status === 'passed' &&
     text(redesign.attestationId) &&
     text(redesign.sourceBuilderRunId) &&
@@ -153,6 +163,7 @@ export function prospectValueReportView(
       const editedSiteProof = record(item.editedSiteProof);
       const afterEvidence = record(item.afterEvidence);
       const comparison = record(item.comparison);
+      const verification = record(afterEvidence.verification);
       const businessOpportunity = text(item.businessOpportunity || item.value);
       if (!title || !before || !businessOpportunity || !text(evidence.artifactId)) return [];
       return [
@@ -177,6 +188,11 @@ export function prospectValueReportView(
           designPriority: text(item.designPriority),
           whatChanged: text(comparison.whatChanged),
           whyBetter: text(comparison.whyBetter),
+          comparisonProof:
+            text(comparison.verificationSummary) ||
+            `Both screenshots were captured at ${width} × ${height}.`,
+          originalOverflowPx: Math.max(0, number(verification.originalHorizontalOverflowPx)),
+          redesignedOverflowPx: Math.max(0, number(verification.redesignedHorizontalOverflowPx)),
           hasEditedSiteProof: Boolean(
             text(editedSiteProof.artifactId) && text(editedSiteProof.clientOutcome),
           ),

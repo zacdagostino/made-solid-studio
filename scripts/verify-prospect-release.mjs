@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* global HTMLElement, document, getComputedStyle, requestAnimationFrame, window */
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -156,6 +157,91 @@ function normaliseSourceUrl(value) {
   }
 }
 
+const comparisonCaptureContract = 'verified-comparison-page-ready-v1';
+
+async function waitForComparisonPageReady(page, viewport) {
+  await page.waitForFunction(
+    ({ width, height }) => {
+      const visible = (element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        const rectangle = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return (
+          rectangle.width > 0 &&
+          rectangle.height > 0 &&
+          style.display !== 'none' &&
+          style.visibility !== 'hidden' &&
+          Number(style.opacity) > 0
+        );
+      };
+      const intro = document.querySelector('[data-siteforge-brand-intro]');
+      return (
+        document.readyState === 'complete' &&
+        window.innerWidth === width &&
+        window.innerHeight === height &&
+        !document.documentElement.classList.contains('sf-route-transitioning') &&
+        !visible(intro) &&
+        visible(document.querySelector('main')) &&
+        visible(document.querySelector('h1'))
+      );
+    },
+    { width: viewport.width, height: viewport.height },
+    { timeout: 15_000 },
+  );
+  await page.evaluate(async () => {
+    await document.fonts?.ready;
+    const visibleImages = [...document.images].filter((image) => {
+      const rectangle = image.getBoundingClientRect();
+      return rectangle.top < window.innerHeight && rectangle.bottom > 0;
+    });
+    await Promise.all(visibleImages.map((image) => image.decode().catch(() => undefined)));
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined))),
+    );
+  });
+  const state = await page.evaluate(() => {
+    const root = document.documentElement;
+    const intro = document.querySelector('[data-siteforge-brand-intro]');
+    const introStyle = intro ? getComputedStyle(intro) : undefined;
+    const introRectangle = intro?.getBoundingClientRect();
+    const loaderVisible = Boolean(
+      intro &&
+      introStyle?.display !== 'none' &&
+      introStyle?.visibility !== 'hidden' &&
+      Number(introStyle?.opacity ?? 1) > 0 &&
+      (introRectangle?.width ?? 0) > 0 &&
+      (introRectangle?.height ?? 0) > 0,
+    );
+    return {
+      pageReady: document.readyState === 'complete',
+      loaderVisible,
+      routeTransitioning: root.classList.contains('sf-route-transitioning'),
+      layoutViewportWidth: window.innerWidth,
+      layoutViewportHeight: window.innerHeight,
+      horizontalOverflowPx: Math.max(0, root.scrollWidth - root.clientWidth),
+      mainVisible: Boolean(document.querySelector('main')),
+      h1Visible: Boolean(document.querySelector('h1')),
+      visibleTextLength: (document.body.innerText || '').replace(/\s+/g, ' ').trim().length,
+    };
+  });
+  if (
+    !state.pageReady ||
+    state.loaderVisible ||
+    state.routeTransitioning ||
+    !state.mainVisible ||
+    !state.h1Visible ||
+    state.visibleTextLength < 40 ||
+    state.layoutViewportWidth !== viewport.width ||
+    state.layoutViewportHeight !== viewport.height ||
+    state.horizontalOverflowPx > 1
+  ) {
+    throw new Error(
+      `The redesigned comparison page was not ready at ${viewport.width}×${viewport.height}: ${JSON.stringify(state)}.`,
+    );
+  }
+  return state;
+}
+
 async function renderedSourceRoutes(browser, baseUrl, routes) {
   const context = await browser.newContext({ viewport: { width: 375, height: 812 } });
   const page = await context.newPage();
@@ -252,11 +338,33 @@ async function persistDesignComparisonScreenshots(record, releaseRowId, browser,
   for (const candidate of candidates) {
     const context = await browser.newContext({
       viewport: { width: candidate.viewport.width, height: candidate.viewport.height },
+      isMobile: candidate.viewport.label !== 'desktop',
+      hasTouch: candidate.viewport.label !== 'desktop',
+      reducedMotion: 'reduce',
+      deviceScaleFactor: 1,
+      serviceWorkers: 'block',
     });
     const page = await context.newPage();
     try {
       await page.goto(`${baseUrl}${candidate.route}`, { waitUntil: 'networkidle' });
-      const image = await page.screenshot({ type: 'png' });
+      const captureState = await waitForComparisonPageReady(page, candidate.viewport);
+      const renderedSourceUrl = normaliseSourceUrl(
+        await page.locator('meta[name="siteforge-source-url"]').getAttribute('content'),
+      );
+      if (renderedSourceUrl !== candidate.sourceUrl) {
+        throw new Error(
+          `The redesigned comparison route ${candidate.route} does not match ${candidate.sourceUrl}.`,
+        );
+      }
+      const image = await page.screenshot({
+        type: 'png',
+        clip: {
+          x: 0,
+          y: 0,
+          width: candidate.viewport.width,
+          height: candidate.viewport.height,
+        },
+      });
       const digest = createHash('sha256').update(image).digest('hex');
       const identity = createHash('sha256').update(candidate.key).digest('hex').slice(0, 20);
       const storageBucket = 'siteforge-artifacts';
@@ -279,6 +387,15 @@ async function persistDesignComparisonScreenshots(record, releaseRowId, browser,
         },
         originalArtifactId: candidate.oldArtifact.id,
         observationId: candidate.observation.id,
+        captureContract: comparisonCaptureContract,
+        captureStatus: 'passed',
+        pageReady: captureState.pageReady,
+        loaderVisible: captureState.loaderVisible,
+        routeTransitioning: captureState.routeTransitioning,
+        layoutViewportWidth: captureState.layoutViewportWidth,
+        layoutViewportHeight: captureState.layoutViewportHeight,
+        horizontalOverflowPx: captureState.horizontalOverflowPx,
+        visibleTextLength: captureState.visibleTextLength,
       };
       const { error: saveError } = await supabase.from('artifacts').upsert(
         {

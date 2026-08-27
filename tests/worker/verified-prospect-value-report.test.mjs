@@ -18,6 +18,10 @@ const comparisonMigrationUrl = new URL(
   '../../supabase/migrations/20260826320000_verified_design_comparison_reports.sql',
   import.meta.url,
 );
+const readyComparisonMigrationUrl = new URL(
+  '../../supabase/migrations/20260826330000_verified_page_ready_comparison_reports.sql',
+  import.meta.url,
+);
 const previewWorkerUrl = new URL('../../worker/report-preview-worker.mjs', import.meta.url);
 const releaseVerifierUrl = new URL('../../scripts/verify-prospect-release.mjs', import.meta.url);
 const reportParserUrl = new URL('../../src/lib/prospect-value-report.ts', import.meta.url);
@@ -40,6 +44,7 @@ test('freezes prospect reports against the exact verified edited website', async
     demonstrableMigration,
     highPriorityMigration,
     comparisonMigration,
+    readyComparisonMigration,
   ] = await Promise.all([
     readFile(migrationUrl, 'utf8'),
     readFile(previewWorkerUrl, 'utf8'),
@@ -51,6 +56,7 @@ test('freezes prospect reports against the exact verified edited website', async
     readFile(demonstrableMigrationUrl, 'utf8'),
     readFile(highPriorityMigrationUrl, 'utf8'),
     readFile(comparisonMigrationUrl, 'utf8'),
+    readFile(readyComparisonMigrationUrl, 'utf8'),
   ]);
   const reportRpc = migration.slice(
     migration.indexOf('create or replace function public.create_audit_report_version'),
@@ -85,7 +91,7 @@ test('freezes prospect reports against the exact verified edited website', async
     /This earlier report format must be regenerated before Clientspace preview/,
   );
 
-  assert.match(previewWorker, /report\.schema_version !== 7/);
+  assert.match(previewWorker, /report\.schema_version !== 8/);
   assert.match(previewWorker, /verified_redesign_value/);
   assert.match(previewWorker, /source_release_attestations/);
   assert.match(previewWorker, /reportData\?\.valueThemes/);
@@ -99,13 +105,17 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(releaseVerifier, /persistDesignComparisonScreenshots/);
   assert.match(releaseVerifier, /siteforge-source-url/);
   assert.match(releaseVerifier, /release-comparisons/);
+  assert.match(releaseVerifier, /waitForComparisonPageReady/);
+  assert.match(releaseVerifier, /verified-comparison-page-ready-v1/);
+  assert.match(releaseVerifier, /loaderVisible/);
+  assert.match(releaseVerifier, /horizontalOverflowPx > 1/);
 
-  assert.match(reportParser, /prospectValueReportSchemaVersion = 7/);
+  assert.match(reportParser, /prospectValueReportSchemaVersion = 8/);
   assert.match(reportParser, /reportUsesProspectValueContract/);
   assert.match(reportParser, /redesign\.status === 'passed'/);
 
   assert.match(localRepository, /'sourceReleaseAttestations'/);
-  assert.match(localRepository, /report\.schemaVersion === 7/);
+  assert.match(localRepository, /report\.schemaVersion === 8/);
   assert.match(localRepository, /observation\.confidence !== 'low'/);
   assert.match(localRepository, /observation\.reviewState !== 'blocked'/);
   assert.match(localRepository, /observation\.area !== 'Platform'/);
@@ -113,7 +123,7 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(localRepository, /if \(existing\) return existing/);
   assert.match(
     localRepository,
-    /id: `report-version-v7-design-comparison-\$\{audit\.id\}-\$\{release\.id\}`/,
+    /id: `report-version-v8-ready-design-comparison-\$\{audit\.id\}-\$\{release\.id\}`/,
   );
   assert.match(localRepository, /\.slice\(0, 3\)/);
   assert.match(localRepository, /observation\.sourceUrls\.includes\(sourceUrl\)/);
@@ -122,7 +132,7 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(localRepository, /afterEvidence/);
   assert.match(localRepository, /designPriority/);
   assert.match(localRepository, /observation\.severity === 'high'/);
-  assert.match(localRepository, /verified-design-comparison-v1/);
+  assert.match(localRepository, /verified-ready-design-comparison-v2/);
 
   assert.match(demonstrableMigration, /finding_class = 'observed_defect'/);
   assert.match(demonstrableMigration, /screenshot-demonstrable-v2/);
@@ -134,6 +144,12 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(comparisonMigration, /afterEvidence/);
   assert.match(comparisonMigration, /requiresSameViewport/);
   assert.match(comparisonMigration, /target_report\.schema_version <> 7/);
+  assert.match(readyComparisonMigration, /'schemaVersion', 8/);
+  assert.match(readyComparisonMigration, /verified-ready-design-comparison-v2/);
+  assert.match(readyComparisonMigration, /verified-comparison-page-ready-v1/);
+  assert.match(readyComparisonMigration, /loaderVisible/);
+  assert.match(readyComparisonMigration, /horizontalOverflowPx/);
+  assert.match(readyComparisonMigration, /target_report\.schema_version <> 8/);
 
   assert.match(cloudRepository, /sourceReleaseAttestationAvailability/);
   assert.match(cloudRepository, /PGRST205/);

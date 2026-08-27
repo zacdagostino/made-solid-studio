@@ -27,6 +27,13 @@ const comparisonReportMigration = await readFile(
   ),
   'utf8',
 );
+const readyComparisonReportMigration = await readFile(
+  new URL(
+    '../../supabase/migrations/20260826330000_verified_page_ready_comparison_reports.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
 
 test('report preview is a durable, cancellable exact-version worker job', () => {
   assert.match(migration, /report_version_id uuid not null/);
@@ -38,6 +45,7 @@ test('report preview is a durable, cancellable exact-version worker job', () => 
   assert.match(migration, /target_report\.crawl_run_id/);
   assert.match(valueReportMigration, /target_report\.schema_version <> 6/);
   assert.match(comparisonReportMigration, /target_report\.schema_version <> 7/);
+  assert.match(readyComparisonReportMigration, /target_report\.schema_version <> 8/);
   assert.match(valueReportMigration, /target_attestation public\.source_release_attestations/);
 });
 
@@ -45,7 +53,8 @@ test('worker keeps the secret server-side and resolves canonical screenshot prov
   assert.match(worker, /MADE_SOLID_REPORT_PREVIEW_URL/);
   assert.match(worker, /STUDIO_HANDOFF_SECRET/);
   assert.match(worker, /sourceReportId: source\.report\.id/);
-  assert.match(worker, /report\.schema_version !== 7/);
+  assert.match(worker, /report\.schema_version !== 8/);
+  assert.match(worker, /verified-ready-design-comparison-v2/);
   assert.match(worker, /finding\?\.afterEvidence/);
   assert.match(worker, /source_release_attestations/);
   assert.match(worker, /\.eq\('business_id', job\.business_id\)/);

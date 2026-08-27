@@ -14,11 +14,11 @@ function valueReport() {
     status: 'approved',
     reviewState: 'approved',
     version: 4,
-    schemaVersion: 7,
+    schemaVersion: 8,
     summary: 'Four reviewed cases consolidated into two value themes and tied to verified edit v3.',
     data: {
-      schemaVersion: 7,
-      generatorRevision: 'verified-design-comparison-v1',
+      schemaVersion: 8,
+      generatorRevision: 'verified-ready-design-comparison-v2',
       reportKind: 'verified_redesign_value',
       title: 'See the difference for Demo Local Services',
       summary:
@@ -64,6 +64,15 @@ function valueReport() {
             sourceUrl: 'https://demo-local-services.example/',
             generatedRoute: '/',
             viewport: { width: 375, height: 812 },
+            verification: {
+              status: 'passed',
+              captureContract: 'verified-comparison-page-ready-v1',
+              pageReady: true,
+              loaderVisible: false,
+              sameViewport: true,
+              originalHorizontalOverflowPx: 240,
+              redesignedHorizontalOverflowPx: 0,
+            },
           },
           comparison: {
             whatChanged: 'The redesigned page creates a deliberate mobile hierarchy.',
@@ -98,6 +107,15 @@ function valueReport() {
             sourceUrl: 'https://demo-local-services.example/contact',
             generatedRoute: '/contact/',
             viewport: { width: 768, height: 1024 },
+            verification: {
+              status: 'passed',
+              captureContract: 'verified-comparison-page-ready-v1',
+              pageReady: true,
+              loaderVisible: false,
+              sameViewport: true,
+              originalHorizontalOverflowPx: 160,
+              redesignedHorizontalOverflowPx: 0,
+            },
           },
           comparison: {
             whatChanged: 'The redesigned page creates a clearer enquiry journey.',
@@ -129,6 +147,15 @@ function valueReport() {
             sourceUrl: 'https://demo-local-services.example/about',
             generatedRoute: '/about/',
             viewport: { width: 1440, height: 900 },
+            verification: {
+              status: 'passed',
+              captureContract: 'verified-comparison-page-ready-v1',
+              pageReady: true,
+              loaderVisible: false,
+              sameViewport: true,
+              originalHorizontalOverflowPx: 0,
+              redesignedHorizontalOverflowPx: 0,
+            },
           },
           comparison: {
             whatChanged: 'The redesign presents business proof beside relevant information.',
@@ -480,10 +507,10 @@ test('does not ask for regeneration while Studio is updating to a newer report f
     ...valueReport(),
     id: 'report-newer-than-studio-e2e',
     version: 12,
-    schemaVersion: 8,
+    schemaVersion: 9,
     data: {
       ...valueReport().data,
-      schemaVersion: 8,
+      schemaVersion: 9,
     },
   };
   await seedReport(page, newerReport);
