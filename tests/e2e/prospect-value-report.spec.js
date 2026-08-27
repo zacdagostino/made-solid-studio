@@ -14,11 +14,11 @@ function valueReport() {
     status: 'approved',
     reviewState: 'approved',
     version: 4,
-    schemaVersion: 8,
+    schemaVersion: 9,
     summary: 'Four reviewed cases consolidated into two value themes and tied to verified edit v3.',
     data: {
-      schemaVersion: 8,
-      generatorRevision: 'verified-ready-design-comparison-v2',
+      schemaVersion: 9,
+      generatorRevision: 'gpt-5.6-sol-design-curation-v1',
       reportKind: 'verified_redesign_value',
       title: 'See the difference for Demo Local Services',
       summary:
@@ -229,7 +229,7 @@ async function seedReport(page, report) {
         request.onsuccess = () => {
           const database = request.result;
           const transaction = database.transaction(
-            ['crawlRuns', 'audits', 'artifacts', 'reportVersions'],
+            ['crawlRuns', 'audits', 'artifacts', 'reportVersions', 'sourceReleaseAttestations'],
             'readwrite',
           );
           transaction.onerror = () => reject(transaction.error);
@@ -315,9 +315,61 @@ async function seedReport(page, report) {
             });
           });
           transaction.objectStore('reportVersions').put(report);
+          transaction.objectStore('sourceReleaseAttestations').put({
+            id: 'release-attestation-e2e',
+            businessId,
+            attestationId: 'a'.repeat(64),
+            sourceBuilderRunId: 'builder-value-report-e2e',
+            sourceManifestId: 'manifest-value-report-e2e',
+            sourceRepositoryUrl: 'https://github.com/example/report-site',
+            sourceCommit: 'b'.repeat(40),
+            sourceTree: 'c'.repeat(40),
+            sourceBranch: 'main',
+            sourceEditVersion: 3,
+            verificationProfile: 'made-solid-edited-site-release-v1',
+            verifiedAt: '2099-08-26T03:56:55.654Z',
+            createdAt: '2099-08-26T03:56:55.654Z',
+            checks: [
+              ['source-verification', 'Source verification'],
+              ['responsive-layout', 'Responsive layout'],
+              ['responsive-navigation', 'Responsive navigation'],
+              ['accessibility', 'Accessibility'],
+            ].map(([id, label]) => ({ id, label, detail: 'Passed.', status: 'passed' })),
+            sourceBuilderStatus: 'review_required',
+          });
         };
       }),
     { auditId, businessId, crawlRunId, report },
+  );
+}
+
+async function seedReportGenerationJob(page, overrides = {}) {
+  await page.evaluate(
+    ({ auditId, businessId, crawlRunId, overrides }) => {
+      window.localStorage.setItem(
+        'siteforge-e2e-report-generation-job',
+        JSON.stringify({
+          id: 'report-generation-e2e',
+          businessId,
+          auditId,
+          crawlRunId,
+          releaseAttestationId: 'release-attestation-e2e',
+          generatorContractVersion: 'client-value-report-agent-v1',
+          model: 'gpt-5.6-sol',
+          reasoningEffort: 'max',
+          status: 'running',
+          progressPhase: 'analysing_comparisons',
+          progressDetail: 'Comparing six verified design candidates.',
+          totalItems: 5,
+          completedItems: 1,
+          errorContext: {},
+          createdAt: '2099-08-27T00:00:00.000Z',
+          updatedAt: '2099-08-27T00:00:00.000Z',
+          ...overrides,
+        }),
+      );
+    },
+    { auditId, businessId, crawlRunId, overrides },
   );
 }
 
@@ -507,10 +559,10 @@ test('does not ask for regeneration while Studio is updating to a newer report f
     ...valueReport(),
     id: 'report-newer-than-studio-e2e',
     version: 12,
-    schemaVersion: 9,
+    schemaVersion: 10,
     data: {
       ...valueReport().data,
-      schemaVersion: 9,
+      schemaVersion: 10,
     },
   };
   await seedReport(page, newerReport);
@@ -527,6 +579,72 @@ test('does not ask for regeneration while Studio is updating to a newer report f
   );
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await expect(page).toHaveScreenshot('newer-report-studio-update.png', {
+    fullPage: true,
+    animations: 'disabled',
+  });
+});
+
+test('shows the active replacement job instead of the stale report on Preview', async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const legacy = {
+    ...valueReport(),
+    id: 'report-running-replacement-e2e',
+    schemaVersion: 8,
+    data: { schemaVersion: 8, title: 'Earlier report', findings: [] },
+  };
+  await seedReport(page, legacy);
+  await seedReportGenerationJob(page);
+  await page.goto(`/#/prospects/${businessId}/report-preview`);
+
+  await expect(
+    page.getByRole('heading', { name: 'GPT-5.6 Sol is choosing the strongest comparisons' }),
+  ).toBeVisible();
+  await expect(page.getByText('Step 2 of 5 · gpt-5.6-sol · max reasoning')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Cancel generation' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'This report needs to be regenerated' }),
+  ).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+    page.viewportSize().width,
+  );
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await expect(page).toHaveScreenshot('client-report-generation-running.png', {
+    fullPage: true,
+    animations: 'disabled',
+  });
+});
+
+test('shows the saved report error with a direct retry control', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const legacy = {
+    ...valueReport(),
+    id: 'report-failed-replacement-e2e',
+    schemaVersion: 8,
+    data: { schemaVersion: 8, title: 'Earlier report', findings: [] },
+  };
+  await seedReport(page, legacy);
+  await seedReportGenerationJob(page, {
+    status: 'failed',
+    progressPhase: 'validating_selection',
+    progressDetail: 'Report generation stopped before a new client report was saved.',
+    errorCode: 'selection_rejected',
+    errorSummary: 'The report agent returned an unsupported client claim.',
+    errorContext: { retryable: true, recoveryAction: 'retry' },
+  });
+  await page.goto(`/#/prospects/${businessId}/report`);
+
+  await expect(page.getByText('Report generation stopped', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(/Error selection_rejected · phase validating_selection/),
+  ).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Retry report generation' })).toBeEnabled();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+    page.viewportSize().width,
+  );
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await expect(page).toHaveScreenshot('client-report-generation-error.png', {
     fullPage: true,
     animations: 'disabled',
   });

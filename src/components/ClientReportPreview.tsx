@@ -7,13 +7,16 @@ import {
   LockKeyhole,
   MoveHorizontal,
   RefreshCcw,
+  RotateCcw,
   ShieldCheck,
+  ShieldAlert,
   Sparkles,
 } from 'lucide-react';
 import { useState } from 'react';
 import type {
   Audit,
   DecisionReport,
+  ReportGenerationJob,
   ReportPreviewJob,
   SourceReleaseAttestation,
 } from '../lib/domain';
@@ -22,7 +25,7 @@ import {
   prospectValueReportView,
   reportUsesProspectValueContract,
 } from '../lib/prospect-value-report';
-import { Button, ButtonGroup, ButtonLink } from './ui';
+import { Button, ButtonGroup, ButtonLink, IndeterminateProgress } from './ui';
 import styles from './ClientReportPreview.module.css';
 
 export function clientReportThemes<T extends { evidenceArtifactId?: string }>(themes: T[]) {
@@ -31,7 +34,7 @@ export function clientReportThemes<T extends { evidenceArtifactId?: string }>(th
       (left, right) =>
         Number(Boolean(right.evidenceArtifactId)) - Number(Boolean(left.evidenceArtifactId)),
     )
-    .slice(0, 3);
+    .slice(0, 4);
 }
 
 export function clientReportContractState(
@@ -171,8 +174,12 @@ export function ClientReportPreview({
   audit,
   clientName,
   evidenceUrls,
+  generationJob,
+  generationWorkerAvailable,
   latestReleaseAttestation,
+  onCancelGeneration,
   onRequestRemotePreview,
+  onRetryGeneration,
   remoteJob,
   report,
   reportPreviewWorkerAvailable,
@@ -182,8 +189,12 @@ export function ClientReportPreview({
   audit?: Audit;
   clientName: string;
   evidenceUrls: Record<string, string>;
+  generationJob?: ReportGenerationJob;
+  generationWorkerAvailable: boolean;
   latestReleaseAttestation?: SourceReleaseAttestation;
+  onCancelGeneration: (jobId: string) => Promise<void>;
   onRequestRemotePreview: (reportVersionId: string) => Promise<void>;
+  onRetryGeneration: () => Promise<void>;
   remoteJob?: ReportPreviewJob;
   report?: DecisionReport;
   reportPreviewWorkerAvailable: boolean;
@@ -203,6 +214,153 @@ export function ClientReportPreview({
       view.redesign.sourceCommit !== latestReleaseAttestation.sourceCommit),
   );
   const clientThemes = view ? clientReportThemes(view.themes) : [];
+  const generationActive =
+    generationJob?.status === 'queued' || generationJob?.status === 'running';
+  const generationStopped =
+    generationJob?.status === 'failed' || generationJob?.status === 'cancelled';
+
+  if (generationActive) {
+    return (
+      <section aria-labelledby="report-generation-title" className={styles.generationState}>
+        <span aria-hidden="true" className={styles.generationIcon}>
+          <LoaderCircle className={styles.spin} size={24} />
+        </span>
+        <div>
+          <p className={styles.kicker}>Replacing the client report</p>
+          <h2 id="report-generation-title">
+            {generationJob.status === 'queued'
+              ? 'The new report is queued'
+              : 'GPT-5.6 Sol is choosing the strongest comparisons'}
+          </h2>
+          <p>
+            {generationJob.progressDetail ||
+              'Studio is analysing the verified before-and-after evidence.'}
+          </p>
+          <small>
+            Step {Math.min(generationJob.completedItems + 1, generationJob.totalItems)} of{' '}
+            {generationJob.totalItems} · {generationJob.model} · {generationJob.reasoningEffort}{' '}
+            reasoning
+          </small>
+          <IndeterminateProgress
+            detail={generationJob.progressDetail || 'Analysing verified comparison candidates.'}
+            label="Client report generation"
+          />
+          <p className={styles.generationNote}>
+            The previous report remains in history and is not shown as the current result while this
+            replacement is running. You can leave this page and return later.
+          </p>
+        </div>
+        <ButtonGroup className={styles.generationActions}>
+          <Button
+            onClick={() => void onCancelGeneration(generationJob.id)}
+            size="small"
+            variant="secondary"
+          >
+            Cancel generation
+          </Button>
+          <ButtonLink
+            href={`#/prospects/${generationJob.businessId}/report`}
+            size="small"
+            variant="secondary"
+          >
+            View report status
+          </ButtonLink>
+        </ButtonGroup>
+      </section>
+    );
+  }
+
+  if (generationStopped) {
+    const failed = generationJob.status === 'failed';
+    const recoveryAction = generationJob.errorContext.recoveryAction;
+    const retryable = recoveryAction === undefined || recoveryAction === 'retry';
+    return (
+      <section
+        aria-labelledby="report-generation-error-title"
+        className={styles.generationError}
+        role="alert"
+      >
+        <span aria-hidden="true" className={styles.generationErrorIcon}>
+          <ShieldAlert size={24} />
+        </span>
+        <div>
+          <p className={styles.kicker}>
+            {failed ? 'Report generation error' : 'Generation cancelled'}
+          </p>
+          <h2 id="report-generation-error-title">
+            {failed
+              ? 'The replacement report was not created'
+              : 'The replacement report was stopped'}
+          </h2>
+          <p>
+            {generationJob.errorSummary ||
+              generationJob.progressDetail ||
+              'No new client report was saved.'}
+          </p>
+          {generationJob.errorCode ? (
+            <small>
+              Error {generationJob.errorCode} · phase {generationJob.progressPhase}
+            </small>
+          ) : null}
+          {!generationWorkerAvailable ? (
+            <p className={styles.generationNote}>
+              The protected report worker is offline. Reconnect it before retrying.
+            </p>
+          ) : null}
+        </div>
+        <ButtonGroup className={styles.generationActions}>
+          {retryable ? (
+            <Button
+              disabled={!generationWorkerAvailable}
+              onClick={() => void onRetryGeneration()}
+              size="small"
+              variant="primary"
+            >
+              <RotateCcw aria-hidden="true" size={16} /> Retry report generation
+            </Button>
+          ) : recoveryAction === 'rerun_release_verification' ? (
+            <ButtonLink
+              href={`#/prospects/${generationJob.businessId}/editing`}
+              size="small"
+              variant="primary"
+            >
+              Re-run website verification <ArrowRight aria-hidden="true" size={16} />
+            </ButtonLink>
+          ) : (
+            <Button disabled size="small" variant="primary">
+              Worker configuration required
+            </Button>
+          )}
+          <ButtonLink
+            href={`#/prospects/${generationJob.businessId}/report`}
+            size="small"
+            variant="secondary"
+          >
+            View full status
+          </ButtonLink>
+        </ButtonGroup>
+      </section>
+    );
+  }
+
+  if (generationJob?.status === 'ready' && !current) {
+    return (
+      <section
+        aria-labelledby="report-generation-ready-title"
+        className={styles.generationState}
+        role="status"
+      >
+        <span aria-hidden="true" className={styles.generationIcon}>
+          <LoaderCircle className={styles.spin} size={24} />
+        </span>
+        <div>
+          <p className={styles.kicker}>Report saved</p>
+          <h2 id="report-generation-ready-title">Loading the new client report</h2>
+          <p>The generation worker finished successfully. Studio is refreshing the saved report.</p>
+        </div>
+      </section>
+    );
+  }
 
   if (report && contractState === 'studio_update_required') {
     return (

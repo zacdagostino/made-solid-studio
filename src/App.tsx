@@ -154,6 +154,7 @@ import {
   type ProspectWorkspace,
   type RedesignBrief,
   type RedesignBriefDraft,
+  type ReportGenerationJob,
   type ResearchArtifact,
   type Task,
   type StructuredVisualContent,
@@ -8935,9 +8936,9 @@ function BuilderRunPanel({
             title: 'Client URL and release contract',
             detail:
               'Generated tests use private /test links, complete builds use private /build links, and approved Clientspace review uses an expiring /review capability. A generated full-site build remains an immutable baseline after editing begins. Live website editing stays in the selected client route on dev.studio.madesolid.com.au, and the current edited website is bound to its exact Git revision. Made Solid handoff requires a matching exact-commit release attestation and creates review material only: it never deploys production or attaches a client domain. Production remains a separate confirmed release action.',
-            revision: `v${selectedAgentPackage.version}.6`,
+            revision: `v${selectedAgentPackage.version}.7`,
             change:
-              'Latest edit: report comparisons now wait for the redesigned page to finish loading, verify the exact source page and viewport, reject redesigned overflow, and preserve complete phone, tablet, and desktop screenshots without cropping.',
+              'Latest edit: client reports now use a persisted GPT-5.6 Sol design-curation job at maximum reasoning to choose one to four verified comparisons, with visible phases, cancellation, exact error codes, recovery actions, and retry controls on Report and Preview.',
           },
           {
             id: 'visual-codex-feedback',
@@ -20074,23 +20075,33 @@ function AuditPanel({
 
 function AuditReportWorkspacePanel({
   workspace,
+  onCancelReport,
   onPrepareReport,
   onRetryAudit,
 }: {
   workspace: ProspectWorkspace;
+  onCancelReport: (jobId: string) => Promise<void>;
   onPrepareReport: () => Promise<void>;
   onRetryAudit: () => Promise<void>;
 }) {
+  const release = workspace.sourceReleaseAttestations[0];
+  const generationJob = reportGenerationJobForWorkspace(workspace, release?.id);
+  const generationWorkerAvailable =
+    workspace.reportGenerationWorkerAvailable ||
+    (import.meta.env.VITE_SITEFORGE_E2E_FIXTURES === 'true' && Boolean(generationJob));
   return (
     <Card className="workspace-panel">
       <AutomatedReportPanel
         activeCaptureRunId={workspace.latestCapture?.id}
         audit={workspace.audit}
         clientName={workspace.business.name}
+        generationJob={generationJob}
+        generationWorkerAvailable={generationWorkerAvailable}
         observations={workspace.auditObservations ?? []}
+        onCancelReport={onCancelReport}
         onPrepareReport={onPrepareReport}
         onRetryAudit={onRetryAudit}
-        releaseAttestation={workspace.sourceReleaseAttestations[0]}
+        releaseAttestation={release}
         releaseAttestationAvailability={workspace.sourceReleaseAttestationAvailability}
         report={workspace.report}
         tasks={workspace.auditSpecialistTasks ?? []}
@@ -20101,9 +20112,13 @@ function AuditReportWorkspacePanel({
 
 function ClientReportPreviewWorkspace({
   workspace,
+  onCancelReportGeneration,
+  onRetryReportGeneration,
   onRequestReportPreview,
 }: {
   workspace: ProspectWorkspace;
+  onCancelReportGeneration: (jobId: string) => Promise<void>;
+  onRetryReportGeneration: () => Promise<void>;
   onRequestReportPreview: (reportVersionId: string) => Promise<void>;
 }) {
   const data = workspace.report?.data;
@@ -20139,6 +20154,11 @@ function ClientReportPreviewWorkspace({
   const currentJob = workspace.reportPreviewJobs.find(
     (job) => job.reportVersionId === workspace.report?.id,
   );
+  const release = workspace.sourceReleaseAttestations[0];
+  const generationJob = reportGenerationJobForWorkspace(workspace, release?.id);
+  const generationWorkerAvailable =
+    workspace.reportGenerationWorkerAvailable ||
+    (import.meta.env.VITE_SITEFORGE_E2E_FIXTURES === 'true' && Boolean(generationJob));
 
   return (
     <>
@@ -20147,8 +20167,12 @@ function ClientReportPreviewWorkspace({
         audit={workspace.audit}
         clientName={workspace.business.name}
         evidenceUrls={urls}
-        latestReleaseAttestation={workspace.sourceReleaseAttestations[0]}
+        generationJob={generationJob}
+        generationWorkerAvailable={generationWorkerAvailable}
+        latestReleaseAttestation={release}
+        onCancelGeneration={onCancelReportGeneration}
         onRequestRemotePreview={onRequestReportPreview}
+        onRetryGeneration={onRetryReportGeneration}
         remoteJob={currentJob}
         report={workspace.report}
         reportPreviewWorkerAvailable={workspace.reportPreviewWorkerAvailable}
@@ -20156,6 +20180,27 @@ function ClientReportPreviewWorkspace({
       />
     </>
   );
+}
+
+function reportGenerationJobForWorkspace(
+  workspace: ProspectWorkspace,
+  releaseAttestationId?: string,
+) {
+  const saved = workspace.reportGenerationJobs.find(
+    (job) =>
+      job.auditId === workspace.audit?.id && job.releaseAttestationId === releaseAttestationId,
+  );
+  if (saved || import.meta.env.VITE_SITEFORGE_E2E_FIXTURES !== 'true') return saved;
+  try {
+    const fixture = JSON.parse(
+      window.localStorage.getItem('siteforge-e2e-report-generation-job') || 'null',
+    ) as ReportGenerationJob | null;
+    return fixture?.businessId === workspace.business.id && fixture.auditId === workspace.audit?.id
+      ? fixture
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function CommittedEditOverview({ workspace }: { workspace: ProspectWorkspace }) {
@@ -20235,6 +20280,7 @@ function WorkspaceContent({
   approveAllAuditFindings,
   updateAuditFinding,
   createDecisionReport,
+  cancelDecisionReport,
   requestReportPreview,
   requestAgentLearningProposal,
   openAgentLearningInbox,
@@ -20338,6 +20384,7 @@ function WorkspaceContent({
     patch: Pick<AuditFinding, 'title' | 'finding' | 'recommendation' | 'severity' | 'reviewState'>,
   ) => Promise<void>;
   createDecisionReport: () => Promise<void>;
+  cancelDecisionReport: (jobId: string) => Promise<void>;
   requestReportPreview: (reportVersionId: string) => Promise<void>;
   requestAgentLearningProposal: (basePackageId: string, direction: string) => Promise<void>;
   openAgentLearningInbox: () => void;
@@ -20564,6 +20611,7 @@ function WorkspaceContent({
   if (tab === 'report') {
     return (
       <AuditReportWorkspacePanel
+        onCancelReport={cancelDecisionReport}
         onPrepareReport={createDecisionReport}
         onRetryAudit={requestWebsiteAudit}
         workspace={workspace}
@@ -20574,6 +20622,8 @@ function WorkspaceContent({
   if (tab === 'report-preview') {
     return (
       <ClientReportPreviewWorkspace
+        onCancelReportGeneration={cancelDecisionReport}
+        onRetryReportGeneration={createDecisionReport}
         onRequestReportPreview={requestReportPreview}
         workspace={workspace}
       />
@@ -20662,6 +20712,7 @@ function WorkspacePage({
   onApproveAllAuditFindings,
   onUpdateAuditFinding,
   onCreateDecisionReport,
+  onCancelDecisionReport,
   onRequestReportPreview,
   onRequestAgentLearningProposal,
   onOpenAgentLearningInbox,
@@ -20770,6 +20821,7 @@ function WorkspacePage({
     patch: Pick<AuditFinding, 'title' | 'finding' | 'recommendation' | 'severity' | 'reviewState'>,
   ) => Promise<void>;
   onCreateDecisionReport: () => Promise<void>;
+  onCancelDecisionReport: (jobId: string) => Promise<void>;
   onRequestReportPreview: (reportVersionId: string) => Promise<void>;
   onRequestAgentLearningProposal: (basePackageId: string, direction: string) => Promise<void>;
   onOpenAgentLearningInbox: () => void;
@@ -20959,6 +21011,7 @@ function WorkspacePage({
           toggleTask={onToggleTask}
           updateAuditFinding={onUpdateAuditFinding}
           createDecisionReport={onCreateDecisionReport}
+          cancelDecisionReport={onCancelDecisionReport}
           requestReportPreview={onRequestReportPreview}
           updateAssetAnnotation={onUpdateAssetAnnotation}
           requestVisualContentExtraction={onRequestVisualContentExtraction}
@@ -21494,7 +21547,8 @@ function WorkspaceApp({
         !captureId ||
         audit.crawlRunId !== captureId ||
         audit.status !== 'ready' ||
-        !release
+        !release ||
+        !candidate.reportGenerationWorkerAvailable
       )
         continue;
       const specialistTasks = (candidate.auditSpecialistTasks ?? []).filter(
@@ -21521,19 +21575,22 @@ function WorkspaceApp({
         currentView.redesign.sourceCommit === release.sourceCommit
       )
         continue;
+      const existingGeneration = candidate.reportGenerationJobs.find(
+        (job) => job.auditId === audit.id && job.releaseAttestationId === release.id,
+      );
+      if (existingGeneration) continue;
       const attemptKey = `${candidate.business.id}:${audit.id}:${release.attestationId}`;
       if (automaticReportAttemptsRef.current.has(attemptKey)) continue;
       automaticReportAttemptsRef.current.add(attemptKey);
       void repository
         .createDecisionReport(candidate.business.id, audit.id)
-        .then(async (created) => {
-          if (!created) throw new Error('The automatic report did not return a saved version.');
+        .then(async () => {
           await refreshData();
           setNotice({
             id: crypto.randomUUID(),
-            title: `${candidate.business.name} report generated`,
-            detail: `Value report v${created.version} is tied to verified edit v${release.sourceEditVersion}.`,
-            tone: 'success',
+            title: `${candidate.business.name} report queued`,
+            detail: `GPT-5.6 Sol will choose the strongest verified design comparisons for edit v${release.sourceEditVersion}.`,
+            tone: 'warning',
           });
         })
         .catch((caught) => {
@@ -21574,6 +21631,9 @@ function WorkspaceApp({
   const activeReportPreview = workspace?.reportPreviewJobs.some(
     (job) => job.status === 'queued' || job.status === 'running',
   );
+  const activeReportGeneration = workspace?.reportGenerationJobs.some(
+    (job) => job.status === 'queued' || job.status === 'running',
+  );
   const activeGithubPublication = workspace?.githubWorkspacePublications.some(
     (publication) => publication.status === 'queued' || publication.status === 'running',
   );
@@ -21594,6 +21654,7 @@ function WorkspaceApp({
       !activeBuilder &&
       !activeClientPublication &&
       !activeMadeSolidHandoff &&
+      !activeReportGeneration &&
       !activeReportPreview &&
       !activeGithubPublication &&
       !awaitingPreferredLogo
@@ -21611,6 +21672,7 @@ function WorkspaceApp({
     activeBuilder,
     activeClientPublication,
     activeMadeSolidHandoff,
+    activeReportGeneration,
     activeReportPreview,
     activeGithubPublication,
     activeCapture,
@@ -21620,6 +21682,7 @@ function WorkspaceApp({
     workspace?.assetRefresh?.id,
     workspace?.visualContentJob?.id,
     workspace?.audit?.id,
+    workspace?.reportGenerationJobs[0]?.id,
     workspace?.latestBuilderRun?.id,
     workspace?.latestCapture?.id,
   ]);
@@ -21746,15 +21809,26 @@ function WorkspaceApp({
 
   async function createDecisionReport() {
     if (!workspace?.audit) throw new Error('Complete a website audit before creating a report.');
-    const report = await repository.createDecisionReport(workspace.business.id, workspace.audit.id);
-    if (!report) throw new Error('The automatic value report could not be created.');
+    await repository.createDecisionReport(workspace.business.id, workspace.audit.id);
     await refreshData();
     setNotice({
       id: crypto.randomUUID(),
-      title: `Report version ${report.version} generated`,
+      title: 'Client report generation queued',
       detail:
-        'Studio selected supported current-run evidence automatically and tied it to the verified edited website.',
-      tone: 'success',
+        'GPT-5.6 Sol will select the strongest verified before-and-after comparisons. Progress and any errors stay visible on Report and Client report preview.',
+      tone: 'warning',
+    });
+  }
+
+  async function cancelDecisionReport(jobId: string) {
+    await repository.cancelReportGeneration(jobId);
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Report cancellation requested',
+      detail:
+        'The worker will stop at its next safe checkpoint. No incomplete report becomes current.',
+      tone: 'warning',
     });
   }
 
@@ -22813,6 +22887,7 @@ function WorkspaceApp({
             tab={route.tab ?? 'overview'}
             onUpdateAuditFinding={updateAuditFinding}
             onCreateDecisionReport={createDecisionReport}
+            onCancelDecisionReport={cancelDecisionReport}
             onRequestReportPreview={requestReportPreview}
             onRequestAgentLearningProposal={requestAgentPackageProposal}
             onOpenAgentLearningInbox={() => navigate({ page: 'agent-studio', section: 'learning' })}

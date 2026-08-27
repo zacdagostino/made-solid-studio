@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   ArrowRight,
   Check,
@@ -14,6 +14,7 @@ import type {
   Audit,
   AuditObservation,
   DecisionReport,
+  ReportGenerationJob,
   SourceReleaseAttestation,
 } from '../lib/domain';
 import {
@@ -34,7 +35,10 @@ type AutomatedReportPanelProps = {
   observations: AuditObservation[];
   tasks: AuditReportSpecialistTask[];
   onPrepareReport: () => void | Promise<void>;
+  onCancelReport?: (jobId: string) => void | Promise<void>;
   onRetryAudit?: () => void | Promise<void>;
+  generationJob?: ReportGenerationJob;
+  generationWorkerAvailable?: boolean;
 };
 
 const areaLabels: Partial<Record<AuditObservation['area'], string>> = {
@@ -78,18 +82,20 @@ export function AutomatedReportPanel({
   audit,
   clientName,
   observations,
+  onCancelReport,
   onPrepareReport,
   onRetryAudit,
   releaseAttestation,
   releaseAttestationAvailability = 'available',
   report,
   tasks,
+  generationJob,
+  generationWorkerAvailable = false,
 }: AutomatedReportPanelProps) {
   const [preparing, setPreparing] = useState(false);
   const [prepareError, setPrepareError] = useState('');
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState('');
-  const attemptedGeneration = useRef('');
   const currentAudit =
     activeCaptureRunId && audit?.crawlRunId === activeCaptureRunId ? audit : undefined;
   const currentReport = reportBelongsToCurrentAudit(report, currentAudit, activeCaptureRunId)
@@ -144,7 +150,19 @@ export function AutomatedReportPanel({
     currentReportView.redesign.sourceCommit === releaseAttestation.sourceCommit,
   );
   const legacyReport = Boolean(currentReport && !reportUsesProspectValueContract(currentReport));
-  const generationKey = `${currentAudit?.id ?? 'no-audit'}:${releaseAttestation?.attestationId ?? 'no-release'}`;
+  const matchingGenerationJob =
+    generationJob &&
+    generationJob.auditId === currentAudit?.id &&
+    generationJob.releaseAttestationId === releaseAttestation?.id
+      ? generationJob
+      : undefined;
+  const generationActive =
+    matchingGenerationJob?.status === 'queued' || matchingGenerationJob?.status === 'running';
+  const generationStopped =
+    matchingGenerationJob?.status === 'failed' || matchingGenerationJob?.status === 'cancelled';
+  const generationRecoveryAction = matchingGenerationJob?.errorContext.recoveryAction;
+  const generationRetryable =
+    generationRecoveryAction === undefined || generationRecoveryAction === 'retry';
 
   const prepareReport = useCallback(async () => {
     if (!canGenerate || preparing) return;
@@ -160,17 +178,6 @@ export function AutomatedReportPanel({
       setPreparing(false);
     }
   }, [canGenerate, onPrepareReport, preparing]);
-
-  useEffect(() => {
-    if (
-      !canGenerate ||
-      currentReportMatchesRelease ||
-      attemptedGeneration.current === generationKey
-    )
-      return;
-    attemptedGeneration.current = generationKey;
-    void prepareReport();
-  }, [canGenerate, currentReportMatchesRelease, generationKey, prepareReport]);
 
   async function retryAudit() {
     if (!onRetryAudit || retrying) return;
@@ -188,7 +195,6 @@ export function AutomatedReportPanel({
   }
 
   function retryGeneration() {
-    attemptedGeneration.current = '';
     void prepareReport();
   }
 
@@ -260,17 +266,23 @@ export function AutomatedReportPanel({
     currentAudit.status === 'running' || currentAudit.status === 'research_pending';
   const stateLabel = currentReportMatchesRelease
     ? 'Report ready'
-    : preparing || (canGenerate && !prepareError)
-      ? 'Generating automatically'
-      : releaseSchemaUnavailable
-        ? 'Studio update required'
-        : !releaseReady
-          ? 'Website verification required'
-          : !specialistsReady
-            ? 'Analysing evidence'
-            : !evidenceReady
-              ? 'No eligible evidence'
-              : 'Ready to generate';
+    : matchingGenerationJob?.status === 'failed'
+      ? 'Generation failed'
+      : matchingGenerationJob?.status === 'cancelled'
+        ? 'Generation cancelled'
+        : !generationWorkerAvailable && canGenerate
+          ? 'Report worker offline'
+          : preparing || generationActive || (canGenerate && !prepareError)
+            ? 'Generating automatically'
+            : releaseSchemaUnavailable
+              ? 'Studio update required'
+              : !releaseReady
+                ? 'Website verification required'
+                : !specialistsReady
+                  ? 'Analysing evidence'
+                  : !evidenceReady
+                    ? 'No eligible evidence'
+                    : 'Ready to generate';
 
   return (
     <section aria-labelledby="automated-report-title" className={styles.panel}>
@@ -284,7 +296,15 @@ export function AutomatedReportPanel({
           </p>
         </div>
         <StatusBadge
-          tone={currentReportMatchesRelease ? 'success' : releaseReady ? 'warning' : 'neutral'}
+          tone={
+            currentReportMatchesRelease
+              ? 'success'
+              : matchingGenerationJob?.status === 'failed'
+                ? 'danger'
+                : releaseReady
+                  ? 'warning'
+                  : 'neutral'
+          }
         >
           {stateLabel}
         </StatusBadge>
@@ -327,8 +347,10 @@ export function AutomatedReportPanel({
             </ButtonLink>
           ) : null}
           <div className={styles.progressHeading}>
-            {preparing || waitingForAudit ? (
+            {preparing || generationActive || waitingForAudit ? (
               <LoaderCircle aria-hidden="true" className={styles.spin} size={24} />
+            ) : generationStopped ? (
+              <ShieldAlert aria-hidden="true" size={24} />
             ) : legacyReport ? (
               <RefreshCcw aria-hidden="true" size={24} />
             ) : releaseSchemaUnavailable ? (
@@ -338,45 +360,125 @@ export function AutomatedReportPanel({
             )}
             <div>
               <h3 id="report-progress-title">
-                {preparing
-                  ? legacyReport
-                    ? 'Replacing the legacy report automatically'
-                    : 'Generating the report automatically'
-                  : legacyReport
-                    ? 'The earlier report will be replaced automatically'
-                    : 'Automatic report preparation'}
+                {generationActive
+                  ? matchingGenerationJob?.progressPhase === 'queued'
+                    ? 'Report generation is queued'
+                    : 'GPT-5.6 Sol is building the report'
+                  : generationStopped
+                    ? 'The replacement report needs attention'
+                    : preparing
+                      ? legacyReport
+                        ? 'Replacing the legacy report automatically'
+                        : 'Generating the report automatically'
+                      : legacyReport
+                        ? 'The earlier report will be replaced automatically'
+                        : 'Automatic report preparation'}
               </h3>
               <p>
-                {preparing
-                  ? 'Studio is freezing a new immutable report version. You can leave this page while it completes.'
-                  : releaseSchemaUnavailable
-                    ? 'This website is not asking for another verification. Report automation is waiting for Studio’s release-record database update.'
-                    : !releaseReady
-                      ? 'The current edited website must pass release verification first. Once it does, this page generates the report without a review step.'
-                      : !specialistsReady
-                        ? 'The six evidence specialists are still working. Report generation begins as soon as they finish.'
-                        : !evidenceReady
-                          ? 'The current audit did not produce a supported, non-low-confidence visitor theme. Restart the audit if the source evidence has changed.'
-                          : 'All prerequisites are ready. Studio will generate the report automatically.'}
+                {generationActive
+                  ? matchingGenerationJob?.progressDetail
+                  : generationStopped
+                    ? 'No incomplete report was saved. Review the exact error and recovery action below, then retry when it is ready.'
+                    : preparing
+                      ? 'Studio is freezing a new immutable report version. You can leave this page while it completes.'
+                      : releaseSchemaUnavailable
+                        ? 'This website is not asking for another verification. Report automation is waiting for Studio’s release-record database update.'
+                        : !releaseReady
+                          ? 'The current edited website must pass release verification first. Once it does, this page generates the report without a review step.'
+                          : !specialistsReady
+                            ? 'The six evidence specialists are still working. Report generation begins as soon as they finish.'
+                            : !evidenceReady
+                              ? 'The current audit did not produce a supported, non-low-confidence visitor theme. Restart the audit if the source evidence has changed.'
+                              : 'All prerequisites are ready. Studio will generate the report automatically.'}
               </p>
+              {generationActive ? (
+                <small>
+                  Step{' '}
+                  {Math.min(
+                    matchingGenerationJob.completedItems + 1,
+                    matchingGenerationJob.totalItems,
+                  )}{' '}
+                  of {matchingGenerationJob.totalItems} · {matchingGenerationJob.model} ·{' '}
+                  {matchingGenerationJob.reasoningEffort} reasoning
+                </small>
+              ) : null}
             </div>
           </div>
-          {preparing || waitingForAudit ? (
+          {preparing || generationActive || waitingForAudit ? (
             <IndeterminateProgress
               detail={
-                preparing
-                  ? 'Selecting supported themes and binding them to the verified edit.'
-                  : currentAudit.progressDetail || 'Analysing the current website evidence.'
+                generationActive
+                  ? matchingGenerationJob?.progressDetail || 'Analysing verified comparisons.'
+                  : preparing
+                    ? 'Queueing the protected report generation worker.'
+                    : currentAudit.progressDetail || 'Analysing the current website evidence.'
               }
-              label={preparing ? 'Automatic report generation' : 'Specialist evidence analysis'}
+              label={
+                preparing || generationActive
+                  ? 'Automatic report generation'
+                  : 'Specialist evidence analysis'
+              }
             />
           ) : null}
-          {prepareError ? (
+          {generationActive && onCancelReport ? (
+            <Button
+              onClick={() => void onCancelReport(matchingGenerationJob.id)}
+              size="small"
+              variant="secondary"
+            >
+              Cancel report generation
+            </Button>
+          ) : null}
+          {prepareError || generationStopped ? (
             <div className={styles.inlineError} role="alert">
-              <span>{prepareError}</span>
-              <Button onClick={retryGeneration} size="small" variant="secondary">
-                <RotateCcw aria-hidden="true" size={16} /> Retry automatic generation
-              </Button>
+              <div>
+                <strong>Report generation stopped</strong>
+                <p>
+                  {prepareError ||
+                    matchingGenerationJob?.errorSummary ||
+                    matchingGenerationJob?.progressDetail ||
+                    'The report worker stopped before saving a new report.'}
+                </p>
+                {matchingGenerationJob?.errorCode ? (
+                  <small>
+                    Error {matchingGenerationJob.errorCode} · phase{' '}
+                    {matchingGenerationJob.progressPhase}
+                  </small>
+                ) : null}
+              </div>
+              {generationRetryable ? (
+                <Button
+                  disabled={!generationWorkerAvailable}
+                  onClick={retryGeneration}
+                  size="small"
+                  variant="secondary"
+                >
+                  <RotateCcw aria-hidden="true" size={16} /> Retry report generation
+                </Button>
+              ) : generationRecoveryAction === 'rerun_release_verification' ? (
+                <ButtonLink
+                  href={`#/prospects/${currentAudit.businessId}/editing`}
+                  size="small"
+                  variant="secondary"
+                >
+                  Re-run website verification <ArrowRight aria-hidden="true" size={16} />
+                </ButtonLink>
+              ) : (
+                <Button disabled size="small" variant="secondary">
+                  Worker configuration required
+                </Button>
+              )}
+            </div>
+          ) : null}
+          {!generationWorkerAvailable &&
+          !generationActive &&
+          canGenerate &&
+          !currentReportMatchesRelease ? (
+            <div className={styles.inlineError} role="alert">
+              <div>
+                <strong>Report worker is offline</strong>
+                <p>No generation was started. Reconnect the protected worker and retry.</p>
+              </div>
             </div>
           ) : null}
         </section>
@@ -418,9 +520,9 @@ export function AutomatedReportPanel({
             <Circle aria-hidden="true" size={17} />
           )}
           <span>
-            <strong>Client themes selected automatically</strong>
+            <strong>Design comparisons ready for agent selection</strong>
             {evidenceReady
-              ? `${eligibleObservations.length} supported ${eligibleObservations.length === 1 ? 'case' : 'cases'} will become up to ${selectedThemes.length} client ${selectedThemes.length === 1 ? 'theme' : 'themes'}.`
+              ? `${eligibleObservations.length} supported ${eligibleObservations.length === 1 ? 'candidate is' : 'candidates are'} available. GPT-5.6 Sol chooses the strongest natural set of one to four.`
               : 'Only supported, non-low-confidence visitor findings are eligible.'}
           </span>
         </li>
@@ -428,10 +530,10 @@ export function AutomatedReportPanel({
 
       {selectedThemes.length > 0 ? (
         <details className={styles.evidenceDetails}>
-          <summary>What Studio selected automatically</summary>
+          <summary>Candidate areas available to the report agent</summary>
           <p>
-            Technical duplicates are combined. Platform-only and low-confidence observations stay
-            private and are not presented as client value claims.
+            GPT-5.6 Sol considers these areas together at maximum reasoning. Evidence checks still
+            exclude platform-only, blocked, low-confidence, stale and unmatched comparisons.
           </p>
           <ul>
             {selectedThemes.map((theme) => (

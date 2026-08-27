@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { Audit, DecisionReport } from '../lib/domain';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { createElement } from 'react';
+import type { Audit, DecisionReport, ReportGenerationJob } from '../lib/domain';
 import {
   prospectValueReportView,
   reportUsesProspectValueContract,
@@ -8,6 +10,7 @@ import {
   clientReportContractState,
   clientReportThemes,
   clientspaceCopyStatus,
+  ClientReportPreview,
   previewReportIsCurrent,
 } from './ClientReportPreview';
 
@@ -18,11 +21,11 @@ const report = (overrides: Partial<DecisionReport> = {}): DecisionReport => ({
   crawlRunId: 'crawl-1',
   status: 'approved',
   version: 2,
-  schemaVersion: 8,
+  schemaVersion: 9,
   summary: 'Frozen summary',
   data: {
-    schemaVersion: 8,
-    generatorRevision: 'verified-ready-design-comparison-v2',
+    schemaVersion: 9,
+    generatorRevision: 'gpt-5.6-sol-design-curation-v1',
     reportKind: 'verified_redesign_value',
     title: 'A stronger digital foundation for Client',
     summary: 'Frozen client value summary',
@@ -104,6 +107,26 @@ const audit: Audit = {
   updatedAt: '2026-08-19T00:00:00.000Z',
 };
 
+const generationJob = (overrides: Partial<ReportGenerationJob> = {}): ReportGenerationJob => ({
+  id: 'generation-1',
+  businessId: 'business-1',
+  auditId: 'audit-1',
+  crawlRunId: 'crawl-1',
+  releaseAttestationId: 'release-1',
+  generatorContractVersion: 'client-value-report-agent-v1',
+  model: 'gpt-5.6-sol',
+  reasoningEffort: 'max',
+  status: 'running',
+  progressPhase: 'analysing_comparisons',
+  progressDetail: 'Comparing six verified design candidates.',
+  totalItems: 5,
+  completedItems: 1,
+  errorContext: {},
+  createdAt: '2026-08-27T00:00:00.000Z',
+  updatedAt: '2026-08-27T00:00:00.000Z',
+  ...overrides,
+});
+
 describe('ClientReportPreview frozen report boundary', () => {
   it('accepts only the approved report matching the current audit and capture', () => {
     expect(previewReportIsCurrent(report(), audit, 'crawl-1')).toBe(true);
@@ -128,7 +151,7 @@ describe('ClientReportPreview frozen report boundary', () => {
     expect(reportUsesProspectValueContract(report({ schemaVersion: 4 }))).toBe(false);
     expect(clientReportContractState(report())).toBe('ready');
     expect(clientReportContractState(report({ schemaVersion: 4 }))).toBe('legacy');
-    expect(clientReportContractState(report({ schemaVersion: 9 }))).toBe('studio_update_required');
+    expect(clientReportContractState(report({ schemaVersion: 10 }))).toBe('studio_update_required');
     expect(
       clientReportContractState(
         report({
@@ -138,18 +161,20 @@ describe('ClientReportPreview frozen report boundary', () => {
     ).toBe('invalid');
   });
 
-  it('keeps the client story to three themes and prioritises themes with screenshots', () => {
+  it('keeps the client story to four themes and prioritises themes with screenshots', () => {
     const themes = [
       { id: 'without-image' },
       { id: 'first-image', evidenceArtifactId: 'artifact-1' },
       { id: 'second-image', evidenceArtifactId: 'artifact-2' },
       { id: 'third-image', evidenceArtifactId: 'artifact-3' },
+      { id: 'fourth-image', evidenceArtifactId: 'artifact-4' },
     ];
 
     expect(clientReportThemes(themes).map((theme) => theme.id)).toEqual([
       'first-image',
       'second-image',
       'third-image',
+      'fourth-image',
     ]);
   });
 
@@ -192,5 +217,55 @@ describe('ClientReportPreview frozen report boundary', () => {
         new Date('2026-08-27T02:00:00.000Z').valueOf(),
       ),
     ).toBe('idle');
+  });
+
+  it('replaces stale report content with the active generation lifecycle', () => {
+    const markup = renderToStaticMarkup(
+      createElement(ClientReportPreview, {
+        activeCaptureRunId: 'crawl-1',
+        audit,
+        clientName: 'Client',
+        evidenceUrls: {},
+        generationJob: generationJob(),
+        generationWorkerAvailable: true,
+        onCancelGeneration: async () => undefined,
+        onRequestRemotePreview: async () => undefined,
+        onRetryGeneration: async () => undefined,
+        report: report({ schemaVersion: 4 }),
+        reportPreviewWorkerAvailable: true,
+      }),
+    );
+
+    expect(markup).toContain('GPT-5.6 Sol is choosing the strongest comparisons');
+    expect(markup).toContain('Cancel generation');
+    expect(markup).not.toContain('This report needs to be regenerated');
+  });
+
+  it('shows the persisted report error and retry control on preview', () => {
+    const markup = renderToStaticMarkup(
+      createElement(ClientReportPreview, {
+        activeCaptureRunId: 'crawl-1',
+        audit,
+        clientName: 'Client',
+        evidenceUrls: {},
+        generationJob: generationJob({
+          status: 'failed',
+          progressPhase: 'validating_selection',
+          errorCode: 'selection_rejected',
+          errorSummary: 'The report agent returned an unsupported client claim.',
+        }),
+        generationWorkerAvailable: true,
+        onCancelGeneration: async () => undefined,
+        onRequestRemotePreview: async () => undefined,
+        onRetryGeneration: async () => undefined,
+        report: report({ schemaVersion: 4 }),
+        reportPreviewWorkerAvailable: true,
+      }),
+    );
+
+    expect(markup).toContain('The replacement report was not created');
+    expect(markup).toContain('selection_rejected');
+    expect(markup).toContain('Retry report generation');
+    expect(markup).not.toContain('This report needs to be regenerated');
   });
 });

@@ -35,6 +35,7 @@ import type {
   Business,
   Contact,
   DecisionReport,
+  ReportGenerationJob,
   SourceReleaseAttestation,
   ReportPreviewJob,
   EvidenceFact,
@@ -1164,6 +1165,37 @@ function reportPreviewJobFromRow(row: DatabaseRow): ReportPreviewJob {
   };
 }
 
+function reportGenerationJobFromRow(row: DatabaseRow): ReportGenerationJob {
+  const status = readString(row, 'status');
+  return {
+    id: readString(row, 'id'),
+    businessId: readString(row, 'business_id'),
+    auditId: readString(row, 'audit_id'),
+    crawlRunId: readString(row, 'crawl_run_id'),
+    releaseAttestationId: readString(row, 'release_attestation_id'),
+    generatorContractVersion: readString(row, 'generator_contract_version'),
+    model: readString(row, 'model'),
+    reasoningEffort: readString(row, 'reasoning_effort'),
+    status:
+      status === 'running' || status === 'ready' || status === 'failed' || status === 'cancelled'
+        ? status
+        : 'queued',
+    progressPhase: readString(row, 'progress_phase') || 'queued',
+    progressDetail:
+      readString(row, 'progress_detail') || 'Waiting for the protected report generation worker.',
+    totalItems: readNumber(row, 'total_items'),
+    completedItems: readNumber(row, 'completed_items'),
+    cancelRequestedAt: readOptionalString(row, 'cancel_requested_at'),
+    resultReportVersionId: readOptionalString(row, 'result_report_version_id'),
+    errorCode: readOptionalString(row, 'error_code'),
+    errorSummary: readOptionalString(row, 'error_summary'),
+    errorContext: recordValue(row.error_context),
+    createdAt: readString(row, 'created_at'),
+    completedAt: readOptionalString(row, 'completed_at'),
+    updatedAt: readString(row, 'updated_at'),
+  };
+}
+
 function taskFromRow(row: DatabaseRow): Task {
   return {
     id: readString(row, 'id'),
@@ -1426,6 +1458,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       concepts,
       reports,
       reportVersions,
+      reportGenerationJobs,
       reportPreviewJobs,
       sourceReleaseAttestations,
       tasks,
@@ -1436,6 +1469,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       githubWorkspacePublications,
       githubWorkspaceWorkerAvailable,
       madeSolidHandoffWorkerAvailable,
+      reportGenerationWorkerAvailable,
       reportPreviewWorkerAvailable,
     ] = await Promise.all([
       this.client.from('websites').select('*').eq('business_id', businessId).limit(1),
@@ -1501,6 +1535,11 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         .eq('business_id', businessId)
         .order('version', { ascending: false }),
       this.client
+        .from('report_generation_jobs')
+        .select('*')
+        .eq('business_id', businessId)
+        .order('created_at', { ascending: false }),
+      this.client
         .from('report_preview_jobs')
         .select('*')
         .eq('business_id', businessId)
@@ -1543,6 +1582,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
         .order('created_at', { ascending: false }),
       this.client.rpc('github_workspace_worker_available'),
       this.client.rpc('made_solid_handoff_worker_available'),
+      this.client.rpc('report_generation_worker_available'),
       this.client.rpc('report_preview_worker_available'),
     ]);
     [
@@ -1566,6 +1606,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       clientPreviewPublications,
     ].forEach((result) => throwIfError(result.error));
     warnOptionalIntegrationError('Private report preview history', reportPreviewJobs.error);
+    warnOptionalIntegrationError('Report generation history', reportGenerationJobs.error);
     warnOptionalIntegrationError(
       'Edited website release verification',
       sourceReleaseAttestations.error,
@@ -1573,6 +1614,10 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     warnOptionalIntegrationError(
       'Private report preview worker status',
       reportPreviewWorkerAvailable.error,
+    );
+    warnOptionalIntegrationError(
+      'Report generation worker status',
+      reportGenerationWorkerAvailable.error,
     );
     warnOptionalIntegrationError('Made Solid handoff history', madeSolidHandoffs.error);
     warnOptionalIntegrationError(
@@ -1923,6 +1968,10 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       clientPreviewPublications: ((clientPreviewPublications.data ?? []) as DatabaseRow[]).map(
         clientPreviewPublicationFromRow,
       ),
+      reportGenerationJobs: ((reportGenerationJobs.data ?? []) as DatabaseRow[]).map(
+        reportGenerationJobFromRow,
+      ),
+      reportGenerationWorkerAvailable: reportGenerationWorkerAvailable.data === true,
       reportPreviewJobs: ((reportPreviewJobs.data ?? []) as DatabaseRow[]).map(
         reportPreviewJobFromRow,
       ),
@@ -2142,14 +2191,19 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
   }
 
   async createDecisionReport(businessId: string, auditId: string) {
-    const { data, error } = await this.client.rpc('create_audit_report_version', {
+    const { error } = await this.client.rpc('request_report_generation', {
       target_business_id: businessId,
       target_audit_id: auditId,
     });
     throwIfError(error);
-    if (typeof data !== 'string') throw new Error('The report draft could not be frozen.');
-    const workspace = await this.getWorkspace(businessId);
-    return workspace?.reportVersions?.find((report) => report.id === data) ?? workspace?.report;
+    return undefined;
+  }
+
+  async cancelReportGeneration(jobId: string) {
+    const { error } = await this.client.rpc('cancel_report_generation', {
+      target_job_id: jobId,
+    });
+    throwIfError(error);
   }
 
   async requestReportPreview(reportVersionId: string) {

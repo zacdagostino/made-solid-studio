@@ -89,7 +89,8 @@ export type WorkspaceRepository = {
     observationId: string,
     reviewState: AuditObservation['reviewState'],
   ): Promise<void>;
-  createDecisionReport(businessId: string, auditId: string): Promise<DecisionReport | undefined>;
+  createDecisionReport(businessId: string, auditId: string): Promise<void>;
+  cancelReportGeneration(jobId: string): Promise<void>;
   requestReportPreview(reportVersionId: string): Promise<ReportPreviewJob | undefined>;
   cancelReportPreview(jobId: string): Promise<void>;
   requestAssetAnalysis(businessId: string): Promise<AssetAnalysisJob | undefined>;
@@ -4525,6 +4526,8 @@ export class SiteforgeRepository {
         right.verifiedAt.localeCompare(left.verifiedAt),
       ),
       sourceReleaseAttestationAvailability: 'available',
+      reportGenerationJobs: [],
+      reportGenerationWorkerAvailable: false,
       reportPreviewJobs: [],
       reportPreviewWorkerAvailable: false,
       tasks: tasks.sort((left, right) => left.state.localeCompare(right.state)),
@@ -4883,10 +4886,7 @@ export class SiteforgeRepository {
     });
   }
 
-  async createDecisionReport(
-    businessId: string,
-    auditId: string,
-  ): Promise<DecisionReport | undefined> {
+  async createDecisionReport(businessId: string, auditId: string): Promise<void> {
     const [
       business,
       audits,
@@ -4969,7 +4969,7 @@ export class SiteforgeRepository {
             release.id,
       )
       .sort((left, right) => right.version - left.version)[0];
-    if (existing) return existing;
+    if (existing) return;
 
     const taskIds = new Set(reportTasks.map((task) => task.id));
     const evidenceFactIds = new Set(
@@ -5306,7 +5306,10 @@ export class SiteforgeRepository {
       updatedAt: now,
     };
     await this.put('reportVersions', report);
-    return report;
+  }
+
+  async cancelReportGeneration(): Promise<void> {
+    throw new Error('Local report generation completes synchronously and cannot be cancelled.');
   }
 
   async requestReportPreview(): Promise<ReportPreviewJob | undefined> {

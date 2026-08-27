@@ -1,6 +1,6 @@
 import type { DecisionReport } from './domain';
 
-export const prospectValueReportSchemaVersion = 8;
+export const prospectValueReportSchemaVersion = 9;
 export const prospectValueReportKind = 'verified_redesign_value';
 
 export type ProspectValueReportTheme = {
@@ -117,7 +117,7 @@ export function reportUsesProspectValueContract(report?: DecisionReport) {
   });
   return Boolean(
     data.reportKind === prospectValueReportKind &&
-    data.generatorRevision === 'verified-ready-design-comparison-v2' &&
+    data.generatorRevision === 'gpt-5.6-sol-design-curation-v1' &&
     redesign.status === 'passed' &&
     text(redesign.attestationId) &&
     text(redesign.sourceBuilderRunId) &&
@@ -126,7 +126,7 @@ export function reportUsesProspectValueContract(report?: DecisionReport) {
     number(redesign.sourceEditVersion) > 0 &&
     text(redesign.verifiedAt) &&
     themes.length > 0 &&
-    themes.length <= 3 &&
+    themes.length <= 4 &&
     themesHaveOldSiteEvidence &&
     deliveredWork.length > 0 &&
     deliveredWork.every((raw) => record(raw).status === 'passed'),
@@ -172,7 +172,7 @@ export function prospectValueReportView(
           area: text(item.area) || 'Website experience',
           title,
           before,
-          // Schema v6 does not turn an audit recommendation into a delivered-work claim. The UI
+          // The client report does not turn an audit recommendation into a delivered-work claim. The UI
           // may show a redesign outcome only when exact edited-site proof is frozen with the theme.
           redesignResponse: text(editedSiteProof.clientOutcome),
           value: businessOpportunity,

@@ -22,6 +22,18 @@ const readyComparisonMigrationUrl = new URL(
   '../../supabase/migrations/20260826330000_verified_page_ready_comparison_reports.sql',
   import.meta.url,
 );
+const agentReportMigrationUrl = new URL(
+  '../../supabase/migrations/20260826340000_agent_curated_report_generation_jobs.sql',
+  import.meta.url,
+);
+const reportGenerationWorkerUrl = new URL(
+  '../../worker/report-generation-worker.mjs',
+  import.meta.url,
+);
+const reportAgentContractUrl = new URL(
+  '../../worker/contracts/client-value-report-agent.md',
+  import.meta.url,
+);
 const previewWorkerUrl = new URL('../../worker/report-preview-worker.mjs', import.meta.url);
 const releaseVerifierUrl = new URL('../../scripts/verify-prospect-release.mjs', import.meta.url);
 const reportParserUrl = new URL('../../src/lib/prospect-value-report.ts', import.meta.url);
@@ -45,6 +57,9 @@ test('freezes prospect reports against the exact verified edited website', async
     highPriorityMigration,
     comparisonMigration,
     readyComparisonMigration,
+    agentReportMigration,
+    reportGenerationWorker,
+    reportAgentContract,
   ] = await Promise.all([
     readFile(migrationUrl, 'utf8'),
     readFile(previewWorkerUrl, 'utf8'),
@@ -57,6 +72,9 @@ test('freezes prospect reports against the exact verified edited website', async
     readFile(highPriorityMigrationUrl, 'utf8'),
     readFile(comparisonMigrationUrl, 'utf8'),
     readFile(readyComparisonMigrationUrl, 'utf8'),
+    readFile(agentReportMigrationUrl, 'utf8'),
+    readFile(reportGenerationWorkerUrl, 'utf8'),
+    readFile(reportAgentContractUrl, 'utf8'),
   ]);
   const reportRpc = migration.slice(
     migration.indexOf('create or replace function public.create_audit_report_version'),
@@ -91,7 +109,8 @@ test('freezes prospect reports against the exact verified edited website', async
     /This earlier report format must be regenerated before Clientspace preview/,
   );
 
-  assert.match(previewWorker, /report\.schema_version !== 8/);
+  assert.match(previewWorker, /report\.schema_version !== 9/);
+  assert.match(previewWorker, /gpt-5\.6-sol-design-curation-v1/);
   assert.match(previewWorker, /verified_redesign_value/);
   assert.match(previewWorker, /source_release_attestations/);
   assert.match(previewWorker, /reportData\?\.valueThemes/);
@@ -110,22 +129,17 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(releaseVerifier, /loaderVisible/);
   assert.match(releaseVerifier, /horizontalOverflowPx > 1/);
 
-  assert.match(reportParser, /prospectValueReportSchemaVersion = 8/);
+  assert.match(reportParser, /prospectValueReportSchemaVersion = 9/);
+  assert.match(reportParser, /gpt-5\.6-sol-design-curation-v1/);
   assert.match(reportParser, /reportUsesProspectValueContract/);
   assert.match(reportParser, /redesign\.status === 'passed'/);
 
   assert.match(localRepository, /'sourceReleaseAttestations'/);
-  assert.match(localRepository, /report\.schemaVersion === 8/);
   assert.match(localRepository, /observation\.confidence !== 'low'/);
   assert.match(localRepository, /observation\.reviewState !== 'blocked'/);
   assert.match(localRepository, /observation\.area !== 'Platform'/);
   assert.match(localRepository, /report\.data\?\.reportKind === 'verified_redesign_value'/);
-  assert.match(localRepository, /if \(existing\) return existing/);
-  assert.match(
-    localRepository,
-    /id: `report-version-v8-ready-design-comparison-\$\{audit\.id\}-\$\{release\.id\}`/,
-  );
-  assert.match(localRepository, /\.slice\(0, 3\)/);
+  assert.match(localRepository, /if \(existing\) return;/);
   assert.match(localRepository, /observation\.sourceUrls\.includes\(sourceUrl\)/);
   assert.match(localRepository, /artifactViewport\.width === viewport\.width/);
   assert.match(localRepository, /artifactViewport\.height === viewport\.height/);
@@ -151,9 +165,48 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(readyComparisonMigration, /horizontalOverflowPx/);
   assert.match(readyComparisonMigration, /target_report\.schema_version <> 8/);
 
+  assert.match(agentReportMigration, /create table public\.report_generation_jobs/);
+  assert.match(
+    agentReportMigration,
+    /status in \('queued', 'running', 'ready', 'failed', 'cancelled'\)/,
+  );
+  assert.match(
+    agentReportMigration,
+    /create or replace function public\.request_report_generation/,
+  );
+  assert.match(agentReportMigration, /create or replace function public\.cancel_report_generation/);
+  assert.match(agentReportMigration, /error_code text/);
+  assert.match(
+    agentReportMigration,
+    /unique \(business_id, audit_id, release_attestation_id, generator_contract_version\)/,
+  );
+  assert.match(agentReportMigration, /for update/);
+  assert.match(agentReportMigration, /Members can view report generation jobs/);
+  assert.match(agentReportMigration, /target_report\.schema_version <> 9/);
+  assert.match(agentReportMigration, /gpt-5\.6-sol-design-curation-v1/);
+  assert.match(reportGenerationWorker, /const defaultModel = 'gpt-5\.6-sol'/);
+  assert.match(reportGenerationWorker, /const reasoningEffort = 'max'/);
+  assert.match(reportGenerationWorker, /store: false/);
+  assert.match(reportGenerationWorker, /strict: true/);
+  assert.match(reportGenerationWorker, /minItems: 0/);
+  assert.match(reportGenerationWorker, /maxItems: 4/);
+  assert.match(reportGenerationWorker, /themes\.length < 1 \|\| themes\.length > 4/);
+  assert.match(reportGenerationWorker, /source: 'client_value_report_selection'/);
+  assert.match(reportGenerationWorker, /progress_phase: 'analysing_comparisons'/);
+  assert.match(reportGenerationWorker, /progress_phase: 'validating_selection'/);
+  assert.match(reportGenerationWorker, /error_code: errorCode/);
+  assert.doesNotMatch(reportGenerationWorker, /severityRank/);
+  assert.match(reportAgentContract, /strongest natural set of one to four comparisons/i);
+  assert.match(reportAgentContract, /Do not force fixed categories/i);
+  assert.match(reportAgentContract, /medium-severity issue may\s+be selected/i);
+  assert.match(reportAgentContract, /never claim guaranteed traffic/i);
+  assert.doesNotMatch(releaseVerifier, /\.eq\('severity', 'high'\)/);
+
   assert.match(cloudRepository, /sourceReleaseAttestationAvailability/);
   assert.match(cloudRepository, /PGRST205/);
   assert.match(cloudRepository, /schema_unavailable/);
+  assert.match(cloudRepository, /request_report_generation/);
+  assert.match(cloudRepository, /cancel_report_generation/);
   assert.match(automatedReportPanel, /Studio update required/);
   assert.match(automatedReportPanel, /not asking for another verification/);
   assert.match(automatedReportPanel, /!releaseReady && !releaseSchemaUnavailable/);

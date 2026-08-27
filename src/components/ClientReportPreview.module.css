@@ -3,6 +3,64 @@
   gap: var(--space-5);
   min-width: 0;
 }
+.generationState,
+.generationError {
+  align-items: flex-start;
+  border-block: 1px solid var(--color-line);
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: auto minmax(0, 1fr);
+  padding-block: var(--space-5);
+}
+.generationState > div,
+.generationError > div {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.generationState h2,
+.generationState p,
+.generationError h2,
+.generationError p {
+  margin: 0;
+}
+.generationState p,
+.generationError p {
+  line-height: 1.6;
+  max-width: 68ch;
+}
+.generationIcon,
+.generationErrorIcon {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  height: 2.75rem;
+  justify-content: center;
+  width: 2.75rem;
+}
+.generationIcon {
+  background: var(--color-warning-badge-bg);
+  color: var(--color-warning);
+}
+.generationErrorIcon {
+  background: var(--color-danger-badge-bg);
+  color: var(--color-danger);
+}
+.generationActions {
+  grid-column: 1 / -1;
+}
+.generationNote {
+  color: var(--color-muted);
+  font-size: 0.9rem;
+}
+.spin {
+  animation: report-preview-spin 0.9s linear infinite;
+}
+@keyframes report-preview-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 .privateBar {
   align-items: flex-start;
   background: var(--color-ink);
@@ -13,6 +71,31 @@
   gap: var(--space-3);
   justify-content: space-between;
   padding: var(--space-3);
+}
+
+@media (min-width: 48rem) {
+  .generationState,
+  .generationError {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .generationActions {
+    align-self: center;
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 30rem) {
+  .generationState,
+  .generationError {
+    gap: var(--space-3);
+    padding-block: var(--space-4);
+  }
+
+  .generationActions {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 .privateBar > div:first-child {
   align-items: center;

@@ -311,7 +311,7 @@ async function loadVerifiedValueReport(job, releaseAttestation) {
     .from('decision_report_versions')
     .select('id, version, schema_version, review_state, summary, data, created_at')
     .eq('business_id', job.business_id)
-    .eq('schema_version', 5)
+    .eq('schema_version', 9)
     .eq('review_state', 'approved')
     .order('version', { ascending: false })
     .limit(1)
@@ -321,6 +321,7 @@ async function loadVerifiedValueReport(job, releaseAttestation) {
   if (
     !report ||
     report.data?.reportKind !== 'verified_redesign_value' ||
+    report.data?.generatorRevision !== 'gpt-5.6-sol-design-curation-v1' ||
     redesign?.status !== 'passed' ||
     redesign?.attestationId !== releaseAttestation.id ||
     redesign?.sourceBuilderRunId !== job.builder_run_id ||

@@ -1061,6 +1061,30 @@ export type SourceReleaseAttestation = {
 
 export type ReportPreviewJobStatus = 'queued' | 'running' | 'ready' | 'failed' | 'cancelled';
 
+export type ReportGenerationJob = {
+  id: string;
+  businessId: string;
+  auditId: string;
+  crawlRunId: string;
+  releaseAttestationId: string;
+  generatorContractVersion: string;
+  model: string;
+  reasoningEffort: string;
+  status: ReportPreviewJobStatus;
+  progressPhase: string;
+  progressDetail: string;
+  totalItems: number;
+  completedItems: number;
+  cancelRequestedAt?: string;
+  resultReportVersionId?: string;
+  errorCode?: string;
+  errorSummary?: string;
+  errorContext: Record<string, unknown>;
+  createdAt: string;
+  completedAt?: string;
+  updatedAt: string;
+};
+
 export type ReportPreviewJob = {
   id: string;
   businessId: string;
@@ -1142,6 +1166,8 @@ export type ProspectWorkspace = {
   reportVersions?: DecisionReport[];
   sourceReleaseAttestations: SourceReleaseAttestation[];
   sourceReleaseAttestationAvailability?: 'available' | 'schema_unavailable' | 'unavailable';
+  reportGenerationJobs: ReportGenerationJob[];
+  reportGenerationWorkerAvailable: boolean;
   reportPreviewJobs: ReportPreviewJob[];
   reportPreviewWorkerAvailable: boolean;
   tasks: Task[];

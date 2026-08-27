@@ -107,7 +107,7 @@ async function loadReviewedDecisionReport(businessId) {
     .from('decision_report_versions')
     .select('id, version, schema_version, review_state, summary, data, created_at')
     .eq('business_id', businessId)
-    .eq('schema_version', 5)
+    .eq('schema_version', 9)
     .eq('review_state', 'approved')
     .order('version', { ascending: false })
     .limit(1)
@@ -116,6 +116,7 @@ async function loadReviewedDecisionReport(businessId) {
   if (
     !data ||
     data.data?.reportKind !== 'verified_redesign_value' ||
+    data.data?.generatorRevision !== 'gpt-5.6-sol-design-curation-v1' ||
     data.data?.redesign?.status !== 'passed'
   ) {
     throw new Error(
@@ -128,7 +129,7 @@ async function loadReviewedDecisionReport(businessId) {
 async function loadReportMedia(reportData) {
   const findings = Array.isArray(reportData?.valueThemes) ? reportData.valueThemes : [];
   const references = findings
-    .map((finding) => finding?.evidence)
+    .flatMap((finding) => [finding?.evidence, finding?.afterEvidence])
     .filter(
       (evidence) =>
         evidence &&

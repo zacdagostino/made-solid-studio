@@ -288,7 +288,6 @@ async function persistDesignComparisonScreenshots(record, releaseRowId, browser,
     )
     .eq('audit_id', audit.id)
     .eq('crawl_run_id', audit.crawl_run_id)
-    .eq('severity', 'high')
     .neq('area', 'Platform')
     .neq('confidence', 'low')
     .neq('review_state', 'blocked')
