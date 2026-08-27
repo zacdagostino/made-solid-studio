@@ -20148,12 +20148,8 @@ function ClientReportPreviewWorkspace({
         remoteJob={currentJob}
         report={workspace.report}
         reportPreviewWorkerAvailable={workspace.reportPreviewWorkerAvailable}
+        screenshotLoadError={loadError}
       />
-      {loadError ? (
-        <p className="form-message form-message--error" role="alert">
-          {loadError}
-        </p>
-      ) : null}
     </>
   );
 }

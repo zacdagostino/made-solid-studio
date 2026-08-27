@@ -267,6 +267,24 @@
   gap: var(--space-2);
   padding: var(--space-4);
 }
+.evidenceError {
+  align-items: flex-start;
+  background: color-mix(in srgb, var(--color-danger) 7%, #fff);
+  border: 1px solid color-mix(in srgb, var(--color-danger) 45%, #bdc9c4);
+  border-radius: var(--radius);
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: var(--space-4);
+}
+.evidenceError strong,
+.evidenceError p {
+  margin: 0;
+}
+.evidenceError p {
+  line-height: 1.55;
+  margin-top: var(--space-1);
+}
 .noEvidence p {
   line-height: 1.65;
   margin: 0;

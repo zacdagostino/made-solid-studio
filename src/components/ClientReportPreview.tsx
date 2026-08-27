@@ -83,6 +83,7 @@ export function ClientReportPreview({
   remoteJob,
   report,
   reportPreviewWorkerAvailable,
+  screenshotLoadError,
 }: {
   activeCaptureRunId?: string;
   audit?: Audit;
@@ -93,6 +94,7 @@ export function ClientReportPreview({
   remoteJob?: ReportPreviewJob;
   report?: DecisionReport;
   reportPreviewWorkerAvailable: boolean;
+  screenshotLoadError?: string;
 }) {
   const current = previewReportIsCurrent(report, audit, activeCaptureRunId) ? report : undefined;
   const view = current ? prospectValueReportView(current) : undefined;
@@ -282,6 +284,14 @@ export function ClientReportPreview({
                       <span>{theme.whatToNotice || theme.before}</span>
                     </figcaption>
                   </figure>
+                ) : theme.evidenceArtifactId && screenshotLoadError ? (
+                  <div className={styles.evidenceError} role="alert">
+                    <LockKeyhole aria-hidden="true" size={20} />
+                    <div>
+                      <strong>Original website screenshot couldn&apos;t be loaded</strong>
+                      <p>{screenshotLoadError}</p>
+                    </div>
+                  </div>
                 ) : (
                   <div className={styles.noEvidence}>
                     <strong>What customers experienced</strong>
