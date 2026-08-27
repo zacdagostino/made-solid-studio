@@ -26,6 +26,10 @@ const agentReportMigrationUrl = new URL(
   '../../supabase/migrations/20260826340000_agent_curated_report_generation_jobs.sql',
   import.meta.url,
 );
+const reportUsageMigrationUrl = new URL(
+  '../../supabase/migrations/20260826350000_report_generation_ai_usage_source.sql',
+  import.meta.url,
+);
 const reportGenerationWorkerUrl = new URL(
   '../../worker/report-generation-worker.mjs',
   import.meta.url,
@@ -60,6 +64,7 @@ test('freezes prospect reports against the exact verified edited website', async
     agentReportMigration,
     reportGenerationWorker,
     reportAgentContract,
+    reportUsageMigration,
   ] = await Promise.all([
     readFile(migrationUrl, 'utf8'),
     readFile(previewWorkerUrl, 'utf8'),
@@ -75,6 +80,7 @@ test('freezes prospect reports against the exact verified edited website', async
     readFile(agentReportMigrationUrl, 'utf8'),
     readFile(reportGenerationWorkerUrl, 'utf8'),
     readFile(reportAgentContractUrl, 'utf8'),
+    readFile(reportUsageMigrationUrl, 'utf8'),
   ]);
   const reportRpc = migration.slice(
     migration.indexOf('create or replace function public.create_audit_report_version'),
@@ -204,6 +210,7 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(reportGenerationWorker, /maxItems: 4/);
   assert.match(reportGenerationWorker, /themes\.length < 1 \|\| themes\.length > 4/);
   assert.match(reportGenerationWorker, /source: 'client_value_report_selection'/);
+  assert.match(reportUsageMigration, /'client_value_report_selection'/);
   assert.match(reportGenerationWorker, /progress_phase: 'analysing_comparisons'/);
   assert.match(reportGenerationWorker, /progress_phase: 'validating_selection'/);
   assert.match(reportGenerationWorker, /error_code: errorCode/);
