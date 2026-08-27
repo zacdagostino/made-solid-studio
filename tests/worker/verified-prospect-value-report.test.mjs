@@ -189,6 +189,8 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(reportGenerationWorker, /forced_login_method="chatgpt"/);
   assert.match(reportGenerationWorker, /--output-schema/);
   assert.match(reportGenerationWorker, /--image/);
+  assert.match(reportGenerationWorker, /arguments_\.push\('-'\)/);
+  assert.match(reportGenerationWorker, /child\.stdin\.end\(prompt\)/);
   assert.match(reportGenerationWorker, /billingMode: 'chatgpt_subscription'/);
   assert.doesNotMatch(reportGenerationWorker, /OPENAI_API_KEY/);
   assert.doesNotMatch(reportGenerationWorker, /SITEFORGE_REPORT_SELECTION_API_KEY/);

@@ -85,11 +85,11 @@ function errorClassification(error) {
     error instanceof Error ? error.message : 'Report generation stopped unexpectedly.';
   if (/configured|signed in|authentication|Codex executable/i.test(message))
     return ['model_configuration', message];
-  if (/selection|duplicate|unsupported|client story/i.test(message))
-    return ['selection_rejected', message];
   if (/candidate|evidence|screenshot|comparison|audit|attestation/i.test(message))
     return ['evidence_unavailable', message];
   if (/model|response|structured|Codex/i.test(message)) return ['model_request_failed', message];
+  if (/selection|duplicate|unsupported|client story/i.test(message))
+    return ['selection_rejected', message];
   return ['report_persistence_failed', message];
 }
 
@@ -441,12 +441,13 @@ async function selectThemes(job, source) {
       `model_reasoning_effort="${reasoningEffort}"`,
     ];
     for (const path of imagePaths) arguments_.push('--image', path);
-    arguments_.push(prompt);
+    arguments_.push('-');
     const child = spawn(executable, arguments_, {
       cwd: directory,
       env: environment,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
+    child.stdin.end(prompt);
     const events = [];
     let stdoutBuffer = '';
     let stderr = '';
