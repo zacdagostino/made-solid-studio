@@ -204,6 +204,10 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(designShowcaseMigration, /technologyFoundation,technologies/);
   assert.match(reportGenerationWorker, /const defaultModel = 'gpt-5\.6-sol'/);
   assert.match(reportGenerationWorker, /const reasoningEffort = 'max'/);
+  assert.match(reportGenerationWorker, /const maximumCandidates = 8/);
+  assert.match(reportGenerationWorker, /function shortlistCandidates\(rawCandidates\)/);
+  assert.match(reportGenerationWorker, /selectedOriginals\.has\(candidate\.original\.id\)/);
+  assert.match(reportGenerationWorker, /sourceCounts\.get\(candidate\.sourceUrl\).*>= 2/);
   assert.match(reportGenerationWorker, /forced_login_method="chatgpt"/);
   assert.match(reportGenerationWorker, /TMPDIR: temporaryDirectory/);
   assert.match(reportGenerationWorker, /codexFailureDetail\(events, stderr, exit\)/);

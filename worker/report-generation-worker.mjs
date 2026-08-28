@@ -12,7 +12,7 @@ const generatorRevision = 'gpt-5.6-sol-design-showcase-v2';
 const schemaVersion = 10;
 const defaultModel = 'gpt-5.6-sol';
 const reasoningEffort = 'max';
-const maximumCandidates = 20;
+const maximumCandidates = 8;
 const maximumImageBytes = 6 * 1024 * 1024;
 const maximumModelRunMs = 20 * 60_000;
 const agentContract = await readFile(
@@ -182,6 +182,43 @@ async function cancellationRequested(job) {
 
 function viewport(metadata) {
   return metadata?.viewport && typeof metadata.viewport === 'object' ? metadata.viewport : {};
+}
+
+function candidatePriority(candidate) {
+  const severity = candidate.observation.severity === 'high' ? 300 : 200;
+  const confidence = candidate.observation.confidence === 'high' ? 50 : 20;
+  const evidenceCount = Math.max(1, candidate.observation.evidence_artifact_ids?.length ?? 1);
+  const specificity = Math.max(0, 20 - evidenceCount);
+  const mobile = Number(candidate.viewport.width ?? 0) <= 480 ? 8 : 0;
+  return severity + confidence + specificity + mobile;
+}
+
+function shortlistCandidates(rawCandidates) {
+  const ranked = [...rawCandidates].sort(
+    (left, right) =>
+      candidatePriority(right) - candidatePriority(left) ||
+      left.sourceUrl.localeCompare(right.sourceUrl) ||
+      Number(left.viewport.width ?? 0) - Number(right.viewport.width ?? 0) ||
+      left.id.localeCompare(right.id),
+  );
+  const selected = [];
+  const selectedOriginals = new Set();
+  const sourceCounts = new Map();
+  for (const candidate of ranked) {
+    if (selectedOriginals.has(candidate.original.id)) continue;
+    if ((sourceCounts.get(candidate.sourceUrl) ?? 0) >= 2) continue;
+    selected.push(candidate);
+    selectedOriginals.add(candidate.original.id);
+    sourceCounts.set(candidate.sourceUrl, (sourceCounts.get(candidate.sourceUrl) ?? 0) + 1);
+    if (selected.length === maximumCandidates) return selected;
+  }
+  for (const candidate of ranked) {
+    if (selectedOriginals.has(candidate.original.id)) continue;
+    selected.push(candidate);
+    selectedOriginals.add(candidate.original.id);
+    if (selected.length === maximumCandidates) break;
+  }
+  return selected;
 }
 
 async function loadCandidateImage(artifact) {
@@ -382,7 +419,7 @@ async function loadSource(job) {
       .filter((item) => Number(item.metadata?.horizontalOverflowPx ?? 0) <= 1)
       .map((item) => [item.metadata?.originalArtifactId, item]),
   );
-  const candidates = observations
+  const rawCandidates = observations
     .flatMap((observation) =>
       (observation.evidence_artifact_ids ?? []).flatMap((artifactId) => {
         const original = originalById.get(artifactId);
@@ -413,14 +450,8 @@ async function loadSource(job) {
         ];
       }),
     )
-    .filter((candidate, index, all) => all.findIndex((item) => item.id === candidate.id) === index)
-    .sort(
-      (left, right) =>
-        left.sourceUrl.localeCompare(right.sourceUrl) ||
-        Number(left.viewport.width ?? 0) - Number(right.viewport.width ?? 0) ||
-        left.id.localeCompare(right.id),
-    )
-    .slice(0, maximumCandidates);
+    .filter((candidate, index, all) => all.findIndex((item) => item.id === candidate.id) === index);
+  const candidates = shortlistCandidates(rawCandidates);
   if (!candidates.length) {
     throw new Error(
       'No exact source-page and screen-size comparison candidates passed the report evidence gate.',
