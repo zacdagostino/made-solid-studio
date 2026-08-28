@@ -207,6 +207,8 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(reportGenerationWorker, /forced_login_method="chatgpt"/);
   assert.match(reportGenerationWorker, /TMPDIR: temporaryDirectory/);
   assert.match(reportGenerationWorker, /codexFailureDetail\(events, stderr, exit\)/);
+  assert.doesNotMatch(reportGenerationWorker, /uniqueItems/);
+  assert.match(reportGenerationWorker, /new Set\(candidateIds\)\.size !== candidateIds\.length/);
   assert.match(reportGenerationWorker, /--output-schema/);
   assert.match(reportGenerationWorker, /--image/);
   assert.match(reportGenerationWorker, /arguments_\.push\('-'\)/);

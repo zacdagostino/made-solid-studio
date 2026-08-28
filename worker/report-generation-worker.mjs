@@ -126,7 +126,6 @@ function selectionSchema(candidateIds) {
               type: 'array',
               minItems: 1,
               maxItems: 4,
-              uniqueItems: true,
               items: { type: 'string', enum: candidateIds },
             },
           },
@@ -772,6 +771,7 @@ function validateSelection(source, result) {
     const candidateIds = Array.isArray(decision.candidateIds) ? decision.candidateIds : [];
     if (
       !candidateIds.length ||
+      new Set(candidateIds).size !== candidateIds.length ||
       candidateIds.some((candidateId) => !candidateById.has(candidateId))
     ) {
       throw new Error('A design decision used evidence outside its candidate set.');
