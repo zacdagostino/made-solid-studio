@@ -2,7 +2,9 @@ import { uxVisionResponseSchema } from './ux-vision-contract.mjs';
 import { openAiApiKey } from './openai-api-policy.mjs';
 
 const responseEndpoint = 'https://api.openai.com/v1/responses';
-const defaultVisionModel = 'gpt-5.4';
+const defaultVisionModel = 'gpt-5.6-sol';
+const visionReasoningEffort = 'max';
+const visionRequestTimeoutMs = 10 * 60 * 1000;
 const maximumScreenshotsPerPage = 9;
 const maximumImageBytes = 6 * 1024 * 1024;
 
@@ -132,9 +134,9 @@ export async function analysePageUxWithVision(client, task, page, pageScreenshot
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: process.env.SITEFORGE_UX_VISION_MODEL?.trim() || defaultVisionModel,
+      model: defaultVisionModel,
       store: false,
-      reasoning: { effort: 'low' },
+      reasoning: { effort: visionReasoningEffort },
       input: [{ role: 'user', content }],
       text: {
         format: {
@@ -145,7 +147,7 @@ export async function analysePageUxWithVision(client, task, page, pageScreenshot
         },
       },
     }),
-    signal: AbortSignal.timeout(90_000),
+    signal: AbortSignal.timeout(visionRequestTimeoutMs),
   });
   if (!response.ok) {
     const requestId = response.headers.get('x-request-id');
@@ -164,7 +166,7 @@ export async function analysePageUxWithVision(client, task, page, pageScreenshot
   }
   return {
     ...parsed,
-    model: body.model || process.env.SITEFORGE_UX_VISION_MODEL?.trim() || defaultVisionModel,
+    model: body.model || defaultVisionModel,
     responseId: body.id,
     screenshots,
   };
@@ -173,4 +175,7 @@ export async function analysePageUxWithVision(client, task, page, pageScreenshot
 export const uxVisionLimits = {
   maximumScreenshotsPerPage,
   maximumImageBytes,
+  model: defaultVisionModel,
+  reasoningEffort: visionReasoningEffort,
+  requestTimeoutMs: visionRequestTimeoutMs,
 };

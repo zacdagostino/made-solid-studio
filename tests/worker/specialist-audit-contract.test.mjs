@@ -8,6 +8,7 @@ const migrationUrl = new URL(
 );
 const workerUrl = new URL('../../worker/audit-specialist-worker.mjs', import.meta.url);
 const browserProfilesUrl = new URL('../../worker/responsive-browser-profiles.mjs', import.meta.url);
+const uxVisionUrl = new URL('../../worker/ux-vision.mjs', import.meta.url);
 const curationMigrationUrl = new URL(
   '../../supabase/migrations/20260819143000_ux_first_report_curation.sql',
   import.meta.url,
@@ -29,9 +30,10 @@ test('specialist audit migration requires a complete current evidence set before
 });
 
 test('responsive specialist uses dedicated current-task screenshots and safe viewport captures', async () => {
-  const [source, browserProfiles] = await Promise.all([
+  const [source, browserProfiles, uxVision] = await Promise.all([
     readFile(workerUrl, 'utf8'),
     readFile(browserProfilesUrl, 'utf8'),
+    readFile(uxVisionUrl, 'utf8'),
   ]);
 
   assert.match(browserProfiles, /label: 'mobile',[\s\S]*width: 375,[\s\S]*height: 812/);
@@ -54,6 +56,10 @@ test('responsive specialist uses dedicated current-task screenshots and safe vie
   assert.match(source, /oversizedLogo/);
   assert.match(source, /image-based-feedback/);
   assert.match(source, /focusedRegion/);
+  assert.match(uxVision, /const defaultVisionModel = 'gpt-5\.6-sol'/);
+  assert.match(uxVision, /const visionReasoningEffort = 'max'/);
+  assert.match(uxVision, /detail: 'original'/);
+  assert.doesNotMatch(uxVision, /gpt-5\.4/);
 });
 
 test('client report curation groups raw cases and caps the main UX story', async () => {
