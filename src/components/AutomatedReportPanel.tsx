@@ -520,7 +520,7 @@ export function AutomatedReportPanel({
             <Circle aria-hidden="true" size={17} />
           )}
           <span>
-            <strong>Design comparisons ready for agent selection</strong>
+            <strong>Design evidence ready for the report agent</strong>
             {evidenceReady
               ? `${eligibleObservations.length} supported ${eligibleObservations.length === 1 ? 'candidate is' : 'candidates are'} available. GPT-5.6 Sol chooses the strongest natural set of one to four.`
               : 'Only supported, non-low-confidence visitor findings are eligible.'}
@@ -533,7 +533,8 @@ export function AutomatedReportPanel({
           <summary>Candidate areas available to the report agent</summary>
           <p>
             GPT-5.6 Sol considers these areas together at maximum reasoning. Evidence checks still
-            exclude platform-only, blocked, low-confidence, stale and unmatched comparisons.
+            exclude platform-only, blocked, low-confidence, stale and unmatched evidence. The agent
+            then identifies the visible design problems, strongest comparisons and design decisions.
           </p>
           <ul>
             {selectedThemes.map((theme) => (

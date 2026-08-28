@@ -21,14 +21,56 @@ const report = (overrides: Partial<DecisionReport> = {}): DecisionReport => ({
   crawlRunId: 'crawl-1',
   status: 'approved',
   version: 2,
-  schemaVersion: 9,
+  schemaVersion: 10,
   summary: 'Frozen summary',
   data: {
-    schemaVersion: 9,
-    generatorRevision: 'gpt-5.6-sol-design-curation-v1',
+    schemaVersion: 10,
+    generatorRevision: 'gpt-5.6-sol-design-showcase-v2',
     reportKind: 'verified_redesign_value',
     title: 'A stronger digital foundation for Client',
     summary: 'Frozen client value summary',
+    transformationStatement: 'A clearer experience now leads visitors from interest to action.',
+    majorFindings: [
+      {
+        id: 'finding-1',
+        area: 'Mobile navigation',
+        title: 'Navigation dominated the first screen',
+        originalProblem: 'The original mobile header left little room for useful page content.',
+        visitorImpact: 'Visitors had to move past the interface before reaching the service story.',
+        whyItMatters: 'The first screen should establish relevance quickly.',
+        evidence: {
+          artifactId: 'artifact-1',
+          sourceUrl: 'https://example.com',
+          viewport: { width: 375, height: 812 },
+        },
+      },
+    ],
+    designDecisions: [
+      {
+        id: 'decision-1',
+        title: 'Give the service story priority',
+        detail: 'Navigation and branding support the page instead of crowding out its message.',
+      },
+    ],
+    technologyFoundation: {
+      evidenceStatus: 'verified',
+      items: [
+        {
+          id: 'nextjs',
+          title: 'Modern Next.js foundation',
+          detail: 'The website uses a maintainable production foundation.',
+        },
+        {
+          id: 'typescript',
+          title: 'Reliable TypeScript source',
+          detail: 'Typed source code supports safer future changes.',
+        },
+      ],
+      responsiveVerification: {
+        title: 'Responsive by design',
+        detail: 'The complete website was checked across phone, tablet and desktop.',
+      },
+    },
     strengths: [{ id: 'identity', title: 'Established identity', detail: 'Approved identity.' }],
     valueThemes: [
       {
@@ -113,7 +155,7 @@ const generationJob = (overrides: Partial<ReportGenerationJob> = {}): ReportGene
   auditId: 'audit-1',
   crawlRunId: 'crawl-1',
   releaseAttestationId: 'release-1',
-  generatorContractVersion: 'client-value-report-agent-v1',
+  generatorContractVersion: 'client-value-report-agent-v2',
   model: 'gpt-5.6-sol',
   reasoningEffort: 'max',
   status: 'running',
@@ -151,7 +193,7 @@ describe('ClientReportPreview frozen report boundary', () => {
     expect(reportUsesProspectValueContract(report({ schemaVersion: 4 }))).toBe(false);
     expect(clientReportContractState(report())).toBe('ready');
     expect(clientReportContractState(report({ schemaVersion: 4 }))).toBe('legacy');
-    expect(clientReportContractState(report({ schemaVersion: 10 }))).toBe('studio_update_required');
+    expect(clientReportContractState(report({ schemaVersion: 11 }))).toBe('studio_update_required');
     expect(
       clientReportContractState(
         report({
@@ -236,7 +278,7 @@ describe('ClientReportPreview frozen report boundary', () => {
       }),
     );
 
-    expect(markup).toContain('GPT-5.6 Sol is choosing the strongest comparisons');
+    expect(markup).toContain('GPT-5.6 Sol is building the design story');
     expect(markup).toContain('Cancel generation');
     expect(markup).not.toContain('This report needs to be regenerated');
   });

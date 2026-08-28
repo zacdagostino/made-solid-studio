@@ -14,15 +14,79 @@ function valueReport() {
     status: 'approved',
     reviewState: 'approved',
     version: 4,
-    schemaVersion: 9,
+    schemaVersion: 10,
     summary: 'Four reviewed cases consolidated into two value themes and tied to verified edit v3.',
     data: {
-      schemaVersion: 9,
-      generatorRevision: 'gpt-5.6-sol-design-curation-v1',
+      schemaVersion: 10,
+      generatorRevision: 'gpt-5.6-sol-design-showcase-v2',
       reportKind: 'verified_redesign_value',
       title: 'See the difference for Demo Local Services',
       summary:
         'Demo Local Services now has a complete, verified website redesign grounded in reviewed evidence from the original site.',
+      transformationStatement:
+        'A crowded, uncertain experience has become a focused website that makes the service and next step easier to understand.',
+      majorFindings: [
+        {
+          id: 'finding-navigation',
+          area: 'Mobile navigation',
+          title: 'The interface crowded out the first message',
+          originalProblem:
+            'Navigation and page chrome occupied too much of the first phone screen.',
+          visitorImpact:
+            'Visitors had to work past the interface before reaching the useful service content.',
+          whyItMatters: 'The first screen should establish relevance quickly.',
+          evidence: {
+            artifactId: 'old-site-mobile-screenshot',
+            sourceUrl: 'https://demo-local-services.example/',
+            viewport: { width: 375, height: 812 },
+          },
+        },
+        {
+          id: 'finding-enquiry',
+          area: 'Enquiry journey',
+          title: 'The next action was difficult to recognise',
+          originalProblem: 'The original contact experience did not establish a clear visual path.',
+          visitorImpact:
+            'Interested customers could hesitate when they were ready to make contact.',
+          whyItMatters: 'A service website should make the next step feel obvious and low effort.',
+          evidence: {
+            artifactId: 'old-site-enquiry-screenshot',
+            sourceUrl: 'https://demo-local-services.example/contact',
+            viewport: { width: 768, height: 1024 },
+          },
+        },
+      ],
+      designDecisions: [
+        {
+          id: 'decision-hierarchy',
+          title: 'Make the service story lead',
+          detail: 'Branding and navigation support the content instead of competing with it.',
+        },
+        {
+          id: 'decision-actions',
+          title: 'Keep customer actions in context',
+          detail: 'Enquiry prompts now appear where customers have enough information to act.',
+        },
+      ],
+      technologyFoundation: {
+        evidenceStatus: 'verified',
+        items: [
+          {
+            id: 'nextjs',
+            title: 'Modern Next.js foundation',
+            detail: 'The website uses a maintainable, production-ready web foundation.',
+          },
+          {
+            id: 'typescript',
+            title: 'Reliable TypeScript source',
+            detail: 'Typed source code makes future changes safer to maintain.',
+          },
+        ],
+        responsiveVerification: {
+          title: 'Responsive by design',
+          detail: 'The complete website was checked across phone, tablet and desktop layouts.',
+        },
+      },
       strengths: [
         {
           id: 'identity',
@@ -354,7 +418,7 @@ async function seedReportGenerationJob(page, overrides = {}) {
           auditId,
           crawlRunId,
           releaseAttestationId: 'release-attestation-e2e',
-          generatorContractVersion: 'client-value-report-agent-v1',
+          generatorContractVersion: 'client-value-report-agent-v2',
           model: 'gpt-5.6-sol',
           reasoningEffort: 'max',
           status: 'running',
@@ -399,12 +463,19 @@ test('renders the prospect-specific verified value report at every required view
   await comparisons.first().focus();
   await page.keyboard.press('ArrowRight');
   await expect(comparisons.first()).toHaveValue('51');
+  await page.getByRole('button', { name: 'After', exact: true }).first().click();
+  await expect(comparisons).toHaveCount(2);
+  await page.getByRole('button', { name: 'Compare', exact: true }).first().click();
+  await expect(comparisons).toHaveCount(3);
   await expect(
     page.getByText(
       'The client report above is already generated and ready. Create this separate copy only when you want to prepare it for Clientspace sharing.',
     ),
   ).toBeVisible();
   await expect(page.getByRole('heading', { name: 'A foundation worth building on' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'What was holding the website back' }),
+  ).toBeVisible();
   await expect(
     page.getByRole('heading', {
       name: "See what changed—and why it's better",
@@ -414,9 +485,16 @@ test('renders the prospect-specific verified value report at every required view
   await expect(page.getByText('Reviewed across mobile, tablet and desktop')).toBeVisible();
   await expect(
     page.getByRole('img', { name: /Original Demo Local Services website/i }),
-  ).toHaveCount(3);
+  ).toHaveCount(5);
+  await expect(
+    page.getByRole('heading', { name: 'The choices shaping the new experience' }),
+  ).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'A modern website foundation' })).toBeVisible();
+  await expect(page.getByText('Modern Next.js foundation')).toBeVisible();
   await expect(page.getByText('What to notice')).toHaveCount(3);
-  await expect(page.getByText(/^0[1-3]$/)).toHaveCount(3);
+  await expect(
+    page.locator('section[aria-labelledby="themes-title"]').getByText(/^0[1-3]$/),
+  ).toHaveCount(3);
 
   // Technical provenance can remain available to Studio, but it must not lead the client story.
   const visibleCopy = await page.locator('body').innerText();
@@ -559,10 +637,10 @@ test('does not ask for regeneration while Studio is updating to a newer report f
     ...valueReport(),
     id: 'report-newer-than-studio-e2e',
     version: 12,
-    schemaVersion: 10,
+    schemaVersion: 11,
     data: {
       ...valueReport().data,
-      schemaVersion: 10,
+      schemaVersion: 11,
     },
   };
   await seedReport(page, newerReport);
@@ -599,7 +677,7 @@ test('shows the active replacement job instead of the stale report on Preview', 
   await page.goto(`/#/prospects/${businessId}/report-preview`);
 
   await expect(
-    page.getByRole('heading', { name: 'GPT-5.6 Sol is choosing the strongest comparisons' }),
+    page.getByRole('heading', { name: 'GPT-5.6 Sol is building the design story' }),
   ).toBeVisible();
   await expect(page.getByText('Step 2 of 5 · gpt-5.6-sol · max reasoning')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Cancel generation' })).toBeVisible();

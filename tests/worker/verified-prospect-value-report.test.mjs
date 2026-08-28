@@ -30,6 +30,10 @@ const reportUsageMigrationUrl = new URL(
   '../../supabase/migrations/20260826350000_report_generation_ai_usage_source.sql',
   import.meta.url,
 );
+const designShowcaseMigrationUrl = new URL(
+  '../../supabase/migrations/20260826360000_design_showcase_value_reports.sql',
+  import.meta.url,
+);
 const reportGenerationWorkerUrl = new URL(
   '../../worker/report-generation-worker.mjs',
   import.meta.url,
@@ -65,6 +69,7 @@ test('freezes prospect reports against the exact verified edited website', async
     reportGenerationWorker,
     reportAgentContract,
     reportUsageMigration,
+    designShowcaseMigration,
   ] = await Promise.all([
     readFile(migrationUrl, 'utf8'),
     readFile(previewWorkerUrl, 'utf8'),
@@ -81,6 +86,7 @@ test('freezes prospect reports against the exact verified edited website', async
     readFile(reportGenerationWorkerUrl, 'utf8'),
     readFile(reportAgentContractUrl, 'utf8'),
     readFile(reportUsageMigrationUrl, 'utf8'),
+    readFile(designShowcaseMigrationUrl, 'utf8'),
   ]);
   const reportRpc = migration.slice(
     migration.indexOf('create or replace function public.create_audit_report_version'),
@@ -115,8 +121,8 @@ test('freezes prospect reports against the exact verified edited website', async
     /This earlier report format must be regenerated before Clientspace preview/,
   );
 
-  assert.match(previewWorker, /report\.schema_version !== 9/);
-  assert.match(previewWorker, /gpt-5\.6-sol-design-curation-v1/);
+  assert.match(previewWorker, /report\.schema_version !== 10/);
+  assert.match(previewWorker, /gpt-5\.6-sol-design-showcase-v2/);
   assert.match(previewWorker, /verified_redesign_value/);
   assert.match(previewWorker, /source_release_attestations/);
   assert.match(previewWorker, /reportData\?\.valueThemes/);
@@ -135,8 +141,8 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(releaseVerifier, /loaderVisible/);
   assert.match(releaseVerifier, /horizontalOverflowPx > 1/);
 
-  assert.match(reportParser, /prospectValueReportSchemaVersion = 9/);
-  assert.match(reportParser, /gpt-5\.6-sol-design-curation-v1/);
+  assert.match(reportParser, /prospectValueReportSchemaVersion = 10/);
+  assert.match(reportParser, /gpt-5\.6-sol-design-showcase-v2/);
   assert.match(reportParser, /reportUsesProspectValueContract/);
   assert.match(reportParser, /redesign\.status === 'passed'/);
 
@@ -190,6 +196,12 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(agentReportMigration, /Members can view report generation jobs/);
   assert.match(agentReportMigration, /target_report\.schema_version <> 9/);
   assert.match(agentReportMigration, /gpt-5\.6-sol-design-curation-v1/);
+  assert.match(designShowcaseMigration, /client-value-report-agent-v2/);
+  assert.match(designShowcaseMigration, /schema_version <> 10/);
+  assert.match(designShowcaseMigration, /gpt-5\.6-sol-design-showcase-v2/);
+  assert.match(designShowcaseMigration, /majorFindings/);
+  assert.match(designShowcaseMigration, /designDecisions/);
+  assert.match(designShowcaseMigration, /technologyFoundation,technologies/);
   assert.match(reportGenerationWorker, /const defaultModel = 'gpt-5\.6-sol'/);
   assert.match(reportGenerationWorker, /const reasoningEffort = 'max'/);
   assert.match(reportGenerationWorker, /forced_login_method="chatgpt"/);
@@ -213,11 +225,17 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(reportUsageMigration, /'client_value_report_selection'/);
   assert.match(reportGenerationWorker, /progress_phase: 'analysing_comparisons'/);
   assert.match(reportGenerationWorker, /progress_phase: 'validating_selection'/);
+  assert.match(reportGenerationWorker, /technologyFoundation/);
+  assert.match(releaseVerifier, /verifiedTechnologyFoundation/);
   assert.match(reportGenerationWorker, /error_code: errorCode/);
   assert.doesNotMatch(reportGenerationWorker, /severityRank/);
-  assert.match(reportAgentContract, /strongest natural set of one to four comparisons/i);
-  assert.match(reportAgentContract, /Do not force fixed categories/i);
-  assert.match(reportAgentContract, /medium-severity issue may\s+be selected/i);
+  assert.match(reportAgentContract, /Website transformation report agent v2/i);
+  assert.match(reportAgentContract, /three to six distinct major findings/i);
+  assert.match(
+    reportAgentContract,
+    /strongest natural set of one to four before-and-after comparisons/i,
+  );
+  assert.match(reportAgentContract, /medium-severity issue may be selected/i);
   assert.match(reportAgentContract, /never claim guaranteed traffic/i);
   assert.doesNotMatch(releaseVerifier, /\.eq\('severity', 'high'\)/);
 

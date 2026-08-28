@@ -106,9 +106,9 @@ async function loadFrozenReport(job) {
     throw new Error('The selected report version is not an approved frozen report.');
   }
   if (
-    report.schema_version !== 9 ||
+    report.schema_version !== 10 ||
     report.data?.reportKind !== 'verified_redesign_value' ||
-    report.data?.generatorRevision !== 'gpt-5.6-sol-design-curation-v1' ||
+    report.data?.generatorRevision !== 'gpt-5.6-sol-design-showcase-v2' ||
     report.data?.redesign?.status !== 'passed'
   ) {
     throw new Error(
@@ -157,12 +157,15 @@ async function loadFrozenReport(job) {
 }
 
 async function loadReportMedia(reportData, job, report) {
-  const findings = Array.isArray(reportData?.valueThemes) ? reportData.valueThemes : [];
+  const findings = [
+    ...(Array.isArray(reportData?.valueThemes) ? reportData.valueThemes : []),
+    ...(Array.isArray(reportData?.majorFindings) ? reportData.majorFindings : []),
+  ];
   const artifactIds = findings
     .flatMap((finding) => [finding?.evidence, finding?.afterEvidence])
     .map((evidence) => (typeof evidence?.artifactId === 'string' ? evidence.artifactId : ''))
     .filter((artifactId, index, all) => artifactId && all.indexOf(artifactId) === index)
-    .slice(0, 8);
+    .slice(0, 14);
   if (!artifactIds.length) return [];
   const { data: references, error: referencesError } = await supabase
     .from('artifacts')

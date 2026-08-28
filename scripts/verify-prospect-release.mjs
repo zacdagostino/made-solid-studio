@@ -262,7 +262,37 @@ async function renderedSourceRoutes(browser, baseUrl, routes) {
   return bySource;
 }
 
-async function persistDesignComparisonScreenshots(record, releaseRowId, browser, baseUrl, routes) {
+function verifiedTechnologyFoundation(workspace) {
+  const packagePath = join(workspace, 'package.json');
+  if (!existsSync(packagePath)) return { technologies: [] };
+  let packageJson;
+  try {
+    packageJson = JSON.parse(readFileSync(packagePath, 'utf8'));
+  } catch {
+    throw new Error('The exact edited website package could not be read for technology evidence.');
+  }
+  const dependencies = {
+    ...(packageJson.dependencies ?? {}),
+    ...(packageJson.devDependencies ?? {}),
+  };
+  const technologies = [];
+  if (typeof dependencies.next === 'string') {
+    technologies.push({ id: 'nextjs', name: 'Next.js', version: dependencies.next });
+  }
+  if (typeof dependencies.typescript === 'string' && existsSync(join(workspace, 'tsconfig.json'))) {
+    technologies.push({ id: 'typescript', name: 'TypeScript', version: dependencies.typescript });
+  }
+  return { technologies };
+}
+
+async function persistDesignComparisonScreenshots(
+  record,
+  releaseRowId,
+  browser,
+  baseUrl,
+  routes,
+  technologyFoundation,
+) {
   const supabaseUrl = process.env.SITEFORGE_SUPABASE_URL?.trim();
   const serviceRoleKey = process.env.SITEFORGE_SUPABASE_SERVICE_ROLE_KEY?.trim();
   if (!supabaseUrl || !serviceRoleKey) {
@@ -395,6 +425,7 @@ async function persistDesignComparisonScreenshots(record, releaseRowId, browser,
         layoutViewportHeight: captureState.layoutViewportHeight,
         horizontalOverflowPx: captureState.horizontalOverflowPx,
         visibleTextLength: captureState.visibleTextLength,
+        technologyFoundation,
       };
       const { error: saveError } = await supabase.from('artifacts').upsert(
         {
@@ -773,6 +804,7 @@ try {
     browser,
     staticServer.url,
     outputRoutes(join(verificationWorkspace, 'out')),
+    verifiedTechnologyFoundation(verificationWorkspace),
   );
   writeJsonAtomically(join(dirname(attemptPath), `${commit}.json`), record);
   emit(

@@ -7,9 +7,9 @@ import { createClient } from '@supabase/supabase-js';
 import { codexUsage, recordAiUsage } from './ai-usage.mjs';
 
 const workerId = `${hostname()}-${process.pid}`;
-const generatorContractVersion = 'client-value-report-agent-v1';
-const generatorRevision = 'gpt-5.6-sol-design-curation-v1';
-const schemaVersion = 9;
+const generatorContractVersion = 'client-value-report-agent-v2';
+const generatorRevision = 'gpt-5.6-sol-design-showcase-v2';
+const schemaVersion = 10;
 const defaultModel = 'gpt-5.6-sol';
 const reasoningEffort = 'max';
 const maximumCandidates = 20;
@@ -37,9 +37,47 @@ function selectionSchema(candidateIds) {
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['selectionSummary', 'themes'],
+    required: [
+      'presentationTitle',
+      'presentationSummary',
+      'transformationStatement',
+      'selectionSummary',
+      'majorFindings',
+      'themes',
+      'designDecisions',
+    ],
     properties: {
+      presentationTitle: { type: 'string', minLength: 8, maxLength: 180 },
+      presentationSummary: conciseString,
+      transformationStatement: conciseString,
       selectionSummary: conciseString,
+      majorFindings: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 6,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: [
+            'candidateId',
+            'area',
+            'title',
+            'originalProblem',
+            'visitorImpact',
+            'whyItMatters',
+            'selectionReason',
+          ],
+          properties: {
+            candidateId: { type: 'string', enum: candidateIds },
+            area: { type: 'string', minLength: 1, maxLength: 80 },
+            title: { type: 'string', minLength: 8, maxLength: 180 },
+            originalProblem: conciseString,
+            visitorImpact: conciseString,
+            whyItMatters: conciseString,
+            selectionReason: conciseString,
+          },
+        },
+      },
       themes: {
         type: 'array',
         minItems: 0,
@@ -70,6 +108,27 @@ function selectionSchema(candidateIds) {
             whatChanged: conciseString,
             whyBetter: conciseString,
             selectionReason: conciseString,
+          },
+        },
+      },
+      designDecisions: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 5,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['title', 'detail', 'candidateIds'],
+          properties: {
+            title: { type: 'string', minLength: 8, maxLength: 180 },
+            detail: conciseString,
+            candidateIds: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 4,
+              uniqueItems: true,
+              items: { type: 'string', enum: candidateIds },
+            },
           },
         },
       },
@@ -355,6 +414,20 @@ async function loadSource(job) {
       'No exact source-page and screen-size comparison candidates passed the report evidence gate.',
     );
   }
+  const technologyIds = new Set(
+    candidates.flatMap((candidate) =>
+      Array.isArray(candidate.after.metadata?.technologyFoundation?.technologies)
+        ? candidate.after.metadata.technologyFoundation.technologies.map(
+            (technology) => technology?.id,
+          )
+        : [],
+    ),
+  );
+  if (!technologyIds.has('nextjs') || !technologyIds.has('typescript')) {
+    throw new Error(
+      'The comparison evidence does not include verified Next.js and TypeScript foundation evidence. Run release verification again.',
+    );
+  }
   return {
     business: businessResult.data,
     audit: auditResult.data,
@@ -391,6 +464,7 @@ async function selectThemes(job, source) {
     observation: candidate.observation.observation,
     customerImpact: candidate.observation.customer_impact,
     recommendation: candidate.observation.recommendation,
+    measuredSignals: candidate.observation.measurement,
     sourceUrl: candidate.sourceUrl,
     screen: candidate.viewport,
     originalHorizontalOverflowPx: Number(candidate.original.metadata?.horizontalOverflowPx ?? 0),
@@ -537,6 +611,17 @@ async function selectThemes(job, source) {
   }
 }
 
+function assertClientCopy(values) {
+  const unsupportedClaim =
+    /\b(guarantee(?:d|s)?|will (?:increase|improve|deliver)|revenue|sales|rankings?|conversion rate|legal(?:ly)? compliant|best (?:technology|framework|platform))\b/i;
+  if (
+    values.some((value) => !plainText(value)) ||
+    values.some((value) => unsupportedClaim.test(value))
+  ) {
+    throw new Error('The report agent returned an unsupported or incomplete client claim.');
+  }
+}
+
 function validateSelection(source, result) {
   const themes = Array.isArray(result.selection?.themes) ? result.selection.themes : [];
   if (themes.length < 1 || themes.length > 4) {
@@ -547,9 +632,12 @@ function validateSelection(source, result) {
   if (new Set(selectedIds).size !== selectedIds.length) {
     throw new Error('The report agent selected a comparison more than once.');
   }
-  const unsupportedClaim =
-    /\b(guarantee(?:d|s)?|will (?:increase|improve|deliver)|revenue|sales|rankings?|conversion rate|legal(?:ly)? compliant)\b/i;
-  return themes.map((theme, index) => {
+  assertClientCopy([
+    result.selection.presentationTitle,
+    result.selection.presentationSummary,
+    result.selection.transformationStatement,
+  ]);
+  const frozenThemes = themes.map((theme, index) => {
     const candidate = candidateById.get(theme.candidateId);
     if (!candidate)
       throw new Error('The report agent selected evidence outside its candidate set.');
@@ -562,12 +650,7 @@ function validateSelection(source, result) {
       theme.whatChanged,
       theme.whyBetter,
     ];
-    if (
-      clientFields.some((value) => !plainText(value)) ||
-      clientFields.some((value) => unsupportedClaim.test(value))
-    ) {
-      throw new Error('The report agent returned an unsupported or incomplete client claim.');
-    }
+    assertClientCopy(clientFields);
     return {
       id: `theme-${index + 1}-${candidate.observation.id.slice(0, 8)}`,
       area: plainText(theme.area, 80),
@@ -628,6 +711,79 @@ function validateSelection(source, result) {
       },
     };
   });
+  const majorFindings = Array.isArray(result.selection?.majorFindings)
+    ? result.selection.majorFindings
+    : [];
+  if (majorFindings.length < 1 || majorFindings.length > 6) {
+    throw new Error('The report agent did not return a usable set of original design findings.');
+  }
+  if (new Set(majorFindings.map((finding) => finding.candidateId)).size !== majorFindings.length) {
+    throw new Error('The report agent repeated an original design finding.');
+  }
+  const frozenFindings = majorFindings.map((finding, index) => {
+    const candidate = candidateById.get(finding.candidateId);
+    if (!candidate) throw new Error('A design finding used evidence outside its candidate set.');
+    assertClientCopy([
+      finding.title,
+      finding.originalProblem,
+      finding.visitorImpact,
+      finding.whyItMatters,
+    ]);
+    return {
+      id: `finding-${index + 1}-${candidate.observation.id.slice(0, 8)}`,
+      area: plainText(finding.area, 80),
+      title: plainText(finding.title, 180),
+      originalProblem: plainText(finding.originalProblem),
+      visitorImpact: plainText(finding.visitorImpact),
+      whyItMatters: plainText(finding.whyItMatters),
+      evidence: {
+        artifactId: candidate.original.id,
+        storageBucket: candidate.original.storage_bucket,
+        storagePath: candidate.original.storage_path,
+        sourceUrl: candidate.sourceUrl,
+        viewport: candidate.viewport,
+      },
+      internalEvidence: {
+        observationId: candidate.observation.id,
+        measurement: candidate.observation.measurement,
+        selectionReason: plainText(finding.selectionReason),
+      },
+    };
+  });
+  const designDecisions = Array.isArray(result.selection?.designDecisions)
+    ? result.selection.designDecisions
+    : [];
+  if (designDecisions.length < 1 || designDecisions.length > 5) {
+    throw new Error('The report agent did not return a usable set of design decisions.');
+  }
+  const frozenDecisions = designDecisions.map((decision, index) => {
+    assertClientCopy([decision.title, decision.detail]);
+    const candidateIds = Array.isArray(decision.candidateIds) ? decision.candidateIds : [];
+    if (
+      !candidateIds.length ||
+      candidateIds.some((candidateId) => !candidateById.has(candidateId))
+    ) {
+      throw new Error('A design decision used evidence outside its candidate set.');
+    }
+    return {
+      id: `decision-${index + 1}`,
+      title: plainText(decision.title, 180),
+      detail: plainText(decision.detail),
+      sourceObservationIds: candidateIds.map(
+        (candidateId) => candidateById.get(candidateId).observation.id,
+      ),
+    };
+  });
+  return {
+    themes: frozenThemes,
+    majorFindings: frozenFindings,
+    designDecisions: frozenDecisions,
+    presentation: {
+      title: plainText(result.selection.presentationTitle, 180),
+      summary: plainText(result.selection.presentationSummary),
+      transformationStatement: plainText(result.selection.transformationStatement),
+    },
+  };
 }
 
 function deliveredWork(release) {
@@ -645,7 +801,46 @@ function deliveredWork(release) {
   }));
 }
 
-async function freezeReport(job, source, result, themes) {
+function technologyFoundation(source) {
+  const evidence = source.candidates
+    .map((candidate) => candidate.after.metadata?.technologyFoundation)
+    .find((value) => value && typeof value === 'object');
+  const technologies = Array.isArray(evidence?.technologies) ? evidence.technologies : [];
+  const items = technologies.flatMap((technology) => {
+    if (technology?.id === 'nextjs') {
+      return [
+        {
+          id: 'nextjs',
+          title: 'Modern Next.js foundation',
+          detail:
+            'The new website is built on Next.js for a maintainable, production-ready web foundation that can grow with the business.',
+        },
+      ];
+    }
+    if (technology?.id === 'typescript') {
+      return [
+        {
+          id: 'typescript',
+          title: 'Reliable TypeScript source',
+          detail:
+            'Typed source code makes future changes safer and easier to maintain as the website evolves.',
+        },
+      ];
+    }
+    return [];
+  });
+  return {
+    evidenceStatus: items.length ? 'verified' : 'unavailable',
+    items,
+    responsiveVerification: {
+      title: 'Responsive by design',
+      detail:
+        'The complete website was checked across phone, tablet and desktop layouts before this report was prepared.',
+    },
+  };
+}
+
+async function freezeReport(job, source, result, validated) {
   const now = new Date().toISOString();
   const data = {
     schemaVersion,
@@ -654,8 +849,9 @@ async function freezeReport(job, source, result, themes) {
     auditId: source.audit.id,
     crawlRunId: source.audit.crawl_run_id,
     generatedAt: now,
-    title: `See the difference for ${source.business.name}`,
-    summary: `Compare the original ${source.business.name} website with the verified redesign and see why the selected design improvements matter to customers.`,
+    title: validated.presentation.title,
+    summary: validated.presentation.summary,
+    transformationStatement: validated.presentation.transformationStatement,
     strengths: [
       {
         id: 'evidence-led-foundation',
@@ -669,7 +865,10 @@ async function freezeReport(job, source, result, themes) {
           'The proposed solution is a working website—not a mock-up or a list of future recommendations.',
       },
     ],
-    valueThemes: themes,
+    majorFindings: validated.majorFindings,
+    valueThemes: validated.themes,
+    designDecisions: validated.designDecisions,
+    technologyFoundation: technologyFoundation(source),
     deliveredWork: deliveredWork(source.release),
     redesign: {
       status: 'passed',
@@ -725,7 +924,7 @@ async function freezeReport(job, source, result, themes) {
         version,
         schema_version: schemaVersion,
         review_state: 'approved',
-        summary: `${themes.length} design-led comparisons selected from ${source.candidates.length} verified candidates.`,
+        summary: `${validated.themes.length} design-led comparisons and ${validated.majorFindings.length} original experience findings selected from ${source.candidates.length} verified candidates.`,
         data: { ...data, version },
         created_by: job.requested_by,
       })
@@ -752,7 +951,7 @@ async function processJob(job) {
     await updateJob(job, {
       completed_items: 1,
       progress_phase: 'analysing_comparisons',
-      progress_detail: `GPT-5.6 Sol is comparing ${source.candidates.length} verified design candidates at maximum reasoning.`,
+      progress_detail: `GPT-5.6 Sol is analysing ${source.candidates.length} verified design candidates and building the client presentation at maximum reasoning.`,
       lease_expires_at: new Date(Date.now() + 8 * 60_000).toISOString(),
     });
     const result = await selectThemes(job, source);
@@ -763,17 +962,18 @@ async function processJob(job) {
       progress_detail: 'Checking every selected claim against its exact screenshots and release.',
       lease_expires_at: new Date(Date.now() + 8 * 60_000).toISOString(),
     });
-    const themes = validateSelection(source, result);
+    const validated = validateSelection(source, result);
     await updateJob(job, {
       completed_items: 4,
       progress_phase: 'freezing_report',
-      progress_detail: 'Freezing the selected comparisons as a new immutable client report.',
+      progress_detail:
+        'Freezing the design findings, comparisons and decisions as a new immutable client report.',
     });
-    const reportId = await freezeReport(job, source, result, themes);
+    const reportId = await freezeReport(job, source, result, validated);
     await updateJob(job, {
       status: 'ready',
       progress_phase: 'complete',
-      progress_detail: `Report ready with ${themes.length} design-led comparison${themes.length === 1 ? '' : 's'}.`,
+      progress_detail: `Report ready with ${validated.themes.length} design-led comparison${validated.themes.length === 1 ? '' : 's'} and ${validated.majorFindings.length} original design finding${validated.majorFindings.length === 1 ? '' : 's'}.`,
       completed_items: 5,
       result_report_version_id: reportId,
       lease_expires_at: null,

@@ -107,7 +107,7 @@ async function loadReviewedDecisionReport(businessId) {
     .from('decision_report_versions')
     .select('id, version, schema_version, review_state, summary, data, created_at')
     .eq('business_id', businessId)
-    .eq('schema_version', 9)
+    .eq('schema_version', 10)
     .eq('review_state', 'approved')
     .order('version', { ascending: false })
     .limit(1)
@@ -116,7 +116,7 @@ async function loadReviewedDecisionReport(businessId) {
   if (
     !data ||
     data.data?.reportKind !== 'verified_redesign_value' ||
-    data.data?.generatorRevision !== 'gpt-5.6-sol-design-curation-v1' ||
+    data.data?.generatorRevision !== 'gpt-5.6-sol-design-showcase-v2' ||
     data.data?.redesign?.status !== 'passed'
   ) {
     throw new Error(
@@ -127,7 +127,10 @@ async function loadReviewedDecisionReport(businessId) {
 }
 
 async function loadReportMedia(reportData) {
-  const findings = Array.isArray(reportData?.valueThemes) ? reportData.valueThemes : [];
+  const findings = [
+    ...(Array.isArray(reportData?.valueThemes) ? reportData.valueThemes : []),
+    ...(Array.isArray(reportData?.majorFindings) ? reportData.majorFindings : []),
+  ];
   const references = findings
     .flatMap((finding) => [finding?.evidence, finding?.afterEvidence])
     .filter(
@@ -141,7 +144,7 @@ async function loadReportMedia(reportData) {
       (evidence, index, all) =>
         all.findIndex((candidate) => candidate.artifactId === evidence.artifactId) === index,
     )
-    .slice(0, 8);
+    .slice(0, 14);
   const media = [];
   for (const reference of references) {
     const { data, error } = await supabase.storage

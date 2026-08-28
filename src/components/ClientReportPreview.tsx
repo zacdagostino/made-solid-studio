@@ -2,9 +2,13 @@ import {
   ArrowLeft,
   ArrowRight,
   Check,
+  Code2,
   ExternalLink,
+  Eye,
+  Layers3,
   LoaderCircle,
   LockKeyhole,
+  MonitorSmartphone,
   MoveHorizontal,
   RefreshCcw,
   RotateCcw,
@@ -80,11 +84,44 @@ function BeforeAfterComparison({
   viewportWidth: number;
 }) {
   const [position, setPosition] = useState(50);
+  const [viewMode, setViewMode] = useState<'compare' | 'before' | 'after'>('compare');
   const maximumFrameWidth = Math.round(Math.min(1120, (viewportWidth / viewportHeight) * 704));
   const viewportLabel =
     viewportWidth <= 480 ? 'Phone' : viewportWidth <= 900 ? 'Tablet' : 'Desktop';
   return (
     <figure className={styles.comparisonFigure}>
+      <div aria-label={`Choose how to view ${title}`} className={styles.comparisonToolbar}>
+        <span>{viewportLabel} view</span>
+        <ButtonGroup>
+          <Button
+            aria-pressed={viewMode === 'before'}
+            className={viewMode === 'before' ? styles.activeComparisonMode : undefined}
+            onClick={() => setViewMode('before')}
+            size="small"
+            variant="secondary"
+          >
+            Before
+          </Button>
+          <Button
+            aria-pressed={viewMode === 'compare'}
+            className={viewMode === 'compare' ? styles.activeComparisonMode : undefined}
+            onClick={() => setViewMode('compare')}
+            size="small"
+            variant="secondary"
+          >
+            Compare
+          </Button>
+          <Button
+            aria-pressed={viewMode === 'after'}
+            className={viewMode === 'after' ? styles.activeComparisonMode : undefined}
+            onClick={() => setViewMode('after')}
+            size="small"
+            variant="secondary"
+          >
+            After
+          </Button>
+        </ButtonGroup>
+      </div>
       <div
         className={styles.comparisonFrame}
         style={{
@@ -96,27 +133,38 @@ function BeforeAfterComparison({
         <div
           aria-hidden="true"
           className={styles.afterLayer}
-          style={{ clipPath: `inset(0 ${100 - position}% 0 0)` }}
+          style={{
+            clipPath:
+              viewMode === 'after'
+                ? 'inset(0 0 0 0)'
+                : viewMode === 'before'
+                  ? 'inset(0 100% 0 0)'
+                  : `inset(0 ${100 - position}% 0 0)`,
+          }}
         >
           <img alt="" src={afterUrl} />
         </div>
         <span className={styles.beforeLabel}>Before</span>
         <span className={styles.afterLabel}>After</span>
-        <span
-          aria-hidden="true"
-          className={styles.comparisonHandle}
-          style={{ left: `${position}%` }}
-        >
-          <MoveHorizontal size={18} />
-        </span>
-        <input
-          aria-label={`Compare the original and redesigned ${title} screenshots`}
-          max="100"
-          min="0"
-          onChange={(event) => setPosition(Number(event.currentTarget.value))}
-          type="range"
-          value={position}
-        />
+        {viewMode === 'compare' ? (
+          <>
+            <span
+              aria-hidden="true"
+              className={styles.comparisonHandle}
+              style={{ left: `${position}%` }}
+            >
+              <MoveHorizontal size={18} />
+            </span>
+            <input
+              aria-label={`Compare the original and redesigned ${title} screenshots`}
+              max="100"
+              min="0"
+              onChange={(event) => setPosition(Number(event.currentTarget.value))}
+              type="range"
+              value={position}
+            />
+          </>
+        ) : null}
       </div>
       <figcaption>
         <strong>
@@ -130,8 +178,9 @@ function BeforeAfterComparison({
         <strong>What to notice in the original</strong>
         <span>{notice}</span>
         <small>
-          Drag the comparison control, or use its arrow keys, to reveal the original and redesigned
-          website.
+          {viewMode === 'compare'
+            ? 'Drag the comparison control, or use its arrow keys, to reveal the original and redesigned website.'
+            : `Showing the ${viewMode === 'before' ? 'original' : 'redesigned'} website. Use the view controls above to compare.`}
         </small>
       </figcaption>
     </figure>
@@ -230,7 +279,7 @@ export function ClientReportPreview({
           <h2 id="report-generation-title">
             {generationJob.status === 'queued'
               ? 'The new report is queued'
-              : 'GPT-5.6 Sol is choosing the strongest comparisons'}
+              : 'GPT-5.6 Sol is building the design story'}
           </h2>
           <p>
             {generationJob.progressDetail ||
@@ -514,7 +563,7 @@ export function ClientReportPreview({
 
       <article className={styles.report}>
         <header className={styles.hero}>
-          <p>Made Solid · Website value report</p>
+          <p>Made Solid · Website transformation</p>
           <h1>{view.title}</h1>
           <p className={styles.lede}>{view.summary}</p>
           <div className={styles.reportMeta}>
@@ -526,12 +575,61 @@ export function ClientReportPreview({
         <section className={styles.intro} aria-labelledby="foundation-title">
           <div>
             <p className={styles.kicker}>The outcome</p>
-            <h2 id="foundation-title">A stronger digital foundation is ready</h2>
+            <h2 id="foundation-title">A clearer, more confident website experience</h2>
           </div>
           <p>
-            We have turned the clearest problems in the original experience into practical
-            improvements that help customers understand {clientName} and take the next step.
+            {view.transformationStatement ||
+              `The clearest problems in the original experience have become practical design improvements that help customers understand ${clientName} and take the next step.`}
           </p>
+        </section>
+
+        <section className={styles.diagnosis} aria-labelledby="diagnosis-title">
+          <div className={styles.sectionHeading}>
+            <p className={styles.kicker}>The original experience</p>
+            <h2 id="diagnosis-title">What was holding the website back</h2>
+            <p>
+              These are the most important visible design issues found across the original website.
+              Each one is tied to captured evidence—not a generic checklist.
+            </p>
+          </div>
+          <div className={styles.diagnosisGrid}>
+            {view.majorFindings.map((finding, index) => (
+              <article className={styles.diagnosisCard} key={finding.id}>
+                <div className={styles.diagnosisMedia}>
+                  {evidenceUrls[finding.evidenceArtifactId] ? (
+                    <img
+                      alt={`Original ${clientName} website evidence for ${finding.title}`}
+                      src={evidenceUrls[finding.evidenceArtifactId]}
+                    />
+                  ) : (
+                    <div className={styles.mediaUnavailable}>
+                      <Eye aria-hidden="true" size={22} />
+                      <span>Original screenshot unavailable</span>
+                    </div>
+                  )}
+                  <span>
+                    {finding.viewportWidth <= 480
+                      ? 'Phone'
+                      : finding.viewportWidth <= 900
+                        ? 'Tablet'
+                        : 'Desktop'}
+                  </span>
+                </div>
+                <div className={styles.diagnosisCopy}>
+                  <span>{String(index + 1).padStart(2, '0')}</span>
+                  <p>{finding.area}</p>
+                  <h3>{finding.title}</h3>
+                  <p>{finding.originalProblem}</p>
+                  <div>
+                    <strong>What visitors experience</strong>
+                    <p>{finding.visitorImpact}</p>
+                    <strong>Why it matters</strong>
+                    <p>{finding.whyItMatters}</p>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
         </section>
 
         {view.strengths.length ? (
@@ -613,6 +711,49 @@ export function ClientReportPreview({
                     <p>{theme.value}</p>
                   </div>
                 </div>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className={styles.decisions} aria-labelledby="decisions-title">
+          <div>
+            <p className={styles.kicker}>The design direction</p>
+            <h2 id="decisions-title">The choices shaping the new experience</h2>
+            <p>The redesign is a connected system of decisions—not a surface-level reskin.</p>
+          </div>
+          <ol>
+            {view.designDecisions.map((decision) => (
+              <li key={decision.id}>
+                <Layers3 aria-hidden="true" size={20} />
+                <div>
+                  <strong>{decision.title}</strong>
+                  <p>{decision.detail}</p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        <section className={styles.technology} aria-labelledby="technology-title">
+          <div>
+            <p className={styles.kicker}>Built for what comes next</p>
+            <h2 id="technology-title">A modern website foundation</h2>
+            <p>
+              The design is backed by maintainable technology and verified responsive behaviour, so
+              it is ready to support future content and improvements.
+            </p>
+          </div>
+          <div className={styles.technologyGrid}>
+            {view.technologyFoundation.map((item) => (
+              <article key={item.id}>
+                {item.id === 'nextjs' || item.id === 'typescript' ? (
+                  <Code2 aria-hidden="true" size={21} />
+                ) : (
+                  <MonitorSmartphone aria-hidden="true" size={21} />
+                )}
+                <h3>{item.title}</h3>
+                <p>{item.detail}</p>
               </article>
             ))}
           </div>

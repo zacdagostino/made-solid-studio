@@ -20128,8 +20128,9 @@ function ClientReportPreviewWorkspace({
       : data && Array.isArray(data.findings)
         ? data.findings
         : [];
+  const majorFindings = data && Array.isArray(data.majorFindings) ? data.majorFindings : [];
   const evidenceArtifactIds = new Set(
-    findings.flatMap((finding) => {
+    [...findings, ...majorFindings].flatMap((finding) => {
       if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return [];
       const evidence = (finding as Record<string, unknown>).evidence;
       const afterEvidence = (finding as Record<string, unknown>).afterEvidence;
@@ -20188,7 +20189,9 @@ function reportGenerationJobForWorkspace(
 ) {
   const saved = workspace.reportGenerationJobs.find(
     (job) =>
-      job.auditId === workspace.audit?.id && job.releaseAttestationId === releaseAttestationId,
+      job.auditId === workspace.audit?.id &&
+      job.releaseAttestationId === releaseAttestationId &&
+      job.generatorContractVersion === 'client-value-report-agent-v2',
   );
   if (saved || import.meta.env.VITE_SITEFORGE_E2E_FIXTURES !== 'true') return saved;
   try {

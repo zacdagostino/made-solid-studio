@@ -1,6 +1,6 @@
 import type { DecisionReport } from './domain';
 
-export const prospectValueReportSchemaVersion = 9;
+export const prospectValueReportSchemaVersion = 10;
 export const prospectValueReportKind = 'verified_redesign_value';
 
 export type ProspectValueReportTheme = {
@@ -34,6 +34,30 @@ export type ProspectValueReportStrength = {
   detail: string;
 };
 
+export type ProspectValueReportFinding = {
+  id: string;
+  area: string;
+  title: string;
+  originalProblem: string;
+  visitorImpact: string;
+  whyItMatters: string;
+  evidenceArtifactId: string;
+  viewportHeight: number;
+  viewportWidth: number;
+};
+
+export type ProspectValueReportDecision = {
+  id: string;
+  title: string;
+  detail: string;
+};
+
+export type ProspectValueReportTechnology = {
+  id: string;
+  title: string;
+  detail: string;
+};
+
 export type ProspectValueReportProof = {
   id: string;
   label: string;
@@ -44,8 +68,12 @@ export type ProspectValueReportProof = {
 export type ProspectValueReportView = {
   title: string;
   summary: string;
+  transformationStatement: string;
   strengths: ProspectValueReportStrength[];
+  majorFindings: ProspectValueReportFinding[];
   themes: ProspectValueReportTheme[];
+  designDecisions: ProspectValueReportDecision[];
+  technologyFoundation: ProspectValueReportTechnology[];
   deliveredWork: ProspectValueReportProof[];
   nextStep: string;
   methodology: string[];
@@ -84,6 +112,10 @@ export function reportUsesProspectValueContract(report?: DecisionReport) {
   const data = record(report.data);
   const redesign = record(data.redesign);
   const themes = Array.isArray(data.valueThemes) ? data.valueThemes : [];
+  const majorFindings = Array.isArray(data.majorFindings) ? data.majorFindings : [];
+  const designDecisions = Array.isArray(data.designDecisions) ? data.designDecisions : [];
+  const technology = record(data.technologyFoundation);
+  const technologyItems = Array.isArray(technology.items) ? technology.items.map(record) : [];
   const deliveredWork = Array.isArray(data.deliveredWork) ? data.deliveredWork : [];
   const themesHaveOldSiteEvidence = themes.every((raw) => {
     const theme = record(raw);
@@ -117,7 +149,7 @@ export function reportUsesProspectValueContract(report?: DecisionReport) {
   });
   return Boolean(
     data.reportKind === prospectValueReportKind &&
-    data.generatorRevision === 'gpt-5.6-sol-design-curation-v1' &&
+    data.generatorRevision === 'gpt-5.6-sol-design-showcase-v2' &&
     redesign.status === 'passed' &&
     text(redesign.attestationId) &&
     text(redesign.sourceBuilderRunId) &&
@@ -128,6 +160,27 @@ export function reportUsesProspectValueContract(report?: DecisionReport) {
     themes.length > 0 &&
     themes.length <= 4 &&
     themesHaveOldSiteEvidence &&
+    majorFindings.length > 0 &&
+    majorFindings.length <= 6 &&
+    majorFindings.every((raw) => {
+      const finding = record(raw);
+      const evidence = record(finding.evidence);
+      const viewport = record(evidence.viewport);
+      return Boolean(
+        text(finding.title) &&
+        text(finding.originalProblem) &&
+        text(finding.visitorImpact) &&
+        text(finding.whyItMatters) &&
+        text(evidence.artifactId) &&
+        number(viewport.width) > 0 &&
+        number(viewport.height) > 0,
+      );
+    }) &&
+    designDecisions.length > 0 &&
+    designDecisions.length <= 5 &&
+    technology.evidenceStatus === 'verified' &&
+    technologyItems.some((item) => item.id === 'nextjs') &&
+    technologyItems.some((item) => item.id === 'typescript') &&
     deliveredWork.length > 0 &&
     deliveredWork.every((raw) => record(raw).status === 'passed'),
   );
@@ -200,6 +253,53 @@ export function prospectValueReportView(
       ];
     },
   );
+  const majorFindings: ProspectValueReportFinding[] = (data.majorFindings as unknown[]).flatMap(
+    (raw, index) => {
+      const item = record(raw);
+      const evidence = record(item.evidence);
+      const viewport = record(evidence.viewport);
+      const title = text(item.title);
+      const artifactId = text(evidence.artifactId);
+      if (!title || !artifactId) return [];
+      return [
+        {
+          id: text(item.id) || `finding-${index + 1}`,
+          area: text(item.area) || 'Original website experience',
+          title,
+          originalProblem: text(item.originalProblem),
+          visitorImpact: text(item.visitorImpact),
+          whyItMatters: text(item.whyItMatters),
+          evidenceArtifactId: artifactId,
+          viewportWidth: number(viewport.width),
+          viewportHeight: number(viewport.height),
+        },
+      ];
+    },
+  );
+  const designDecisions: ProspectValueReportDecision[] = (data.designDecisions as unknown[])
+    .map((raw, index) => {
+      const item = record(raw);
+      const title = text(item.title);
+      const detail = text(item.detail);
+      return title && detail
+        ? { id: text(item.id) || `decision-${index + 1}`, title, detail }
+        : undefined;
+    })
+    .filter((item): item is ProspectValueReportDecision => Boolean(item));
+  const technology = record(data.technologyFoundation);
+  const technologyFoundation: ProspectValueReportTechnology[] = [
+    ...(Array.isArray(technology.items) ? technology.items : []),
+    technology.responsiveVerification,
+  ]
+    .map((raw, index) => {
+      const item = record(raw);
+      const title = text(item.title);
+      const detail = text(item.detail);
+      return title && detail
+        ? { id: text(item.id) || `technology-${index + 1}`, title, detail }
+        : undefined;
+    })
+    .filter((item): item is ProspectValueReportTechnology => Boolean(item));
   const deliveredWork = (data.deliveredWork as unknown[])
     .map((raw, index) => {
       const item = record(raw);
@@ -218,8 +318,12 @@ export function prospectValueReportView(
   return {
     title: text(data.title) || 'A stronger digital foundation',
     summary: text(data.summary) || report.summary,
+    transformationStatement: text(data.transformationStatement),
     strengths,
+    majorFindings,
     themes,
+    designDecisions,
+    technologyFoundation,
     deliveredWork,
     nextStep: text(data.nextStep) || 'Review the completed website and choose the right next step.',
     methodology: textList(data.methodology),
