@@ -1,5 +1,6 @@
 const allowedIssueTypes = new Set([
   'navigation_obstruction',
+  'content_obstruction',
   'oversized_branding',
   'visual_hierarchy',
   'content_redundancy',
@@ -36,6 +37,8 @@ const ignoredWords = new Set([
 
 const issueSignals = {
   navigation_obstruction: /\b(header|menu|nav(?:igation)?)\b/i,
+  content_obstruction:
+    /\b(cover|covered|covering|fixed|footer|obscur|overlap|overlay|persistent|sticky)\b/i,
   oversized_branding: /\b(brand(?:ing)?|logo|wordmark)\b/i,
   visual_hierarchy: /\b(crowd|dominant|hierarchy|large visual|viewport)\b/i,
   content_redundancy: /\b(duplicat|redundan|repeat)/i,
@@ -197,6 +200,13 @@ export function normaliseVisionObservations(
       metadata.auditId !== auditId
     ) {
       rejected.push(rejection(index, 'evidence_from_different_run'));
+      return;
+    }
+    if (
+      metadata.captureContract !== 'real-device-responsive-audit-v1' ||
+      plainRecord(metadata.viewportIntegrity)?.status !== 'passed'
+    ) {
+      rejected.push(rejection(index, 'untrusted_capture_profile'));
       return;
     }
     if (canonicalUrl(metadata.sourceUrl) !== sourceUrl) {

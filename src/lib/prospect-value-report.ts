@@ -144,12 +144,13 @@ export function reportUsesProspectValueContract(report?: DecisionReport) {
       verification.pageReady === true &&
       verification.loaderVisible === false &&
       verification.sameViewport === true &&
+      verification.sameScrollState === true &&
       number(verification.redesignedHorizontalOverflowPx) <= 1,
     );
   });
   return Boolean(
     data.reportKind === prospectValueReportKind &&
-    data.generatorRevision === 'gpt-5.6-sol-design-showcase-v2' &&
+    data.generatorRevision === 'gpt-5.6-sol-dynamic-design-showcase-v3' &&
     redesign.status === 'passed' &&
     text(redesign.attestationId) &&
     text(redesign.sourceBuilderRunId) &&

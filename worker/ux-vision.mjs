@@ -3,7 +3,7 @@ import { openAiApiKey } from './openai-api-policy.mjs';
 
 const responseEndpoint = 'https://api.openai.com/v1/responses';
 const defaultVisionModel = 'gpt-5.4';
-const maximumScreenshotsPerPage = 6;
+const maximumScreenshotsPerPage = 9;
 const maximumImageBytes = 6 * 1024 * 1024;
 
 const observationSchema = uxVisionResponseSchema();
@@ -18,7 +18,7 @@ function outputText(response) {
 }
 
 function concisePageContext(page, screenshots) {
-  const overview = screenshots.find((item) => item.metadata?.evidenceKind === 'overview');
+  const overview = screenshots.find((item) => item.metadata?.evidenceKind === 'page-overview');
   const metadata = overview?.metadata ?? screenshots[0]?.metadata ?? {};
   return {
     url: page.url,
@@ -31,6 +31,8 @@ function concisePageContext(page, screenshots) {
     visibleTextLength: metadata.visibleTextLength,
     repeatedActionLabels: metadata.repeatedActionLabels ?? [],
     fixedOrStickyElements: metadata.fixedOrStickyElements ?? [],
+    responsiveCaptureContract: metadata.captureContract,
+    viewportIntegrity: metadata.viewportIntegrity,
     resourceSummary: metadata.resourceSummary ?? {},
     runtimeErrors: metadata.runtimeErrors ?? [],
   };
@@ -67,8 +69,10 @@ export async function analysePageUxWithVision(client, task, page, pageScreenshot
   const evidenceOrder = (artifact) => {
     const kind = artifact.metadata?.evidenceKind ?? '';
     if (kind === 'page-overview') return 0;
-    if (kind.startsWith('interaction-')) return 1;
-    return 2;
+    if (kind === 'scroll-middle') return 1;
+    if (kind === 'scroll-bottom') return 2;
+    if (kind.startsWith('interaction-')) return 3;
+    return 4;
   };
   const screenshots = [...pageScreenshots]
     .sort(
@@ -86,7 +90,9 @@ export async function analysePageUxWithVision(client, task, page, pageScreenshot
       text: [
         'Act as an evidence-bound website UX reviewer for everyday visitors.',
         'Identify only directly visible or structurally supported interface problems.',
-        'Look for hierarchy, information structure, readability, redundant content, oversized imagery or branding, confusing navigation, obscured actions, poor mobile use, inaccessible image-based text, inconsistent patterns, and weak conversion journeys.',
+        'Inspect every supplied top, middle, and bottom scroll state. Look for hierarchy, information structure, readability, redundant content, oversized imagery or branding, confusing navigation, obscured actions, poor mobile use, inaccessible image-based text, inconsistent patterns, and weak conversion journeys.',
+        'Specifically check whether any persistent fixed or sticky interface covers meaningful main or footer content, actions, or navigation. Treat supplied geometric overlap measurements as screening evidence: visually confirm that the overlap is genuinely harmful before reporting it.',
+        'Apply this dynamically to any visible component or layout. Do not search for a business-specific selector, label, or known defect.',
         'Do not infer sales loss, legal non-compliance, business intent, developer competence, or platform causation.',
         'Do not praise the design or produce client prose. Return candidate observations for a human reviewer.',
         'Return at most eight strong concerns for this page. Omit generic advice and uncertain preferences.',
@@ -106,6 +112,10 @@ export async function analysePageUxWithVision(client, task, page, pageScreenshot
         evidenceKind: artifact.metadata?.evidenceKind,
         interactionState: artifact.metadata?.interactionState,
         focusedRegion: artifact.metadata?.focusedRegion,
+        captureContract: artifact.metadata?.captureContract,
+        viewportIntegrity: artifact.metadata?.viewportIntegrity,
+        scrollState: artifact.metadata?.scrollState,
+        persistentOverlayOcclusions: artifact.metadata?.persistentOverlayOcclusions,
       })}`,
     });
     content.push({

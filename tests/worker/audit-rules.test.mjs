@@ -214,3 +214,115 @@ test('turns measured mobile UX obstructions into screenshot-linked findings', ()
   assert.ok(findings.every((finding) => finding.evidenceArtifactIds.includes('ux-shot')));
   assert.equal(findings[0].measurement.maximumViewportRatio, 0.443);
 });
+
+test('links persistent overlay findings to the exact scroll-state screenshots', () => {
+  const findings = generateSpecialistAuditFindings('responsive_ui', {
+    pages: [
+      {
+        url: 'https://example.test/contact',
+        title: 'Contact',
+        canonical_url: 'https://example.test/contact',
+        page_type: 'contact',
+        metadata: { headingCount: 1, viewportPresent: true, formCount: 1 },
+      },
+    ],
+    facts: [],
+    accessibilityReports: [],
+    performanceReports: [],
+    evidenceArtifacts: [
+      { id: 'overview-shot', sourceUrl: 'https://example.test/contact', kind: 'screenshot' },
+      { id: 'bottom-shot', sourceUrl: 'https://example.test/contact', kind: 'screenshot' },
+    ],
+    screenshots: [
+      {
+        id: 'overview-shot',
+        sourceUrl: 'https://example.test/contact',
+        metadata: {
+          viewport: { label: 'mobile', width: 375, height: 812 },
+          pageWidth: 375,
+          contentViewportWidth: 375,
+          captureContract: 'real-device-responsive-audit-v1',
+          viewportIntegrity: { status: 'passed' },
+          evidenceKind: 'page-overview',
+          persistentOverlayOcclusions: [],
+        },
+      },
+      {
+        id: 'bottom-shot',
+        sourceUrl: 'https://example.test/contact',
+        metadata: {
+          viewport: { label: 'mobile', width: 375, height: 812 },
+          pageWidth: 375,
+          contentViewportWidth: 375,
+          captureContract: 'real-device-responsive-audit-v1',
+          viewportIntegrity: { status: 'passed' },
+          evidenceKind: 'scroll-bottom',
+          scrollState: { scrollProgress: 1, scrollY: 1800, maximumScrollY: 1800 },
+          persistentOverlayOcclusions: [
+            {
+              selector: '#contact-bar',
+              label: 'Phone Email LinkedIn',
+              position: 'fixed',
+              bounds: { x: 0, y: 690, width: 375, height: 122 },
+              viewportAreaRatio: 0.15,
+              occludedContent: [
+                {
+                  selector: 'footer > p',
+                  label: 'Business contact details',
+                  element: 'p',
+                  bounds: { x: 20, y: 720, width: 300, height: 60 },
+                  overlapAreaPx: 18_000,
+                  overlapRatio: 1,
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  });
+
+  const obstruction = findings.find(
+    (finding) => finding.title === 'Persistent interface elements cover page content',
+  );
+  assert.ok(obstruction);
+  assert.equal(obstruction.severity, 'high');
+  assert.deepEqual(obstruction.evidenceArtifactIds, ['bottom-shot']);
+  assert.equal(obstruction.measurement.testedViews[0].evidenceKind, 'scroll-bottom');
+  assert.equal(obstruction.measurement.testedViews[0].overlays[0].position, 'fixed');
+});
+
+test('measures horizontal overflow against the visible content viewport', () => {
+  const findings = generateSpecialistAuditFindings('responsive_ui', {
+    pages: [
+      {
+        url: 'https://example.test/',
+        title: 'Example',
+        canonical_url: 'https://example.test/',
+        page_type: 'homepage',
+        metadata: { headingCount: 1, viewportPresent: true },
+      },
+    ],
+    facts: [],
+    accessibilityReports: [],
+    performanceReports: [],
+    evidenceArtifacts: [],
+    screenshots: [
+      {
+        sourceUrl: 'https://example.test/',
+        metadata: {
+          viewport: { label: 'mobile', width: 375, height: 812 },
+          pageWidth: 500,
+          layoutViewportWidth: 500,
+          contentViewportWidth: 375,
+        },
+      },
+    ],
+  });
+
+  const overflow = findings.find((finding) =>
+    finding.title.startsWith('Horizontal layout overflow'),
+  );
+  assert.ok(overflow);
+  assert.equal(overflow.measurement.testedViews[0].overflowPx, 125);
+});

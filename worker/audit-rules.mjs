@@ -31,6 +31,7 @@ function finding({
   customerImpact = '',
   confidence = 'high',
   measurement = {},
+  evidenceArtifactIds = [],
 }) {
   return {
     area,
@@ -40,7 +41,9 @@ function finding({
     recommendation,
     sourceUrls: [...new Set(sourceUrls)],
     evidenceFactIds: sourceEvidenceIds(factsByUrl, sourceUrls),
-    evidenceArtifactIds: sourceArtifactIds(artifactsByUrl, sourceUrls),
+    evidenceArtifactIds: evidenceArtifactIds.length
+      ? [...new Set(evidenceArtifactIds)]
+      : sourceArtifactIds(artifactsByUrl, sourceUrls),
     findingClass,
     customerImpact,
     confidence,
@@ -218,7 +221,9 @@ export function generateAuditFindings({
 
   const overflowingScreens = screenshots.filter((screenshot) => {
     const pageWidth = numberValue(screenshot.metadata, 'pageWidth');
-    const viewportWidth = numberValue(screenshot.metadata, 'layoutViewportWidth');
+    const viewportWidth =
+      numberValue(screenshot.metadata, 'contentViewportWidth') ||
+      numberValue(screenshot.metadata, 'layoutViewportWidth');
     return viewportWidth > 0 && pageWidth > viewportWidth;
   });
   const overflowUrls = overflowingScreens.map((screenshot) => screenshot.sourceUrl).filter(Boolean);
@@ -229,7 +234,8 @@ export function generateAuditFindings({
       overflowPx: Math.max(
         0,
         numberValue(screenshot.metadata, 'pageWidth') -
-          numberValue(screenshot.metadata, 'layoutViewportWidth'),
+          (numberValue(screenshot.metadata, 'contentViewportWidth') ||
+            numberValue(screenshot.metadata, 'layoutViewportWidth')),
       ),
     }));
     findings.push(
@@ -244,6 +250,48 @@ export function generateAuditFindings({
           'Inspect fixed-width elements, media, tables, and navigation at the affected viewport before redesigning the responsive layout.',
         sourceUrls: overflowUrls,
         measurement: { testedViews: overflowMeasurements },
+      }),
+    );
+  }
+
+  const obstructedScreens = screenshots.filter(
+    (screenshot) =>
+      screenshot.metadata?.captureContract === 'real-device-responsive-audit-v1' &&
+      screenshot.metadata?.viewportIntegrity?.status === 'passed' &&
+      Array.isArray(screenshot.metadata?.persistentOverlayOcclusions) &&
+      screenshot.metadata.persistentOverlayOcclusions.length > 0,
+  );
+  const obstructedUrls = obstructedScreens
+    .map((screenshot) => screenshot.sourceUrl)
+    .filter(Boolean);
+  if (obstructedUrls.length) {
+    const overlayCount = obstructedScreens.reduce(
+      (total, screenshot) => total + screenshot.metadata.persistentOverlayOcclusions.length,
+      0,
+    );
+    findings.push(
+      addFinding({
+        area: 'UX',
+        severity: 'high',
+        title: 'Persistent interface elements cover page content',
+        finding: `${overlayCount} fixed or sticky interface ${overlayCount === 1 ? 'element was' : 'elements were'} measured over meaningful page content across ${obstructedScreens.length} real-device responsive ${obstructedScreens.length === 1 ? 'capture' : 'captures'}.`,
+        customerImpact:
+          'Important content or actions can become difficult to read or use when a persistent control sits over them, especially near the end of a page on a phone.',
+        recommendation:
+          'Keep persistent actions clear of the document content by reserving responsive space, reducing or collapsing the control, or making it dismissible. Recheck the footer and other page endings at every supported viewport.',
+        sourceUrls: obstructedUrls,
+        evidenceArtifactIds: obstructedScreens.map((screenshot) => screenshot.id).filter(Boolean),
+        findingClass: 'usability_concern',
+        measurement: {
+          captureContract: 'real-device-responsive-audit-v1',
+          testedViews: obstructedScreens.map((screenshot) => ({
+            sourceUrl: screenshot.sourceUrl,
+            viewport: screenshot.metadata?.viewport,
+            evidenceKind: screenshot.metadata?.evidenceKind,
+            scrollState: screenshot.metadata?.scrollState,
+            overlays: screenshot.metadata?.persistentOverlayOcclusions,
+          })),
+        },
       }),
     );
   }

@@ -34,12 +34,16 @@ const designShowcaseMigrationUrl = new URL(
   '../../supabase/migrations/20260826360000_design_showcase_value_reports.sql',
   import.meta.url,
 );
+const dynamicReportMigrationUrl = new URL(
+  '../../supabase/migrations/20260826370000_dynamic_persistent_interface_reports.sql',
+  import.meta.url,
+);
 const reportGenerationWorkerUrl = new URL(
   '../../worker/report-generation-worker.mjs',
   import.meta.url,
 );
 const reportAgentContractUrl = new URL(
-  '../../worker/contracts/client-value-report-agent.md',
+  '../../worker/contracts/client-value-report-agent-v3.md',
   import.meta.url,
 );
 const previewWorkerUrl = new URL('../../worker/report-preview-worker.mjs', import.meta.url);
@@ -70,6 +74,7 @@ test('freezes prospect reports against the exact verified edited website', async
     reportAgentContract,
     reportUsageMigration,
     designShowcaseMigration,
+    dynamicReportMigration,
   ] = await Promise.all([
     readFile(migrationUrl, 'utf8'),
     readFile(previewWorkerUrl, 'utf8'),
@@ -87,6 +92,7 @@ test('freezes prospect reports against the exact verified edited website', async
     readFile(reportAgentContractUrl, 'utf8'),
     readFile(reportUsageMigrationUrl, 'utf8'),
     readFile(designShowcaseMigrationUrl, 'utf8'),
+    readFile(dynamicReportMigrationUrl, 'utf8'),
   ]);
   const reportRpc = migration.slice(
     migration.indexOf('create or replace function public.create_audit_report_version'),
@@ -122,7 +128,7 @@ test('freezes prospect reports against the exact verified edited website', async
   );
 
   assert.match(previewWorker, /report\.schema_version !== 10/);
-  assert.match(previewWorker, /gpt-5\.6-sol-design-showcase-v2/);
+  assert.match(previewWorker, /gpt-5\.6-sol-dynamic-design-showcase-v3/);
   assert.match(previewWorker, /verified_redesign_value/);
   assert.match(previewWorker, /source_release_attestations/);
   assert.match(previewWorker, /reportData\?\.valueThemes/);
@@ -138,11 +144,14 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(releaseVerifier, /release-comparisons/);
   assert.match(releaseVerifier, /waitForComparisonPageReady/);
   assert.match(releaseVerifier, /verified-comparison-page-ready-v1/);
+  assert.match(releaseVerifier, /matchedOriginalScrollProgress/);
+  assert.match(releaseVerifier, /originalEvidenceKind/);
   assert.match(releaseVerifier, /loaderVisible/);
   assert.match(releaseVerifier, /horizontalOverflowPx > 1/);
 
   assert.match(reportParser, /prospectValueReportSchemaVersion = 10/);
-  assert.match(reportParser, /gpt-5\.6-sol-design-showcase-v2/);
+  assert.match(reportParser, /gpt-5\.6-sol-dynamic-design-showcase-v3/);
+  assert.match(reportParser, /verification\.sameScrollState === true/);
   assert.match(reportParser, /reportUsesProspectValueContract/);
   assert.match(reportParser, /redesign\.status === 'passed'/);
 
@@ -202,6 +211,13 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(designShowcaseMigration, /majorFindings/);
   assert.match(designShowcaseMigration, /designDecisions/);
   assert.match(designShowcaseMigration, /technologyFoundation,technologies/);
+  assert.match(dynamicReportMigration, /client-value-report-agent-v3/);
+  assert.match(dynamicReportMigration, /real-device-responsive-audit-v1/);
+  assert.match(dynamicReportMigration, /viewportIntegrity,status/);
+  assert.match(dynamicReportMigration, /originalEvidenceKind/);
+  assert.match(dynamicReportMigration, /scrollState,scrollProgress/);
+  assert.match(dynamicReportMigration, /sameScrollState/);
+  assert.match(dynamicReportMigration, /gpt-5\.6-sol-dynamic-design-showcase-v3/);
   assert.match(reportGenerationWorker, /const defaultModel = 'gpt-5\.6-sol'/);
   assert.match(reportGenerationWorker, /const reasoningEffort = 'max'/);
   assert.match(reportGenerationWorker, /const maximumCandidates = 8/);
@@ -237,13 +253,15 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(releaseVerifier, /verifiedTechnologyFoundation/);
   assert.match(reportGenerationWorker, /error_code: errorCode/);
   assert.doesNotMatch(reportGenerationWorker, /severityRank/);
-  assert.match(reportAgentContract, /Website transformation report agent v2/i);
+  assert.match(reportAgentContract, /Website transformation report agent v3/i);
   assert.match(reportAgentContract, /three to six distinct major findings/i);
   assert.match(
     reportAgentContract,
     /strongest natural set of one to four before-and-after comparisons/i,
   );
   assert.match(reportAgentContract, /medium-severity issue may be selected/i);
+  assert.match(reportAgentContract, /persistent fixed or sticky/i);
+  assert.match(reportAgentContract, /visibly covers meaningful content/i);
   assert.match(reportAgentContract, /never claim guaranteed traffic/i);
   assert.doesNotMatch(releaseVerifier, /\.eq\('severity', 'high'\)/);
 

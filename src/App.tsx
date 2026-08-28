@@ -20191,7 +20191,7 @@ function reportGenerationJobForWorkspace(
     (job) =>
       job.auditId === workspace.audit?.id &&
       job.releaseAttestationId === releaseAttestationId &&
-      job.generatorContractVersion === 'client-value-report-agent-v2',
+      job.generatorContractVersion === 'client-value-report-agent-v3',
   );
   if (saved || import.meta.env.VITE_SITEFORGE_E2E_FIXTURES !== 'true') return saved;
   try {

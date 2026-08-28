@@ -6,17 +6,15 @@ import { createClient } from '@supabase/supabase-js';
 import { chromium } from 'playwright';
 import { openAiApiEnabled } from './openai-api-policy.mjs';
 import { createResearchPacket } from './research-packet.mjs';
+import {
+  orderedResponsiveProfiles,
+  responsiveBrowserContextOptions,
+} from './responsive-browser-profiles.mjs';
 import { assertPublicUrl, isRobotsAllowed } from './security.mjs';
 import { selectVisualAssets, visualAssetKey, visualAssetScore } from './visual-assets.mjs';
 
 const artifactBucket = 'siteforge-artifacts';
 const workerUserAgent = 'SiteForgeResearchBot/0.1 (+https://siteforge.local/research)';
-const desktopUserAgent =
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36';
-const tabletUserAgent =
-  'Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
-const mobileUserAgent =
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
 const captureTimeoutMs = 45_000;
 const maxHtmlBytes = 3 * 1024 * 1024;
 const maxReadableTextCharacters = 50_000;
@@ -32,32 +30,7 @@ const privateWriteAttempts = 3;
 function captureVisualEvidence() {
   return process.env.SITEFORGE_CAPTURE_VISUAL_EVIDENCE?.trim().toLowerCase() === 'true';
 }
-const screenshotViewports = [
-  {
-    label: 'desktop',
-    width: 1440,
-    height: 900,
-    isMobile: false,
-    hasTouch: false,
-    userAgent: desktopUserAgent,
-  },
-  {
-    label: 'tablet',
-    width: 768,
-    height: 1024,
-    isMobile: true,
-    hasTouch: true,
-    userAgent: tabletUserAgent,
-  },
-  {
-    label: 'mobile',
-    width: 375,
-    height: 812,
-    isMobile: true,
-    hasTouch: true,
-    userAgent: mobileUserAgent,
-  },
-];
+const screenshotViewports = orderedResponsiveProfiles(['desktop', 'tablet', 'mobile']);
 const pagePriority = [
   ['contact', 100],
   ['quote', 95],
@@ -420,12 +393,7 @@ async function assertRobotsAllowsUrl(targetUrl, dnsCache) {
 async function createCaptureContext(browser, viewport, dnsCache) {
   const context = await browser.newContext({
     serviceWorkers: 'block',
-    userAgent: viewport.userAgent,
-    viewport: { width: viewport.width, height: viewport.height },
-    screen: { width: viewport.width, height: viewport.height },
-    isMobile: viewport.isMobile,
-    hasTouch: viewport.hasTouch,
-    deviceScaleFactor: 1,
+    ...responsiveBrowserContextOptions(viewport),
   });
   await context.route('**/*', async (route) => {
     try {

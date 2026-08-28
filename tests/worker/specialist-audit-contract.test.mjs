@@ -7,6 +7,7 @@ const migrationUrl = new URL(
   import.meta.url,
 );
 const workerUrl = new URL('../../worker/audit-specialist-worker.mjs', import.meta.url);
+const browserProfilesUrl = new URL('../../worker/responsive-browser-profiles.mjs', import.meta.url);
 const curationMigrationUrl = new URL(
   '../../supabase/migrations/20260819143000_ux_first_report_curation.sql',
   import.meta.url,
@@ -28,11 +29,23 @@ test('specialist audit migration requires a complete current evidence set before
 });
 
 test('responsive specialist uses dedicated current-task screenshots and safe viewport captures', async () => {
-  const source = await readFile(workerUrl, 'utf8');
+  const [source, browserProfiles] = await Promise.all([
+    readFile(workerUrl, 'utf8'),
+    readFile(browserProfilesUrl, 'utf8'),
+  ]);
 
-  assert.match(source, /\{ label: 'mobile', width: 375, height: 812/);
-  assert.match(source, /\{ label: 'tablet', width: 768, height: 1024/);
-  assert.match(source, /\{ label: 'desktop', width: 1440, height: 900/);
+  assert.match(browserProfiles, /label: 'mobile',[\s\S]*width: 375,[\s\S]*height: 812/);
+  assert.match(browserProfiles, /label: 'tablet',[\s\S]*width: 768,[\s\S]*height: 1024/);
+  assert.match(browserProfiles, /label: 'desktop',[\s\S]*width: 1440,[\s\S]*height: 900/);
+  assert.match(browserProfiles, /Android 14; Pixel 7/);
+  assert.match(browserProfiles, /iPad; CPU OS 17_5/);
+  assert.match(source, /responsiveBrowserContextOptions\(viewport\)/);
+  assert.match(source, /real-device-responsive-audit-v1/);
+  assert.match(source, /viewportIntegrity/);
+  assert.match(source, /contentViewportWidth/);
+  assert.match(source, /scroll-middle/);
+  assert.match(source, /scroll-bottom/);
+  assert.match(source, /persistentOverlayOcclusions/);
   assert.match(source, /artifact\.metadata\?\.specialistTaskId === task\.id/);
   assert.match(source, /redirect: 'manual'/);
   assert.match(source, /await assertPublicUrl\(currentUrl, dnsCache\)/);

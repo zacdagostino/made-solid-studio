@@ -108,8 +108,12 @@ async function loadFrozenReport(job) {
   if (
     report.schema_version !== 10 ||
     report.data?.reportKind !== 'verified_redesign_value' ||
-    report.data?.generatorRevision !== 'gpt-5.6-sol-design-showcase-v2' ||
-    report.data?.redesign?.status !== 'passed'
+    report.data?.generatorRevision !== 'gpt-5.6-sol-dynamic-design-showcase-v3' ||
+    report.data?.redesign?.status !== 'passed' ||
+    !Array.isArray(report.data?.valueThemes) ||
+    report.data.valueThemes.some(
+      (theme) => theme?.afterEvidence?.verification?.sameScrollState !== true,
+    )
   ) {
     throw new Error(
       'This earlier report format must be regenerated before it can reach Clientspace.',

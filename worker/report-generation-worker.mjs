@@ -7,8 +7,8 @@ import { createClient } from '@supabase/supabase-js';
 import { codexUsage, recordAiUsage } from './ai-usage.mjs';
 
 const workerId = `${hostname()}-${process.pid}`;
-const generatorContractVersion = 'client-value-report-agent-v2';
-const generatorRevision = 'gpt-5.6-sol-design-showcase-v2';
+const generatorContractVersion = 'client-value-report-agent-v3';
+const generatorRevision = 'gpt-5.6-sol-dynamic-design-showcase-v3';
 const schemaVersion = 10;
 const defaultModel = 'gpt-5.6-sol';
 const reasoningEffort = 'max';
@@ -16,7 +16,7 @@ const maximumCandidates = 8;
 const maximumImageBytes = 6 * 1024 * 1024;
 const maximumModelRunMs = 20 * 60_000;
 const agentContract = await readFile(
-  new URL('./contracts/client-value-report-agent.md', import.meta.url),
+  new URL('./contracts/client-value-report-agent-v3.md', import.meta.url),
   'utf8',
 );
 
@@ -413,7 +413,15 @@ async function loadSource(job) {
     ]);
   if (originalError) throw originalError;
   if (redesignError) throw redesignError;
-  const originalById = new Map((originals ?? []).map((item) => [item.id, item]));
+  const originalById = new Map(
+    (originals ?? [])
+      .filter(
+        (item) =>
+          item.metadata?.captureContract === 'real-device-responsive-audit-v1' &&
+          item.metadata?.viewportIntegrity?.status === 'passed',
+      )
+      .map((item) => [item.id, item]),
+  );
   const redesignedByOriginal = new Map(
     (redesigned ?? [])
       .filter((item) => Number(item.metadata?.horizontalOverflowPx ?? 0) <= 1)
@@ -427,6 +435,8 @@ async function loadSource(job) {
         const sourceUrl = original?.metadata?.sourceUrl;
         const originalViewport = viewport(original?.metadata);
         const afterViewport = viewport(after?.metadata);
+        const originalScrollProgress = Number(original?.metadata?.scrollState?.scrollProgress ?? 0);
+        const afterScrollProgress = Number(after?.metadata?.scrollState?.scrollProgress ?? 0);
         if (
           !original ||
           !after ||
@@ -434,7 +444,9 @@ async function loadSource(job) {
           !(observation.source_urls ?? []).includes(sourceUrl) ||
           originalViewport.width !== afterViewport.width ||
           originalViewport.height !== afterViewport.height ||
-          after.metadata?.sourceUrl !== sourceUrl
+          after.metadata?.sourceUrl !== sourceUrl ||
+          after.metadata?.originalEvidenceKind !== original.metadata?.evidenceKind ||
+          Math.abs(originalScrollProgress - afterScrollProgress) > 0.03
         ) {
           return [];
         }
@@ -482,9 +494,13 @@ async function loadSource(job) {
 
 async function selectThemes(job, source) {
   const model = job.model || defaultModel;
-  if (model !== defaultModel || job.reasoning_effort !== reasoningEffort) {
+  if (
+    job.generator_contract_version !== generatorContractVersion ||
+    model !== defaultModel ||
+    job.reasoning_effort !== reasoningEffort
+  ) {
     throw new Error(
-      'The report generation job is not configured for GPT-5.6 Sol at maximum reasoning.',
+      'The report generation job is not configured for the current GPT-5.6 Sol contract at maximum reasoning.',
     );
   }
   const executable = await codexBinary();
@@ -509,6 +525,15 @@ async function selectThemes(job, source) {
     measuredSignals: candidate.observation.measurement,
     sourceUrl: candidate.sourceUrl,
     screen: candidate.viewport,
+    pagePosition: {
+      evidenceKind: candidate.original.metadata?.evidenceKind,
+      scrollProgress: Number(candidate.original.metadata?.scrollState?.scrollProgress ?? 0),
+    },
+    originalCapture: {
+      contract: candidate.original.metadata?.captureContract,
+      profile: candidate.original.metadata?.viewportIntegrity?.profileId,
+      persistentOverlayOcclusions: candidate.original.metadata?.persistentOverlayOcclusions ?? [],
+    },
     originalHorizontalOverflowPx: Number(candidate.original.metadata?.horizontalOverflowPx ?? 0),
   }));
   try {
@@ -728,6 +753,9 @@ function validateSelection(source, result) {
           pageReady: true,
           loaderVisible: false,
           sameViewport: true,
+          sameScrollState: true,
+          originalEvidenceKind: candidate.original.metadata?.evidenceKind,
+          scrollProgress: Number(candidate.original.metadata?.scrollState?.scrollProgress ?? 0),
           originalHorizontalOverflowPx: Number(
             candidate.original.metadata?.horizontalOverflowPx ?? 0,
           ),
@@ -740,8 +768,9 @@ function validateSelection(source, result) {
         whatChanged: plainText(theme.whatChanged),
         whyBetter: plainText(theme.whyBetter),
         customerValue: plainText(theme.businessOpportunity),
-        evidenceBasis: 'Matched source page, screen size and passed exact-commit verification.',
-        verificationSummary: `Verified ${candidate.viewport.label || 'responsive'} comparison at ${candidate.viewport.width} × ${candidate.viewport.height} after the page finished loading.`,
+        evidenceBasis:
+          'Matched source page, screen size, scroll state and passed exact-commit verification.',
+        verificationSummary: `Verified ${candidate.viewport.label || 'responsive'} comparison at ${candidate.viewport.width} × ${candidate.viewport.height} and the same page position after the page finished loading.`,
       },
       internalEvidence: {
         observationIds: [candidate.observation.id],

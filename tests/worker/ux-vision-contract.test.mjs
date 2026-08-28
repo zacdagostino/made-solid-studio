@@ -19,6 +19,8 @@ function screenshot(overrides = {}) {
       auditId,
       sourceUrl: 'https://example.com/',
       viewport: { label: 'mobile', width: 375, height: 812 },
+      captureContract: 'real-device-responsive-audit-v1',
+      viewportIntegrity: { status: 'passed', profileId: 'mobile-android-chrome-v1' },
     },
     ...overrides,
   };
@@ -101,6 +103,58 @@ test('rejects observations that do not bind to exact same-run screenshot evidenc
     assert.equal(result.accepted.length, 0);
     assert.equal(result.rejected[0].reason, entry.expectedReason);
   }
+});
+
+test('rejects screenshots that were not captured with a verified responsive browser profile', () => {
+  const artifact = screenshot({
+    metadata: {
+      ...screenshot().metadata,
+      captureContract: 'legacy-responsive-capture',
+      viewportIntegrity: { status: 'failed' },
+    },
+  });
+  const result = normaliseVisionObservations([rawObservation()], {
+    screenshotArtifacts: [artifact],
+    auditId,
+    crawlRunId: runId,
+  });
+
+  assert.equal(result.accepted.length, 0);
+  assert.equal(result.rejected[0].reason, 'untrusted_capture_profile');
+});
+
+test('accepts a visually confirmed persistent-content obstruction when overlap evidence corroborates it', () => {
+  const raw = rawObservation({
+    issueType: 'content_obstruction',
+    area: 'UX',
+    title: 'Sticky contact actions cover footer information',
+    observation:
+      'The fixed action bar visibly sits over the footer content at the end of the page.',
+    customerImpact: 'Visitors cannot comfortably read or use the covered footer information.',
+    recommendation: 'Reserve space for the actions or collapse them before the footer is reached.',
+    region: {
+      label: 'Fixed contact actions over footer',
+      selector: 'body > aside',
+      bounds: { x: 0, y: 690, width: 375, height: 122 },
+    },
+  });
+  const overlapRule = {
+    id: 'rule-persistent-overlay',
+    title: 'Persistent interface elements cover page content',
+    finding: 'A fixed interface element overlaps meaningful footer content.',
+    sourceUrls: ['https://example.com/'],
+    evidenceArtifactIds: ['shot-mobile'],
+  };
+  const result = normaliseVisionObservations([raw], {
+    screenshotArtifacts: [screenshot()],
+    auditId,
+    crawlRunId: runId,
+    ruleFindings: [overlapRule],
+  });
+
+  assert.equal(result.rejected.length, 0);
+  assert.equal(result.accepted[0].issueType, 'content_obstruction');
+  assert.equal(result.accepted[0].candidateState, 'ranked_candidate');
 });
 
 test('rejects unobservable or off-screen regions', () => {

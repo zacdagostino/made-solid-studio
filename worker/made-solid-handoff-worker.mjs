@@ -321,8 +321,12 @@ async function loadVerifiedValueReport(job, releaseAttestation) {
   if (
     !report ||
     report.data?.reportKind !== 'verified_redesign_value' ||
-    report.data?.generatorRevision !== 'gpt-5.6-sol-design-showcase-v2' ||
+    report.data?.generatorRevision !== 'gpt-5.6-sol-dynamic-design-showcase-v3' ||
     redesign?.status !== 'passed' ||
+    !Array.isArray(report.data?.valueThemes) ||
+    report.data.valueThemes.some(
+      (theme) => theme?.afterEvidence?.verification?.sameScrollState !== true,
+    ) ||
     redesign?.attestationId !== releaseAttestation.id ||
     redesign?.sourceBuilderRunId !== job.builder_run_id ||
     redesign?.sourceManifestId !== job.source_manifest_id ||

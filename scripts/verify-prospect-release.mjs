@@ -22,6 +22,10 @@ import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import AxeBuilder from '@axe-core/playwright';
 import { createClient } from '@supabase/supabase-js';
 import { chromium } from 'playwright';
+import {
+  responsiveBrowserContextOptions,
+  responsiveBrowserProfiles,
+} from '../worker/responsive-browser-profiles.mjs';
 import { meaningfulGitStatus } from './prospect-workspace-state.mjs';
 
 const directoryPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
@@ -355,7 +359,7 @@ async function persistDesignComparisonScreenshots(
       ) {
         continue;
       }
-      const key = `${sourceUrl}:${viewport.width}x${viewport.height}`;
+      const key = `${sourceUrl}:${viewport.width}x${viewport.height}:${oldArtifact.id}`;
       if (!candidates.some((item) => item.key === key)) {
         candidates.push({ key, observation, oldArtifact, route, sourceUrl, viewport });
       }
@@ -365,12 +369,21 @@ async function persistDesignComparisonScreenshots(
   }
   let saved = 0;
   for (const candidate of candidates) {
+    const responsiveProfile = responsiveBrowserProfiles[candidate.viewport.label];
+    const responsiveOptions =
+      responsiveProfile &&
+      responsiveProfile.width === candidate.viewport.width &&
+      responsiveProfile.height === candidate.viewport.height
+        ? responsiveBrowserContextOptions(responsiveProfile)
+        : {
+            viewport: { width: candidate.viewport.width, height: candidate.viewport.height },
+            isMobile: candidate.viewport.label !== 'desktop',
+            hasTouch: candidate.viewport.label !== 'desktop',
+            deviceScaleFactor: 1,
+          };
     const context = await browser.newContext({
-      viewport: { width: candidate.viewport.width, height: candidate.viewport.height },
-      isMobile: candidate.viewport.label !== 'desktop',
-      hasTouch: candidate.viewport.label !== 'desktop',
+      ...responsiveOptions,
       reducedMotion: 'reduce',
-      deviceScaleFactor: 1,
       serviceWorkers: 'block',
     });
     const page = await context.newPage();
@@ -385,15 +398,41 @@ async function persistDesignComparisonScreenshots(
           `The redesigned comparison route ${candidate.route} does not match ${candidate.sourceUrl}.`,
         );
       }
-      const image = await page.screenshot({
-        type: 'png',
-        clip: {
-          x: 0,
-          y: 0,
-          width: candidate.viewport.width,
-          height: candidate.viewport.height,
-        },
+      const requestedScrollProgress = Number(
+        candidate.oldArtifact.metadata?.scrollState?.scrollProgress ?? 0,
+      );
+      if (requestedScrollProgress > 0) {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          await page.evaluate((progress) => {
+            const maximumScrollY = Math.max(
+              0,
+              document.documentElement.scrollHeight - window.innerHeight,
+            );
+            window.scrollTo(0, Math.round(maximumScrollY * progress));
+          }, requestedScrollProgress);
+          await page.waitForTimeout(350);
+        }
+      }
+      const matchedScrollState = await page.evaluate(() => {
+        const maximumScrollY = Math.max(
+          0,
+          document.documentElement.scrollHeight - window.innerHeight,
+        );
+        return {
+          scrollY: Math.round(window.scrollY),
+          maximumScrollY: Math.round(maximumScrollY),
+          scrollProgress:
+            maximumScrollY > 0 ? Number((window.scrollY / maximumScrollY).toFixed(3)) : 0,
+        };
       });
+      if (
+        requestedScrollProgress > 0 &&
+        matchedScrollState.maximumScrollY > 0 &&
+        Math.abs(matchedScrollState.scrollProgress - requestedScrollProgress) > 0.03
+      ) {
+        throw new Error('The redesigned comparison could not match the original scroll state.');
+      }
+      const image = await page.screenshot({ type: 'png' });
       const digest = createHash('sha256').update(image).digest('hex');
       const identity = createHash('sha256').update(candidate.key).digest('hex').slice(0, 20);
       const storageBucket = 'siteforge-artifacts';
@@ -416,6 +455,9 @@ async function persistDesignComparisonScreenshots(
         },
         originalArtifactId: candidate.oldArtifact.id,
         observationId: candidate.observation.id,
+        originalEvidenceKind: candidate.oldArtifact.metadata?.evidenceKind,
+        matchedOriginalScrollProgress: requestedScrollProgress,
+        scrollState: matchedScrollState,
         captureContract: comparisonCaptureContract,
         captureStatus: 'passed',
         pageReady: captureState.pageReady,

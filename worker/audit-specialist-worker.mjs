@@ -5,19 +5,19 @@ import { hostname } from 'node:os';
 import { createClient } from '@supabase/supabase-js';
 import { chromium } from 'playwright';
 import { generateSpecialistAuditFindings } from './audit-rules.mjs';
+import {
+  orderedResponsiveProfiles,
+  responsiveBrowserContextOptions,
+} from './responsive-browser-profiles.mjs';
 import { assertPublicUrl, isRobotsAllowed } from './security.mjs';
 import { analysePageUxWithVision, uxVisionConfigured } from './ux-vision.mjs';
 import { normaliseVisionObservations, rankVisionCandidates } from './ux-vision-contract.mjs';
 
 const artifactBucket = 'siteforge-artifacts';
-const auditUserAgent = 'SiteForgeResearchBot/0.1 (+https://siteforge.local/research)';
+const auditRobotsUserAgent = 'SiteForgeResearchBot/0.1 (+https://siteforge.local/research)';
 const requestTimeoutMs = 45_000;
 const maxVisualPages = 4;
-const visualViewports = [
-  { label: 'mobile', width: 375, height: 812, isMobile: true, hasTouch: true },
-  { label: 'tablet', width: 768, height: 1024, isMobile: true, hasTouch: true },
-  { label: 'desktop', width: 1440, height: 900, isMobile: false, hasTouch: false },
-];
+const visualViewports = orderedResponsiveProfiles(['mobile', 'tablet', 'desktop']);
 
 class SpecialistCancelledError extends Error {
   constructor() {
@@ -112,7 +112,7 @@ async function robotsAllows(url, dnsCache) {
     for (let redirectCount = 0; redirectCount <= 5; redirectCount += 1) {
       await assertPublicUrl(currentUrl, dnsCache);
       response = await fetch(currentUrl, {
-        headers: { 'User-Agent': auditUserAgent },
+        headers: { 'User-Agent': auditRobotsUserAgent },
         redirect: 'manual',
         signal: AbortSignal.timeout(requestTimeoutMs),
       });
@@ -134,10 +134,7 @@ async function robotsAllows(url, dnsCache) {
 
 async function createSafeContext(browser, viewport, dnsCache) {
   const context = await browser.newContext({
-    viewport: { width: viewport.width, height: viewport.height },
-    isMobile: viewport.isMobile,
-    hasTouch: viewport.hasTouch,
-    userAgent: auditUserAgent,
+    ...responsiveBrowserContextOptions(viewport),
     serviceWorkers: 'block',
   });
   await context.route('**/*', async (route) => {
@@ -155,6 +152,211 @@ async function createSafeContext(browser, viewport, dnsCache) {
     }
   });
   return context;
+}
+
+export async function inspectPersistentInterfaceState(page) {
+  return page.evaluate(() => {
+    function stableSelector(element) {
+      if (!(element instanceof Element)) return '';
+      if (element.id) return `#${CSS.escape(element.id)}`;
+      const parts = [];
+      let current = element;
+      while (current && current !== document.body && parts.length < 5) {
+        const parent = current.parentElement;
+        if (!parent) break;
+        const tag = current.tagName.toLowerCase();
+        const siblings = [...parent.children].filter((child) => child.tagName === current.tagName);
+        parts.unshift(
+          siblings.length > 1 ? `${tag}:nth-of-type(${siblings.indexOf(current) + 1})` : tag,
+        );
+        current = parent;
+      }
+      return `body > ${parts.join(' > ')}`;
+    }
+
+    function visibleRectangle(element) {
+      const rectangle = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      if (
+        rectangle.width <= 0 ||
+        rectangle.height <= 0 ||
+        rectangle.bottom <= 0 ||
+        rectangle.right <= 0 ||
+        rectangle.top >= window.innerHeight ||
+        rectangle.left >= document.documentElement.clientWidth ||
+        style.display === 'none' ||
+        style.visibility === 'hidden' ||
+        Number(style.opacity) === 0
+      ) {
+        return undefined;
+      }
+      return rectangle;
+    }
+
+    function bounds(rectangle) {
+      return {
+        x: Math.max(0, Math.round(rectangle.x)),
+        y: Math.max(0, Math.round(rectangle.y)),
+        width: Math.round(
+          Math.min(document.documentElement.clientWidth, rectangle.right) -
+            Math.max(0, rectangle.left),
+        ),
+        height: Math.round(
+          Math.min(window.innerHeight, rectangle.bottom) - Math.max(0, rectangle.top),
+        ),
+      };
+    }
+
+    function intersectionArea(left, right) {
+      const width = Math.max(
+        0,
+        Math.min(left.right, right.right) - Math.max(left.left, right.left),
+      );
+      const height = Math.max(
+        0,
+        Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top),
+      );
+      return width * height;
+    }
+
+    function label(element) {
+      return (meaningfulLabel(element) || element.tagName)
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 120);
+    }
+
+    function meaningfulLabel(element) {
+      return (
+        element.getAttribute('aria-label') ||
+        element.getAttribute('alt') ||
+        element.textContent ||
+        ''
+      )
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 120);
+    }
+
+    function hasVisiblePaint(element) {
+      const style = window.getComputedStyle(element);
+      const backgroundChannels = style.backgroundColor
+        .match(/rgba?\(([^)]+)\)/)?.[1]
+        ?.split(',')
+        .map((channel) => channel.trim());
+      const backgroundAlpha =
+        backgroundChannels && backgroundChannels.length >= 4
+          ? Number.parseFloat(backgroundChannels[3])
+          : style.backgroundColor === 'transparent'
+            ? 0
+            : 1;
+      const backgroundIsVisible =
+        style.backgroundImage !== 'none' ||
+        (Number.isFinite(backgroundAlpha) && backgroundAlpha > 0);
+      const borderIsVisible = ['Top', 'Right', 'Bottom', 'Left'].some(
+        (side) =>
+          Number.parseFloat(style[`border${side}Width`]) > 0 &&
+          style[`border${side}Style`] !== 'none',
+      );
+      return (
+        backgroundIsVisible ||
+        borderIsVisible ||
+        style.boxShadow !== 'none' ||
+        style.filter !== 'none' ||
+        style.backdropFilter !== 'none' ||
+        Boolean(element.querySelector('img, svg, video, canvas, input, button, a[href]'))
+      );
+    }
+
+    const persistentElements = [...document.querySelectorAll('body *')]
+      .map((element) => ({
+        element,
+        position: window.getComputedStyle(element).position,
+        rectangle: visibleRectangle(element),
+      }))
+      .filter(
+        (entry) =>
+          entry.rectangle &&
+          (entry.position === 'fixed' || entry.position === 'sticky') &&
+          entry.rectangle.width >= 32 &&
+          entry.rectangle.height >= 16 &&
+          (Boolean(meaningfulLabel(entry.element)) || hasVisiblePaint(entry.element)),
+      );
+    const contentElements = [
+      ...document.querySelectorAll(
+        'main h1, main h2, main h3, main h4, main p, main li, main a, main button, main img, main input, main select, main textarea, footer h1, footer h2, footer h3, footer h4, footer p, footer li, footer a, footer button, footer img, [role="main"] h1, [role="main"] h2, [role="main"] h3, [role="main"] p, [role="main"] li, [role="main"] a, [role="main"] button, [role="contentinfo"] h1, [role="contentinfo"] h2, [role="contentinfo"] h3, [role="contentinfo"] p, [role="contentinfo"] li, [role="contentinfo"] a, [role="contentinfo"] button, [role="contentinfo"] img',
+      ),
+    ]
+      .map((element) => ({ element, rectangle: visibleRectangle(element) }))
+      .filter((entry) => entry.rectangle);
+    const persistentOverlayOcclusions = persistentElements
+      .map((overlay) => {
+        const occludedContent = contentElements
+          .filter(
+            (content) =>
+              !overlay.element.contains(content.element) &&
+              !content.element.contains(overlay.element),
+          )
+          .map((content) => {
+            const area = intersectionArea(overlay.rectangle, content.rectangle);
+            const contentArea = content.rectangle.width * content.rectangle.height;
+            return {
+              element: content.element,
+              rectangle: content.rectangle,
+              area,
+              ratio: contentArea > 0 ? area / contentArea : 0,
+            };
+          })
+          .filter((content) => content.area >= 64 && content.ratio >= 0.08)
+          .sort((left, right) => right.area - left.area)
+          .slice(0, 8)
+          .map((content) => ({
+            selector: stableSelector(content.element),
+            label: label(content.element),
+            element: content.element.tagName.toLowerCase(),
+            bounds: bounds(content.rectangle),
+            overlapAreaPx: Math.round(content.area),
+            overlapRatio: Number(content.ratio.toFixed(3)),
+          }));
+        if (!occludedContent.length) return undefined;
+        return {
+          selector: stableSelector(overlay.element),
+          label: label(overlay.element),
+          position: overlay.position,
+          bounds: bounds(overlay.rectangle),
+          viewportAreaRatio: Number(
+            (
+              (overlay.rectangle.width * overlay.rectangle.height) /
+              (document.documentElement.clientWidth * window.innerHeight)
+            ).toFixed(3),
+          ),
+          occludedContent,
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 6);
+    const maximumScrollY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    return {
+      scrollY: Math.round(window.scrollY),
+      maximumScrollY: Math.round(maximumScrollY),
+      scrollProgress: maximumScrollY > 0 ? Number((window.scrollY / maximumScrollY).toFixed(3)) : 0,
+      persistentOverlayOcclusions,
+    };
+  });
+}
+
+export async function moveToScrollProgress(page, progress) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await page.evaluate((targetProgress) => {
+      const maximumScrollY = Math.max(
+        0,
+        document.documentElement.scrollHeight - window.innerHeight,
+      );
+      window.scrollTo(0, Math.round(maximumScrollY * targetProgress));
+    }, progress);
+    await page.waitForTimeout(350);
+  }
+  return inspectPersistentInterfaceState(page);
 }
 
 function pagePriority(page) {
@@ -303,6 +505,8 @@ async function captureResponsiveEvidence(client, task, workerId, pages) {
             const pageWidth = Math.ceil(root.scrollWidth);
             const pageHeight = Math.ceil(root.scrollHeight);
             const layoutViewportWidth = window.innerWidth;
+            const visualViewportWidth = window.visualViewport?.width ?? layoutViewportWidth;
+            const contentViewportWidth = Math.min(root.clientWidth, visualViewportWidth);
             const undersizedTargets = [
               ...document.querySelectorAll('a[href], button, input, select, textarea'),
             ]
@@ -519,7 +723,12 @@ async function captureResponsiveEvidence(client, task, workerId, pages) {
               pageWidth,
               pageHeight,
               layoutViewportWidth,
-              horizontalOverflowPx: Math.max(0, pageWidth - layoutViewportWidth),
+              visualViewportWidth,
+              contentViewportWidth,
+              clientViewportWidth: root.clientWidth,
+              screenWidth: window.screen.width,
+              userAgent: window.navigator.userAgent,
+              horizontalOverflowPx: Math.max(0, pageWidth - contentViewportWidth),
               undersizedTargetCount: undersizedTargets.length,
               undersizedTargets: undersizedTargets.slice(0, 8),
               loadMs:
@@ -563,12 +772,55 @@ async function captureResponsiveEvidence(client, task, workerId, pages) {
             };
           });
           metrics.runtimeErrors = runtimeErrors;
-          const captureHeight = Math.min(metrics.pageHeight, viewport.height);
-          const image = await page.screenshot({
-            type: 'png',
-            clip: { x: 0, y: 0, width: viewport.width, height: captureHeight },
+          if (metrics.userAgent !== viewport.userAgent || metrics.screenWidth !== viewport.width) {
+            throw new Error(
+              `The ${viewport.label} browser profile did not match the requested responsive capture.`,
+            );
+          }
+          const captureContract = 'real-device-responsive-audit-v1';
+          const viewportIntegrity = {
+            status: 'passed',
+            profileId: viewport.id,
+            requestedWidth: viewport.width,
+            screenWidth: metrics.screenWidth,
+            layoutViewportWidth: metrics.layoutViewportWidth,
+            visualViewportWidth: metrics.visualViewportWidth,
+            contentViewportWidth: metrics.contentViewportWidth,
+          };
+          const topState = await moveToScrollProgress(page, 0);
+          const topImage = await page.screenshot({ type: 'png' });
+          await saveScreenshot(client, task, pageRecord, viewport, topImage, {
+            ...metrics,
+            captureContract,
+            viewportIntegrity,
+            scrollState: topState,
+            persistentOverlayOcclusions: topState.persistentOverlayOcclusions,
           });
-          await saveScreenshot(client, task, pageRecord, viewport, image, metrics);
+          if (topState.maximumScrollY > Math.max(80, viewport.height * 0.2)) {
+            for (const scrollCapture of [
+              { progress: 0.5, evidenceKind: 'scroll-middle' },
+              { progress: 1, evidenceKind: 'scroll-bottom' },
+            ]) {
+              const scrollState = await moveToScrollProgress(page, scrollCapture.progress);
+              const scrollImage = await page.screenshot({ type: 'png' });
+              await saveScreenshot(
+                client,
+                task,
+                pageRecord,
+                viewport,
+                scrollImage,
+                {
+                  ...metrics,
+                  captureContract,
+                  viewportIntegrity,
+                  scrollState,
+                  persistentOverlayOcclusions: scrollState.persistentOverlayOcclusions,
+                },
+                scrollCapture.evidenceKind,
+              );
+            }
+          }
+          await moveToScrollProgress(page, 0);
           for (const region of (metrics.uxRegions ?? []).slice(0, 3)) {
             if (!region.selector) continue;
             const locator = page.locator(region.selector).first();
@@ -581,7 +833,12 @@ async function captureResponsiveEvidence(client, task, workerId, pages) {
               pageRecord,
               viewport,
               focusedImage,
-              { ...metrics, focusedRegion: region },
+              {
+                ...metrics,
+                captureContract,
+                viewportIntegrity,
+                focusedRegion: region,
+              },
               region.kind,
             );
           }
@@ -671,6 +928,8 @@ async function captureResponsiveEvidence(client, task, workerId, pages) {
               interactionImage,
               {
                 ...metrics,
+                captureContract,
+                viewportIntegrity,
                 interactionState: interaction.kind,
                 focusedRegion: interaction,
               },
@@ -757,6 +1016,7 @@ async function loadAuditInput(client, task, workerId) {
       (report) => report.navigation || report.structure,
     ),
     screenshots: currentScreenshots.map((artifact) => ({
+      id: artifact.id,
       sourceUrl: sourceUrl(artifact),
       metadata: artifact.metadata ?? {},
     })),

@@ -116,8 +116,12 @@ async function loadReviewedDecisionReport(businessId) {
   if (
     !data ||
     data.data?.reportKind !== 'verified_redesign_value' ||
-    data.data?.generatorRevision !== 'gpt-5.6-sol-design-showcase-v2' ||
-    data.data?.redesign?.status !== 'passed'
+    data.data?.generatorRevision !== 'gpt-5.6-sol-dynamic-design-showcase-v3' ||
+    data.data?.redesign?.status !== 'passed' ||
+    !Array.isArray(data.data?.valueThemes) ||
+    data.data.valueThemes.some(
+      (theme) => theme?.afterEvidence?.verification?.sameScrollState !== true,
+    )
   ) {
     throw new Error(
       'Create a current verified value report before publishing this website to Clientspace.',
