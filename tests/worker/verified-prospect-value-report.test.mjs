@@ -205,6 +205,8 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(reportGenerationWorker, /const defaultModel = 'gpt-5\.6-sol'/);
   assert.match(reportGenerationWorker, /const reasoningEffort = 'max'/);
   assert.match(reportGenerationWorker, /forced_login_method="chatgpt"/);
+  assert.match(reportGenerationWorker, /TMPDIR: temporaryDirectory/);
+  assert.match(reportGenerationWorker, /codexFailureDetail\(events, stderr, exit\)/);
   assert.match(reportGenerationWorker, /--output-schema/);
   assert.match(reportGenerationWorker, /--image/);
   assert.match(reportGenerationWorker, /arguments_\.push\('-'\)/);

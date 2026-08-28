@@ -220,7 +220,7 @@ async function codexBinary() {
   throw new Error('The Codex executable is not configured for report generation.');
 }
 
-function codexEnvironment(environment = process.env) {
+function codexEnvironment(environment = process.env, temporaryDirectory = '') {
   const values = {
     HOME: environment.HOME,
     PATH: environment.PATH,
@@ -230,10 +230,23 @@ function codexEnvironment(environment = process.env) {
     TERM: environment.TERM,
     NO_COLOR: '1',
     CODEX_HOME: environment.SITEFORGE_CODEX_HOME?.trim() || environment.CODEX_HOME?.trim(),
+    TMPDIR: temporaryDirectory || environment.TMPDIR,
+    TMP: temporaryDirectory || environment.TMP,
+    TEMP: temporaryDirectory || environment.TEMP,
   };
   return Object.fromEntries(
     Object.entries(values).filter(([, value]) => typeof value === 'string' && value.length > 0),
   );
+}
+
+function codexFailureDetail(events, stderr, exit) {
+  for (const event of [...events].reverse()) {
+    if (!/(?:error|fail)/i.test(String(event?.type ?? ''))) continue;
+    const detail =
+      event?.error?.message ?? event?.error ?? event?.message ?? event?.item?.message ?? null;
+    if (typeof detail === 'string' && detail.trim()) return detail.trim().slice(-700);
+  }
+  return stderr.trim().slice(-700) || String(exit.signal || exit.code);
 }
 
 async function runProcess(executable, arguments_, options = {}) {
@@ -445,9 +458,8 @@ async function selectThemes(job, source) {
     );
   }
   const executable = await codexBinary();
-  const environment = codexEnvironment();
-  await assertCodexAuthentication(executable, environment);
   const directory = await mkdtemp(join(tmpdir(), 'made-solid-report-'));
+  const environment = codexEnvironment(process.env, directory);
   const schemaPath = join(directory, 'selection.schema.json');
   const outputPath = join(directory, 'selection.json');
   const imagePaths = [];
@@ -470,6 +482,7 @@ async function selectThemes(job, source) {
     originalHorizontalOverflowPx: Number(candidate.original.metadata?.horizontalOverflowPx ?? 0),
   }));
   try {
+    await assertCodexAuthentication(executable, environment);
     await writeFile(
       schemaPath,
       `${JSON.stringify(selectionSchema(source.candidates.map((candidate) => candidate.id)), null, 2)}\n`,
@@ -573,9 +586,7 @@ async function selectThemes(job, source) {
       throw new Error('Codex report selection timed out after twenty minutes.');
     }
     if (exit.code !== 0) {
-      throw new Error(
-        `Codex report selection failed: ${stderr.trim().slice(-700) || exit.signal || exit.code}`,
-      );
+      throw new Error(`Codex report selection failed: ${codexFailureDetail(events, stderr, exit)}`);
     }
     const text = (await readFile(outputPath, 'utf8')).trim();
     if (!text) throw new Error('The report selection model returned no structured result.');
