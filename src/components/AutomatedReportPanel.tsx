@@ -15,6 +15,7 @@ import type {
   AuditObservation,
   DecisionReport,
   ReportGenerationJob,
+  ResearchArtifact,
   SourceReleaseAttestation,
 } from '../lib/domain';
 import {
@@ -32,6 +33,7 @@ type AutomatedReportPanelProps = {
   report?: DecisionReport;
   releaseAttestation?: SourceReleaseAttestation;
   releaseAttestationAvailability?: 'available' | 'schema_unavailable' | 'unavailable';
+  artifacts: ResearchArtifact[];
   observations: AuditObservation[];
   tasks: AuditReportSpecialistTask[];
   onPrepareReport: () => void | Promise<void>;
@@ -40,6 +42,92 @@ type AutomatedReportPanelProps = {
   generationJob?: ReportGenerationJob;
   generationWorkerAvailable?: boolean;
 };
+
+function metadataRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function metadataBoolean(value: unknown) {
+  return value === true || value === 'true';
+}
+
+function metadataNumber(value: unknown) {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+export function reportComparisonEvidenceReadiness({
+  activeCaptureRunId,
+  artifacts,
+  audit,
+  observations,
+  releaseAttestation,
+}: {
+  activeCaptureRunId?: string;
+  artifacts: ResearchArtifact[];
+  audit?: Audit;
+  observations: AuditObservation[];
+  releaseAttestation?: SourceReleaseAttestation;
+}) {
+  if (!activeCaptureRunId || !audit || !releaseAttestation) {
+    return { matchedCandidateCount: 0, trustedOriginalCount: 0 };
+  }
+
+  const trustedOriginals = new Map(
+    artifacts
+      .filter((artifact) => {
+        const viewportIntegrity = metadataRecord(artifact.metadata.viewportIntegrity);
+        return (
+          artifact.kind === 'screenshot' &&
+          artifact.crawlRunId === activeCaptureRunId &&
+          artifact.metadata.captureContract === 'real-device-responsive-audit-v1' &&
+          viewportIntegrity?.status === 'passed'
+        );
+      })
+      .map((artifact) => [artifact.id, artifact]),
+  );
+
+  const matchedOriginalIds = new Set<string>();
+  for (const artifact of artifacts) {
+    const originalArtifactId = artifact.metadata.originalArtifactId;
+    if (
+      artifact.kind !== 'screenshot' ||
+      artifact.crawlRunId !== activeCaptureRunId ||
+      artifact.metadata.captureContract !== 'verified-comparison-page-ready-v1' ||
+      artifact.metadata.releaseAttestationId !== releaseAttestation.id ||
+      artifact.metadata.captureStatus !== 'passed' ||
+      !metadataBoolean(artifact.metadata.pageReady) ||
+      metadataBoolean(artifact.metadata.loaderVisible) ||
+      typeof originalArtifactId !== 'string'
+    )
+      continue;
+    const original = trustedOriginals.get(originalArtifactId);
+    if (!original) continue;
+    const originalScroll = metadataRecord(original.metadata.scrollState)?.scrollProgress ?? 0;
+    const redesignedScroll = metadataRecord(artifact.metadata.scrollState)?.scrollProgress ?? 0;
+    const horizontalOverflow = metadataNumber(artifact.metadata.horizontalOverflowPx);
+    if (
+      String(original.metadata.evidenceKind ?? '') !==
+        String(artifact.metadata.originalEvidenceKind ?? '') ||
+      String(originalScroll) !== String(redesignedScroll) ||
+      horizontalOverflow === undefined ||
+      horizontalOverflow > 1
+    )
+      continue;
+    matchedOriginalIds.add(originalArtifactId);
+  }
+
+  const matchedCandidateCount = observations.filter(
+    (observation) =>
+      observation.auditId === audit.id &&
+      observation.crawlRunId === activeCaptureRunId &&
+      observationIsEligibleForAutomaticReport(observation) &&
+      observation.evidenceArtifactIds.some((id) => matchedOriginalIds.has(id)),
+  ).length;
+  return { matchedCandidateCount, trustedOriginalCount: trustedOriginals.size };
+}
 
 const areaLabels: Partial<Record<AuditObservation['area'], string>> = {
   UI: 'Interface clarity',
@@ -79,6 +167,7 @@ export function observationIsEligibleForAutomaticReport(observation: AuditObserv
 
 export function AutomatedReportPanel({
   activeCaptureRunId,
+  artifacts,
   audit,
   clientName,
   observations,
@@ -138,7 +227,19 @@ export function AutomatedReportPanel({
   const auditReady = currentAudit?.status === 'ready';
   const specialistsReady =
     currentTasks.length === 6 && currentTasks.every((task) => task.status === 'ready');
-  const evidenceReady = eligibleObservations.length > 0;
+  const comparisonEvidence = useMemo(
+    () =>
+      reportComparisonEvidenceReadiness({
+        activeCaptureRunId,
+        artifacts,
+        audit: currentAudit,
+        observations,
+        releaseAttestation,
+      }),
+    [activeCaptureRunId, artifacts, currentAudit, observations, releaseAttestation],
+  );
+  const eligibleEvidenceExists = eligibleObservations.length > 0;
+  const evidenceReady = comparisonEvidence.matchedCandidateCount > 0;
   const canGenerate = auditReady && specialistsReady && evidenceReady && releaseReady;
   const currentReportView = currentReport ? prospectValueReportView(currentReport) : undefined;
   const currentReportMatchesRelease = Boolean(
@@ -272,7 +373,7 @@ export function AutomatedReportPanel({
         ? 'Generation cancelled'
         : !generationWorkerAvailable && canGenerate
           ? 'Report worker offline'
-          : preparing || generationActive || (canGenerate && !prepareError)
+          : preparing || generationActive
             ? 'Generating automatically'
             : releaseSchemaUnavailable
               ? 'Studio update required'
@@ -281,7 +382,9 @@ export function AutomatedReportPanel({
                 : !specialistsReady
                   ? 'Analysing evidence'
                   : !evidenceReady
-                    ? 'No eligible evidence'
+                    ? eligibleEvidenceExists
+                      ? 'Fresh comparison evidence required'
+                      : 'No eligible evidence'
                     : 'Ready to generate';
 
   return (
@@ -370,9 +473,11 @@ export function AutomatedReportPanel({
                       ? legacyReport
                         ? 'Replacing the legacy report automatically'
                         : 'Generating the report automatically'
-                      : legacyReport
-                        ? 'The earlier report will be replaced automatically'
-                        : 'Automatic report preparation'}
+                      : !evidenceReady && eligibleEvidenceExists
+                        ? 'The new report has not started'
+                        : legacyReport
+                          ? 'The earlier report will be replaced automatically'
+                          : 'Automatic report preparation'}
               </h3>
               <p>
                 {generationActive
@@ -387,9 +492,11 @@ export function AutomatedReportPanel({
                           ? 'The current edited website must pass release verification first. Once it does, this page generates the report without a review step.'
                           : !specialistsReady
                             ? 'The six evidence specialists are still working. Report generation begins as soon as they finish.'
-                            : !evidenceReady
+                            : !eligibleEvidenceExists
                               ? 'The current audit did not produce a supported, non-low-confidence visitor theme. Restart the audit if the source evidence has changed.'
-                              : 'All prerequisites are ready. Studio will generate the report automatically.'}
+                              : !evidenceReady
+                                ? `No report job is running. These ${eligibleObservations.length} observations predate Studio’s trusted real-device capture contract, so they cannot be used for a new client report. Run a fresh responsive audit, then re-run exact website verification to create position-matched comparisons.`
+                                : 'All prerequisites are ready. Studio will start the report automatically; the manual action below remains available if the request needs to be retried.'}
               </p>
               {generationActive ? (
                 <small>
@@ -427,6 +534,26 @@ export function AutomatedReportPanel({
               variant="secondary"
             >
               Cancel report generation
+            </Button>
+          ) : null}
+          {!evidenceReady && eligibleEvidenceExists && onRetryAudit ? (
+            <Button disabled={retrying} onClick={() => void retryAudit()} variant="primary">
+              {retrying ? (
+                <LoaderCircle aria-hidden="true" className={styles.spin} size={17} />
+              ) : (
+                <RotateCcw aria-hidden="true" size={17} />
+              )}
+              {retrying ? 'Starting fresh responsive audit…' : 'Run fresh responsive audit'}
+            </Button>
+          ) : null}
+          {retryError ? <p role="alert">{retryError}</p> : null}
+          {canGenerate &&
+          generationWorkerAvailable &&
+          !preparing &&
+          !generationActive &&
+          !generationStopped ? (
+            <Button onClick={() => void prepareReport()} variant="primary">
+              <Sparkles aria-hidden="true" size={17} /> Generate current report
             </Button>
           ) : null}
           {prepareError || generationStopped ? (
@@ -520,15 +647,17 @@ export function AutomatedReportPanel({
             <Circle aria-hidden="true" size={17} />
           )}
           <span>
-            <strong>Design evidence ready for the report agent</strong>
+            <strong>Trusted before-and-after evidence</strong>
             {evidenceReady
-              ? `${eligibleObservations.length} supported ${eligibleObservations.length === 1 ? 'candidate is' : 'candidates are'} available. GPT-5.6 Sol chooses the strongest natural set of one to four.`
-              : 'Only supported, non-low-confidence visitor findings are eligible.'}
+              ? `${comparisonEvidence.matchedCandidateCount} position-matched ${comparisonEvidence.matchedCandidateCount === 1 ? 'candidate is' : 'candidates are'} ready. GPT-5.6 Sol chooses the strongest natural set of one to four.`
+              : eligibleEvidenceExists
+                ? `${eligibleObservations.length} older ${eligibleObservations.length === 1 ? 'observation exists' : 'observations exist'}, but none has a trusted real-device original and matching verified redesign screenshot yet.`
+                : 'Only supported, non-low-confidence visitor findings are eligible.'}
           </span>
         </li>
       </ol>
 
-      {selectedThemes.length > 0 ? (
+      {evidenceReady && selectedThemes.length > 0 ? (
         <details className={styles.evidenceDetails}>
           <summary>Candidate areas available to the report agent</summary>
           <p>

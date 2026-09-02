@@ -440,6 +440,83 @@ async function seedReportGenerationJob(page, overrides = {}) {
   );
 }
 
+async function seedLegacyReportEvidenceWithoutTrustedComparisons(page) {
+  const legacy = {
+    ...valueReport(),
+    id: 'report-old-evidence-e2e',
+    version: 12,
+    schemaVersion: 8,
+    data: { schemaVersion: 8, title: 'Earlier report', findings: [] },
+  };
+  await seedReport(page, legacy);
+  await page.evaluate(
+    ({ auditId, businessId, crawlRunId }) =>
+      new Promise((resolve, reject) => {
+        const request = indexedDB.open('siteforge-os', 9);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const database = request.result;
+          const transaction = database.transaction(
+            ['auditSpecialistTasks', 'auditObservations'],
+            'readwrite',
+          );
+          transaction.onerror = () => reject(transaction.error);
+          transaction.oncomplete = () => {
+            database.close();
+            resolve();
+          };
+          [
+            'responsive_ui',
+            'accessibility',
+            'performance_engineering',
+            'technical_seo',
+            'conversion_journey',
+            'platform_integrations',
+          ].forEach((specialistKind, index) => {
+            transaction.objectStore('auditSpecialistTasks').put({
+              id: `legacy-specialist-${index}`,
+              businessId,
+              auditId,
+              crawlRunId,
+              specialistKind,
+              status: 'ready',
+              progressPhase: 'complete',
+              progressDetail: 'Complete.',
+              totalItems: 1,
+              completedItems: 1,
+              createdAt: '2099-08-26T03:00:00.000Z',
+              updatedAt: '2099-08-26T03:00:00.000Z',
+            });
+          });
+          transaction.objectStore('auditObservations').put({
+            id: 'legacy-responsive-observation',
+            businessId,
+            auditId,
+            specialistTaskId: 'legacy-specialist-0',
+            crawlRunId,
+            specialistKind: 'responsive_ui',
+            area: 'Mobile',
+            findingClass: 'observed_defect',
+            severity: 'high',
+            title: 'The mobile interface obscures useful content',
+            observation: 'A persistent interface occupies part of the page.',
+            customerImpact: 'Visitors cannot see all of the surrounding content.',
+            recommendation: 'Reserve space for persistent interface controls.',
+            sourceUrls: ['https://demo-local-services.example/'],
+            evidenceFactIds: [],
+            evidenceArtifactIds: ['old-site-mobile-screenshot'],
+            measurement: {},
+            confidence: 'high',
+            reviewState: 'needs_review',
+            createdAt: '2099-08-26T03:00:00.000Z',
+            updatedAt: '2099-08-26T03:00:00.000Z',
+          });
+        };
+      }),
+    { auditId, businessId, crawlRunId },
+  );
+}
+
 test('renders the prospect-specific verified value report at every required viewport', async ({
   page,
 }, testInfo) => {
@@ -729,4 +806,33 @@ test('shows the saved report error with a direct retry control', async ({ page }
     fullPage: true,
     animations: 'disabled',
   });
+});
+
+test('does not claim a report is generating when trusted comparison evidence is missing', async ({
+  page,
+}, testInfo) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await seedLegacyReportEvidenceWithoutTrustedComparisons(page);
+  await page.goto(`/#/prospects/${businessId}/report`);
+
+  await expect(page.getByText('Fresh comparison evidence required', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'The new report has not started' })).toBeVisible();
+  await expect(page.getByText(/No report job is running/i)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Run fresh responsive audit' })).toBeEnabled();
+  await expect(page.getByText('Generating automatically', { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+    page.viewportSize().width,
+  );
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await expect(page).toHaveScreenshot('report-missing-trusted-comparisons.png', {
+    fullPage: true,
+    animations: 'disabled',
+  });
+
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      320,
+    );
+  }
 });

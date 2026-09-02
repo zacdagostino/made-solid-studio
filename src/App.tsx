@@ -97,6 +97,7 @@ import { ClientEmailDesk } from './components/ClientEmailDesk';
 import {
   AutomatedReportPanel,
   observationIsEligibleForAutomaticReport,
+  reportComparisonEvidenceReadiness,
 } from './components/AutomatedReportPanel';
 import { ClientReportPreview } from './components/ClientReportPreview';
 import { prospectValueReportView } from './lib/prospect-value-report';
@@ -20093,6 +20094,7 @@ function AuditReportWorkspacePanel({
     <Card className="workspace-panel">
       <AutomatedReportPanel
         activeCaptureRunId={workspace.latestCapture?.id}
+        artifacts={workspace.artifacts}
         audit={workspace.audit}
         clientName={workspace.business.name}
         generationJob={generationJob}
@@ -21566,6 +21568,16 @@ function WorkspaceApp({
             observation.crawlRunId === captureId &&
             observationIsEligibleForAutomaticReport(observation),
         )
+      )
+        continue;
+      if (
+        reportComparisonEvidenceReadiness({
+          activeCaptureRunId: captureId,
+          artifacts: candidate.artifacts,
+          audit,
+          observations: candidate.auditObservations ?? [],
+          releaseAttestation: release,
+        }).matchedCandidateCount === 0
       )
         continue;
       const currentReport =
