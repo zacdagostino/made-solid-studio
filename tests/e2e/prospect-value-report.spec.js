@@ -517,6 +517,66 @@ async function seedLegacyReportEvidenceWithoutTrustedComparisons(page) {
   );
 }
 
+async function markLegacyObservationAsFreshResponsiveEvidence(page, withComparison = false) {
+  await page.evaluate(
+    ({ businessId, crawlRunId, withComparison }) =>
+      new Promise((resolve, reject) => {
+        const request = indexedDB.open('siteforge-os', 9);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const database = request.result;
+          const transaction = database.transaction('artifacts', 'readwrite');
+          transaction.onerror = () => reject(transaction.error);
+          transaction.oncomplete = () => {
+            database.close();
+            resolve();
+          };
+          const store = transaction.objectStore('artifacts');
+          if (withComparison) {
+            store.put({
+              id: 'matched-comparison-e2e',
+              businessId,
+              crawlRunId,
+              kind: 'screenshot',
+              label: 'Verified redesigned website',
+              storageBucket: 'e2e-fixtures',
+              storagePath: '/test-fixtures/new-site-improvement.svg',
+              contentType: 'image/svg+xml',
+              metadata: {
+                captureContract: 'verified-comparison-page-ready-v1',
+                captureStatus: 'passed',
+                evidenceKind: 'edited-site-comparison',
+                horizontalOverflowPx: 0,
+                loaderVisible: false,
+                originalArtifactId: 'old-site-mobile-screenshot',
+                originalEvidenceKind: 'scroll-bottom',
+                pageReady: true,
+                releaseAttestationId: 'release-attestation-e2e',
+                scrollState: { scrollProgress: 1 },
+              },
+              createdAt: '2099-08-26T03:30:00.000Z',
+            });
+          }
+          const read = store.get('old-site-mobile-screenshot');
+          read.onerror = () => reject(read.error);
+          read.onsuccess = () => {
+            store.put({
+              ...read.result,
+              metadata: {
+                ...read.result.metadata,
+                captureContract: 'real-device-responsive-audit-v1',
+                evidenceKind: 'scroll-bottom',
+                scrollState: { scrollProgress: 1 },
+                viewportIntegrity: { status: 'passed' },
+              },
+            });
+          };
+        };
+      }),
+    { businessId, crawlRunId, withComparison },
+  );
+}
+
 test('renders the prospect-specific verified value report at every required viewport', async ({
   page,
 }, testInfo) => {
@@ -808,6 +868,35 @@ test('shows the saved report error with a direct retry control', async ({ page }
   });
 });
 
+test('shows one clear queued report state with a safe stop action', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await seedLegacyReportEvidenceWithoutTrustedComparisons(page);
+  await markLegacyObservationAsFreshResponsiveEvidence(page, true);
+  await seedReportGenerationJob(page, {
+    status: 'queued',
+    progressPhase: 'queued',
+    progressDetail: 'Waiting for the protected report agent.',
+    completedItems: 0,
+  });
+  await page.goto(`/#/prospects/${businessId}/report`);
+
+  await expect(
+    page.getByRole('heading', { name: 'The report is queued and waiting to start' }),
+  ).toBeVisible();
+  await expect(page.getByText('Waiting for the protected report agent.').first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Stop report generation' })).toBeVisible();
+  await expect(page.getByText(/stops at its next safe checkpoint/i)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Generate current report' })).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+    page.viewportSize().width,
+  );
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await expect(page).toHaveScreenshot('report-generation-queued.png', {
+    fullPage: true,
+    animations: 'disabled',
+  });
+});
+
 test('does not claim a report is generating when trusted comparison evidence is missing', async ({
   page,
 }, testInfo) => {
@@ -815,9 +904,10 @@ test('does not claim a report is generating when trusted comparison evidence is 
   await seedLegacyReportEvidenceWithoutTrustedComparisons(page);
   await page.goto(`/#/prospects/${businessId}/report`);
 
-  await expect(page.getByText('Fresh comparison evidence required', { exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'The new report has not started' })).toBeVisible();
-  await expect(page.getByText(/No report job is running/i)).toBeVisible();
+  await expect(page.getByText('Responsive evidence required', { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Capture current responsive evidence once' }),
+  ).toBeVisible();
   await expect(page.getByRole('button', { name: 'Run fresh responsive audit' })).toBeEnabled();
   await expect(page.getByText('Generating automatically', { exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
@@ -835,4 +925,68 @@ test('does not claim a report is generating when trusted comparison evidence is 
       320,
     );
   }
+});
+
+test('automatically refreshes stale comparison screenshots instead of rerunning the audit', async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await seedLegacyReportEvidenceWithoutTrustedComparisons(page);
+  await markLegacyObservationAsFreshResponsiveEvidence(page);
+  let releaseRequestCount = 0;
+  let finishReleaseRequest;
+  await page.route('**/__made-solid/final-edit?**', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'finalised',
+        detail: 'The current website is committed and synced.',
+        releaseVerificationAvailable: true,
+        businessId,
+        branch: 'main',
+        commit: 'b'.repeat(40),
+        synced: true,
+        sourceBuild: {
+          buildId: 'builder-value-report-e2e',
+          manifestId: 'manifest-value-report-e2e',
+        },
+      }),
+    });
+  });
+  await page.route('**/__made-solid/release-verification', async (route) => {
+    releaseRequestCount += 1;
+    await new Promise((resolve) => {
+      finishReleaseRequest = resolve;
+    });
+    await route.fulfill({
+      contentType: 'application/x-ndjson',
+      body: `${JSON.stringify({
+        status: 'running',
+        phase: 'comparison_evidence',
+        detail: 'Capturing like-for-like screenshots from the exact edited website.',
+      })}\n${JSON.stringify({
+        status: 'complete',
+        phase: 'ready',
+        detail: 'Matched comparison screenshots are ready.',
+      })}\n`,
+    });
+  });
+
+  await page.goto(`/#/prospects/${businessId}/report`);
+
+  await expect(
+    page.getByRole('heading', { name: 'Capturing matching before-and-after screenshots' }),
+  ).toBeVisible();
+  await expect(page.getByText(/Preparing the exact edited website/i).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Run fresh responsive audit' })).toHaveCount(0);
+  await expect.poll(() => releaseRequestCount).toBe(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+    page.viewportSize().width,
+  );
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await expect(page).toHaveScreenshot('report-comparison-refresh-running.png', {
+    fullPage: true,
+    animations: 'disabled',
+  });
+  finishReleaseRequest();
 });

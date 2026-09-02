@@ -141,9 +141,8 @@ describe('AutomatedReportPanel comparison readiness', () => {
       }),
     );
 
-    expect(markup).toContain('Fresh comparison evidence required');
-    expect(markup).toContain('The new report has not started');
-    expect(markup).toContain('No report job is running');
+    expect(markup).toContain('Responsive evidence required');
+    expect(markup).toContain('Capture current responsive evidence once');
     expect(markup).toContain('Run fresh responsive audit');
     expect(markup).not.toContain('Generating automatically');
   });
@@ -157,7 +156,11 @@ describe('AutomatedReportPanel comparison readiness', () => {
         observations: [observation],
         releaseAttestation: release,
       }),
-    ).toEqual({ matchedCandidateCount: 0, trustedOriginalCount: 1 });
+    ).toEqual({
+      matchedCandidateCount: 0,
+      trustedObservationCount: 1,
+      trustedOriginalCount: 1,
+    });
 
     expect(
       reportComparisonEvidenceReadiness({
@@ -167,6 +170,33 @@ describe('AutomatedReportPanel comparison readiness', () => {
         observations: [observation],
         releaseAttestation: release,
       }),
-    ).toEqual({ matchedCandidateCount: 1, trustedOriginalCount: 1 });
+    ).toEqual({
+      matchedCandidateCount: 1,
+      trustedObservationCount: 1,
+      trustedOriginalCount: 1,
+    });
+  });
+
+  it('asks for a comparison refresh instead of rerunning an already fresh audit', () => {
+    const markup = renderToStaticMarkup(
+      createElement(AutomatedReportPanel, {
+        activeCaptureRunId: 'capture-1',
+        artifacts: [original],
+        audit,
+        clientName: 'Client',
+        generationWorkerAvailable: true,
+        observations: [observation],
+        onPrepareReport: () => undefined,
+        onRefreshComparisons: () => undefined,
+        onRetryAudit: () => undefined,
+        releaseAttestation: release,
+        tasks,
+      }),
+    );
+
+    expect(markup).toContain('Comparison refresh required');
+    expect(markup).toContain('Fresh audit complete — update the comparison screenshots');
+    expect(markup).toContain('Refresh comparison screenshots');
+    expect(markup).not.toContain('Run fresh responsive audit');
   });
 });

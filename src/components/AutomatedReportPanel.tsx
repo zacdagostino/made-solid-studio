@@ -39,6 +39,13 @@ type AutomatedReportPanelProps = {
   onPrepareReport: () => void | Promise<void>;
   onCancelReport?: (jobId: string) => void | Promise<void>;
   onRetryAudit?: () => void | Promise<void>;
+  onRefreshComparisons?: () => void | Promise<void>;
+  comparisonRefresh?: {
+    status: 'idle' | 'running' | 'failed';
+    phase: string;
+    detail: string;
+  };
+  comparisonRefreshBlocker?: string;
   generationJob?: ReportGenerationJob;
   generationWorkerAvailable?: boolean;
 };
@@ -71,8 +78,8 @@ export function reportComparisonEvidenceReadiness({
   observations: AuditObservation[];
   releaseAttestation?: SourceReleaseAttestation;
 }) {
-  if (!activeCaptureRunId || !audit || !releaseAttestation) {
-    return { matchedCandidateCount: 0, trustedOriginalCount: 0 };
+  if (!activeCaptureRunId || !audit) {
+    return { matchedCandidateCount: 0, trustedObservationCount: 0, trustedOriginalCount: 0 };
   }
 
   const trustedOriginals = new Map(
@@ -96,7 +103,7 @@ export function reportComparisonEvidenceReadiness({
       artifact.kind !== 'screenshot' ||
       artifact.crawlRunId !== activeCaptureRunId ||
       artifact.metadata.captureContract !== 'verified-comparison-page-ready-v1' ||
-      artifact.metadata.releaseAttestationId !== releaseAttestation.id ||
+      artifact.metadata.releaseAttestationId !== releaseAttestation?.id ||
       artifact.metadata.captureStatus !== 'passed' ||
       !metadataBoolean(artifact.metadata.pageReady) ||
       metadataBoolean(artifact.metadata.loaderVisible) ||
@@ -119,6 +126,13 @@ export function reportComparisonEvidenceReadiness({
     matchedOriginalIds.add(originalArtifactId);
   }
 
+  const trustedObservationCount = observations.filter(
+    (observation) =>
+      observation.auditId === audit.id &&
+      observation.crawlRunId === activeCaptureRunId &&
+      observationIsEligibleForAutomaticReport(observation) &&
+      observation.evidenceArtifactIds.some((id) => trustedOriginals.has(id)),
+  ).length;
   const matchedCandidateCount = observations.filter(
     (observation) =>
       observation.auditId === audit.id &&
@@ -126,7 +140,11 @@ export function reportComparisonEvidenceReadiness({
       observationIsEligibleForAutomaticReport(observation) &&
       observation.evidenceArtifactIds.some((id) => matchedOriginalIds.has(id)),
   ).length;
-  return { matchedCandidateCount, trustedOriginalCount: trustedOriginals.size };
+  return {
+    matchedCandidateCount,
+    trustedObservationCount,
+    trustedOriginalCount: trustedOriginals.size,
+  };
 }
 
 const areaLabels: Partial<Record<AuditObservation['area'], string>> = {
@@ -173,6 +191,7 @@ export function AutomatedReportPanel({
   observations,
   onCancelReport,
   onPrepareReport,
+  onRefreshComparisons,
   onRetryAudit,
   releaseAttestation,
   releaseAttestationAvailability = 'available',
@@ -180,6 +199,8 @@ export function AutomatedReportPanel({
   tasks,
   generationJob,
   generationWorkerAvailable = false,
+  comparisonRefresh = { status: 'idle', phase: 'idle', detail: '' },
+  comparisonRefreshBlocker,
 }: AutomatedReportPanelProps) {
   const [preparing, setPreparing] = useState(false);
   const [prepareError, setPrepareError] = useState('');
@@ -240,6 +261,11 @@ export function AutomatedReportPanel({
   );
   const eligibleEvidenceExists = eligibleObservations.length > 0;
   const evidenceReady = comparisonEvidence.matchedCandidateCount > 0;
+  const trustedAuditEvidenceReady = comparisonEvidence.trustedObservationCount > 0;
+  const freshResponsiveAuditRequired = eligibleEvidenceExists && !trustedAuditEvidenceReady;
+  const comparisonRefreshRequired = trustedAuditEvidenceReady && !evidenceReady;
+  const comparisonRefreshActive = comparisonRefresh.status === 'running';
+  const comparisonRefreshFailed = comparisonRefresh.status === 'failed';
   const canGenerate = auditReady && specialistsReady && evidenceReady && releaseReady;
   const currentReportView = currentReport ? prospectValueReportView(currentReport) : undefined;
   const currentReportMatchesRelease = Boolean(
@@ -367,25 +393,33 @@ export function AutomatedReportPanel({
     currentAudit.status === 'running' || currentAudit.status === 'research_pending';
   const stateLabel = currentReportMatchesRelease
     ? 'Report ready'
-    : matchingGenerationJob?.status === 'failed'
-      ? 'Generation failed'
-      : matchingGenerationJob?.status === 'cancelled'
-        ? 'Generation cancelled'
-        : !generationWorkerAvailable && canGenerate
-          ? 'Report worker offline'
-          : preparing || generationActive
-            ? 'Generating automatically'
-            : releaseSchemaUnavailable
-              ? 'Studio update required'
-              : !releaseReady
-                ? 'Website verification required'
-                : !specialistsReady
-                  ? 'Analysing evidence'
-                  : !evidenceReady
-                    ? eligibleEvidenceExists
-                      ? 'Fresh comparison evidence required'
-                      : 'No eligible evidence'
-                    : 'Ready to generate';
+    : comparisonRefreshActive
+      ? 'Updating comparisons'
+      : matchingGenerationJob?.status === 'failed'
+        ? 'Generation failed'
+        : matchingGenerationJob?.status === 'cancelled'
+          ? 'Generation cancelled'
+          : matchingGenerationJob?.status === 'queued'
+            ? 'Report queued'
+            : matchingGenerationJob?.status === 'running'
+              ? 'Writing report'
+              : !generationWorkerAvailable && canGenerate
+                ? 'Report worker offline'
+                : preparing || generationActive
+                  ? 'Generating automatically'
+                  : releaseSchemaUnavailable
+                    ? 'Studio update required'
+                    : !releaseReady
+                      ? 'Website verification required'
+                      : !specialistsReady
+                        ? 'Analysing evidence'
+                        : freshResponsiveAuditRequired
+                          ? 'Responsive evidence required'
+                          : comparisonRefreshRequired
+                            ? 'Comparison refresh required'
+                            : !eligibleEvidenceExists
+                              ? 'No eligible evidence'
+                              : 'Ready to generate';
 
   return (
     <section aria-labelledby="automated-report-title" className={styles.panel}>
@@ -444,15 +478,10 @@ export function AutomatedReportPanel({
         </section>
       ) : (
         <section aria-labelledby="report-progress-title" className={styles.progressState}>
-          {!releaseReady && !releaseSchemaUnavailable ? (
-            <ButtonLink href={`#/prospects/${currentAudit.businessId}/editing`} variant="primary">
-              Verify current edited website <ArrowRight aria-hidden="true" size={17} />
-            </ButtonLink>
-          ) : null}
           <div className={styles.progressHeading}>
-            {preparing || generationActive || waitingForAudit ? (
+            {preparing || generationActive || waitingForAudit || comparisonRefreshActive ? (
               <LoaderCircle aria-hidden="true" className={styles.spin} size={24} />
-            ) : generationStopped ? (
+            ) : generationStopped || comparisonRefreshFailed ? (
               <ShieldAlert aria-hidden="true" size={24} />
             ) : legacyReport ? (
               <RefreshCcw aria-hidden="true" size={24} />
@@ -463,40 +492,51 @@ export function AutomatedReportPanel({
             )}
             <div>
               <h3 id="report-progress-title">
-                {generationActive
-                  ? matchingGenerationJob?.progressPhase === 'queued'
-                    ? 'Report generation is queued'
-                    : 'GPT-5.6 Sol is building the report'
-                  : generationStopped
-                    ? 'The replacement report needs attention'
-                    : preparing
-                      ? legacyReport
-                        ? 'Replacing the legacy report automatically'
-                        : 'Generating the report automatically'
-                      : !evidenceReady && eligibleEvidenceExists
-                        ? 'The new report has not started'
-                        : legacyReport
-                          ? 'The earlier report will be replaced automatically'
-                          : 'Automatic report preparation'}
+                {comparisonRefreshActive
+                  ? 'Capturing matching before-and-after screenshots'
+                  : generationActive
+                    ? matchingGenerationJob?.progressPhase === 'queued'
+                      ? 'The report is queued and waiting to start'
+                      : 'GPT-5.6 Sol is building the report'
+                    : generationStopped
+                      ? 'The replacement report needs attention'
+                      : preparing
+                        ? legacyReport
+                          ? 'Replacing the legacy report automatically'
+                          : 'Generating the report automatically'
+                        : comparisonRefreshFailed
+                          ? 'The comparison refresh needs attention'
+                          : freshResponsiveAuditRequired
+                            ? 'Capture current responsive evidence once'
+                            : comparisonRefreshRequired
+                              ? 'Fresh audit complete — update the comparison screenshots'
+                              : legacyReport
+                                ? 'The earlier report will be replaced automatically'
+                                : 'Automatic report preparation'}
               </h3>
               <p>
-                {generationActive
-                  ? matchingGenerationJob?.progressDetail
-                  : generationStopped
-                    ? 'No incomplete report was saved. Review the exact error and recovery action below, then retry when it is ready.'
-                    : preparing
-                      ? 'Studio is freezing a new immutable report version. You can leave this page while it completes.'
-                      : releaseSchemaUnavailable
-                        ? 'This website is not asking for another verification. Report automation is waiting for Studio’s release-record database update.'
-                        : !releaseReady
-                          ? 'The current edited website must pass release verification first. Once it does, this page generates the report without a review step.'
-                          : !specialistsReady
-                            ? 'The six evidence specialists are still working. Report generation begins as soon as they finish.'
-                            : !eligibleEvidenceExists
-                              ? 'The current audit did not produce a supported, non-low-confidence visitor theme. Restart the audit if the source evidence has changed.'
-                              : !evidenceReady
-                                ? `No report job is running. These ${eligibleObservations.length} observations predate Studio’s trusted real-device capture contract, so they cannot be used for a new client report. Run a fresh responsive audit, then re-run exact website verification to create position-matched comparisons.`
-                                : 'All prerequisites are ready. Studio will start the report automatically; the manual action below remains available if the request needs to be retried.'}
+                {comparisonRefreshActive
+                  ? comparisonRefresh.detail ||
+                    'Checking the exact edited website and capturing the same pages, screen sizes and scroll positions as the fresh audit.'
+                  : generationActive
+                    ? matchingGenerationJob?.progressDetail
+                    : generationStopped
+                      ? 'No incomplete report was saved. Review the exact error and recovery action below, then retry when it is ready.'
+                      : preparing
+                        ? 'Studio is freezing a new immutable report version. You can leave this page while it completes.'
+                        : releaseSchemaUnavailable
+                          ? 'This website is not asking for another verification. Report automation is waiting for Studio’s release-record database update.'
+                          : !releaseReady
+                            ? 'The current edited website must pass release verification first. Once it does, this page generates the report without a review step.'
+                            : !specialistsReady
+                              ? 'The six evidence specialists are still working. Report generation begins as soon as they finish.'
+                              : !eligibleEvidenceExists
+                                ? 'The current audit did not produce a supported, non-low-confidence visitor theme. Restart the audit if the source evidence has changed.'
+                                : freshResponsiveAuditRequired
+                                  ? `The ${eligibleObservations.length} supported observations do not yet include trusted responsive screenshots. Run one fresh audit; Studio will handle the remaining comparison and report steps automatically.`
+                                  : comparisonRefreshRequired
+                                    ? `${comparisonEvidence.trustedObservationCount} supported ${comparisonEvidence.trustedObservationCount === 1 ? 'finding has' : 'findings have'} fresh old-site screenshots. The edited website’s earlier verification is still valid, but its comparison images point to the previous audit. Studio will refresh those images without rerunning the audit.`
+                                    : 'All prerequisites are ready. Studio will start the report automatically; the manual action below remains available if the request needs to be retried.'}
               </p>
               {generationActive ? (
                 <small>
@@ -511,32 +551,41 @@ export function AutomatedReportPanel({
               ) : null}
             </div>
           </div>
-          {preparing || generationActive || waitingForAudit ? (
+          {preparing || generationActive || waitingForAudit || comparisonRefreshActive ? (
             <IndeterminateProgress
               detail={
-                generationActive
-                  ? matchingGenerationJob?.progressDetail || 'Analysing verified comparisons.'
-                  : preparing
-                    ? 'Queueing the protected report generation worker.'
-                    : currentAudit.progressDetail || 'Analysing the current website evidence.'
+                comparisonRefreshActive
+                  ? comparisonRefresh.detail || 'Refreshing verified comparison screenshots.'
+                  : generationActive
+                    ? matchingGenerationJob?.progressDetail || 'Analysing verified comparisons.'
+                    : preparing
+                      ? 'Queueing the protected report generation worker.'
+                      : currentAudit.progressDetail || 'Analysing the current website evidence.'
               }
               label={
-                preparing || generationActive
-                  ? 'Automatic report generation'
-                  : 'Specialist evidence analysis'
+                comparisonRefreshActive
+                  ? 'Verified comparison refresh'
+                  : preparing || generationActive
+                    ? 'Automatic report generation'
+                    : 'Specialist evidence analysis'
               }
             />
           ) : null}
           {generationActive && onCancelReport ? (
-            <Button
-              onClick={() => void onCancelReport(matchingGenerationJob.id)}
-              size="small"
-              variant="secondary"
-            >
-              Cancel report generation
-            </Button>
+            <div className={styles.stopAction}>
+              <Button
+                onClick={() => void onCancelReport(matchingGenerationJob.id)}
+                size="small"
+                variant="secondary"
+              >
+                Stop report generation
+              </Button>
+              <small>
+                The worker stops at its next safe checkpoint. No partial report is shown.
+              </small>
+            </div>
           ) : null}
-          {!evidenceReady && eligibleEvidenceExists && onRetryAudit ? (
+          {freshResponsiveAuditRequired && onRetryAudit ? (
             <Button disabled={retrying} onClick={() => void retryAudit()} variant="primary">
               {retrying ? (
                 <LoaderCircle aria-hidden="true" className={styles.spin} size={17} />
@@ -545,6 +594,50 @@ export function AutomatedReportPanel({
               )}
               {retrying ? 'Starting fresh responsive audit…' : 'Run fresh responsive audit'}
             </Button>
+          ) : null}
+          {comparisonRefreshRequired && onRefreshComparisons && !comparisonRefreshActive ? (
+            <Button
+              disabled={Boolean(comparisonRefreshBlocker)}
+              onClick={() => void onRefreshComparisons()}
+              variant="primary"
+            >
+              <RefreshCcw aria-hidden="true" size={17} />
+              Refresh comparison screenshots
+            </Button>
+          ) : null}
+          {comparisonRefreshRequired && comparisonRefreshBlocker ? (
+            <div className={styles.inlineError} role="alert">
+              <div>
+                <strong>Comparison refresh cannot start yet</strong>
+                <p>{comparisonRefreshBlocker}</p>
+              </div>
+              <ButtonLink
+                href={`#/prospects/${currentAudit.businessId}/editing`}
+                size="small"
+                variant="secondary"
+              >
+                Open Website editing <ArrowRight aria-hidden="true" size={16} />
+              </ButtonLink>
+            </div>
+          ) : null}
+          {comparisonRefreshFailed ? (
+            <div className={styles.inlineError} role="alert">
+              <div>
+                <strong>Comparison screenshot refresh stopped</strong>
+                <p>{comparisonRefresh.detail}</p>
+                {comparisonRefresh.phase ? <small>Phase {comparisonRefresh.phase}</small> : null}
+              </div>
+              {onRefreshComparisons ? (
+                <Button
+                  disabled={Boolean(comparisonRefreshBlocker)}
+                  onClick={() => void onRefreshComparisons()}
+                  size="small"
+                  variant="secondary"
+                >
+                  <RotateCcw aria-hidden="true" size={16} /> Retry comparison refresh
+                </Button>
+              ) : null}
+            </div>
           ) : null}
           {retryError ? <p role="alert">{retryError}</p> : null}
           {canGenerate &&
@@ -611,7 +704,7 @@ export function AutomatedReportPanel({
         </section>
       )}
 
-      <ol aria-label="Automatic report prerequisites" className={styles.checks}>
+      <ol aria-label="Automatic report workflow" className={styles.checks}>
         <li data-ready={auditReady && specialistsReady}>
           {auditReady && specialistsReady ? (
             <Check aria-hidden="true" size={17} />
@@ -619,40 +712,52 @@ export function AutomatedReportPanel({
             <Circle aria-hidden="true" size={17} />
           )}
           <span>
-            <strong>Current evidence analysed</strong>
+            <strong>1. Current website audit</strong>
             {specialistsReady
               ? 'All six specialist checks are complete.'
               : 'Specialist checks are still running.'}
           </span>
         </li>
-        <li data-ready={releaseReady}>
-          {releaseReady ? (
+        <li data-ready={releaseReady && evidenceReady}>
+          {releaseReady && evidenceReady ? (
             <Check aria-hidden="true" size={17} />
           ) : (
             <Circle aria-hidden="true" size={17} />
           )}
           <span>
-            <strong>Edited website verified</strong>
-            {releaseReady
-              ? `Edit v${releaseAttestation?.sourceEditVersion} passed release checks.`
-              : releaseSchemaUnavailable
-                ? 'Studio’s release-record database needs to be updated before this verified edit can be attached to the report.'
-                : 'The exact edited website still needs release verification.'}
+            <strong>2. Matched design comparisons</strong>
+            {evidenceReady
+              ? `${comparisonEvidence.matchedCandidateCount} supported before-and-after ${comparisonEvidence.matchedCandidateCount === 1 ? 'comparison is' : 'comparisons are'} ready for edit v${releaseAttestation?.sourceEditVersion}.`
+              : comparisonRefreshActive
+                ? 'Studio is matching the edited website to the fresh audit screenshots now.'
+                : comparisonRefreshRequired
+                  ? 'The fresh old-site screenshots are ready; the matching edited-site images need to be refreshed.'
+                  : releaseReady
+                    ? 'The website passed release checks. Fresh responsive audit screenshots are still required.'
+                    : releaseSchemaUnavailable
+                      ? 'Studio’s release-record database needs to be updated before this verified edit can be attached to the report.'
+                      : 'The edited website needs exact verification before comparisons can be created.'}
           </span>
         </li>
-        <li data-ready={evidenceReady}>
-          {evidenceReady ? (
+        <li data-ready={currentReportMatchesRelease}>
+          {currentReportMatchesRelease ? (
             <Check aria-hidden="true" size={17} />
           ) : (
             <Circle aria-hidden="true" size={17} />
           )}
           <span>
-            <strong>Trusted before-and-after evidence</strong>
-            {evidenceReady
-              ? `${comparisonEvidence.matchedCandidateCount} position-matched ${comparisonEvidence.matchedCandidateCount === 1 ? 'candidate is' : 'candidates are'} ready. GPT-5.6 Sol chooses the strongest natural set of one to four.`
-              : eligibleEvidenceExists
-                ? `${eligibleObservations.length} older ${eligibleObservations.length === 1 ? 'observation exists' : 'observations exist'}, but none has a trusted real-device original and matching verified redesign screenshot yet.`
-                : 'Only supported, non-low-confidence visitor findings are eligible.'}
+            <strong>3. Client report</strong>
+            {currentReportMatchesRelease
+              ? `Value report v${currentReport?.version} is ready to preview.`
+              : generationActive
+                ? matchingGenerationJob?.status === 'queued'
+                  ? 'Queued safely. The report agent will begin when the worker is available.'
+                  : 'GPT-5.6 Sol is selecting and writing the strongest supported design story.'
+                : generationStopped
+                  ? 'Generation stopped without replacing the earlier report. Use the recovery action above.'
+                  : evidenceReady
+                    ? 'Everything is ready. Studio will queue the report automatically.'
+                    : 'Starts automatically after the matched comparisons are ready.'}
           </span>
         </li>
       </ol>

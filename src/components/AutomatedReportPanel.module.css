@@ -185,6 +185,19 @@
   padding-left: var(--space-3);
 }
 
+.stopAction {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.stopAction small {
+  color: var(--color-muted);
+  line-height: 1.5;
+  max-width: 52ch;
+}
+
 .spin {
   animation: report-spin 0.9s linear infinite;
 }
@@ -207,6 +220,11 @@
   .actions {
     align-self: center;
     grid-column: auto;
+  }
+
+  .stopAction {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .checks {

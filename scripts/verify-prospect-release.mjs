@@ -343,22 +343,28 @@ async function persistDesignComparisonScreenshots(
   const sourceRoutes = await renderedSourceRoutes(browser, baseUrl, routes);
   const candidates = [];
   for (const observation of observations ?? []) {
-    const viewport = observation.viewport;
-    if (!viewport || !Number(viewport.width) || !Number(viewport.height)) continue;
     const supportedSourceUrls = new Set((observation.source_urls ?? []).map(normaliseSourceUrl));
     for (const oldArtifact of (observation.evidence_artifact_ids ?? [])
       .map((id) => artifactsById.get(id))
       .filter(Boolean)) {
-      const sourceUrl = normaliseSourceUrl(oldArtifact.metadata?.sourceUrl);
-      const route = sourceRoutes.get(sourceUrl);
-      if (!sourceUrl || !route || !supportedSourceUrls.has(sourceUrl)) continue;
-      const artifactViewport = oldArtifact.metadata?.viewport;
       if (
-        artifactViewport?.width !== viewport.width ||
-        artifactViewport?.height !== viewport.height
+        oldArtifact.metadata?.captureContract !== 'real-device-responsive-audit-v1' ||
+        oldArtifact.metadata?.viewportIntegrity?.status !== 'passed'
       ) {
         continue;
       }
+      const viewport = oldArtifact.metadata?.viewport;
+      if (
+        !viewport ||
+        !Number(viewport.width) ||
+        !Number(viewport.height) ||
+        !['mobile', 'tablet', 'desktop'].includes(viewport.label)
+      ) {
+        continue;
+      }
+      const sourceUrl = normaliseSourceUrl(oldArtifact.metadata?.sourceUrl);
+      const route = sourceRoutes.get(sourceUrl);
+      if (!sourceUrl || !route || !supportedSourceUrls.has(sourceUrl)) continue;
       const key = `${sourceUrl}:${viewport.width}x${viewport.height}:${oldArtifact.id}`;
       if (!candidates.some((item) => item.key === key)) {
         candidates.push({ key, observation, oldArtifact, route, sourceUrl, viewport });
@@ -848,6 +854,11 @@ try {
     outputRoutes(join(verificationWorkspace, 'out')),
     verifiedTechnologyFoundation(verificationWorkspace),
   );
+  if (comparisonEvidence.saved < 1) {
+    throw new Error(
+      'The website passed release checks, but Studio could not create a matched before-and-after screenshot. Review the current audit routes and responsive evidence, then retry the comparison refresh.',
+    );
+  }
   writeJsonAtomically(join(dirname(attemptPath), `${commit}.json`), record);
   emit(
     'complete',

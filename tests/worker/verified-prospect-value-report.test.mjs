@@ -148,6 +148,12 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(releaseVerifier, /originalEvidenceKind/);
   assert.match(releaseVerifier, /loaderVisible/);
   assert.match(releaseVerifier, /horizontalOverflowPx > 1/);
+  assert.match(releaseVerifier, /comparisonEvidence\.saved < 1/);
+  assert.match(releaseVerifier, /could not create a matched before-and-after screenshot/);
+  assert.match(releaseVerifier, /const viewport = oldArtifact\.metadata\?\.viewport/);
+  assert.match(releaseVerifier, /real-device-responsive-audit-v1/);
+  assert.match(releaseVerifier, /viewportIntegrity\?\.status !== 'passed'/);
+  assert.doesNotMatch(releaseVerifier, /const viewport = observation\.viewport/);
 
   assert.match(reportParser, /prospectValueReportSchemaVersion = 10/);
   assert.match(reportParser, /gpt-5\.6-sol-dynamic-design-showcase-v3/);
@@ -272,5 +278,6 @@ test('freezes prospect reports against the exact verified edited website', async
   assert.match(cloudRepository, /cancel_report_generation/);
   assert.match(automatedReportPanel, /Studio update required/);
   assert.match(automatedReportPanel, /not asking for another verification/);
-  assert.match(automatedReportPanel, /!releaseReady && !releaseSchemaUnavailable/);
+  assert.match(automatedReportPanel, /Fresh audit complete — update the comparison screenshots/);
+  assert.match(automatedReportPanel, /Stop report generation/);
 });

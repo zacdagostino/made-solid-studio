@@ -16673,6 +16673,63 @@ type ReleaseVerificationProgress = {
   attestation?: WebsiteReleaseAttestation;
 };
 
+function releaseVerificationBlockerForState(state: FinalEditState) {
+  if (state.status === 'loading') return 'Checking the current editable website.';
+  const staleRuntime =
+    state.releaseVerificationAvailable === undefined && state.businessId === undefined;
+  const available = state.releaseVerificationAvailable ?? Boolean(state.businessId);
+  if (!available) {
+    return staleRuntime
+      ? 'Restart Workspace Studio to reconnect its updated verification service.'
+      : 'The exact-commit verification service is unavailable in this Studio runtime.';
+  }
+  if (state.status === 'changes_pending')
+    return `Commit edit v${state.workingVersion ?? 1} before verifying the current website.`;
+  if (!state.commit) return 'Create a website commit before verifying the current website.';
+  if (!state.synced)
+    return `Push commit ${state.commit.slice(0, 8)} before verifying the current website.`;
+  if (!state.sourceBuild?.buildId || !state.businessId)
+    return 'The editable website is missing its prospect and generated-build lineage. Recreate it from Build & preview.';
+  if (state.status !== 'ready' && state.status !== 'finalised')
+    return 'Resolve the current editable website status before verifying the current website.';
+  return undefined;
+}
+
+async function streamReleaseVerification(
+  directory: string,
+  onProgress: (progress: ReleaseVerificationProgress) => void,
+) {
+  const response = await studioRuntimeFetch('/__made-solid/release-verification', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ directory }),
+  });
+  if (!response.ok || !response.body) {
+    throw new Error((await response.text()) || 'Release verification is unavailable.');
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = '';
+  let lastEvent: ReleaseVerificationProgress | undefined;
+  while (true) {
+    const { done, value } = await reader.read();
+    buffered += decoder.decode(value, { stream: !done });
+    const lines = buffered.split(/\r?\n/);
+    buffered = lines.pop() ?? '';
+    if (done && buffered.trim()) lines.push(buffered);
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      lastEvent = JSON.parse(line) as ReleaseVerificationProgress;
+      onProgress(lastEvent);
+    }
+    if (done) break;
+  }
+  if (!lastEvent || lastEvent.status === 'failed') {
+    throw new Error(lastEvent?.detail || 'The current website did not pass release verification.');
+  }
+  return lastEvent;
+}
+
 const finalEditStages = [
   { phase: 'verifying', label: 'Verify the complete website' },
   { phase: 'bundling', label: 'Refresh the refinement bundle' },
@@ -18065,23 +18122,7 @@ function WebsiteEditingPage({
   const canFinalise = state.status === 'changes_pending';
   const staleVerificationRuntime =
     state.releaseVerificationAvailable === undefined && state.businessId === undefined;
-  const releaseVerificationAvailable =
-    state.releaseVerificationAvailable ?? Boolean(state.businessId);
-  const releaseVerificationBlocker = !releaseVerificationAvailable
-    ? staleVerificationRuntime
-      ? 'Studio’s verification service was updated after this development runtime started. Restart Workspace Studio; this page will reconnect and recognise any existing verification automatically.'
-      : 'The exact-commit verification service is unavailable in this Studio runtime.'
-    : state.status === 'changes_pending'
-      ? `Commit edit v${state.workingVersion ?? 1} before verifying it.`
-      : !state.commit
-        ? 'Create a website commit before running release verification.'
-        : !state.synced
-          ? `Push commit ${state.commit.slice(0, 8)} to its upstream branch before verifying it.`
-          : !state.sourceBuild?.buildId || !state.businessId
-            ? 'This editable workspace is missing its verified prospect and generated-build lineage. Recreate it from the prospect’s Build & preview page.'
-            : state.status !== 'ready' && state.status !== 'finalised'
-              ? 'Resolve the current website workspace status before running release verification.'
-              : undefined;
+  const releaseVerificationBlocker = releaseVerificationBlockerForState(state);
   const canVerifyRelease = Boolean(!isRunning && !releaseIsRunning && !releaseVerificationBlocker);
   const editingTitle =
     state.status === 'loading'
@@ -18164,36 +18205,7 @@ function WebsiteEditingPage({
       detail: `Preparing commit ${state.commit?.slice(0, 8)} for release verification.`,
     });
     try {
-      const response = await studioRuntimeFetch('/__made-solid/release-verification', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ directory }),
-      });
-      if (!response.ok || !response.body) {
-        throw new Error((await response.text()) || 'Release verification is unavailable.');
-      }
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffered = '';
-      let lastEvent: ReleaseVerificationProgress | undefined;
-      while (true) {
-        const { done, value } = await reader.read();
-        buffered += decoder.decode(value, { stream: !done });
-        const lines = buffered.split(/\r?\n/);
-        buffered = lines.pop() ?? '';
-        if (done && buffered.trim()) lines.push(buffered);
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          lastEvent = JSON.parse(line) as ReleaseVerificationProgress;
-          setReleaseProgress(lastEvent);
-        }
-        if (done) break;
-      }
-      if (!lastEvent || lastEvent.status === 'failed') {
-        throw new Error(
-          lastEvent?.detail || 'The current website did not pass release verification.',
-        );
-      }
+      await streamReleaseVerification(directory, setReleaseProgress);
       await refresh();
     } catch (caught) {
       const detail =
@@ -20200,17 +20212,109 @@ function AuditReportWorkspacePanel({
   onCancelReport,
   onPrepareReport,
   onRetryAudit,
+  onRefreshWorkspace,
 }: {
   workspace: ProspectWorkspace;
   onCancelReport: (jobId: string) => Promise<void>;
   onPrepareReport: () => Promise<void>;
   onRetryAudit: () => Promise<void>;
+  onRefreshWorkspace: () => Promise<void>;
 }) {
+  const { directory, state: editState, refresh: refreshEditState } = useFinalEditState(workspace);
+  const [comparisonRefresh, setComparisonRefresh] = useState<{
+    status: 'idle' | 'running' | 'failed';
+    phase: string;
+    detail: string;
+  }>({ status: 'idle', phase: 'idle', detail: '' });
+  const automaticComparisonAttemptRef = useRef('');
   const release = workspace.sourceReleaseAttestations[0];
   const generationJob = reportGenerationJobForWorkspace(workspace, release?.id);
   const generationWorkerAvailable =
     workspace.reportGenerationWorkerAvailable ||
     (import.meta.env.VITE_SITEFORGE_E2E_FIXTURES === 'true' && Boolean(generationJob));
+  const comparisonEvidence = reportComparisonEvidenceReadiness({
+    activeCaptureRunId: workspace.latestCapture?.id,
+    artifacts: workspace.artifacts,
+    audit: workspace.audit,
+    observations: workspace.auditObservations ?? [],
+    releaseAttestation: release,
+  });
+  const comparisonRefreshRequired =
+    comparisonEvidence.trustedObservationCount > 0 &&
+    comparisonEvidence.matchedCandidateCount === 0;
+  const comparisonRefreshBlocker = releaseVerificationBlockerForState(editState);
+
+  const refreshComparisons = useCallback(async () => {
+    if (comparisonRefresh.status === 'running') return;
+    if (comparisonRefreshBlocker) {
+      setComparisonRefresh({
+        status: 'failed',
+        phase: 'blocked',
+        detail: comparisonRefreshBlocker,
+      });
+      return;
+    }
+    setComparisonRefresh({
+      status: 'running',
+      phase: 'preparing',
+      detail: 'Preparing the exact edited website for matched screenshot capture.',
+    });
+    try {
+      await streamReleaseVerification(directory, (progress) => {
+        setComparisonRefresh({
+          status: progress.status === 'failed' ? 'failed' : 'running',
+          phase: progress.phase,
+          detail: progress.detail,
+        });
+      });
+      setComparisonRefresh({
+        status: 'running',
+        phase: 'syncing',
+        detail: 'Matched screenshots are ready. Syncing the report workspace now.',
+      });
+      await Promise.all([refreshEditState(), onRefreshWorkspace()]);
+      setComparisonRefresh({ status: 'idle', phase: 'complete', detail: '' });
+    } catch (caught) {
+      setComparisonRefresh({
+        status: 'failed',
+        phase: 'failed',
+        detail:
+          caught instanceof Error
+            ? caught.message
+            : 'The matched comparison screenshots could not be refreshed.',
+      });
+      await Promise.all([refreshEditState(), onRefreshWorkspace()]);
+    }
+  }, [
+    comparisonRefresh.status,
+    comparisonRefreshBlocker,
+    directory,
+    onRefreshWorkspace,
+    refreshEditState,
+  ]);
+
+  useEffect(() => {
+    if (
+      workspace.audit?.status !== 'ready' ||
+      comparisonRefresh.status !== 'idle' ||
+      !comparisonRefreshRequired ||
+      comparisonRefreshBlocker
+    )
+      return;
+    const attemptKey = `${workspace.audit?.id ?? 'audit'}:${editState.commit ?? 'commit'}:${comparisonEvidence.trustedObservationCount}`;
+    if (automaticComparisonAttemptRef.current === attemptKey) return;
+    automaticComparisonAttemptRef.current = attemptKey;
+    void refreshComparisons();
+  }, [
+    comparisonEvidence.trustedObservationCount,
+    comparisonRefresh.status,
+    comparisonRefreshBlocker,
+    comparisonRefreshRequired,
+    editState.commit,
+    refreshComparisons,
+    workspace.audit?.id,
+  ]);
+
   return (
     <Card className="workspace-panel">
       <AutomatedReportPanel
@@ -20223,7 +20327,10 @@ function AuditReportWorkspacePanel({
         observations={workspace.auditObservations ?? []}
         onCancelReport={onCancelReport}
         onPrepareReport={onPrepareReport}
+        onRefreshComparisons={refreshComparisons}
         onRetryAudit={onRetryAudit}
+        comparisonRefresh={comparisonRefresh}
+        comparisonRefreshBlocker={comparisonRefreshBlocker}
         releaseAttestation={release}
         releaseAttestationAvailability={workspace.sourceReleaseAttestationAvailability}
         report={workspace.report}
@@ -20409,6 +20516,7 @@ function WorkspaceContent({
   createDecisionReport,
   cancelDecisionReport,
   requestReportPreview,
+  refreshWorkspace,
   requestAgentLearningProposal,
   openAgentLearningInbox,
 }: {
@@ -20514,6 +20622,7 @@ function WorkspaceContent({
   createDecisionReport: () => Promise<void>;
   cancelDecisionReport: (jobId: string) => Promise<void>;
   requestReportPreview: (reportVersionId: string) => Promise<void>;
+  refreshWorkspace: () => Promise<void>;
   requestAgentLearningProposal: (basePackageId: string, direction: string) => Promise<void>;
   openAgentLearningInbox: () => void;
 }) {
@@ -20742,6 +20851,7 @@ function WorkspaceContent({
       <AuditReportWorkspacePanel
         onCancelReport={cancelDecisionReport}
         onPrepareReport={createDecisionReport}
+        onRefreshWorkspace={refreshWorkspace}
         onRetryAudit={requestWebsiteAudit}
         workspace={workspace}
       />
@@ -20844,6 +20954,7 @@ function WorkspacePage({
   onCreateDecisionReport,
   onCancelDecisionReport,
   onRequestReportPreview,
+  onRefreshWorkspace,
   onRequestAgentLearningProposal,
   onOpenAgentLearningInbox,
   onVersionChange,
@@ -20954,6 +21065,7 @@ function WorkspacePage({
   onCreateDecisionReport: () => Promise<void>;
   onCancelDecisionReport: (jobId: string) => Promise<void>;
   onRequestReportPreview: (reportVersionId: string) => Promise<void>;
+  onRefreshWorkspace: () => Promise<void>;
   onRequestAgentLearningProposal: (basePackageId: string, direction: string) => Promise<void>;
   onOpenAgentLearningInbox: () => void;
   tab: WorkspaceTab;
@@ -21145,6 +21257,7 @@ function WorkspacePage({
           createDecisionReport={onCreateDecisionReport}
           cancelDecisionReport={onCancelDecisionReport}
           requestReportPreview={onRequestReportPreview}
+          refreshWorkspace={onRefreshWorkspace}
           updateAssetAnnotation={onUpdateAssetAnnotation}
           requestVisualContentExtraction={onRequestVisualContentExtraction}
           cancelVisualContentExtraction={onCancelVisualContentExtraction}
@@ -23044,6 +23157,9 @@ function WorkspaceApp({
             onCreateDecisionReport={createDecisionReport}
             onCancelDecisionReport={cancelDecisionReport}
             onRequestReportPreview={requestReportPreview}
+            onRefreshWorkspace={async () => {
+              await refreshData();
+            }}
             onRequestAgentLearningProposal={requestAgentPackageProposal}
             onOpenAgentLearningInbox={() => navigate({ page: 'agent-studio', section: 'learning' })}
             onUpdateAssetAnnotation={updateAssetAnnotation}
