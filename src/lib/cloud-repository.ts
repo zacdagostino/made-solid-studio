@@ -1054,6 +1054,10 @@ function auditSpecialistTaskFromRow(row: DatabaseRow): AuditSpecialistTask {
     completedItems: readNumber(row, 'completed_items'),
     cancelRequestedAt,
     errorSummary: readOptionalString(row, 'error_summary'),
+    errorCode: readOptionalString(row, 'error_code'),
+    retryable: typeof row.retryable === 'boolean' ? row.retryable : undefined,
+    recoveryAction: readOptionalString(row, 'recovery_action'),
+    attemptCount: readNumber(row, 'attempt_count'),
     createdAt: readString(row, 'created_at'),
     updatedAt: readString(row, 'updated_at'),
   };
@@ -2153,6 +2157,13 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     if (typeof data !== 'string') throw new Error('The website audit could not be queued.');
     const workspace = await this.getWorkspace(businessId);
     return workspace?.audit;
+  }
+
+  async retryAuditSpecialist(taskId: string) {
+    const { error } = await this.client.rpc('retry_audit_specialist_task', {
+      target_task_id: taskId,
+    });
+    throwIfError(error);
   }
 
   async cancelWebsiteAudit(businessId: string) {

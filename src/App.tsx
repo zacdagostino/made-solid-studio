@@ -19567,13 +19567,43 @@ function findingReviewTone(state: AuditFinding['reviewState']) {
   return 'warning' as const;
 }
 
-const auditSpecialistLabels: Record<AuditSpecialistTask['specialistKind'], string> = {
-  responsive_ui: 'Responsive UI',
-  accessibility: 'Accessibility',
-  performance_engineering: 'Performance engineering',
-  technical_seo: 'Technical SEO',
-  conversion_journey: 'Conversion journey',
-  platform_integrations: 'Platform and integrations',
+const auditSpecialistPresentation: Record<
+  AuditSpecialistTask['specialistKind'],
+  { label: string; purpose: string; scope: string }
+> = {
+  responsive_ui: {
+    label: 'Responsive UI and UX',
+    purpose: 'Checks the real customer experience on phone, tablet and desktop.',
+    scope:
+      'Navigation, clipped content, oversized branding, sticky overlays, tap targets and visual hierarchy',
+  },
+  accessibility: {
+    label: 'Accessibility',
+    purpose: 'Checks whether people can understand and operate the public pages.',
+    scope:
+      'Page structure, labels, keyboard access, focus, images and assistive-technology signals',
+  },
+  performance_engineering: {
+    label: 'Performance and engineering',
+    purpose: 'Checks measured delivery signals without guessing from the visual design.',
+    scope: 'Loading evidence, page movement, resource weight and public runtime behaviour',
+  },
+  technical_seo: {
+    label: 'Technical SEO and content',
+    purpose: 'Checks whether search engines and visitors can understand each page.',
+    scope: 'Titles, descriptions, headings, crawl signals, links and readable content structure',
+  },
+  conversion_journey: {
+    label: 'Conversion and trust',
+    purpose: 'Checks how clearly a ready customer can understand the offer and act.',
+    scope: 'Calls to action, contact routes, decision friction, proof and reassurance',
+  },
+  platform_integrations: {
+    label: 'Platform and integrations',
+    purpose: 'Records verified technology and dependency signals separately from design issues.',
+    scope:
+      'CMS, frameworks, third-party services, public dependencies and runtime ownership signals',
+  },
 };
 
 function FindingEditor({
@@ -19742,12 +19772,14 @@ function FindingEditor({
 function AuditPanel({
   workspace,
   onRequestAudit,
+  onRetrySpecialist,
   onCancelAudit,
   onApproveAllFindings,
   onUpdateFinding,
 }: {
   workspace: ProspectWorkspace;
   onRequestAudit: () => Promise<void>;
+  onRetrySpecialist: (taskId: string) => Promise<void>;
   onCancelAudit: () => Promise<void>;
   onApproveAllFindings: () => Promise<void>;
   onUpdateFinding: (
@@ -19758,6 +19790,7 @@ function AuditPanel({
   const [isRequesting, setIsRequesting] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [isApprovingAll, setIsApprovingAll] = useState(false);
+  const [retryingSpecialistId, setRetryingSpecialistId] = useState<string>();
   const [message, setMessage] = useState<{
     tone: 'success' | 'error';
     title: string;
@@ -19783,11 +19816,35 @@ function AuditPanel({
     (observation) => observation.auditId === audit?.id,
   );
   const visibleFindingCount = specialistObservations.length || findings.length;
-  const approvedCount = specialistObservations.length
-    ? specialistObservations.filter((observation) => observation.reviewState === 'approved').length
-    : findings.filter((finding) => finding.reviewState === 'approved').length;
   const pendingFindings = findings.filter((finding) => finding.reviewState === 'needs_review');
   const failedSpecialists = specialistTasks.filter((task) => task.status === 'failed');
+  const readySpecialistCount = specialistTasks.filter((task) => task.status === 'ready').length;
+  const activeSpecialistCount = specialistTasks.filter(
+    (task) => task.status === 'running' || task.status === 'research_pending',
+  ).length;
+
+  async function retrySpecialist(task: AuditSpecialistTask) {
+    if (retryingSpecialistId) return;
+    setRetryingSpecialistId(task.id);
+    setMessage(undefined);
+    try {
+      await onRetrySpecialist(task.id);
+      setMessage({
+        tone: 'success',
+        title: `${auditSpecialistPresentation[task.specialistKind].label} retry queued`,
+        detail:
+          'The five completed specialist results stay intact. Only this failed section will run again.',
+      });
+    } catch (error) {
+      setMessage({
+        tone: 'error',
+        title: 'Specialist retry could not start',
+        detail: error instanceof Error ? error.message : 'Try this specialist again.',
+      });
+    } finally {
+      setRetryingSpecialistId(undefined);
+    }
+  }
 
   async function requestAudit() {
     if (!confirmOpenAiApiUsage('Responsive UX vision analysis')) return;
@@ -19857,35 +19914,39 @@ function AuditPanel({
       <div className="audit-panel__header">
         <div>
           <Eyebrow>Website audit</Eyebrow>
-          <h2>Evidence-led audit</h2>
+          <h2>What customers experience on the current website</h2>
           <p className="muted-copy">
             {openAiApiFeaturesEnabled
-              ? 'Deterministic specialist checks run first. Responsive UX vision uses the separately billed OpenAI API only after you confirm the audit action.'
-              : 'OpenAI API workers are off. Six deterministic specialist checks analyse the latest saved capture without a model call.'}{' '}
-            Findings stay internal and need your judgment before they guide a redesign or a
-            client-facing report.
+              ? 'Six specialists inspect the same saved website evidence. Measured checks establish the facts; GPT-5.6 Sol then analyses the responsive screenshots for broader UI and UX problems.'
+              : 'Six measured specialist checks analyse the latest saved capture. Visual AI analysis is currently off.'}{' '}
+            Results stay private here. The report agent later chooses only supported,
+            client-relevant design comparisons.
           </p>
         </div>
         <div className="audit-panel__actions">
           <StatusBadge tone={auditStatusTone(displayedStatus)}>
             {auditStatusLabel(displayedStatus)}
           </StatusBadge>
-          <Button
-            disabled={!captureReady || isActive || isRequesting}
-            onClick={() => void requestAudit()}
-            type="button"
-          >
-            <ClipboardCheck aria-hidden="true" size={16} />
-            {isRequesting
-              ? 'Queueing audit'
-              : isActive
-                ? audit?.status === 'running'
-                  ? 'Audit running'
-                  : 'Audit queued'
-                : displayedStatus === 'ready'
-                  ? 'Generate audit again'
-                  : 'Generate audit'}
-          </Button>
+          {displayedStatus === 'failed' ? (
+            <p className="audit-panel__action-hint">Retry the failed specialist below.</p>
+          ) : (
+            <Button
+              disabled={!captureReady || isActive || isRequesting}
+              onClick={() => void requestAudit()}
+              type="button"
+            >
+              <ClipboardCheck aria-hidden="true" size={16} />
+              {isRequesting
+                ? 'Queueing audit'
+                : isActive
+                  ? audit?.status === 'running'
+                    ? 'Audit running'
+                    : 'Audit queued'
+                  : displayedStatus === 'ready'
+                    ? 'Run a fresh audit'
+                    : 'Generate audit'}
+            </Button>
+          )}
           {isActive ? (
             <Button
               disabled={isCancelling || Boolean(audit?.cancelRequestedAt)}
@@ -19932,9 +19993,11 @@ function AuditPanel({
           <div>
             <strong>The audit could not complete</strong>
             <p>
-              {audit?.errorSummary ||
-                audit?.progressDetail ||
-                'Confirm the saved capture is available, inspect the specialist errors below, then generate it again.'}
+              {failedSpecialists.length
+                ? `${failedSpecialists.map((task) => auditSpecialistPresentation[task.specialistKind].label).join(', ')} failed. ${readySpecialistCount} completed ${readySpecialistCount === 1 ? 'section is' : 'sections are'} intact. Retry only the failed section below.`
+                : audit?.errorSummary ||
+                  audit?.progressDetail ||
+                  'Inspect the specialist details below, then retry only the failed section.'}
             </p>
           </div>
         </div>
@@ -19962,16 +20025,16 @@ function AuditPanel({
         <>
           <dl className="audit-panel__metrics">
             <div>
-              <dt>Findings generated</dt>
+              <dt>Specialists complete</dt>
+              <dd>{readySpecialistCount} of 6</dd>
+            </div>
+            <div>
+              <dt>Supported findings</dt>
               <dd>{visibleFindingCount}</dd>
             </div>
             <div>
-              <dt>Approved findings</dt>
-              <dd>{approvedCount}</dd>
-            </div>
-            <div>
-              <dt>Source capture</dt>
-              <dd>{workspace.latestCapture?.capturedPageCount ?? 0} pages</dd>
+              <dt>Public pages analysed</dt>
+              <dd>{workspace.latestCapture?.capturedPageCount ?? 0}</dd>
             </div>
           </dl>
           {specialistTasks.length ? (
@@ -19982,30 +20045,86 @@ function AuditPanel({
                   <h3 id="audit-specialists-title">
                     {audit?.version ? `Audit version ${audit.version}` : 'Current specialist audit'}
                   </h3>
+                  <p>
+                    Open each section at a glance: what it checks, its live work, and the
+                    evidence-backed result.
+                  </p>
                 </div>
                 <span>
-                  {specialistTasks.filter((task) => task.status === 'ready').length} of{' '}
-                  {specialistTasks.length} complete
+                  {readySpecialistCount} complete
+                  {activeSpecialistCount ? ` · ${activeSpecialistCount} working` : ''}
+                  {failedSpecialists.length ? ` · ${failedSpecialists.length} failed` : ''}
                 </span>
               </div>
               <ul className="audit-specialists__list">
-                {specialistTasks.map((task) => (
-                  <li key={task.id}>
-                    <div>
-                      <strong>{auditSpecialistLabels[task.specialistKind]}</strong>
-                      <p>
-                        {task.errorSummary ||
-                          task.progressDetail ||
-                          (task.status === 'research_pending'
-                            ? 'Waiting for a protected specialist worker.'
-                            : 'No worker detail has been saved yet.')}
+                {specialistTasks.map((task) => {
+                  const presentation = auditSpecialistPresentation[task.specialistKind];
+                  const isTaskActive =
+                    task.status === 'running' || task.status === 'research_pending';
+                  const resultDetail =
+                    task.status === 'ready' && task.totalItems === 0
+                      ? 'Completed — no evidence-backed issue was found in this section.'
+                      : (isTaskActive
+                          ? task.progressDetail || task.errorSummary
+                          : task.errorSummary || task.progressDetail) ||
+                        (isTaskActive
+                          ? 'Waiting for the protected specialist worker.'
+                          : 'No worker detail has been saved yet.');
+                  return (
+                    <li data-status={task.status} key={task.id}>
+                      <div className="audit-specialists__task-heading">
+                        <div>
+                          <strong>{presentation.label}</strong>
+                          <p>{presentation.purpose}</p>
+                        </div>
+                        <StatusBadge tone={auditStatusTone(task.status)}>
+                          {auditStatusLabel(task.status).replace('Audit ', '')}
+                        </StatusBadge>
+                      </div>
+                      <p className="audit-specialists__scope">
+                        <span>Includes</span> {presentation.scope}
                       </p>
-                    </div>
-                    <StatusBadge tone={auditStatusTone(task.status)}>
-                      {auditStatusLabel(task.status).replace('Audit ', '')}
-                    </StatusBadge>
-                  </li>
-                ))}
+                      {isTaskActive ? (
+                        <IndeterminateProgress
+                          detail={
+                            task.totalItems > 0
+                              ? `${task.completedItems} of ${task.totalItems} saved · ${resultDetail}`
+                              : resultDetail
+                          }
+                          label={`${presentation.label} progress`}
+                        />
+                      ) : (
+                        <p className="audit-specialists__result">{resultDetail}</p>
+                      )}
+                      {task.status === 'failed' ? (
+                        <div className="audit-specialists__recovery">
+                          <p>
+                            <strong>What to do:</strong>{' '}
+                            {task.recoveryAction ||
+                              'Retry this section. The completed specialist results will be retained.'}
+                          </p>
+                          {task.errorCode ? <small>Error reference: {task.errorCode}</small> : null}
+                          <Button
+                            disabled={Boolean(retryingSpecialistId)}
+                            onClick={() => void retrySpecialist(task)}
+                            size="small"
+                            type="button"
+                            variant="secondary"
+                          >
+                            {retryingSpecialistId === task.id ? (
+                              <LoaderCircle aria-hidden="true" className="spinner" size={16} />
+                            ) : (
+                              <RotateCcw aria-hidden="true" size={16} />
+                            )}
+                            {retryingSpecialistId === task.id
+                              ? 'Queueing retry…'
+                              : `Retry ${presentation.label} only`}
+                          </Button>
+                        </div>
+                      ) : null}
+                    </li>
+                  );
+                })}
               </ul>
               {failedSpecialists.length ? (
                 <div className="audit-specialists__error" role="alert">
@@ -20013,7 +20132,8 @@ function AuditPanel({
                   <p>
                     {failedSpecialists.length} specialist{' '}
                     {failedSpecialists.length === 1 ? 'section failed' : 'sections failed'}. Review
-                    the details above before generating the audit again.
+                    the details above and retry only the failed section. Completed results will not
+                    run again.
                   </p>
                 </div>
               ) : null}
@@ -20027,7 +20147,8 @@ function AuditPanel({
                 <p>
                   {specialistObservations.length}{' '}
                   {specialistObservations.length === 1 ? 'observation is' : 'observations are'}{' '}
-                  ready for evidence and wording review.
+                  supported by current evidence. The report agent can now choose the strongest
+                  client-facing design story automatically.
                 </p>
               </div>
               <ButtonLink href={`#/prospects/${workspace.business.id}/report`} variant="primary">
@@ -20249,6 +20370,7 @@ function WorkspaceContent({
   continueResearchCapture,
   cancelResearchCapture,
   requestWebsiteAudit,
+  retryAuditSpecialist,
   cancelWebsiteAudit,
   requestAssetAnalysis,
   requestBrandColourRefresh,
@@ -20299,6 +20421,7 @@ function WorkspaceContent({
   continueResearchCapture: () => Promise<void>;
   cancelResearchCapture: () => Promise<void>;
   requestWebsiteAudit: () => Promise<void>;
+  retryAuditSpecialist: (taskId: string) => Promise<void>;
   cancelWebsiteAudit: () => Promise<void>;
   requestAssetAnalysis: () => Promise<void>;
   requestBrandColourRefresh: () => Promise<void>;
@@ -20562,6 +20685,7 @@ function WorkspaceContent({
           onCancelAudit={cancelWebsiteAudit}
           onApproveAllFindings={approveAllAuditFindings}
           onRequestAudit={requestWebsiteAudit}
+          onRetrySpecialist={retryAuditSpecialist}
           onUpdateFinding={updateAuditFinding}
           workspace={workspace}
         />
@@ -20681,6 +20805,7 @@ function WorkspacePage({
   onContinueResearchCapture,
   onCancelResearchCapture,
   onRequestWebsiteAudit,
+  onRetryAuditSpecialist,
   onCancelWebsiteAudit,
   onRequestAssetAnalysis,
   onRequestBrandColourRefresh,
@@ -20736,6 +20861,7 @@ function WorkspacePage({
   onContinueResearchCapture: () => Promise<void>;
   onCancelResearchCapture: () => Promise<void>;
   onRequestWebsiteAudit: () => Promise<void>;
+  onRetryAuditSpecialist: (taskId: string) => Promise<void>;
   onCancelWebsiteAudit: () => Promise<void>;
   onRequestAssetAnalysis: () => Promise<void>;
   onRequestBrandColourRefresh: () => Promise<void>;
@@ -21011,6 +21137,7 @@ function WorkspacePage({
           requestResearchCapture={onRequestResearchCapture}
           requestAssetRefresh={onRequestAssetRefresh}
           requestWebsiteAudit={onRequestWebsiteAudit}
+          retryAuditSpecialist={onRetryAuditSpecialist}
           cancelWebsiteAudit={onCancelWebsiteAudit}
           tab={tab}
           toggleTask={onToggleTask}
@@ -21799,6 +21926,18 @@ function WorkspaceApp({
         audit.progressDetail ||
         'Six specialist workers will analyse the latest completed capture and save reviewable findings.',
       tone: audit.status === 'ready' ? 'success' : 'warning',
+    });
+  }
+
+  async function retryAuditSpecialist(taskId: string) {
+    await repository.retryAuditSpecialist(taskId);
+    await refreshData();
+    setNotice({
+      id: crypto.randomUUID(),
+      title: 'Specialist retry queued',
+      detail:
+        'Only the failed specialist section will run again. Completed audit evidence is retained.',
+      tone: 'warning',
     });
   }
 
@@ -22881,6 +23020,7 @@ function WorkspaceApp({
             onRequestResearchCapture={requestResearchCapture}
             onRequestAssetRefresh={requestAssetRefresh}
             onRequestWebsiteAudit={requestWebsiteAudit}
+            onRetryAuditSpecialist={retryAuditSpecialist}
             onCancelWebsiteAudit={cancelWebsiteAudit}
             onToggleTask={toggleTask}
             onTabChange={(tab) =>

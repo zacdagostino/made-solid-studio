@@ -15982,12 +15982,21 @@ a:focus-visible {
 }
 .audit-panel__header h2 {
   margin-bottom: var(--space-2);
+  max-inline-size: 28ch;
 }
 .audit-panel__actions {
   display: grid;
   flex: none;
   justify-items: end;
   gap: var(--space-2);
+}
+.audit-panel__action-hint {
+  max-inline-size: 24ch;
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  text-align: end;
 }
 .audit-panel__metrics {
   display: grid;
@@ -16061,6 +16070,13 @@ a:focus-visible {
 .audit-report-ready h3 {
   margin-bottom: 0;
 }
+.audit-specialists__heading p {
+  max-inline-size: 62ch;
+  margin: var(--space-1) 0 0;
+  color: var(--color-muted);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
 .audit-specialists__heading > span {
   color: var(--color-muted);
   font-size: 0.82rem;
@@ -16075,28 +16091,81 @@ a:focus-visible {
   list-style: none;
 }
 .audit-specialists__list li {
-  display: flex;
+  display: grid;
   min-width: 0;
-  align-items: start;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding: var(--space-3);
+  align-content: start;
+  gap: var(--space-3);
+  padding: var(--space-4);
   border: 1px solid var(--color-line);
   border-radius: var(--radius);
   background: var(--color-subtle);
 }
+.audit-specialists__list li[data-status='running'],
+.audit-specialists__list li[data-status='research_pending'] {
+  border-color: color-mix(in srgb, var(--color-warning) 48%, var(--color-line));
+  background: color-mix(in srgb, var(--color-warning) 6%, var(--color-panel));
+}
+.audit-specialists__list li[data-status='failed'] {
+  border-color: color-mix(in srgb, var(--color-danger) 48%, var(--color-line));
+  background: color-mix(in srgb, var(--color-danger) 6%, var(--color-panel));
+}
 .audit-specialists__list li > div {
+  min-width: 0;
+}
+.audit-specialists__task-heading {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.audit-specialists__task-heading > div {
   min-width: 0;
 }
 .audit-specialists__list strong,
 .audit-specialists__list p {
   overflow-wrap: anywhere;
 }
-.audit-specialists__list p {
+.audit-specialists__task-heading p,
+.audit-specialists__scope,
+.audit-specialists__result {
   margin: var(--space-1) 0 0;
-  color: var(--color-ink);
+  color: var(--color-muted);
   font-size: 0.84rem;
   line-height: 1.45;
+}
+.audit-specialists__scope {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-line);
+}
+.audit-specialists__scope span {
+  color: var(--color-ink);
+  font-weight: 800;
+}
+.audit-specialists__result {
+  margin: 0;
+  color: var(--color-ink);
+}
+.audit-specialists__list .indeterminate-progress {
+  max-inline-size: none;
+}
+.audit-specialists__recovery {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid color-mix(in srgb, var(--color-danger) 32%, var(--color-line));
+}
+.audit-specialists__recovery p,
+.audit-specialists__recovery small {
+  margin: 0;
+  color: var(--color-danger-message);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.audit-specialists__recovery small {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
 }
 .audit-specialists__list .status-badge--danger {
   color: var(--color-danger-message);
@@ -18261,6 +18330,9 @@ a:focus-visible {
   .audit-panel__actions {
     justify-items: start;
   }
+  .audit-panel__action-hint {
+    text-align: start;
+  }
   .brief-panel__actions {
     justify-items: start;
   }
@@ -18283,6 +18355,15 @@ a:focus-visible {
   .audit-report-ready {
     display: grid;
     align-items: start;
+  }
+  .audit-specialists__task-heading {
+    display: grid;
+  }
+  .audit-specialists__task-heading .status-badge {
+    justify-self: start;
+  }
+  .audit-specialists__recovery .button {
+    width: 100%;
   }
   .packet-header {
     display: grid;

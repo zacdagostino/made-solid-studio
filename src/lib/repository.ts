@@ -80,6 +80,7 @@ export type WorkspaceRepository = {
   continueResearchCapture(businessId: string): Promise<ResearchCapture | undefined>;
   cancelResearchCapture(businessId: string): Promise<void>;
   requestWebsiteAudit(businessId: string): Promise<Audit | undefined>;
+  retryAuditSpecialist(taskId: string): Promise<void>;
   cancelWebsiteAudit(businessId: string): Promise<void>;
   updateAuditFinding(
     finding: AuditFinding,
@@ -4852,6 +4853,39 @@ export class SiteforgeRepository {
           }),
         ),
     );
+  }
+
+  async retryAuditSpecialist(taskId: string) {
+    const task = await this.get<AuditSpecialistTask>('auditSpecialistTasks', taskId);
+    if (!task || task.status !== 'failed') {
+      throw new Error('Only a failed specialist section can be retried.');
+    }
+    const now = new Date().toISOString();
+    await this.put('auditSpecialistTasks', {
+      ...task,
+      status: 'research_pending',
+      progressPhase: 'retry_queued',
+      progressDetail: 'Retry requested. Only this specialist section will run again.',
+      totalItems: 0,
+      completedItems: 0,
+      errorSummary: undefined,
+      errorCode: undefined,
+      retryable: undefined,
+      recoveryAction: undefined,
+      attemptCount: 0,
+      updatedAt: now,
+    });
+    const audit = await this.get<Audit>('audits', task.auditId);
+    if (audit) {
+      await this.put('audits', {
+        ...audit,
+        status: 'running',
+        progressPhase: 'specialist_analysis',
+        progressDetail: `Retrying ${task.specialistKind.replaceAll('_', ' ')}. Completed specialist results are retained.`,
+        errorSummary: undefined,
+        updatedAt: now,
+      });
+    }
   }
 
   async updateAuditFinding(

@@ -215,6 +215,11 @@ async function failResponsiveSpecialist(page) {
             progressPhase: 'failed',
             progressDetail: 'Browser verification stopped on the contact page.',
             errorSummary: 'The mobile browser timed out while loading /contact.',
+            errorCode: 'source_timeout',
+            retryable: true,
+            recoveryAction:
+              'Retry this section. The completed specialist results will be retained.',
+            attemptCount: 3,
             totalItems: 3,
             completedItems: 1,
             createdAt: '2099-08-18T12:00:00.000Z',
@@ -297,14 +302,19 @@ async function seedVerifiedEditedWebsite(page) {
 
 test('shows specialist completion and durable worker errors on the Audit screen', async ({
   page,
-}) => {
+}, testInfo) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await seedReviewedAudit(page);
   await page.goto('/#/prospects/business-demo-local-services/audit');
 
+  await expect(
+    page.getByRole('heading', { name: 'What customers experience on the current website' }),
+  ).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Audit version 4' })).toBeVisible();
-  await expect(page.getByText('6 of 6 complete')).toBeVisible();
-  await expect(page.getByText('2 observations are ready')).toBeVisible();
+  await expect(page.getByText('6 complete', { exact: true })).toBeVisible();
+  await expect(page.getByText('Responsive UI and UX')).toBeVisible();
+  await expect(page.getByText(/sticky overlays, tap targets and visual hierarchy/i)).toBeVisible();
+  await expect(page.getByText('Evidence saved for review.')).toHaveCount(6);
   const reportLink = page.getByRole('link', { name: 'Open automated report' });
   await expect(reportLink).toHaveAttribute(
     'href',
@@ -323,17 +333,30 @@ test('shows specialist completion and durable worker errors on the Audit screen'
   await page.reload();
 
   await expect(page.getByRole('alert').first()).toContainText(
-    'One of six specialist sections failed. Saved evidence remains private.',
+    'Responsive UI and UX failed. 5 completed sections are intact.',
   );
   await expect(
     page.getByText('The mobile browser timed out while loading /contact.'),
   ).toBeVisible();
   await expect(page.getByText('1 specialist section failed')).toBeVisible();
+  await expect(page.getByText('Error reference: source_timeout')).toBeVisible();
+  const retryResponsive = page.getByRole('button', { name: 'Retry Responsive UI and UX only' });
+  await expect(retryResponsive).toBeVisible();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await expect(page).toHaveScreenshot('audit-specialist-error.png', {
     fullPage: true,
     animations: 'disabled',
   });
+  await retryResponsive.click();
+  await expect(page.getByText('Responsive UI and UX retry queued')).toBeVisible();
+  await expect(page.getByText(/only this failed section will run again/i)).toBeVisible();
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      320,
+    );
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  }
 });
 
 test('automatically selects supported report evidence and shows the single remaining prerequisite', async ({

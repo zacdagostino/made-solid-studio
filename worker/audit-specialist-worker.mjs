@@ -32,18 +32,77 @@ function requiredEnvironment(name) {
   return value;
 }
 
-function safeErrorSummary(error) {
+export function classifySpecialistFailure(error) {
   const message = error instanceof Error ? error.message : '';
-  if (/robots|blocked network|public HTTP|public HTTPS/i.test(message)) return message;
+  if (error instanceof SpecialistCancelledError) {
+    return {
+      code: 'cancelled',
+      retryable: false,
+      summary: 'Specialist audit cancelled by a workspace user.',
+      recoveryAction: 'Start a new audit when you are ready to continue.',
+    };
+  }
+  if (/robots|blocked network|public HTTP|public HTTPS/i.test(message)) {
+    return {
+      code: 'source_access_blocked',
+      retryable: false,
+      summary: message,
+      recoveryAction:
+        'Check the public website address and capture permissions, then run a new capture.',
+    };
+  }
   if (/UX vision is not configured/i.test(message)) {
-    return 'Visual UX analysis is not configured on the protected worker. Add the server-only vision API key and retry the audit.';
+    return {
+      code: 'vision_not_configured',
+      retryable: false,
+      summary:
+        'Visual UX analysis is not configured on the protected worker. Add the server-only vision API key and retry this specialist.',
+      recoveryAction: 'Configure the protected vision worker, then retry this specialist section.',
+    };
   }
   if (/UX vision request failed|UX vision returned/i.test(message)) {
-    return 'Visual UX analysis could not complete. The saved screenshots remain private; retry the audit after checking the model connection.';
+    return {
+      code: 'vision_service_unavailable',
+      retryable: true,
+      summary:
+        'Visual UX analysis could not complete. The saved screenshots remain private while Studio retries the model connection.',
+      recoveryAction:
+        'Studio retries this automatically. If it repeats, retry only this specialist section.',
+    };
   }
-  if (/timeout|timed out/i.test(message))
-    return 'A selected public page did not become ready in time.';
-  return 'The protected specialist worker could not complete this audit section.';
+  if (/timeout|timed out/i.test(message)) {
+    return {
+      code: 'source_timeout',
+      retryable: true,
+      summary: 'A selected public page did not become ready in time.',
+      recoveryAction:
+        'Studio retries this automatically. If it repeats, retry only this specialist section.',
+    };
+  }
+  if (/lease was lost/i.test(message)) {
+    return {
+      code: 'worker_lease_lost',
+      retryable: true,
+      summary: 'The specialist worker lost its processing lease before it could save the result.',
+      recoveryAction: 'Studio will reclaim the task automatically.',
+    };
+  }
+  if (/could not (save|load|download|confirm)|failed to fetch|network/i.test(message)) {
+    return {
+      code: 'worker_io_interrupted',
+      retryable: true,
+      summary: 'The specialist worker was interrupted while reading or saving protected evidence.',
+      recoveryAction:
+        'Studio retries this automatically. If it repeats, retry only this specialist section.',
+    };
+  }
+  return {
+    code: 'unexpected_worker_error',
+    retryable: true,
+    summary: 'The protected specialist worker stopped unexpectedly before completing this section.',
+    recoveryAction:
+      'Studio retries this automatically up to two times. If it repeats, retry only this specialist section.',
+  };
 }
 
 function sourceUrl(artifact) {
@@ -1201,6 +1260,9 @@ async function completeTask(client, task, workerId, findingCount) {
       total_items: findingCount,
       completed_items: findingCount,
       error_summary: null,
+      error_code: null,
+      retryable: null,
+      recovery_action: null,
     })
     .eq('id', task.id)
     .eq('worker_id', workerId)
@@ -1210,18 +1272,28 @@ async function completeTask(client, task, workerId, findingCount) {
 }
 
 async function failTask(client, task, workerId, error) {
-  await client
+  const failure = classifySpecialistFailure(error);
+  const retryAutomatically = failure.retryable && task.attempt_count < 3;
+  const nextAttempt = task.attempt_count + 1;
+  const { error: saveError } = await client
     .from('audit_specialist_tasks')
     .update({
-      status: 'failed',
+      status: retryAutomatically ? 'queued' : 'failed',
       worker_id: null,
       lease_expires_at: null,
-      progress_phase: 'failed',
-      progress_detail: safeErrorSummary(error),
-      error_summary: safeErrorSummary(error),
+      progress_phase: retryAutomatically ? 'retry_queued' : 'failed',
+      progress_detail: retryAutomatically
+        ? `${failure.summary} Automatic retry ${nextAttempt} of 3 is queued.`
+        : failure.summary,
+      error_summary: failure.summary,
+      error_code: failure.code,
+      retryable: failure.retryable,
+      recovery_action: failure.recoveryAction,
     })
     .eq('id', task.id)
     .eq('worker_id', workerId);
+  if (saveError) throw new Error('The specialist worker could not save its failure state.');
+  return { ...failure, retryAutomatically };
 }
 
 async function cancelTask(client, task, workerId) {
@@ -1234,6 +1306,9 @@ async function cancelTask(client, task, workerId) {
       progress_phase: 'cancelled',
       progress_detail: 'Specialist audit cancelled. Saved observations remain private.',
       error_summary: 'Specialist audit cancelled by a workspace user.',
+      error_code: 'cancelled',
+      retryable: false,
+      recovery_action: 'Start a new audit when you are ready to continue.',
     })
     .eq('id', task.id)
     .eq('worker_id', workerId);
@@ -1293,8 +1368,10 @@ export async function processNextAuditSpecialist(client, workerId) {
       console.log(`[audit-specialist-worker] cancelled ${task.specialist_kind} ${task.id}`);
       return true;
     }
-    await failTask(client, task, workerId, error);
-    console.error(`[audit-specialist-worker] failed ${task.specialist_kind} ${task.id}`);
+    const failure = await failTask(client, task, workerId, error);
+    console.error(
+      `[audit-specialist-worker] ${failure.retryAutomatically ? 'retrying' : 'failed'} ${task.specialist_kind} ${task.id} code=${failure.code} attempt=${task.attempt_count}`,
+    );
   }
   return true;
 }

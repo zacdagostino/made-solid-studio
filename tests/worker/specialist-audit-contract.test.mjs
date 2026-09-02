@@ -13,6 +13,10 @@ const curationMigrationUrl = new URL(
   '../../supabase/migrations/20260819143000_ux_first_report_curation.sql',
   import.meta.url,
 );
+const recoveryMigrationUrl = new URL(
+  '../../supabase/migrations/20260902210000_audit_specialist_failure_recovery.sql',
+  import.meta.url,
+);
 
 test('specialist audit migration requires a complete current evidence set before report freeze', async () => {
   const source = await readFile(migrationUrl, 'utf8');
@@ -60,6 +64,34 @@ test('responsive specialist uses dedicated current-task screenshots and safe vie
   assert.match(uxVision, /const visionReasoningEffort = 'max'/);
   assert.match(uxVision, /detail: 'original'/);
   assert.doesNotMatch(uxVision, /gpt-5\.4/);
+});
+
+test('specialist failures retain a safe category and retry transient work without rerunning the audit', async () => {
+  const [{ classifySpecialistFailure }, recoveryMigration] = await Promise.all([
+    import(workerUrl),
+    readFile(recoveryMigrationUrl, 'utf8'),
+  ]);
+
+  assert.deepEqual(classifySpecialistFailure(new Error('request timed out')), {
+    code: 'source_timeout',
+    retryable: true,
+    summary: 'A selected public page did not become ready in time.',
+    recoveryAction:
+      'Studio retries this automatically. If it repeats, retry only this specialist section.',
+  });
+  assert.equal(
+    classifySpecialistFailure(new Error('unexpected provider condition')).code,
+    'unexpected_worker_error',
+  );
+  const workerSource = await readFile(workerUrl, 'utf8');
+  assert.match(workerSource, /failure\.retryable && task\.attempt_count < 3/);
+  assert.match(workerSource, /status: retryAutomatically \? 'queued' : 'failed'/);
+  assert.match(workerSource, /error_code: failure\.code/);
+  assert.match(recoveryMigration, /retry_audit_specialist_task\(target_task_id uuid\)/i);
+  assert.match(recoveryMigration, /Only this specialist section will run again/i);
+  assert.match(recoveryMigration, /delete from public\.audit_observations/i);
+  assert.match(recoveryMigration, /latest_audit_id is distinct from target_task\.audit_id/i);
+  assert.match(recoveryMigration, /grant execute.*retry_audit_specialist_task.*authenticated/is);
 });
 
 test('client report curation groups raw cases and caps the main UX story', async () => {

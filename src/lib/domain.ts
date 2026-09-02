@@ -962,6 +962,10 @@ export type AuditSpecialistTask = {
   completedItems: number;
   cancelRequestedAt?: string;
   errorSummary?: string;
+  errorCode?: string;
+  retryable?: boolean;
+  recoveryAction?: string;
+  attemptCount?: number;
   createdAt: string;
   updatedAt: string;
 };
