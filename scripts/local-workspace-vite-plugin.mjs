@@ -24,6 +24,12 @@ import {
 } from './workspace-preview-access.mjs';
 import { assertPublicUrl } from '../worker/security.mjs';
 import { CodexPushNotifications } from './codex-push-notifications.mjs';
+import { CodexChatPreferencesStore } from './codex-chat-preferences.mjs';
+import {
+  checkForCodexUpdate,
+  publicCodexUpdateStatus,
+  updatePaths,
+} from './codex-runtime-updates.mjs';
 import { studioDevelopmentOrigins } from './studio-development-origins.mjs';
 import {
   meaningfulGitStatus,
@@ -44,6 +50,8 @@ const codexFeedbackEndpoint = '/__made-solid/codex-feedback';
 const codexBranchEndpoint = '/__made-solid/codex-branch';
 const codexStatusEndpoint = '/__made-solid/codex-status';
 const codexNotificationsEndpoint = '/__made-solid/codex-notifications';
+const codexUpdatesEndpoint = '/__made-solid/codex-updates';
+const codexPreferencesEndpoint = '/__made-solid/codex-preferences';
 const aiBillingModeEndpoint = '/__made-solid/ai-billing-mode';
 const codexSpeechEndpoint = '/__made-solid/codex-speech';
 const codexAttachmentPrefix = '/__made-solid/codex-attachment/';
@@ -1065,6 +1073,11 @@ async function launchCommittedPreview({ directory, commit, request, writeEvent, 
 
 export function localWorkspacePlugin() {
   const runtimeDataDirectory = process.env.SITEFORGE_RUNTIME_DATA_DIR?.trim();
+  const codexChatPreferences = new CodexChatPreferencesStore({
+    storagePath: runtimeDataDirectory
+      ? resolve(runtimeDataDirectory, 'codex-chat-preferences.json')
+      : resolve('.made-solid', 'codex-chat-preferences.json'),
+  });
   const codexPushNotifications = new CodexPushNotifications({
     storagePath: runtimeDataDirectory
       ? resolve(runtimeDataDirectory, 'codex-push-notifications.json')
@@ -1334,6 +1347,105 @@ export function localWorkspacePlugin() {
               error instanceof Error
                 ? error.message
                 : 'Phone notification settings could not be updated.',
+          });
+        }
+        return;
+      }
+      if (requestUrl.pathname === codexUpdatesEndpoint) {
+        if (request.method !== 'GET' && request.method !== 'POST') {
+          response.statusCode = 405;
+          response.end('Method not allowed');
+          return;
+        }
+        const fetchSite = String(request.headers['sec-fetch-site'] || '').toLowerCase();
+        if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
+          sendJson(response, 403, {
+            status: 'failed',
+            detail: 'Codex update status is only available from Made Solid Studio.',
+          });
+          return;
+        }
+        let updateAction;
+        if (request.method === 'POST') {
+          try {
+            updateAction = JSON.parse(await readRequestBody(request, 4 * 1024))?.action;
+          } catch {
+            sendJson(response, 400, {
+              status: 'failed',
+              detail: 'Choose a valid update action.',
+            });
+            return;
+          }
+          if (updateAction !== 'check') {
+            sendJson(response, 400, {
+              status: 'failed',
+              detail: 'Choose a valid update action.',
+            });
+            return;
+          }
+        }
+        try {
+          if (request.method === 'POST') {
+            const current = await publicCodexUpdateStatus(process.env);
+            if (
+              [
+                'checking',
+                'downloading',
+                'restart_pending',
+                'restarting',
+                'waiting_for_idle',
+              ].includes(current.status)
+            ) {
+              sendJson(response, 409, {
+                ...current,
+                detail: 'A Codex update check or activation is already in progress.',
+              });
+              return;
+            }
+            await checkForCodexUpdate({ environment: process.env });
+          }
+          sendJson(response, 200, await publicCodexUpdateStatus(process.env));
+        } catch (error) {
+          sendJson(response, 503, {
+            status: 'unavailable',
+            detail: error instanceof Error ? error.message : 'Codex update status is unavailable.',
+          });
+        }
+        return;
+      }
+      if (requestUrl.pathname === codexPreferencesEndpoint) {
+        const fetchSite = String(request.headers['sec-fetch-site'] || '').toLowerCase();
+        if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
+          sendJson(response, 403, {
+            status: 'failed',
+            detail: 'Codex preferences are only available from Made Solid Studio.',
+          });
+          return;
+        }
+        const userId = runtimeAuthorization?.userId || 'local-owner';
+        try {
+          if (request.method === 'GET') {
+            sendJson(response, 200, {
+              status: 'ready',
+              preferences: await codexChatPreferences.read(userId),
+            });
+            return;
+          }
+          if (request.method !== 'PUT') {
+            response.statusCode = 405;
+            response.end('Method not allowed');
+            return;
+          }
+          const input = JSON.parse(await readRequestBody(request, 16 * 1024));
+          sendJson(response, 200, {
+            status: 'saved',
+            preferences: await codexChatPreferences.write(userId, input.preferences),
+          });
+        } catch (error) {
+          sendJson(response, 400, {
+            status: 'failed',
+            detail:
+              error instanceof Error ? error.message : 'Codex chat preferences could not be saved.',
           });
         }
         return;
@@ -1635,6 +1747,24 @@ export function localWorkspacePlugin() {
             sendJson(response, 403, {
               status: 'forbidden',
               detail: 'This Codex editor is not authorized for the requested client workspace.',
+            });
+            return;
+          }
+          const startsCodexWork =
+            requestUrl.pathname === codexBranchEndpoint ||
+            [
+              undefined,
+              'enqueue',
+              'temporary-question',
+              'new-thread',
+              'branch-thread',
+              'continue-interrupted-thread',
+            ].includes(input.action);
+          if (startsCodexWork && existsSync(updatePaths(process.env).restartRequest)) {
+            sendJson(response, 409, {
+              status: 'updating',
+              detail:
+                'Codex is activating a verified update. Your message was not sent; try again after the Workspace Agent reconnects.',
             });
             return;
           }

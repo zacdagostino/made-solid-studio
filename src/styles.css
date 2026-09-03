@@ -12110,6 +12110,48 @@ a:focus-visible {
   color: var(--color-muted);
   background: var(--color-panel);
 }
+.client-development-editor__loading-bar {
+  position: absolute;
+  z-index: 4;
+  top: var(--space-2);
+  left: 50%;
+  display: grid;
+  width: min(24rem, calc(100% - var(--space-4)));
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius);
+  color: var(--color-ink);
+  background: color-mix(in srgb, var(--color-panel) 94%, transparent);
+  box-shadow: var(--elevation-floating);
+  transform: translateX(-50%);
+}
+.client-development-editor__loading-bar > span {
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-line);
+}
+.client-development-editor__loading-bar > span > span {
+  display: block;
+  width: 42%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-brand);
+  animation: client-preview-loading 1s ease-in-out infinite;
+}
+.client-development-editor__loading-bar small {
+  color: var(--color-muted);
+  font-weight: 700;
+}
+@keyframes client-preview-loading {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
 .client-development-editor__error {
   align-items: flex-start;
   color: var(--color-ink);
@@ -12138,6 +12180,7 @@ a:focus-visible {
   min-width: 0;
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
+  padding: 0;
   color: var(--color-ink);
   background: var(--color-canvas);
 }
@@ -12209,6 +12252,19 @@ a:focus-visible {
 }
 .focused-website-editor.is-full-preview .focused-website-editor__workspace {
   grid-template-columns: minmax(0, 1fr);
+}
+.focused-website-editor.is-full-preview {
+  grid-template-rows: minmax(0, 1fr);
+  background: #fff;
+}
+.focused-website-editor.is-full-preview .focused-website-editor__toolbar {
+  display: none;
+}
+.focused-website-editor__full-preview-exit {
+  position: fixed;
+  z-index: 50;
+  top: max(var(--space-3), env(safe-area-inset-top));
+  right: max(var(--space-3), env(safe-area-inset-right));
 }
 .focused-website-editor.is-full-preview .focused-website-editor__codex {
   display: none;
@@ -13563,6 +13619,117 @@ a:focus-visible {
 }
 .settings-notifications__actions .button {
   white-space: nowrap;
+}
+.settings-codex-updates {
+  align-items: flex-start;
+}
+.settings-codex-updates__body,
+.settings-codex-updates__releases,
+.settings-codex-updates__releases section,
+.settings-codex-updates__releases section > div {
+  display: grid;
+  gap: var(--space-2);
+}
+.settings-codex-updates__body {
+  width: 100%;
+  max-width: 76ch;
+  gap: var(--space-3);
+}
+.settings-codex-updates__summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.settings-codex-updates__summary > div {
+  min-width: 0;
+}
+.settings-codex-updates__releases {
+  gap: var(--space-3);
+}
+.settings-codex-updates__checker {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius);
+  background: var(--color-subtle);
+}
+.settings-codex-updates__checker dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+  margin: 0;
+  gap: var(--space-3);
+}
+.settings-codex-updates__checker dl > div {
+  min-width: 0;
+}
+.settings-codex-updates__checker dt {
+  color: var(--color-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.settings-codex-updates__checker dd {
+  margin: var(--space-1) 0 0;
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+.settings-codex-updates__checker .button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.settings-codex-updates__releases h3,
+.settings-codex-updates__releases h4,
+.settings-codex-updates__releases ul {
+  margin: 0;
+}
+.settings-codex-updates__releases h3 {
+  font-size: 1rem;
+}
+.settings-codex-updates__releases h4 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: 0.94rem;
+}
+.settings-codex-updates__releases h4 small,
+.settings-codex-updates__releases strong {
+  color: var(--color-muted);
+  font-size: 0.78rem;
+}
+.settings-codex-updates__releases ul {
+  display: grid;
+  gap: var(--space-1);
+  padding-inline-start: var(--space-4);
+  color: var(--color-muted);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+.settings-codex-updates__releases li {
+  overflow-wrap: anywhere;
+}
+.settings-codex-updates__releases .button {
+  justify-self: start;
+}
+@media (max-width: 700px) {
+  .settings-codex-updates__checker {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .settings-codex-updates__checker dl {
+    grid-template-columns: 1fr;
+    gap: var(--space-2);
+  }
+  .settings-codex-updates__checker .button {
+    width: 100%;
+  }
 }
 .data-management {
   display: grid;
@@ -18893,6 +19060,10 @@ a:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .client-development-editor__loading-bar > span > span {
+    width: 100%;
+    animation: none;
+  }
   .asset-analysis-live .spin,
   .brand-kit__conversion .spin,
   .brand-kit__conversion-arrow,

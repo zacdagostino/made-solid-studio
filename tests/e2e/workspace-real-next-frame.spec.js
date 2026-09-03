@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { spawn } from 'node:child_process';
 import { execFileSync } from 'node:child_process';
 import { once } from 'node:events';
-import { cp, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { join, relative } from 'node:path';
@@ -84,14 +84,24 @@ test('executes and hot-reloads a real Next client inside the opaque Workspace fr
   });
   await symlink(join(templateRoot, 'node_modules'), join(appRoot, 'node_modules'));
   const pagePath = join(appRoot, 'src/app/page.tsx');
-  const pageSource = (heading) => `import { RuntimeProof } from './runtime-proof';
+  const pageSource = (heading) => `import Link from 'next/link';
+import { RuntimeProof } from './runtime-proof';
 
 export default function Page() {
-  return <main className="runtime-proof"><h1>${heading}</h1><RuntimeProof /></main>;
+  return <main className="runtime-proof"><h1>${heading}</h1><RuntimeProof /><Link href="/contact/">Contact</Link></main>;
 }
 `;
+  await mkdir(join(appRoot, 'src/app/contact'), { recursive: true });
   await Promise.all([
     writeFile(pagePath, pageSource('Real Next workspace')),
+    writeFile(
+      join(appRoot, 'src/app/contact/page.tsx'),
+      `import Link from 'next/link';
+export default function ContactPage() {
+  return <main><h1>Real Next contact</h1><Link href="/">Home</Link></main>;
+}
+`,
+    ),
     writeFile(
       join(appRoot, 'src/app/runtime-proof.tsx'),
       `'use client';
@@ -219,6 +229,14 @@ export function RuntimeProof() {
     await expect(button).toBeEnabled();
     await button.click();
     await expect(frame.getByRole('button', { name: 'Hydrated clicks: 1' })).toBeVisible();
+    await frame.getByRole('link', { name: 'Contact' }).click();
+    await expect(frame.getByRole('heading', { name: 'Real Next contact' })).toBeVisible();
+    const contactFrame = page.frames().find((candidate) => candidate.url().includes('/contact/'));
+    expect(contactFrame?.url()).toContain(
+      `/__made-solid/workspace-frame/real-next-client/${token}/contact/`,
+    );
+    await frame.getByRole('link', { name: 'Home' }).click();
+    await expect(frame.getByRole('heading', { name: 'Real Next workspace' })).toBeVisible();
     await expect
       .poll(() =>
         webSockets.some((url) =>

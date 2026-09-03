@@ -34,7 +34,7 @@ test('registers editor-only client chat scope as immutable test package v22.8', 
 
   assert.match(app, /<CodexFeedbackPanel key="universal" \/>/);
   assert.match(app, /workspaceDirectory=\{directory\}/);
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.101`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.107`/);
   assert.match(
     app,
     /Each prospect has one client-named website editor that combines the current preview with client-scoped Codex/,

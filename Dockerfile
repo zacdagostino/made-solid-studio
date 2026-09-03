@@ -16,7 +16,7 @@ RUN apt-get update \
       ripgrep \
       tmux \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install --global @openai/codex@0.148.0
+    && npm install --global @openai/codex@0.152.1
 
 WORKDIR /app
 

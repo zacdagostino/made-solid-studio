@@ -8945,10 +8945,10 @@ function BuilderRunPanel({
             id: 'visual-codex-feedback',
             title: 'Codex Workspace Agent and visual feedback',
             detail:
-              'The Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy, available as both a persistent popup and a dedicated Studio page. Every conversation in the selector shows when it is working, and a finished conversation shows an unread notification until the reviewer opens it. It defaults to included ChatGPT subscription access and gives only the authenticated Studio owner a disclosed, reversible switch to separately billed OpenAI API credits for all Studio AI work when subscription allowance is exhausted. Production Studio stays on its exact reviewed release, while an authenticated dev.studio.madesolid.com.au visit opens the full Studio UI from the persistent editable checkout with immediate source updates; workspace.madesolid.com.au remains a compatibility entry during the staged migration. The owner-only live-update connection stays active while Chrome is backgrounded, and privately cached development modules make an unavoidable reload restore the saved route and workspace before live hydration. Each prospect has one client-named website editor that combines the current preview with client-scoped Codex; the private source repository and local preview runtime are separately labelled supporting controls, not a second editor. Reviewers can send text, images, or both, choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. While Codex is working and the composer is empty, the primary Send control becomes a Stop Codex control that interrupts the selected supervisor and active attached agents. Typing text or attaching an image immediately restores Send so another message can be queued; clearing the draft restores Stop. Stop follows the exact selected turn, disappears promptly on completion, and is a separate control from Send so a completion or server-version race cannot submit a stop click as a message. Model, Reasoning, and Agent team stay together in compact Run setup, while usage, billing, Fast, and voice preferences sit behind a separate Chat settings cog. A completed final Codex reply can branch into a separately selected conversation that preserves native context, clean prompts, image evidence, and the same client or universal workspace boundary while leaving the original chat unchanged. Voice reading offers saved Natural or Literal interpretation and three speeds, explicit preview and manual Read, opt-in chat-scoped auto-read, progressive private Google audio with device fallback, and a persistent read-along dock with active-word restart, exact seeking where available, five-second skipping, pause, resume, and stop. Natural reading says “then” for right-arrow icons and keeps a verification introduction while it skips its long technical results list. Selecting text inside one completed Codex reply offers a temporary read-only quick question that inherits the whole selected conversation, follows the saved auto-read preference, and never changes the original chat or workspace; the same excerpt can instead be appended to the draft, sent immediately without replacing that draft, or dismissed on both popup and page chat. An explicit per-phone Web Push opt-in sends generic private alerts only after a tracked Studio Codex supervisor turn completes successfully, including while Studio is closed. Studio source edits apply in place without restarting the workspace, and a compact top status announces the brief update while the current route, popup, draft, and conversation remain mounted. The launcher is present during startup checks, and a refresh restores the open selected conversation and its exact transcript reading position without changing the active prospect route. Exact-client preview capabilities stay private and out of the clean development URL. Observable activity and queue state appears without invented progress.',
-            revision: `v${selectedAgentPackage.version}.101`,
+              'The Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy, available as both a persistent popup and a dedicated Studio page. Every conversation in the selector shows when it is working, and a finished conversation shows an unread notification until the reviewer opens it. It defaults to included ChatGPT subscription access and gives only the authenticated Studio owner a disclosed, reversible switch to separately billed OpenAI API credits for all Studio AI work when subscription allowance is exhausted. Production Studio stays on its exact reviewed release, while an authenticated dev.studio.madesolid.com.au visit opens the full Studio UI from the persistent editable checkout with immediate source updates; workspace.madesolid.com.au remains a compatibility entry during the staged migration. The owner-only live-update connection stays active while Chrome is backgrounded, and privately cached development modules make an unavoidable reload restore the saved route and workspace before live hydration. Each prospect has one client-named website editor that combines the current preview with client-scoped Codex; the private source repository and local preview runtime are separately labelled supporting controls, not a second editor. Reviewers can send text, images, or both, choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. While Codex is working and the composer is empty, the primary Send control becomes a Stop Codex control that interrupts the selected supervisor and active attached agents. Typing text or attaching an image immediately restores Send so another message can be queued; clearing the draft restores Stop. Stop follows the exact selected turn, disappears promptly on completion, and is a separate control from Send so a completion or server-version race cannot submit a stop click as a message. Model, Reasoning, and Agent team stay together in compact Run setup, while usage, billing, Fast, and voice preferences sit behind a separate Chat settings cog. A completed final Codex reply can branch into a separately selected conversation that preserves native context, clean prompts, image evidence, and the same client or universal workspace boundary while leaving the original chat unchanged. Voice reading offers saved Natural or Literal interpretation and three speeds, explicit preview and manual Read, opt-in chat-scoped auto-read, progressive private Google audio with device fallback, and a persistent read-along dock with active-word restart, exact seeking where available, five-second skipping, pause, resume, and stop. Natural reading says “then” for right-arrow icons and keeps a verification introduction while it skips its long technical results list. Selecting text inside one completed Codex reply offers a temporary read-only quick question that inherits the whole selected conversation, follows the saved auto-read preference, and never changes the original chat or workspace; the same excerpt can instead be appended to the draft, sent immediately without replacing that draft, or dismissed on both popup and page chat. An explicit per-phone Web Push opt-in sends generic private alerts after a tracked Studio Codex supervisor turn completes successfully and after a stable Codex runtime update passes its health check, including while Studio is closed. The runtime checks official releases daily, waits for all Codex work to finish, shares one activated executable with chat and builder jobs, restores the previous version after a failed startup, and shows the exact version, lifecycle, and official release highlights in Settings. Studio source edits apply in place without restarting the workspace, and a compact top status announces the brief update while the current route, popup, draft, and conversation remain mounted. The launcher is present during startup checks, and a refresh restores the open selected conversation and its exact transcript reading position without changing the active prospect route. Exact-client preview capabilities stay private and out of the clean development URL. Observable activity and queue state appears without invented progress.',
+            revision: `v${selectedAgentPackage.version}.107`,
             change:
-              'Latest edit: returning from a backgrounded Chrome tab now keeps the live Studio mounted, while unavoidable reloads reuse private modules, a warm optimizer cache, and saved workspace state.',
+              'Latest edit: the hello@madesolid.com.au website gate now opens its marked Codex iframe through the existing owner-authenticated Development Studio session, while every other parent and normal Studio document remains non-frameable.',
           },
           {
             id: 'inbound-client-email-review',
@@ -13309,6 +13309,7 @@ function BuilderSettingsPage() {
           Open Codex Cloud <ExternalLink aria-hidden="true" size={16} />
         </ButtonLink>
       </Card>
+      <CodexRuntimeUpdateSettings />
       <CodexPhoneNotificationSettings />
       <Card className="workspace-panel settings-page__card">
         <div>
@@ -13334,6 +13335,177 @@ function BuilderSettingsPage() {
         </StatusBadge>
       </Card>
     </section>
+  );
+}
+
+function CodexRuntimeUpdateSettings() {
+  const [updateStatus, setUpdateStatus] =
+    useState<import('./lib/codex-runtime-updates').CodexUpdateStatus>();
+  const [updateError, setUpdateError] = useState('');
+  const [checkingNow, setCheckingNow] = useState(false);
+
+  const readStatus = useCallback(async () => {
+    try {
+      const { readCodexUpdateStatus } = await import('./lib/codex-runtime-updates');
+      const status = await readCodexUpdateStatus();
+      setUpdateStatus(status);
+      setUpdateError('');
+    } catch (error) {
+      setUpdateError(
+        error instanceof Error ? error.message : 'Codex update status is unavailable.',
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const refresh = async () => {
+      if (!active) return;
+      await readStatus();
+    };
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 30_000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [readStatus]);
+
+  const checkForUpdates = async () => {
+    setCheckingNow(true);
+    setUpdateError('');
+    try {
+      const { checkCodexUpdatesNow } = await import('./lib/codex-runtime-updates');
+      setUpdateStatus(await checkCodexUpdatesNow());
+    } catch (error) {
+      setUpdateError(
+        error instanceof Error ? error.message : 'Codex could not check for updates. Try again.',
+      );
+    } finally {
+      setCheckingNow(false);
+    }
+  };
+
+  const state = updateStatus?.status;
+  const statusBadge = !updateStatus
+    ? { label: updateError ? 'Needs attention' : 'Checking', tone: 'warning' as const }
+    : state === 'updated'
+      ? { label: `Updated to v${updateStatus.currentVersion}`, tone: 'success' as const }
+      : state === 'rollback' || state === 'failed'
+        ? {
+            label: state === 'rollback' ? 'Previous version restored' : 'Check failed',
+            tone: 'danger' as const,
+          }
+        : state &&
+            ['downloading', 'restart_pending', 'restarting', 'waiting_for_idle'].includes(state)
+          ? { label: 'Update in progress', tone: 'warning' as const }
+          : { label: `v${updateStatus.currentVersion} is current`, tone: 'success' as const };
+  const detail = updateError
+    ? updateError
+    : !updateStatus
+      ? 'Checking the protected Codex runtime…'
+      : state === 'downloading'
+        ? `Downloading and verifying Codex v${updateStatus.latestVersion}. The current version stays available while this finishes.`
+        : state === 'waiting_for_idle' || state === 'restart_pending'
+          ? `Codex v${updateStatus.latestVersion} is verified and will activate after active and queued Codex work finishes.`
+          : state === 'restarting'
+            ? `Codex v${updateStatus.currentVersion} is completing its startup health check.`
+            : state === 'rollback'
+              ? `${updateStatus.failureSummary || 'The new release did not pass its startup check.'} Studio restored v${updateStatus.currentVersion} automatically.`
+              : state === 'failed'
+                ? `${updateStatus.failureSummary || 'The automatic update check failed.'} Codex v${updateStatus.currentVersion} remains available.`
+                : state === 'updated'
+                  ? `Studio automatically installed and verified Codex v${updateStatus.currentVersion}${updateStatus.updatedAt ? ` on ${formatDateTime(updateStatus.updatedAt)}` : ''}.`
+                  : `Studio checks official stable Codex releases daily. Active work finishes before an update restarts the Workspace Agent.`;
+  const releases = updateStatus?.releases ?? [];
+  const updateInProgress = Boolean(
+    state &&
+    ['checking', 'downloading', 'restart_pending', 'restarting', 'waiting_for_idle'].includes(
+      state,
+    ),
+  );
+
+  return (
+    <Card
+      aria-busy={!updateStatus && !updateError}
+      className="workspace-panel settings-page__card settings-codex-updates"
+    >
+      <div className="settings-codex-updates__body">
+        <div className="settings-codex-updates__summary">
+          <div>
+            <Eyebrow>Automatic updates</Eyebrow>
+            <h2>Codex runtime</h2>
+          </div>
+          <StatusBadge tone={statusBadge.tone}>{statusBadge.label}</StatusBadge>
+        </div>
+        <p aria-live="polite" className="muted-copy" role="status">
+          {detail}
+        </p>
+        <div className="settings-codex-updates__checker">
+          <dl aria-label="Codex version details">
+            <div>
+              <dt>Installed version</dt>
+              <dd>{updateStatus ? `Codex v${updateStatus.currentVersion}` : 'Checking…'}</dd>
+            </div>
+            <div>
+              <dt>Latest stable</dt>
+              <dd>{updateStatus ? `Codex v${updateStatus.latestVersion}` : 'Checking…'}</dd>
+            </div>
+            <div>
+              <dt>Last checked</dt>
+              <dd>
+                {updateStatus?.checkedAt
+                  ? formatDateTime(updateStatus.checkedAt)
+                  : 'Not checked yet'}
+              </dd>
+            </div>
+          </dl>
+          <Button
+            disabled={checkingNow || updateInProgress}
+            onClick={() => void checkForUpdates()}
+            variant="secondary"
+          >
+            {checkingNow ? (
+              <LoaderCircle aria-hidden="true" className="spin" size={16} />
+            ) : (
+              <SearchCheck aria-hidden="true" size={16} />
+            )}
+            {checkingNow ? 'Checking for updates…' : 'Check for updates'}
+          </Button>
+        </div>
+        {releases.length ? (
+          <div className="settings-codex-updates__releases">
+            <h3>What changed</h3>
+            {releases.slice(0, 3).map((release) => (
+              <section key={release.version} aria-labelledby={`codex-release-${release.version}`}>
+                <h4 id={`codex-release-${release.version}`}>
+                  Codex v{release.version}
+                  {release.date ? <small>{release.date}</small> : null}
+                </h4>
+                {release.sections.map((section) => (
+                  <div key={section.title}>
+                    <strong>{section.title}</strong>
+                    <ul>
+                      {section.items.slice(0, 4).map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </section>
+            ))}
+            <ButtonLink
+              href="https://learn.chatgpt.com/docs/changelog?products=codex&topics=codex-cli"
+              rel="noreferrer"
+              target="_blank"
+              variant="secondary"
+            >
+              Open official Codex changelog <ExternalLink aria-hidden="true" size={16} />
+            </ButtonLink>
+          </div>
+        ) : null}
+      </div>
+    </Card>
   );
 }
 
@@ -17772,8 +17944,10 @@ function ClientDevelopmentEditor({
   const [loadKey, setLoadKey] = useState(0);
   const [loading, setLoading] = useState(true);
   const [frameLoading, setFrameLoading] = useState(false);
+  const [navigationLoading, setNavigationLoading] = useState(false);
   const [error, setError] = useState('');
   const [surfaceSize, setSurfaceSize] = useState({ width: 0, height: 0 });
+  const frameRef = useRef<HTMLIFrameElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -17793,8 +17967,21 @@ function ClientDevelopmentEditor({
   }, []);
 
   useEffect(() => {
+    const handlePreviewMessage = (event: MessageEvent) => {
+      if (event.source !== frameRef.current?.contentWindow) return;
+      const payload = event.data as { source?: unknown; status?: unknown } | undefined;
+      if (payload?.source === 'made-solid-workspace-preview' && payload.status === 'loading') {
+        setNavigationLoading(true);
+      }
+    };
+    window.addEventListener('message', handlePreviewMessage);
+    return () => window.removeEventListener('message', handlePreviewMessage);
+  }, []);
+
+  useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
+    setNavigationLoading(false);
     setError('');
     setPreviewUrl('');
     const access = new URL('/__made-solid/workspace-preview-access', window.location.origin);
@@ -17897,6 +18084,18 @@ function ClientDevelopmentEditor({
             {loading ? 'Connecting to the live client preview…' : 'Rendering the latest website…'}
           </div>
         ) : null}
+        {navigationLoading ? (
+          <div
+            aria-label="Loading the next website page"
+            className="client-development-editor__loading-bar"
+            role="status"
+          >
+            <span aria-hidden="true">
+              <span />
+            </span>
+            <small>Loading the next page…</small>
+          </div>
+        ) : null}
         {error ? (
           <div className="client-development-editor__error" role="alert">
             <CircleAlert aria-hidden="true" size={20} />
@@ -17925,7 +18124,11 @@ function ClientDevelopmentEditor({
                   setFrameLoading(false);
                   setError('The secured client preview stopped responding.');
                 }}
-                onLoad={() => setFrameLoading(false)}
+                onLoad={() => {
+                  setFrameLoading(false);
+                  setNavigationLoading(false);
+                }}
+                ref={frameRef}
                 sandbox="allow-modals allow-popups allow-scripts"
                 src={previewUrl}
                 title={`${clientName} live website preview`}
@@ -17943,6 +18146,8 @@ function FocusedWebsiteEditor({ workspace }: { workspace: ProspectWorkspace }) {
   const [viewportMode, setViewportMode] = useState<PreviewViewportMode>('fit');
   const [fullPreview, setFullPreview] = useState(false);
   const [codexContainer, setCodexContainer] = useState<HTMLElement | null>(null);
+  const editorRef = useRef<HTMLElement>(null);
+  const viewportBeforeFullPreviewRef = useRef<PreviewViewportMode>('fit');
   const directory = editableWorkspaceDirectoryName(workspace);
   const editingRoute = hrefForRoute({
     page: 'prospects',
@@ -17971,10 +18176,58 @@ function FocusedWebsiteEditor({ workspace }: { workspace: ProspectWorkspace }) {
     };
   }, []);
 
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      if (document.fullscreenElement === editorRef.current) {
+        setFullPreview(true);
+      } else if (document.fullscreenElement === null) {
+        setFullPreview(false);
+        setViewportMode(viewportBeforeFullPreviewRef.current);
+      }
+    };
+    const handleEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape' && fullPreview && document.fullscreenElement === null) {
+        setFullPreview(false);
+        setViewportMode(viewportBeforeFullPreviewRef.current);
+      }
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [fullPreview]);
+
+  async function enterFullPreview() {
+    viewportBeforeFullPreviewRef.current = viewportMode;
+    setMobileSurface('preview');
+    setViewportMode('fit');
+    setFullPreview(true);
+    try {
+      await editorRef.current?.requestFullscreen();
+    } catch {
+      // The edge-to-edge editor remains available when browser fullscreen is unavailable.
+    }
+  }
+
+  async function exitFullPreview() {
+    if (document.fullscreenElement === editorRef.current) {
+      try {
+        await document.exitFullscreen();
+      } catch {
+        // Keep the explicit CSS fallback in sync even if the browser refuses the request.
+      }
+    }
+    setViewportMode(viewportBeforeFullPreviewRef.current);
+    setFullPreview(false);
+  }
+
   return (
     <main
       className={`focused-website-editor${fullPreview ? ' is-full-preview' : ''}`}
       data-testid="focused-website-editor"
+      ref={editorRef}
     >
       <header className="focused-website-editor__toolbar">
         <div className="focused-website-editor__identity">
@@ -18020,10 +18273,7 @@ function FocusedWebsiteEditor({ workspace }: { workspace: ProspectWorkspace }) {
           <IconButton
             aria-pressed={fullPreview}
             label={fullPreview ? 'Exit full preview' : 'Enter full preview'}
-            onClick={() => {
-              setFullPreview((current) => !current);
-              setMobileSurface('preview');
-            }}
+            onClick={() => void (fullPreview ? exitFullPreview() : enterFullPreview())}
             variant="secondary"
           >
             {fullPreview ? (
@@ -18063,6 +18313,17 @@ function FocusedWebsiteEditor({ workspace }: { workspace: ProspectWorkspace }) {
           </ButtonGroup>
         </div>
       </header>
+      {fullPreview ? (
+        <div className="focused-website-editor__full-preview-exit">
+          <IconButton
+            label="Exit full preview"
+            onClick={() => void exitFullPreview()}
+            variant="secondary"
+          >
+            <Minimize2 aria-hidden="true" size={17} />
+          </IconButton>
+        </div>
+      ) : null}
       <div className="focused-website-editor__workspace">
         <section
           aria-label={`${workspace.business.name} editor preview pane`}
@@ -21351,6 +21612,38 @@ function WorkspaceApp({
     const timeout = window.setTimeout(() => setNotice(undefined), 10000);
     return () => window.clearTimeout(timeout);
   }, [notice]);
+
+  useEffect(() => {
+    let active = true;
+    const announceUpdate = async () => {
+      try {
+        const { readCodexUpdateStatus } = await import('./lib/codex-runtime-updates');
+        const status = await readCodexUpdateStatus();
+        if (!active || status.status !== 'updated' || !status.updatedAt) return;
+        const noticeKey = `${status.currentVersion}:${status.updatedAt}`;
+        if (window.localStorage.getItem('made-solid-codex-update-notice') === noticeKey) return;
+        window.localStorage.setItem('made-solid-codex-update-notice', noticeKey);
+        const firstChange = status.releases
+          .flatMap((release) => release.sections.flatMap((section) => section.items))
+          .at(0);
+        setNotice({
+          id: crypto.randomUUID(),
+          title: `Codex updated to v${status.currentVersion}`,
+          detail: firstChange || 'The new stable Codex release passed its startup check.',
+          tone: 'info',
+          action: { label: 'View update', onClick: () => navigate({ page: 'settings' }) },
+        });
+      } catch {
+        // Settings exposes actionable runtime errors; background polling stays quiet.
+      }
+    };
+    void announceUpdate();
+    const interval = window.setInterval(() => void announceUpdate(), 60_000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, []);
 
   useEffect(() => {
     const nextStatuses = new Map<string, string>();

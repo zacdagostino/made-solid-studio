@@ -5,7 +5,16 @@ set -euo pipefail
 project_directory="$(cd "$(dirname "$0")/.." && pwd)"
 source "$project_directory/scripts/configure-codex-runtime"
 
-if ! command -v codex >/dev/null 2>&1; then
+codex_executable="${SITEFORGE_CODEX_BIN:-codex}"
+if [[ "$codex_executable" == */* ]]; then
+  codex_available=0
+  [[ -x "$codex_executable" ]] && codex_available=1
+elif command -v "$codex_executable" >/dev/null 2>&1; then
+  codex_available=1
+else
+  codex_available=0
+fi
+if ((codex_available == 0)); then
   echo "Codex is required for the Studio Workspace Agent. Run scripts/codespace-work to install it."
   exit 1
 fi
@@ -24,7 +33,7 @@ if [[ "$billing_mode" == "api_credits" ]]; then
   unset OPENAI_API_KEY SITEFORGE_CODEX_API_KEY
   echo "[codex-runtime] using separately billed OpenAI API credits."
 else
-  login_status="$(codex --config 'forced_login_method="chatgpt"' login status 2>&1 || true)"
+  login_status="$("$codex_executable" --config 'forced_login_method="chatgpt"' login status 2>&1 || true)"
   if [[ ! "$login_status" =~ [Ll]ogged[[:space:]]in[[:space:]]using[[:space:]][Cc]hat[Gg][Pp][Tt] ]]; then
     echo "The Studio Codex Workspace Agent requires a ChatGPT subscription sign-in."
     echo "Run 'codex login --device-auth' in this trusted environment, then restart Studio."
@@ -54,7 +63,7 @@ fi
 
 cd "$studio_workspace_directory"
 
-exec codex "${codex_configuration[@]}" --strict-config app-server \
+exec "$codex_executable" "${codex_configuration[@]}" --strict-config app-server \
   --listen ws://127.0.0.1:4500 \
   --enable prevent_idle_sleep \
   --disable shell_snapshot

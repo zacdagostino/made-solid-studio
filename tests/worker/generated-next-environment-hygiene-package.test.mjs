@@ -52,7 +52,8 @@ test('registers generated Next environment hygiene as immutable test package v23
     /manual environment declarations and real source changes remain pending edits/,
   );
 
-  assert.match(responsiveSpec, /agent-package-local-v23-3-generated-next-environment-hygiene/);
+  assert.match(responsiveSpec, /agent-package-local-v23-4-persistent-codex-preferences/);
+  assert.match(responsiveSpec, /\['v23\.4', 'Persistent Codex preferences'\]/);
   assert.match(responsiveSpec, /\['v23\.3', 'Generated Next environment hygiene'\]/);
   assert.match(responsiveSpec, /\['v23\.2', 'Configured final edit upstream'\]/);
 });

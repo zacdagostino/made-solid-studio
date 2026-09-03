@@ -213,6 +213,7 @@ async function showMutableSpeechConversation(page, currentStatus) {
 test.beforeEach(async ({ page }) => {
   let statusRequestCount = 0;
   let billingMode = 'chatgpt_subscription';
+  let savedCodexPreferences = null;
   await page.addInitScript(
     ({ screenshot, tabScreenshot }) => {
       class MockSpeechSynthesisUtterance extends EventTarget {
@@ -431,6 +432,18 @@ test.beforeEach(async ({ page }) => {
       status: 503,
       contentType: 'application/json',
       body: JSON.stringify({ status: 'unavailable' }),
+    });
+  });
+  await page.route('**/__made-solid/codex-preferences', async (route) => {
+    if (route.request().method() === 'PUT') {
+      savedCodexPreferences = route.request().postDataJSON().preferences;
+    }
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        preferences: savedCodexPreferences,
+        status: route.request().method() === 'PUT' ? 'saved' : 'ready',
+      }),
     });
   });
   await page.route('**/__made-solid/ai-billing-mode', async (route) => {
@@ -845,6 +858,71 @@ test('keeps the Codex launcher visible while its initial status reconnects', asy
 
   releaseStatus();
   await expect(page.getByRole('button', { name: 'Chat with Codex' })).toBeVisible();
+});
+
+test('resynchronizes a remembered open website chat after its iframe loads', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      'made-solid-codex-chat-session-v1',
+      JSON.stringify({ isOpen: true }),
+    );
+  });
+  await page.goto('/');
+  await page.setContent(`
+    <main style="min-height:100dvh;background:#e7ff1f">
+      <h1>Made Solid website</h1>
+    </main>
+    <iframe
+      aria-label="Made Solid Codex chat"
+      id="made-solid-codex-panel"
+      src="/#/codex-panel"
+      style="border:0;bottom:0;height:68px;position:fixed;right:0;width:68px"
+    ></iframe>
+    <script>
+      (() => {
+        const frame = document.getElementById('made-solid-codex-panel');
+        window.addEventListener('message', (event) => {
+          if (
+            event.origin !== window.location.origin ||
+            event.source !== frame.contentWindow ||
+            event.data?.source !== 'made-solid-codex-panel'
+          ) return;
+          const open = event.data.open === true;
+          frame.style.width = open ? 'min(444px, 100vw)' : '68px';
+          frame.style.height = open ? 'min(744px, 100dvh)' : '68px';
+        });
+        frame.addEventListener('load', () => {
+          frame.contentWindow.postMessage(
+            {
+              action: 'synchronize',
+              source: 'made-solid-codex-host',
+              title: document.title,
+              url: window.location.href,
+              viewportHeight: window.innerHeight,
+              viewportWidth: window.innerWidth,
+            },
+            window.location.origin,
+          );
+        });
+      })();
+    </script>
+  `);
+
+  const frame = page.locator('#made-solid-codex-panel');
+  const expectedWidth = Math.min(444, page.viewportSize().width);
+  const expectedHeight = Math.min(744, page.viewportSize().height);
+  await expect
+    .poll(async () => {
+      const box = await frame.boundingBox();
+      return box ? { height: box.height, width: box.width } : null;
+    })
+    .toEqual({ height: expectedHeight, width: expectedWidth });
+  await expect(
+    page.frameLocator('#made-solid-codex-panel').getByRole('dialog', { name: 'Codex' }),
+  ).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
 });
 
 test('provides Codex chat as a dedicated responsive Studio page', async ({ page }, testInfo) => {
@@ -3377,6 +3455,48 @@ test('keeps the selected model, reasoning, and Fast preference after reopen', as
     'aria-pressed',
     'true',
   );
+});
+
+test('restores Codex chat settings after browser site data is cleared', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  let composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  const savedRequest = page.waitForRequest((request) => {
+    if (!request.url().endsWith('/__made-solid/codex-preferences') || request.method() !== 'PUT')
+      return false;
+    return request.postDataJSON().preferences?.speechStyle === 'literal';
+  });
+
+  await openRunSettings(composer);
+  await composer.getByLabel('Model').selectOption('gpt-5.6-terra');
+  await composer.getByLabel('Reasoning').selectOption('high');
+  await composer.getByRole('button', { name: /Agent team/ }).click();
+  await openChatSettings(composer);
+  await composer.getByRole('button', { name: /^Fast/ }).click();
+  await composer.getByRole('checkbox', { name: 'Auto-read Codex' }).check();
+  await composer.getByLabel('Reading style').selectOption('literal');
+  await composer.getByLabel('Speed').selectOption('1.15');
+  await savedRequest;
+
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openRunSettings(composer);
+  await expect(composer.getByLabel('Model')).toHaveValue('gpt-5.6-terra');
+  await expect(composer.getByLabel('Reasoning')).toHaveValue('high');
+  await expect(composer.getByRole('button', { name: /Agent team/ })).toHaveAttribute(
+    'aria-pressed',
+    'false',
+  );
+  await openChatSettings(composer);
+  await expect(composer.getByRole('button', { name: /^Fast/ })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect(composer.getByRole('checkbox', { name: 'Auto-read Codex' })).toBeChecked();
+  await expect(composer.getByLabel('Reading style')).toHaveValue('literal');
+  await expect(composer.getByLabel('Speed')).toHaveValue('1.15');
 });
 
 test('keeps an unsent draft across Studio and preview workspaces until it is sent', async ({

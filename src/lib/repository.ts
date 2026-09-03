@@ -455,6 +455,15 @@ const localConfiguredFinalEditUpstreamPackageId =
   'agent-package-local-v23-2-configured-final-edit-upstream';
 const localGeneratedNextEnvironmentHygienePackageId =
   'agent-package-local-v23-3-generated-next-environment-hygiene';
+const localPersistentCodexPreferencesPackageId =
+  'agent-package-local-v23-4-persistent-codex-preferences';
+const localReliableNextWebsitePreviewPackageId =
+  'agent-package-local-v23-5-reliable-next-website-preview';
+const localAutomaticCodexUpdatesPackageId = 'agent-package-local-v23-6-automatic-codex-updates';
+const localCodexUpdateCheckerPackageId = 'agent-package-local-v23-7-codex-update-checker';
+const localOwnerOnlyWebsiteCodexPackageId = 'agent-package-local-v23-8-owner-only-website-codex';
+const localAuthenticatedWebsiteCodexEmbedPackageId =
+  'agent-package-local-v23-9-authenticated-website-codex-embed';
 
 type StoreName =
   | 'activities'
@@ -3703,10 +3712,118 @@ export class SiteforgeRepository {
         'Keeps edit versions and release gates tied to intentional website work while preserving every manual environment declaration and genuine source change.',
       stagedBehaviourIds: ['client-url-release-contract'],
     };
+    const localPersistentCodexPreferencesPackage: AgentPackage = {
+      ...localGeneratedNextEnvironmentHygienePackage,
+      id: localPersistentCodexPreferencesPackageId,
+      version: 23.4,
+      basePackageId: localGeneratedNextEnvironmentHygienePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v23.4',
+      contractAddendum:
+        'Authenticated Studio Codex chat preferences persist on the private runtime volume for the owner and restore after browser cookies or site data are deleted.',
+      instructionsAddendum:
+        'Keep browser storage as an immediate offline cache, then hydrate model, per-model reasoning, Agent team, Fast, Auto-read, language, voice, reading style, and speed from one bounded owner-scoped runtime record after authentication. Migrate the browser choice when no runtime record exists, write atomically, and never expose preferences before the existing Studio owner authorization succeeds.',
+      summary:
+        'Persistent Codex preferences test package: restores owner chat settings after cookies or browser site data are cleared.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps the reviewer’s Codex setup consistent across cleared browser sessions and signed-in devices without weakening private runtime access.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localReliableNextWebsitePreviewPackage: AgentPackage = {
+      ...localPersistentCodexPreferencesPackage,
+      id: localReliableNextWebsitePreviewPackageId,
+      version: 23.5,
+      basePackageId: localPersistentCodexPreferencesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v23.5',
+      contractAddendum:
+        'A generated Next.js website remains fully navigable inside its exact client preview capability without server/client URL divergence. Internal page changes expose a truthful indeterminate loading state, development-only Next.js chrome stays outside the client review surface, and full preview uses the complete available screen with a persistent exit control.',
+      instructionsAddendum:
+        'Keep server-rendered internal anchor hrefs byte-consistent for Next.js hydration. Route document navigation through the exact directory and token capability without exposing it to generated source, retain secured resource and hot-reload rewriting, and announce navigation start only from the bound preview frame. Hide framework development chrome in the private client view while retaining runtime errors in protected logs. Make full preview edge-to-edge, request browser fullscreen from the reviewer gesture where supported, provide a CSS fallback and visible exit control, restore on Escape, and preserve reduced-motion loading feedback.',
+      summary:
+        'Reliable Next website preview test package: fixes client page navigation, adds visible workspace loading, removes development chrome, and makes full preview edge-to-edge.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes generated Next.js sites reviewable as complete multi-page websites without weakening exact-client preview isolation or hiding protected diagnostics.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localAutomaticCodexUpdatesPackage: AgentPackage = {
+      ...localReliableNextWebsitePreviewPackage,
+      id: localAutomaticCodexUpdatesPackageId,
+      version: 23.6,
+      basePackageId: localReliableNextWebsitePreviewPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v23.6',
+      contractAddendum:
+        'The protected Studio runtime checks the official stable Codex CLI release daily, stages and verifies it on persistent storage, waits for active and queued Codex work to finish, then atomically activates it and health-checks the restarted App Server. A failed startup restores the prior executable. The owner can see the installed version, lifecycle state, failure or rollback detail, and official Codex feature notes in Settings, with an in-app notice and an opt-in phone alert after successful activation.',
+      instructionsAddendum:
+        'Resolve one persistent Codex executable pointer for the Workspace Agent and all subsequently launched builder jobs. Accept only stable @openai/codex registry versions, verify the staged binary reports the exact requested version, and never restart while tracked chat work or another Codex process is active. Preserve the prior executable until the replacement survives its startup health window, roll back atomically on failure, and retain truthful persisted status. Parse release highlights only from the official OpenAI Codex changelog, keep status private behind existing owner authorization, and reuse the established Web Push opt-in without exposing prospect or conversation data.',
+      summary:
+        'Automatic Codex updates test package: safely installs stable releases after work finishes, restores failed updates, and shows official feature notes with Studio and phone alerts.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps the complete protected Codex runtime current without interrupting work, while making every activation, feature summary, failure, and rollback visible to the owner.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localCodexUpdateCheckerPackage: AgentPackage = {
+      ...localAutomaticCodexUpdatesPackage,
+      id: localCodexUpdateCheckerPackageId,
+      version: 23.7,
+      basePackageId: localAutomaticCodexUpdatesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v23.7',
+      contractAddendum:
+        'The owner-facing Codex runtime Settings card shows the installed version, latest known stable version, last successful check time, automatic-update lifecycle, and official release notes. A protected Check for updates action requests an immediate official registry check without disabling the daily updater, duplicating an active check, or interrupting Codex work.',
+      instructionsAddendum:
+        'Keep the manual Codex update check behind the existing authenticated same-site runtime boundary. Serialize update checks across runtime processes, reject duplicate checks while downloading or activating, announce checking and failure states accessibly, and keep the installed executable available until the existing idle activation and health-check contract succeeds.',
+      summary:
+        'Codex update checker test package: adds installed/latest version details, last-check time, and an immediate protected update check in Settings.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Lets the Studio owner verify the live Codex version and request a fresh official update check without waiting for the daily schedule or weakening safe activation.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localOwnerOnlyWebsiteCodexPackage: AgentPackage = {
+      ...localCodexUpdateCheckerPackage,
+      id: localOwnerOnlyWebsiteCodexPackageId,
+      version: 23.8,
+      basePackageId: localCodexUpdateCheckerPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v23.8',
+      contractAddendum:
+        'The Codex control on the Made Solid development website is rendered only after the website server confirms the exact authenticated Studio admin account and staff record. The embedded Studio panel resynchronizes its remembered open state after the host bridge is ready, so returning to an already-open chat expands it instead of leaving it trapped in the launcher frame.',
+      instructionsAddendum:
+        'Keep the website Codex iframe and its bridge script absent from signed-out and non-admin responses. Reuse the server-side Studio admin authorization boundary rather than relying on client-side hiding. On iframe load, request the current embedded panel state and accept resize messages only from the configured Studio origin and exact iframe contentWindow. Preserve the owner gateway and runtime authorization checks.',
+      summary:
+        'Owner-only website Codex panel test package: hides the development-site chat from every non-owner and reliably restores an already-open owner chat.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the development website chat both owner-private and dependable across remembered chat state without weakening the Studio runtime boundary.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localAuthenticatedWebsiteCodexEmbedPackage: AgentPackage = {
+      ...localOwnerOnlyWebsiteCodexPackage,
+      id: localAuthenticatedWebsiteCodexEmbedPackageId,
+      version: 23.9,
+      basePackageId: localOwnerOnlyWebsiteCodexPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v23.9',
+      contractAddendum:
+        'The owner-only Codex panel on dev.madesolid.com.au uses the existing owner-authenticated Development Studio session and an explicit website-Codex marker. Only that marked iframe from the exact development website origin may be framed; normal Studio documents remain non-frameable.',
+      instructionsAddendum:
+        'Keep the iframe itself behind the exact hello@madesolid.com.au website server authorization and never place a Supabase access token in browser markup or a URL. Authorize framing only when the explicit iframe marker, Fetch Metadata, exact development website referrer, and owner-authenticated Development Studio cookie all match. Reject every other iframe parent and retain owner-cookie protection for the document and its modules.',
+      summary:
+        'Authenticated website Codex embed test package: replaces the broken frame with a narrowly frameable owner session while keeping the rest of Development Studio non-frameable.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the authorized development-website launcher load reliably without weakening the existing owner-only Studio boundary.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localAuthenticatedWebsiteCodexEmbedPackage,
+          localOwnerOnlyWebsiteCodexPackage,
+          localCodexUpdateCheckerPackage,
+          localAutomaticCodexUpdatesPackage,
+          localReliableNextWebsitePreviewPackage,
+          localPersistentCodexPreferencesPackage,
           localGeneratedNextEnvironmentHygienePackage,
           localConfiguredFinalEditUpstreamPackage,
           localSeamlessStudioResumePackage,
@@ -3888,6 +4005,12 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localAuthenticatedWebsiteCodexEmbedPackage,
+          localOwnerOnlyWebsiteCodexPackage,
+          localCodexUpdateCheckerPackage,
+          localAutomaticCodexUpdatesPackage,
+          localReliableNextWebsitePreviewPackage,
+          localPersistentCodexPreferencesPackage,
           localGeneratedNextEnvironmentHygienePackage,
           localConfiguredFinalEditUpstreamPackage,
           localSeamlessStudioResumePackage,
@@ -4072,6 +4195,12 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localAuthenticatedWebsiteCodexEmbedPackage,
+            localOwnerOnlyWebsiteCodexPackage,
+            localCodexUpdateCheckerPackage,
+            localAutomaticCodexUpdatesPackage,
+            localReliableNextWebsitePreviewPackage,
+            localPersistentCodexPreferencesPackage,
             localGeneratedNextEnvironmentHygienePackage,
             localConfiguredFinalEditUpstreamPackage,
             localSeamlessStudioResumePackage,

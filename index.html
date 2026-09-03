@@ -9,54 +9,215 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="manifest" href="/studio.webmanifest" />
     <title>Made Solid Studio</title>
+    <script>
+      (() => {
+        try {
+          const storedTheme = localStorage.getItem('siteforge-os.theme');
+          const theme =
+            storedTheme === 'light' || storedTheme === 'dark'
+              ? storedTheme
+              : matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light';
+          document.documentElement.dataset.theme = theme;
+        } catch {
+          if (matchMedia('(prefers-color-scheme: dark)').matches) {
+            document.documentElement.dataset.theme = 'dark';
+          }
+        }
+      })();
+    </script>
+    <style>
+      @font-face {
+        font-family: 'Space Grotesk';
+        font-style: normal;
+        font-weight: 600;
+        font-display: swap;
+        src: url('/fonts/space-grotesk-600-latin.woff2') format('woff2');
+      }
+
+      :root {
+        --startup-ink: #0d0d0d;
+        --startup-muted: #686868;
+        --startup-surface: #ffffff;
+        --startup-glow: rgb(0 0 0 / 0.07);
+        --startup-mark: #0d0d0d;
+        --startup-title-offset: 0px;
+        color-scheme: light;
+      }
+
+      [data-theme='dark'] {
+        --startup-ink: #ececec;
+        --startup-muted: #b4b4b4;
+        --startup-surface: #212121;
+        --startup-glow: rgb(255 255 255 / 0.08);
+        --startup-mark: #e7ff1f;
+        color-scheme: dark;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        min-height: 100%;
+        margin: 0;
+        background: var(--startup-surface);
+      }
+
+      .studio-startup {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100vh;
+        height: 100dvh;
+        overflow: hidden;
+        color: var(--startup-ink);
+        background:
+          radial-gradient(520px circle at 50% 44%, var(--startup-glow), transparent 68%),
+          var(--startup-surface);
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          sans-serif;
+      }
+
+      .studio-startup__brand {
+        position: absolute;
+        left: 50%;
+        top: calc(50% + var(--startup-title-offset));
+        width: 170px;
+        height: 92px;
+        transform: translate(-50%, -50%);
+      }
+
+      .studio-startup__mark {
+        position: absolute;
+        top: 0;
+        left: 50%;
+        width: 36px;
+        height: 32px;
+        background: var(--startup-mark);
+        mask: url('/made-solid-anvil.svg') center / contain no-repeat;
+        -webkit-mask: url('/made-solid-anvil.svg') center / contain no-repeat;
+        animation: studio-startup-logo-float 2.8s ease-in-out infinite;
+      }
+
+      .studio-startup__wordmark {
+        position: absolute;
+        top: 62px;
+        left: 50%;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-family: 'Space Grotesk', Inter, ui-sans-serif, system-ui, sans-serif;
+        font-size: 1rem;
+        font-weight: 600;
+        line-height: 1.2;
+        white-space: nowrap;
+        transform: translateX(-50%) scale(1.5);
+      }
+
+      .studio-startup__studio {
+        padding: 4px;
+        border-radius: 4px;
+        color: #0d0d0d;
+        background: #e7ff1f;
+        font-size: 0.58rem;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        line-height: 1;
+        text-transform: uppercase;
+      }
+
+      .studio-startup__status {
+        position: absolute;
+        top: calc(50% + var(--startup-title-offset) + 4.5rem);
+        left: 50%;
+        width: min(88vw, 32rem);
+        transform: translateX(-50%);
+        text-align: center;
+      }
+
+      .studio-startup__status p {
+        margin: 0;
+        color: var(--startup-muted);
+        font-size: 0.9rem;
+        font-weight: 600;
+        line-height: 1.55;
+      }
+
+      .studio-startup__reload {
+        min-height: 44px;
+        margin-top: 20px;
+        padding: 0 18px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid currentColor;
+        border-radius: 8px;
+        color: var(--startup-ink);
+        background: transparent;
+        text-decoration: none;
+      }
+
+      .studio-startup__reload:hover {
+        background: color-mix(in srgb, var(--startup-ink) 8%, transparent);
+      }
+
+      .studio-startup__reload:focus-visible {
+        outline: 3px solid color-mix(in srgb, var(--startup-ink) 42%, transparent);
+        outline-offset: 3px;
+      }
+
+      @keyframes studio-startup-logo-float {
+        0%,
+        100% {
+          transform: translate(-50%, 0) scale(1.5);
+        }
+        50% {
+          transform: translate(-50%, -7px) scale(1.5);
+        }
+      }
+
+      @media (max-width: 767px) {
+        :root {
+          --startup-title-offset: -3rem;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .studio-startup__mark {
+          animation: none;
+          transform: translateX(-50%) scale(1.5);
+        }
+      }
+    </style>
   </head>
   <body>
     <div id="root">
       <main
+        aria-label="Loading Made Solid Studio workspace"
+        class="studio-startup"
         id="studio-startup-shell"
-        style="
-          box-sizing: border-box;
-          min-height: 100vh;
-          display: grid;
-          place-items: center;
-          padding: 24px;
-          background: #0d0d0d;
-          color: #f4f1e8;
-          font-family:
-            system-ui,
-            -apple-system,
-            BlinkMacSystemFont,
-            'Segoe UI',
-            sans-serif;
-        "
       >
-        <section style="max-width: 32rem; text-align: center">
-          <h1 style="margin: 0; font-size: 1.25rem; line-height: 1.3">Opening Made Solid Studio</h1>
-          <p
-            id="studio-startup-message"
-            role="status"
-            aria-live="polite"
-            style="margin: 10px 0 0; color: #b9b5aa; line-height: 1.55"
-          >
+        <span aria-label="Made Solid Studio" class="studio-startup__brand" role="img">
+          <span aria-hidden="true" class="studio-startup__mark"></span>
+          <strong aria-hidden="true" class="studio-startup__wordmark">
+            <span>Made Solid</span>
+            <span class="studio-startup__studio">Studio</span>
+          </strong>
+        </span>
+        <section class="studio-startup__status">
+          <p id="studio-startup-message" role="status" aria-live="polite">
             Loading the development workspace…
           </p>
-          <a
-            id="studio-startup-reload"
-            href=""
-            hidden
-            style="
-              min-height: 44px;
-              margin-top: 20px;
-              padding: 0 18px;
-              display: inline-flex;
-              align-items: center;
-              justify-content: center;
-              border: 1px solid #68645b;
-              border-radius: 8px;
-              color: #f4f1e8;
-              text-decoration: none;
-            "
-          >
+          <a id="studio-startup-reload" href="" hidden class="studio-startup__reload">
             Reload development Studio
           </a>
         </section>

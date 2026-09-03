@@ -18,6 +18,7 @@ import {
   rewritePreviewRootReferences,
   rewriteNextWorkspaceFrameRuntimeReferences,
   rewritePreviewRuntimeReferences,
+  rewriteWorkspaceFrameRootReferences,
   rewriteWorkspaceFrameRuntimeReferences,
 } from '../../preview-host/server.mjs';
 import { createWorkspacePreviewToken } from '../../scripts/workspace-preview-access.mjs';
@@ -214,6 +215,8 @@ test('keeps Vite and Next live runtime requests inside an exact frame route', ()
   assert.match(html, new RegExp(`srcset="${frameBase}small\\.png 1x, ${frameBase}large\\.png 2x"`));
   assert.match(html, new RegExp(`"assetPrefix":"${frameBase.slice(0, -1)}"`));
   assert.match(html, /data-made-solid-opaque-runtime/);
+  assert.match(html, /data-made-solid-workspace-frame/);
+  assert.match(html, /made-solid-workspace-preview/);
   assert.doesNotMatch(html, /data-siteforge-preview-navigation/);
 
   const viteClient = rewriteWorkspaceFrameRuntimeReferences(
@@ -223,6 +226,18 @@ test('keeps Vite and Next live runtime requests inside an exact frame route', ()
   assert.match(viteClient, new RegExp(`const base\\$1 = "${frameBase}"`));
   assert.match(viteClient, new RegExp(`\\$\\{"${frameBase}"\\}`));
   assert.match(viteClient, new RegExp(`const base = "${frameBase}"`));
+});
+
+test('keeps Next anchor hrefs hydratable while securing document resources and navigation', () => {
+  const frameBase = '/__made-solid/workspace-frame/client-a/payload.signature/';
+  const source =
+    '<a href="/contact-us/">Contact</a><link rel="stylesheet" href="/_next/site.css"><img src="/assets/team.jpg">';
+
+  const rewritten = rewriteWorkspaceFrameRootReferences(source, frameBase);
+
+  assert.match(rewritten, /<a href="\/contact-us\/">Contact<\/a>/);
+  assert.match(rewritten, new RegExp(`href="${frameBase}_next/site\\.css"`));
+  assert.match(rewritten, new RegExp(`src="${frameBase}assets/team\\.jpg"`));
 });
 
 test('proxies a live frame through an exact preview-origin capability', async () => {

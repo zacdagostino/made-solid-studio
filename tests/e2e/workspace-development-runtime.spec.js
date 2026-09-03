@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { createServer as createHttpServer } from 'node:http';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -66,6 +67,75 @@ function appSource(label) {
 export function App() { return <main><h1>Workspace Studio sentinel</h1><p>${label}</p></main>; }
 `;
 }
+
+test('frames the owner-authenticated Codex document only from the development website', async ({
+  page,
+}) => {
+  const upstream = createHttpServer((_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    response.end('<button type="button" aria-label="Chat with Codex">Codex</button>');
+  });
+  upstream.listen(0, '127.0.0.1');
+  await once(upstream, 'listening');
+  const upstreamAddress = upstream.address();
+  if (!upstreamAddress || typeof upstreamAddress === 'string') {
+    throw new Error('Expected an upstream server.');
+  }
+
+  let iframeSource = '';
+  const website = createHttpServer((_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    response.end(
+      `<!doctype html><html><body><iframe aria-label="Made Solid Codex chat" src="${iframeSource}"></iframe></body></html>`,
+    );
+  });
+  website.listen(0, '127.0.0.1');
+  await once(website, 'listening');
+  const websiteAddress = website.address();
+  if (!websiteAddress || typeof websiteAddress === 'string') {
+    throw new Error('Expected a development website server.');
+  }
+  const websiteOrigin = `http://localhost:${websiteAddress.port}`;
+
+  const gateway = startWorkspaceStudioGateway({
+    ownerUserId,
+    port: 0,
+    secret,
+    studioOrigin: 'https://studio.madesolid.com.au',
+    upstreamPort: upstreamAddress.port,
+    workspaceOrigin: 'https://dev.studio.madesolid.com.au',
+    workspaceOrigins: ['https://dev.studio.madesolid.com.au'],
+    websiteOrigin,
+  });
+  if (!gateway.listening) await once(gateway, 'listening');
+  const gatewayAddress = gateway.address();
+  if (!gatewayAddress || typeof gatewayAddress === 'string') {
+    throw new Error('Expected a Workspace gateway.');
+  }
+  const gatewayOrigin = `http://localhost:${gatewayAddress.port}`;
+  iframeSource = `${gatewayOrigin}/?embed=website-codex#/codex-panel`;
+
+  try {
+    const exchange = createWorkspaceStudioToken(secret, ownerUserId, { lifetimeMs: 120_000 });
+    await page.goto(`${gatewayOrigin}/?access=${encodeURIComponent(exchange)}`);
+    await page.goto(websiteOrigin);
+    await expect(
+      page.frameLocator('iframe[aria-label="Made Solid Codex chat"]').getByRole('button', {
+        name: 'Chat with Codex',
+      }),
+    ).toBeVisible();
+    await expect(page.locator('iframe[aria-label="Made Solid Codex chat"]')).toHaveAttribute(
+      'src',
+      /embed=website-codex/,
+    );
+  } finally {
+    await Promise.all([
+      new Promise((resolve) => gateway.close(resolve)),
+      new Promise((resolve) => website.close(resolve)),
+      new Promise((resolve) => upstream.close(resolve)),
+    ]);
+  }
+});
 
 test('keeps a hash route while authenticated Vite HMR updates through the Workspace gateway', async ({
   page,

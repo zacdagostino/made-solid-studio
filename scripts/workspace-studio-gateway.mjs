@@ -14,6 +14,7 @@ const cookieName = '__Host-made-solid-studio-workspace';
 const sessionLifetimeMs = 8 * 60 * 60 * 1_000;
 const codexBranchPath = '/__made-solid/codex-branch';
 const codexBranchTimeoutMs = 120_000;
+const websiteCodexEmbed = 'website-codex';
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function requiredEnvironment(name, environment = process.env) {
@@ -75,6 +76,10 @@ export function workspaceStudioGatewayConfiguration(environment = process.env) {
     upstreamPort,
     workspaceOrigin,
     workspaceOrigins,
+    websiteOrigin:
+      workspaceOrigin === 'https://dev.studio.madesolid.com.au'
+        ? 'https://dev.madesolid.com.au'
+        : undefined,
   };
 }
 
@@ -121,6 +126,23 @@ function requestsDocument(request) {
     destination !== 'iframe' &&
     (mode === 'navigate' || destination === 'document' || accept.includes('text/html'))
   );
+}
+
+function requestsWebsiteCodexEmbed(request, requestUrl, configuration) {
+  if (
+    !configuration.websiteOrigin ||
+    requestUrl.searchParams.get('embed') !== websiteCodexEmbed ||
+    (request.method !== 'GET' && request.method !== 'HEAD') ||
+    String(request.headers['sec-fetch-dest'] || '').toLowerCase() !== 'iframe' ||
+    String(request.headers['sec-fetch-site'] || '').toLowerCase() !== 'same-site'
+  ) {
+    return false;
+  }
+  try {
+    return new URL(String(request.headers.referer || '')).origin === configuration.websiteOrigin;
+  } catch {
+    return false;
+  }
 }
 
 function safeReturnPath(requestUrl) {
@@ -219,7 +241,7 @@ function workspaceResponseCacheControl(request) {
   return 'private, no-cache';
 }
 
-function proxyHttp(request, response, configuration, requestOrigin) {
+function proxyHttp(request, response, configuration, requestOrigin, frameOrigin) {
   const requestPath = new URL(request.url || '/', requestOrigin).pathname;
   const upstream = createProxyRequest(
     {
@@ -233,7 +255,7 @@ function proxyHttp(request, response, configuration, requestOrigin) {
       const headers = {
         ...upstreamResponse.headers,
         'cache-control': workspaceResponseCacheControl(request),
-        'content-security-policy': "frame-ancestors 'none'; base-uri 'self'",
+        'content-security-policy': `frame-ancestors ${frameOrigin || "'none'"}; base-uri 'self'`,
         'cross-origin-opener-policy': 'same-origin',
         'cross-origin-resource-policy': 'same-origin',
         'referrer-policy': 'no-referrer',
@@ -300,6 +322,7 @@ export function startWorkspaceStudioGateway(configuration = workspaceStudioGatew
       unavailable(response);
       return;
     }
+    const websiteCodexRequest = requestsWebsiteCodexEmbed(request, requestUrl, configuration);
     if (!access) {
       if (requestsDocument(request)) requestOwnerReentry(response, configuration, request);
       else unavailable(response);
@@ -313,7 +336,13 @@ export function startWorkspaceStudioGateway(configuration = workspaceStudioGatew
       exchangeAccess(response, requestUrl, configuration);
       return;
     }
-    proxyHttp(request, response, configuration, requestOrigin);
+    proxyHttp(
+      request,
+      response,
+      configuration,
+      requestOrigin,
+      websiteCodexRequest ? configuration.websiteOrigin : undefined,
+    );
   });
   server.on('upgrade', (request, socket, head) => {
     const { access, queryToken, requestOrigin } = accessForRequest(request, configuration);

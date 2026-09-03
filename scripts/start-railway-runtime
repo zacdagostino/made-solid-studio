@@ -10,6 +10,8 @@ workspace_root="${SITEFORGE_RUNTIME_WORKSPACES_DIR:-$runtime_data_directory/work
 studio_workspace_directory="$workspace_root/siteforge-os"
 prospect_workspaces_directory="$runtime_data_directory/prospect-workspaces"
 codex_home_directory="$runtime_data_directory/codex"
+codex_update_directory="$runtime_directory/codex-update"
+codex_update_restart_file="$codex_update_directory/restart-requested"
 preview_secret_file="$runtime_directory/workspace-preview-secret"
 port="${PORT:-8080}"
 workspace_gateway_port="${SITEFORGE_WORKSPACE_PROXY_PORT:-3000}"
@@ -49,6 +51,7 @@ done
 
 mkdir -p \
   "$runtime_directory" \
+  "$codex_update_directory" \
   "$workspace_vite_cache_directory" \
   "$prospect_workspaces_directory" \
   "$codex_home_directory"
@@ -95,7 +98,9 @@ export SITEFORGE_STUDIO_WORKSPACE_DIR="$workspace_root/siteforge-os"
 export MADE_SOLID_WEBSITE_DIRECTORY="$workspace_root/made-solid-website"
 export SITEFORGE_PROSPECT_WORKSPACES_DIR="$prospect_workspaces_directory"
 export SITEFORGE_CODEX_HOME="$codex_home_directory"
+export SITEFORGE_CODEX_UPDATE_DIR="$codex_update_directory"
 export CODEX_HOME="$codex_home_directory"
+export PATH="$codex_update_directory/current/node_modules/.bin:$PATH"
 export SITEFORGE_ACTIVE_PREVIEW_PATH="$runtime_directory/active-preview.json"
 export SITEFORGE_PREVIEW_PORT="${SITEFORGE_PREVIEW_PORT:-8787}"
 export SITEFORGE_WORKSPACE_PROXY_PORT="$workspace_gateway_port"
@@ -125,19 +130,59 @@ stop_runtime() {
 
 maintain_codex_app_server() {
   while true; do
+    activated_version=''
+    if [[ -f "$codex_update_restart_file" ]]; then
+      if ! activated_version="$(node "$application_directory/scripts/codex-runtime-updates.mjs" activate)"; then
+        echo "[railway-runtime] Codex update activation could not be prepared; keeping the current version."
+        sleep 5
+        continue
+      fi
+      if [[ -n "$activated_version" ]]; then
+        echo "[railway-runtime] activating Codex $activated_version after active work finished."
+      fi
+    fi
+    SITEFORGE_CODEX_BIN="$(node "$application_directory/scripts/codex-runtime-updates.mjs" resolve-bin 2>/dev/null || true)"
+    SITEFORGE_CODEX_BIN="${SITEFORGE_CODEX_BIN:-codex}"
+    export SITEFORGE_CODEX_BIN
     started_mode="$(node "$application_directory/scripts/runtime-ai-billing.mjs")"
     "$application_directory/scripts/start-codex-app-server" &
     codex_process=$!
+    codex_started_at=$SECONDS
+    activation_completed=0
     while kill -0 "$codex_process" 2>/dev/null; do
       sleep 2
+      if [[ -n "$activated_version" && "$activation_completed" == "0" && $((SECONDS - codex_started_at)) -ge 10 ]]; then
+        if node "$application_directory/scripts/codex-runtime-updates.mjs" health && \
+          node "$application_directory/scripts/codex-runtime-updates.mjs" complete; then
+          activation_completed=1
+          echo "[railway-runtime] Codex $activated_version passed its App Server health check."
+        else
+          echo "[railway-runtime] Codex $activated_version did not accept an App Server connection; rolling back."
+          kill -TERM "$codex_process" 2>/dev/null || true
+          break
+        fi
+      fi
       current_mode="$(node "$application_directory/scripts/runtime-ai-billing.mjs")"
       if [[ "$current_mode" != "$started_mode" ]]; then
         echo "[railway-runtime] AI billing mode changed; restarting the Codex Workspace Agent."
         kill -TERM "$codex_process" 2>/dev/null || true
         break
       fi
+      if [[ -z "$activated_version" && -f "$codex_update_restart_file" ]]; then
+        echo "[railway-runtime] a verified Codex update is ready; restarting the idle Workspace Agent."
+        kill -TERM "$codex_process" 2>/dev/null || true
+        break
+      fi
     done
     wait "$codex_process" 2>/dev/null || true
+    if [[ -n "$activated_version" && "$activation_completed" == "0" ]]; then
+      if node "$application_directory/scripts/codex-runtime-updates.mjs" rollback \
+        "Codex $activated_version stopped before its startup check completed."; then
+        echo "[railway-runtime] Codex $activated_version failed its startup check; restored the previous version."
+      else
+        echo "[railway-runtime] Codex $activated_version failed and automatic rollback needs attention."
+      fi
+    fi
     sleep 2
   done
 }
@@ -226,6 +271,22 @@ maintain_workspace_gateway() {
   done
 }
 
+maintain_codex_updates() {
+  local updater_process=''
+  local updater_stopping=0
+  trap 'updater_stopping=1; [[ -z "$updater_process" ]] || kill -TERM "$updater_process" 2>/dev/null || true' INT TERM
+  while ((updater_stopping == 0)); do
+    node "$application_directory/scripts/codex-runtime-updates.mjs" daemon &
+    updater_process=$!
+    wait "$updater_process" 2>/dev/null || true
+    updater_process=''
+    if ((updater_stopping == 0)); then
+      echo "[railway-runtime] Codex update maintenance stopped; retrying without interrupting Studio."
+      sleep 5
+    fi
+  done
+}
+
 trap stop_runtime INT TERM EXIT
 
 (
@@ -246,6 +307,9 @@ critical_processes+=("$!")
 node "$application_directory/preview-host/server.mjs" &
 child_processes+=("$!")
 critical_processes+=("$!")
+
+maintain_codex_updates &
+child_processes+=("$!")
 
 maintain_workspace_studio &
 child_processes+=("$!")

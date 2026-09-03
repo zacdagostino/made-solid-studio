@@ -65,6 +65,7 @@ test('requires exact HTTPS origins and distinct gateway and Vite ports', () => {
     upstreamPort: 5173,
     workspaceOrigin: 'https://workspace.madesolid.com.au',
     workspaceOrigins: ['https://workspace.madesolid.com.au'],
+    websiteOrigin: undefined,
   });
   assert.deepEqual(
     workspaceStudioGatewayConfiguration({
@@ -84,6 +85,7 @@ test('requires exact HTTPS origins and distinct gateway and Vite ports', () => {
         'https://legacy.example.com',
         'https://workspace.madesolid.com.au',
       ],
+      websiteOrigin: 'https://dev.madesolid.com.au',
     },
   );
   assert.throws(
@@ -205,6 +207,79 @@ test('protects every Vite request behind an owner cookie and keeps access out of
     assert.deepEqual(
       upstreamRequests.map(({ cookie: upstreamCookie }) => upstreamCookie),
       ['', ''],
+    );
+  } finally {
+    await new Promise((resolve) => gateway.close(resolve));
+    await new Promise((resolve) => upstream.close(resolve));
+  }
+});
+
+test('frames only the marked development website Codex document with an owner session', async () => {
+  const upstream = createServer((_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    response.end('<h1>Codex panel</h1>');
+  });
+  upstream.listen(0, '127.0.0.1');
+  const upstreamPort = await listening(upstream);
+  const gateway = startWorkspaceStudioGateway({
+    ownerUserId,
+    port: 0,
+    secret,
+    studioOrigin: 'https://studio.madesolid.com.au',
+    upstreamPort,
+    workspaceOrigin: 'https://dev.studio.madesolid.com.au',
+    workspaceOrigins: ['https://dev.studio.madesolid.com.au'],
+    websiteOrigin: 'https://dev.madesolid.com.au',
+  });
+  const gatewayPort = await listening(gateway);
+  const origin = `http://127.0.0.1:${gatewayPort}`;
+  const iframeHeaders = {
+    Accept: 'text/html',
+    Referer: 'https://dev.madesolid.com.au/admin',
+    'Sec-Fetch-Dest': 'iframe',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'same-site',
+  };
+  try {
+    const token = createWorkspaceStudioToken(secret, ownerUserId);
+    const exchange = await fetch(`${origin}/?access=${encodeURIComponent(token)}`, {
+      headers: {
+        Accept: 'text/html',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+      },
+      redirect: 'manual',
+    });
+    assert.equal(exchange.status, 303);
+    assert.equal(exchange.headers.get('location'), '/');
+    assert.doesNotMatch(exchange.headers.get('location') || '', /access=/);
+    const cookie = (exchange.headers.get('set-cookie') || '').split(';', 1)[0];
+
+    const document = await fetch(`${origin}/?embed=website-codex`, {
+      headers: { ...iframeHeaders, Cookie: cookie },
+    });
+    assert.equal(document.status, 200);
+    assert.match(
+      document.headers.get('content-security-policy') || '',
+      /frame-ancestors https:\/\/dev\.madesolid\.com\.au/,
+    );
+
+    const signedOut = await fetch(`${origin}/?embed=website-codex`, {
+      headers: iframeHeaders,
+    });
+    assert.equal(signedOut.status, 404);
+
+    const untrustedParent = await fetch(`${origin}/?embed=website-codex`, {
+      headers: {
+        ...iframeHeaders,
+        Cookie: cookie,
+        Referer: 'https://untrusted.example/',
+      },
+    });
+    assert.equal(untrustedParent.status, 200);
+    assert.match(
+      untrustedParent.headers.get('content-security-policy') || '',
+      /frame-ancestors 'none'/,
     );
   } finally {
     await new Promise((resolve) => gateway.close(resolve));

@@ -169,9 +169,23 @@ export function rewritePreviewRuntimeReferences(source, base) {
     .replace(/(["'])\/assets\//g, (_match, quote) => `${quote}${base}assets/`);
 }
 
+export function rewriteWorkspaceFrameRootReferences(source, base) {
+  return source
+    .replace(/(\bsrc=["'])\/(?!\/)/gi, (_match, prefix) => `${prefix}${base}`)
+    .replace(/(<link\b[^>]*\bhref=["'])\/(?!\/)/gi, (_match, prefix) => `${prefix}${base}`)
+    .replace(/(\baction=["'])\/(?!\/)/gi, (_match, prefix) => `${prefix}${base}`)
+    .replace(
+      /(\\"|\\')\/(?=(?:_next|assets)\b)/g,
+      (_match, escapedQuote) => `${escapedQuote}${base}`,
+    )
+    .replace(/url\(\s*(["']?)\/(?!\/)/gi, (_match, quote) => `url(${quote}${base}`);
+}
+
 export function rewriteWorkspaceFrameRuntimeReferences(source, base) {
   const pathBase = new URL(base, 'https://preview.madesolid.invalid').pathname;
-  return rewritePreviewRuntimeReferences(source, base)
+  return rewriteWorkspaceFrameRootReferences(source, base)
+    .replace(/(\.p\s*=\s*["'])\/_next\//g, (_match, assignment) => `${assignment}${base}_next/`)
+    .replace(/(["'])\/assets\//g, (_match, quote) => `${quote}${base}assets/`)
     .replace(/(["'`])\/_next\//g, (_match, quote) => `${quote}${base}_next/`)
     .replace(
       /(["'`])\/(?!\/)(?=(?:@vite|@react-refresh|src|node_modules)\/)/g,
@@ -199,8 +213,11 @@ export function rewriteNextWorkspaceFrameRuntimeReferences(source, base) {
     );
 }
 
-const opaqueFrameRuntimeScript = `
+function opaqueFrameRuntimeScript(base) {
+  const frameRoot = JSON.stringify(base);
+  return `
   (() => {
+    const frameRoot = ${frameRoot};
     const createMemoryStorage = () => {
       const entries = new Map();
       return {
@@ -236,8 +253,46 @@ const opaqueFrameRuntimeScript = `
         });
       } catch {}
     }
+    const announceNavigation = () => {
+      try {
+        window.parent.postMessage(
+          { source: 'made-solid-workspace-preview', status: 'loading' },
+          '*',
+        );
+      } catch {}
+    };
+    document.addEventListener('click', (event) => {
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+        return;
+      }
+      const target = event.target instanceof Element ? event.target.closest('a[href]') : null;
+      if (!target || target.target || target.hasAttribute('download')) return;
+      const rawHref = target.getAttribute('href') || '';
+      if (!rawHref || rawHref.startsWith('#')) return;
+      let destination;
+      try {
+        destination = new URL(rawHref, window.location.href);
+      } catch {
+        return;
+      }
+      if (
+        destination.origin !== window.location.origin ||
+        destination.pathname.startsWith(frameRoot)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const secured = new URL(frameRoot, window.location.origin);
+      secured.pathname = frameRoot + destination.pathname.replace(/^\\/+/, '');
+      secured.search = destination.search;
+      secured.hash = destination.hash;
+      announceNavigation();
+      window.location.assign(secured.href);
+    }, true);
   })();
 `;
+}
 
 const previewNavigationScript = `
   (() => {
@@ -278,7 +333,7 @@ export function preparePreviewHtml(source, base, clientspaceReviewOrigin) {
 export function prepareWorkspaceFrameHtml(source, base) {
   const rootedSource = rewriteWorkspaceFrameRuntimeReferences(source, base);
   const opaqueRuntime = source.includes('/_next/')
-    ? `<script data-made-solid-opaque-runtime>${opaqueFrameRuntimeScript}</script>`
+    ? `<style data-made-solid-workspace-frame>nextjs-portal{display:none!important}</style><script data-made-solid-opaque-runtime>${opaqueFrameRuntimeScript(base)}</script>`
     : '';
   const baseElement = `<base href="${base}">${opaqueRuntime}`;
   const withBase = rootedSource.replace(/<head(\s[^>]*)?>/i, (match) => `${match}${baseElement}`);

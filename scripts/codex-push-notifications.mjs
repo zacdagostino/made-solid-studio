@@ -193,14 +193,27 @@ export class CodexPushNotifications {
   }
 
   async notifyCompletion(record) {
-    const state = await this.state();
-    if (!state.subscriptions.length) return { delivered: 0, subscriptions: 0 };
     const payload = {
       body: 'Your Codex chat is ready to review.',
       tag: `codex-complete-${record.id}`,
       title: 'Codex finished',
       url: '/#/codex',
     };
+    return this.notify(payload);
+  }
+
+  async notifyCodexUpdate({ version }) {
+    return this.notify({
+      body: `Codex updated to ${version}. Open Studio to see the new features and fixes.`,
+      tag: `codex-update-${version}`,
+      title: 'Codex updated',
+      url: '/#/settings',
+    });
+  }
+
+  async notify(payload) {
+    const state = await this.state();
+    if (!state.subscriptions.length) return { delivered: 0, subscriptions: 0 };
     let delivered = 0;
     const retained = [];
     for (const subscription of state.subscriptions) {

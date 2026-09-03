@@ -9,6 +9,12 @@ test('keeps a visible bounded recovery shell when Studio modules cannot start', 
   ]);
 
   assert.match(document, /id="studio-startup-shell"/);
+  assert.match(document, /aria-label="Loading Made Solid Studio workspace"/);
+  assert.match(document, /class="studio-startup__brand"/);
+  assert.match(document, /class="studio-startup__brand" role="img"/);
+  assert.match(document, /class="studio-startup__mark"/);
+  assert.match(document, /class="studio-startup__wordmark"/);
+  assert.match(document, /siteforge-os\.theme/);
   assert.match(document, /role="status"/);
   assert.match(document, /Your source and saved work are safe/);
   assert.match(document, /Reload development Studio/);

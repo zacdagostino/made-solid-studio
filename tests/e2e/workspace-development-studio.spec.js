@@ -52,7 +52,7 @@ async function mockDevelopmentWorkspace(page) {
         body { margin: 0; min-height: 100vh; display: grid; place-items: center; font-family: sans-serif; color: #f7f7f4; background: #172240; }
         main { width: min(720px, calc(100% - 48px)); }
         p { color: #cbd5e1; line-height: 1.6; }
-      </style></head><body><main><p>Demo Local Services</p><h1>Live client website</h1><p>The exact client preview remains isolated inside Made Solid Workspace.</p></main></body></html>`,
+      </style></head><body><main><p>Demo Local Services</p><h1>Live client website</h1><p>The exact client preview remains isolated inside Made Solid Workspace.</p><a href="#next" onclick="event.preventDefault(); parent.postMessage({ source: 'made-solid-workspace-preview', status: 'loading' }, '*')">Open another page</a></main></body></html>`,
       contentType: 'text/html',
     });
   });
@@ -205,6 +205,15 @@ test('opens the exact client preview and scoped Codex in a dedicated editor tab'
   await expect(page).toHaveURL(new RegExp(`/#/website-editor/${businessId}$`));
   await expect(page.getByTestId('client-development-editor')).toBeVisible();
 
+  const previewFrame = page.frameLocator(
+    'iframe[title="Demo Local Services live website preview"]',
+  );
+  await previewFrame.getByRole('link', { name: 'Open another page' }).click();
+  await expect(page.getByLabel('Loading the next website page')).toBeVisible();
+  await previewFrame.locator('html').evaluate(() => window.location.reload());
+  await expect(previewFrame.getByRole('heading', { name: 'Live client website' })).toBeVisible();
+  await expect(page.getByLabel('Loading the next website page')).toBeHidden();
+
   const editor = page.getByTestId('focused-website-editor');
   const previewWidth = async () => {
     const previewFrame = page.frames().find((frame) => frame.url().startsWith(clientPreviewUrl));
@@ -224,6 +233,10 @@ test('opens the exact client preview and scoped Codex in a dedicated editor tab'
   await expect.poll(previewWidth).toBe(1440);
   await page.getByRole('button', { name: 'Enter full preview' }).click();
   await expect(editor).toHaveClass(/is-full-preview/);
+  await expect(page.locator('[data-preview-viewport="fit"]')).toBeVisible();
+  await expect.poll(previewWidth).toBe(testInfo.project.use.viewport.width);
+  await expect(page.locator('.focused-website-editor__toolbar')).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Exit full preview' })).toBeVisible();
   await expect(page.getByLabel('Demo Local Services Codex chat')).toBeHidden();
   await expect(
     page
@@ -232,6 +245,7 @@ test('opens the exact client preview and scoped Codex in a dedicated editor tab'
   ).toBeHidden();
   await expect(editor).toHaveScreenshot('workspace-development-full-desktop-preview.png');
   await page.getByRole('button', { name: 'Exit full preview' }).click();
+  await expect(page.locator('.focused-website-editor__toolbar')).toBeVisible();
   await page.getByRole('button', { name: 'Fit' }).click();
   await expect(editor).toHaveScreenshot('workspace-development-focused-editor.png');
 

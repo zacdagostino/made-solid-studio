@@ -286,6 +286,7 @@ const branchEndpoint = '/__made-solid/codex-branch';
 const localPageCaptureEndpoint = '/__made-solid/page-screenshot';
 const codexAttachmentPrefix = '/__made-solid/codex-attachment/';
 const codexSpeechEndpoint = '/__made-solid/codex-speech';
+const codexPreferencesEndpoint = '/__made-solid/codex-preferences';
 const aiBillingModeEndpoint = '/__made-solid/ai-billing-mode';
 const browserCaptureSource = 'made-solid-browser-capture';
 const codexPreferencesKey = 'made-solid-codex-preferences-v1';
@@ -497,57 +498,36 @@ function quotedCodexExcerpt(text: string, instruction = 'Quoted from Codex:') {
   return `${instruction}\n\n${quote}`;
 }
 
+function normalizeCodexPreferences(stored: Partial<CodexPreferences>): CodexPreferences {
+  return {
+    modelId: typeof stored.modelId === 'string' ? stored.modelId : '',
+    effortByModel:
+      stored.effortByModel && typeof stored.effortByModel === 'object' ? stored.effortByModel : {},
+    workMode: stored.workMode === 'direct' ? 'direct' : 'team',
+    fastMode: stored.fastMode === true,
+    autoReadCodex: stored.autoReadCodex === true,
+    speechLanguage:
+      typeof stored.speechLanguage === 'string' && stored.speechLanguage.trim()
+        ? stored.speechLanguage
+        : 'en-AU',
+    speechRate: [0.85, 1, 1.15].includes(Number(stored.speechRate)) ? Number(stored.speechRate) : 1,
+    speechStyle: stored.speechStyle === 'literal' ? 'literal' : 'natural',
+    speechVoice:
+      typeof stored.speechVoice === 'string' && stored.speechVoice.trim()
+        ? stored.speechVoice
+        : 'Aoede',
+  };
+}
+
 function readCodexPreferences(): CodexPreferences {
-  if (typeof window === 'undefined')
-    return {
-      modelId: '',
-      effortByModel: {},
-      workMode: 'team',
-      fastMode: false,
-      autoReadCodex: false,
-      speechLanguage: 'en-AU',
-      speechRate: 1,
-      speechStyle: 'natural',
-      speechVoice: 'Aoede',
-    };
+  if (typeof window === 'undefined') return normalizeCodexPreferences({});
   try {
     const stored = JSON.parse(
       window.localStorage.getItem(codexPreferencesKey) || '{}',
     ) as Partial<CodexPreferences>;
-    return {
-      modelId: typeof stored.modelId === 'string' ? stored.modelId : '',
-      effortByModel:
-        stored.effortByModel && typeof stored.effortByModel === 'object'
-          ? stored.effortByModel
-          : {},
-      workMode: stored.workMode === 'direct' ? 'direct' : 'team',
-      fastMode: stored.fastMode === true,
-      autoReadCodex: stored.autoReadCodex === true,
-      speechLanguage:
-        typeof stored.speechLanguage === 'string' && stored.speechLanguage.trim()
-          ? stored.speechLanguage
-          : 'en-AU',
-      speechRate: [0.85, 1, 1.15].includes(Number(stored.speechRate))
-        ? Number(stored.speechRate)
-        : 1,
-      speechStyle: stored.speechStyle === 'literal' ? 'literal' : 'natural',
-      speechVoice:
-        typeof stored.speechVoice === 'string' && stored.speechVoice.trim()
-          ? stored.speechVoice
-          : 'Aoede',
-    };
+    return normalizeCodexPreferences(stored);
   } catch {
-    return {
-      modelId: '',
-      effortByModel: {},
-      workMode: 'team',
-      fastMode: false,
-      autoReadCodex: false,
-      speechLanguage: 'en-AU',
-      speechRate: 1,
-      speechStyle: 'natural',
-      speechVoice: 'Aoede',
-    };
+    return normalizeCodexPreferences({});
   }
 }
 
@@ -1322,6 +1302,8 @@ export function CodexFeedbackPanel({
     () => readCodexPreferences().speechRate,
   );
   const [autoReadCodex, setAutoReadCodex] = useState(() => readCodexPreferences().autoReadCodex);
+  const [runtimePreferencesReady, setRuntimePreferencesReady] = useState(false);
+  const [runtimePreferencesHydrated, setRuntimePreferencesHydrated] = useState(false);
   const [selectedSpeechModel, setSelectedSpeechModel] = useState('chirp3-hd');
   const [voicePreviewState, setVoicePreviewState] = useState<'idle' | 'loading' | 'playing'>(
     'idle',
@@ -1374,6 +1356,44 @@ export function CodexFeedbackPanel({
   const selectedSpeechLanguageLabel =
     speechLanguages.find(({ code }) => code === selectedSpeechLanguage)?.label ??
     selectedSpeechLanguage;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+    void studioRuntimeFetch(codexPreferencesEndpoint, {
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Saved Codex preferences are unavailable.');
+        return (await response.json()) as { preferences?: Partial<CodexPreferences> | null };
+      })
+      .then(({ preferences }) => {
+        if (!active) return;
+        if (preferences) {
+          const saved = normalizeCodexPreferences(preferences);
+          setSelectedModelId(saved.modelId);
+          setEffortPreferences(saved.effortByModel);
+          setSelectedEffort(saved.effortByModel[saved.modelId] || '');
+          setWorkMode(saved.workMode);
+          setFastMode(saved.fastMode);
+          setAutoReadCodex(saved.autoReadCodex);
+          setSelectedSpeechLanguage(saved.speechLanguage);
+          setSelectedSpeechRate(saved.speechRate);
+          setSelectedSpeechStyle(saved.speechStyle);
+          setSelectedSpeechVoice(saved.speechVoice);
+        }
+        setRuntimePreferencesReady(true);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (active) setRuntimePreferencesHydrated(true);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, []);
 
   const stopVoicePreview = useCallback(() => {
     voicePreviewAbortRef.current?.abort();
@@ -2229,6 +2249,7 @@ export function CodexFeedbackPanel({
         ) {
           selectConversation(nextStatus.thread.id, nextStatus.thread.scope);
         }
+        if (!runtimePreferencesHydrated) return true;
         if (!selectedModelId || !nextStatus.models.some((model) => model.id === selectedModelId)) {
           const nextModel =
             nextStatus.models.find((model) => model.isDefault) || nextStatus.models[0];
@@ -2255,6 +2276,7 @@ export function CodexFeedbackPanel({
       effortPreferences,
       phase,
       recordConversationLifecycle,
+      runtimePreferencesHydrated,
       selectConversation,
       selectedEffort,
       selectedModelId,
@@ -2352,6 +2374,16 @@ export function CodexFeedbackPanel({
     if (!embedded || window.parent === window) return;
     const receiveWorkspaceContext = (event: MessageEvent) => {
       if (event.source !== window.parent || event.data?.source !== 'made-solid-codex-host') return;
+      if (event.data.action === 'synchronize') {
+        window.parent.postMessage(
+          {
+            source: 'made-solid-codex-panel',
+            open: phase !== 'closed',
+            expanded: phase === 'selecting',
+          },
+          event.origin,
+        );
+      }
       if (event.data.action === 'open') {
         markConversationViewed(selectedThreadIdRef.current || status?.thread?.id);
         restoredChatThreadRef.current = '';
@@ -2379,7 +2411,14 @@ export function CodexFeedbackPanel({
     };
     window.addEventListener('message', receiveWorkspaceContext);
     return () => window.removeEventListener('message', receiveWorkspaceContext);
-  }, [embedded, markConversationViewed, refreshStatus, status?.thread?.id, updateChatSession]);
+  }, [
+    embedded,
+    markConversationViewed,
+    phase,
+    refreshStatus,
+    status?.thread?.id,
+    updateChatSession,
+  ]);
 
   useEffect(() => {
     const log = mountedChatLog;
@@ -2925,20 +2964,32 @@ export function CodexFeedbackPanel({
 
   useEffect(() => {
     if (!selectedModelId || !selectedEffort) return;
-    window.localStorage.setItem(
-      codexPreferencesKey,
-      JSON.stringify({
-        modelId: selectedModelId,
-        effortByModel: { ...effortPreferences, [selectedModelId]: selectedEffort },
-        workMode,
-        fastMode,
-        autoReadCodex,
-        speechLanguage: selectedSpeechLanguage,
-        speechRate: selectedSpeechRate,
-        speechStyle: selectedSpeechStyle,
-        speechVoice: selectedSpeechVoice,
-      } satisfies CodexPreferences),
-    );
+    const preferences = {
+      modelId: selectedModelId,
+      effortByModel: { ...effortPreferences, [selectedModelId]: selectedEffort },
+      workMode,
+      fastMode,
+      autoReadCodex,
+      speechLanguage: selectedSpeechLanguage,
+      speechRate: selectedSpeechRate,
+      speechStyle: selectedSpeechStyle,
+      speechVoice: selectedSpeechVoice,
+    } satisfies CodexPreferences;
+    window.localStorage.setItem(codexPreferencesKey, JSON.stringify(preferences));
+    if (!runtimePreferencesReady) return;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      void studioRuntimeFetch(codexPreferencesEndpoint, {
+        body: JSON.stringify({ preferences }),
+        headers: { 'Content-Type': 'application/json' },
+        method: 'PUT',
+        signal: controller.signal,
+      }).catch(() => undefined);
+    }, 250);
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
   }, [
     autoReadCodex,
     effortPreferences,
@@ -2949,6 +3000,7 @@ export function CodexFeedbackPanel({
     selectedSpeechRate,
     selectedSpeechStyle,
     selectedSpeechVoice,
+    runtimePreferencesReady,
     workMode,
   ]);
 

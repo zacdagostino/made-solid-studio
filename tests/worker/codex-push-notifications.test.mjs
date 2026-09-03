@@ -116,6 +116,32 @@ test('removes an expired push endpoint after a 410 response', async () => {
   assert.deepEqual(stored.subscriptions, []);
 });
 
+test('sends a generic Codex version update to subscribed phones', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-update-push-'));
+  const storagePath = join(directory, 'push.json');
+  const { client, subscription } = subscriptionFixture();
+  let request;
+  const notifications = new CodexPushNotifications({
+    fetchImplementation: async (_endpoint, init) => {
+      request = init;
+      return new Response(null, { status: 201 });
+    },
+    storagePath,
+    validateEndpoint: async (endpoint) => new URL(endpoint),
+  });
+  await notifications.subscribe(subscription);
+  assert.deepEqual(await notifications.notifyCodexUpdate({ version: '0.152.1' }), {
+    delivered: 1,
+    subscriptions: 1,
+  });
+  assert.deepEqual(decryptPayload(client, subscription, request.body), {
+    body: 'Codex updated to 0.152.1. Open Studio to see the new features and fixes.',
+    tag: 'codex-update-0.152.1',
+    title: 'Codex updated',
+    url: '/#/settings',
+  });
+});
+
 test('delivers a durable completion marker once across maintenance polls', async () => {
   const storageRoot = await mkdtemp(join(tmpdir(), 'made-solid-codex-push-outbox-'));
   const record = {

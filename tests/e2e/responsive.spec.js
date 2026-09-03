@@ -62,6 +62,60 @@ async function mockStudioPushNotifications(page) {
   });
 }
 
+async function mockCodexRuntimeUpdate(page, { onCheck, seen = true } = {}) {
+  const status = {
+    checkedAt: '2026-09-02T08:30:00.000Z',
+    currentVersion: '0.152.1',
+    failureSummary: null,
+    latestVersion: '0.152.1',
+    releases: [
+      {
+        date: '2026-09-01',
+        version: '0.152.1',
+        sections: [
+          {
+            title: 'Bug Fixes',
+            items: [
+              'Guardian approval review now honors Node REPL policies provided through model metadata.',
+            ],
+          },
+        ],
+      },
+      {
+        date: '2026-09-01',
+        version: '0.152.0',
+        sections: [
+          {
+            title: 'New Features',
+            items: [
+              'App-server clients can configure thread shell-command timeouts, including deadlines longer than one hour.',
+            ],
+          },
+        ],
+      },
+    ],
+    status: 'updated',
+    updateAvailable: false,
+    updatedAt: '2026-09-02T08:00:00.000Z',
+  };
+  if (seen) {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        'made-solid-codex-update-notice',
+        '0.152.1:2026-09-02T08:00:00.000Z',
+      );
+    });
+  }
+  await page.route('**/__made-solid/codex-updates', async (route) => {
+    if (route.request().method() === 'POST') await onCheck?.();
+    await route.fulfill({
+      contentType: 'application/json',
+      status: 200,
+      body: JSON.stringify(status),
+    });
+  });
+}
+
 async function mountPopulatedBuilderActivity(page) {
   const codexItems = Array.from(
     { length: 24 },
@@ -4016,8 +4070,14 @@ test('displays the newest test package above retained package versions', async (
 
   const packagePicker = page.getByLabel('Test agent package');
   await expect(packagePicker).toHaveValue(
-    'agent-package-local-v23-3-generated-next-environment-hygiene',
+    'agent-package-local-v23-9-authenticated-website-codex-embed',
   );
+  await expect(packagePicker).toContainText('v23.9 · Approved test');
+  await expect(packagePicker).toContainText('v23.8 · Approved test');
+  await expect(packagePicker).toContainText('v23.7 · Approved test');
+  await expect(packagePicker).toContainText('v23.6 · Approved test');
+  await expect(packagePicker).toContainText('v23.5 · Approved test');
+  await expect(packagePicker).toContainText('v23.4 · Approved test');
   await expect(packagePicker).toContainText('v23.3 · Approved test');
   await expect(packagePicker).toContainText('v23.2 · Approved test');
   await expect(packagePicker).toContainText('v23.1 · Approved test');
@@ -4197,6 +4257,12 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v23.9', 'Authenticated website Codex embed'],
+    ['v23.8', 'Owner-only website Codex panel'],
+    ['v23.7', 'Codex update checker'],
+    ['v23.6', 'Automatic Codex updates'],
+    ['v23.5', 'Reliable Next website preview'],
+    ['v23.4', 'Persistent Codex preferences'],
     ['v23.3', 'Generated Next environment hygiene'],
     ['v23.2', 'Configured final edit upstream'],
     ['v23.1', 'Seamless Studio resume'],
@@ -5325,11 +5391,15 @@ test('opens the shared builder settings panel from the navigation settings page'
   page,
 }) => {
   await mockStudioPushNotifications(page);
+  await mockCodexRuntimeUpdate(page);
   await page.goto('/#/settings');
 
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Codex Cloud' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Codex completion notifications' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Codex runtime' })).toBeVisible();
+  await expect(page.getByText('Updated to v0.152.1')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'What changed' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Turn on phone notifications' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Open Codex Cloud' })).toHaveAttribute(
     'href',
@@ -5362,6 +5432,7 @@ test('opens the shared builder settings panel from the navigation settings page'
 
 test('turns real device push notifications on and off from Settings', async ({ page }) => {
   await mockStudioPushNotifications(page);
+  await mockCodexRuntimeUpdate(page);
   const requests = [];
   await page.route('**/__made-solid/codex-notifications', async (route) => {
     requests.push(route.request().postDataJSON?.() ?? null);
@@ -5392,6 +5463,7 @@ test('shows a useful retry message when the notification runtime returns an empt
   page,
 }) => {
   await mockStudioPushNotifications(page);
+  await mockCodexRuntimeUpdate(page);
   await page.route('**/__made-solid/codex-notifications', async (route) => {
     await route.fulfill({ body: '', status: 404 });
   });
@@ -5407,6 +5479,54 @@ test('shows a useful retry message when the notification runtime returns an empt
   ).toBeVisible();
   await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
   await expect(page.getByText(/Unexpected end of JSON input/)).toHaveCount(0);
+});
+
+test('shows official Codex update features responsively and announces a new activation', async ({
+  page,
+}, testInfo) => {
+  let manualChecks = 0;
+  await mockStudioPushNotifications(page);
+  await mockCodexRuntimeUpdate(page, {
+    onCheck: () => {
+      manualChecks += 1;
+    },
+    seen: false,
+  });
+  await page.goto('/#/settings');
+
+  const updateCard = page.locator('.settings-codex-updates');
+  await expect(updateCard).toContainText('Codex v0.152.1');
+  await expect(updateCard.getByText('Installed version').locator('..')).toContainText(
+    'Codex v0.152.1',
+  );
+  await expect(updateCard.getByText('Latest stable').locator('..')).toContainText('Codex v0.152.1');
+  await expect(updateCard.getByText('Last checked').locator('..')).toContainText('Sep 2, 08:30 AM');
+  await updateCard.getByRole('button', { name: 'Check for updates' }).click();
+  await expect.poll(() => manualChecks).toBe(1);
+  await expect(updateCard.getByRole('button', { name: 'Check for updates' })).toBeEnabled();
+  await expect(updateCard).toContainText('Guardian approval review');
+  await expect(updateCard).toContainText('App-server clients can configure');
+  await expect(page.getByRole('link', { name: 'Open official Codex changelog' })).toHaveAttribute(
+    'href',
+    'https://learn.chatgpt.com/docs/changelog?products=codex&topics=codex-cli',
+  );
+  await expect(page.locator('.toast')).toContainText('Codex updated to v0.152.1');
+  await page.getByRole('button', { name: 'Dismiss notification' }).click();
+  const accessibility = await new AxeBuilder({ page }).include('.settings-codex-updates').analyze();
+  expect(accessibility.violations).toEqual([]);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+  await expect(updateCard).toHaveScreenshot(
+    `settings-codex-runtime-update-${testInfo.project.name}.png`,
+  );
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    await expect(page.getByRole('link', { name: 'Open official Codex changelog' })).toBeVisible();
+  }
 });
 
 test('opens builder settings from the Agent Studio header', async ({ page }) => {
