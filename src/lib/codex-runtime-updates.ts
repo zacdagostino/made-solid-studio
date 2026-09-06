@@ -8,11 +8,23 @@ export type CodexRelease = {
   sections: CodexReleaseSection[];
   version: string;
 };
+export type CodexRuntimeModel = {
+  defaultEffort: string;
+  defaultServiceTier: string;
+  efforts: Array<{ description: string; id: string }>;
+  id: string;
+  isDefault: boolean;
+  label: string;
+  serviceTiers: Array<{ description: string; id: string; name: string }>;
+  supportsImages: boolean;
+};
 export type CodexUpdateStatus = {
+  availableModels: CodexRuntimeModel[];
   checkedAt: string | null;
   currentVersion: string;
   failureSummary: string | null;
   latestVersion: string;
+  modelCatalogStatus: 'ready' | 'unavailable';
   releases: CodexRelease[];
   status:
     | 'checking'

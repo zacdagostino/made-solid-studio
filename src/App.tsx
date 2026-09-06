@@ -8936,19 +8936,19 @@ function BuilderRunPanel({
             id: 'client-url-release-contract',
             title: 'Client URL and release contract',
             detail:
-              'Generated tests use private /test links, complete builds use private /build links, and approved Clientspace review uses an expiring /review capability. A generated full-site build remains an immutable baseline after editing begins. Live website editing stays in the selected client route on dev.studio.madesolid.com.au, and the current edited website is bound to its exact Git revision. Made Solid handoff requires a matching exact-commit release attestation and creates review material only: it never deploys production or attaches a client domain. Production remains a separate confirmed release action.',
-            revision: `v${selectedAgentPackage.version}.7`,
+              'Generated tests use private /test links, complete builds use private /build links, and approved Clientspace review uses an expiring /review capability. A generated full-site build remains an immutable baseline after editing begins. Live website editing stays in the selected client route on dev.studio.madesolid.com.au, and the current edited website is bound to its exact Git revision. Website editing compares the working files with the latest committed checkpoint and states whether they match, contain uncommitted changes, need sync, or have a newer clean commit. Made Solid handoff requires a matching exact-commit release attestation and creates review material only: it never deploys production or attaches a client domain. Production remains a separate confirmed release action.',
+            revision: `v${selectedAgentPackage.version}.8`,
             change:
-              'Latest edit: client reports now use a persisted GPT-5.6 Sol design-curation job at maximum reasoning to choose one to four verified comparisons, with visible phases, cancellation, exact error codes, recovery actions, and retry controls on Report and Preview.',
+              'Latest edit: Website editing now shows whether the current working website exactly matches the latest committed version or contains newer work that still needs committing or syncing.',
           },
           {
             id: 'visual-codex-feedback',
             title: 'Codex Workspace Agent and visual feedback',
             detail:
-              'The Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy, available as both a persistent popup and a dedicated Studio page. Every conversation in the selector shows when it is working, and a finished conversation shows an unread notification until the reviewer opens it. It defaults to included ChatGPT subscription access and gives only the authenticated Studio owner a disclosed, reversible switch to separately billed OpenAI API credits for all Studio AI work when subscription allowance is exhausted. Production Studio stays on its exact reviewed release, while an authenticated dev.studio.madesolid.com.au visit opens the full Studio UI from the persistent editable checkout with immediate source updates; workspace.madesolid.com.au remains a compatibility entry during the staged migration. The owner-only live-update connection stays active while Chrome is backgrounded, and privately cached development modules make an unavoidable reload restore the saved route and workspace before live hydration. Each prospect has one client-named website editor that combines the current preview with client-scoped Codex; the private source repository and local preview runtime are separately labelled supporting controls, not a second editor. Reviewers can send text, images, or both, choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. While Codex is working and the composer is empty, the primary Send control becomes a Stop Codex control that interrupts the selected supervisor and active attached agents. Typing text or attaching an image immediately restores Send so another message can be queued; clearing the draft restores Stop. Stop follows the exact selected turn, disappears promptly on completion, and is a separate control from Send so a completion or server-version race cannot submit a stop click as a message. Model, Reasoning, and Agent team stay together in compact Run setup, while usage, billing, Fast, and voice preferences sit behind a separate Chat settings cog. A completed final Codex reply can branch into a separately selected conversation that preserves native context, clean prompts, image evidence, and the same client or universal workspace boundary while leaving the original chat unchanged. Voice reading offers saved Natural or Literal interpretation and three speeds, explicit preview and manual Read, opt-in chat-scoped auto-read, progressive private Google audio with device fallback, and a persistent read-along dock with active-word restart, exact seeking where available, five-second skipping, pause, resume, and stop. Natural reading says “then” for right-arrow icons and keeps a verification introduction while it skips its long technical results list. Selecting text inside one completed Codex reply offers a temporary read-only quick question that inherits the whole selected conversation, follows the saved auto-read preference, and never changes the original chat or workspace; the same excerpt can instead be appended to the draft, sent immediately without replacing that draft, or dismissed on both popup and page chat. An explicit per-phone Web Push opt-in sends generic private alerts after a tracked Studio Codex supervisor turn completes successfully and after a stable Codex runtime update passes its health check, including while Studio is closed. The runtime checks official releases daily, waits for all Codex work to finish, shares one activated executable with chat and builder jobs, restores the previous version after a failed startup, and shows the exact version, lifecycle, and official release highlights in Settings. Studio source edits apply in place without restarting the workspace, and a compact top status announces the brief update while the current route, popup, draft, and conversation remain mounted. The launcher is present during startup checks, and a refresh restores the open selected conversation and its exact transcript reading position without changing the active prospect route. Exact-client preview capabilities stay private and out of the clean development URL. Observable activity and queue state appears without invented progress.',
-            revision: `v${selectedAgentPackage.version}.107`,
+              'The Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy, available as both a persistent popup and a dedicated Studio page. The hello@madesolid.com.au website gate keeps the launcher and embedded panel available only to that exact authenticated Studio owner. Every conversation in the selector shows when it is working, and a finished conversation shows an unread notification until the reviewer opens it. It defaults to included ChatGPT subscription access and gives only the authenticated Studio owner a disclosed, reversible switch to separately billed OpenAI API credits for all Studio AI work when subscription allowance is exhausted. Production Studio stays on its exact reviewed release, while an authenticated dev.studio.madesolid.com.au visit opens the full Studio UI from the persistent editable checkout with immediate source updates; workspace.madesolid.com.au remains a compatibility entry during the staged migration. The owner-only live-update connection stays active while Chrome is backgrounded, and privately cached development modules make an unavoidable reload restore the saved route and workspace before live hydration. Each prospect has one client-named website editor that combines the current preview with client-scoped Codex; the private source repository and local preview runtime are separately labelled supporting controls, not a second editor. Reviewers can send text, images, or both, choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. While Codex is working and the composer is empty, the primary Send control becomes a Stop Codex control that interrupts the selected supervisor and active attached agents. Typing text or attaching an image immediately restores Send so another message can be queued; clearing the draft restores Stop. Stop follows the exact selected turn, disappears promptly on completion, and is a separate control from Send so a completion or server-version race cannot submit a stop click as a message. Model, Reasoning, and Agent team stay together in compact Run setup, while usage, billing, Fast, and voice preferences sit behind a separate Chat settings cog. A completed final Codex reply can branch into a separately selected conversation that preserves native context, clean prompts, image evidence, and the same client or universal workspace boundary while leaving the original chat unchanged. Voice reading offers saved Natural or Literal interpretation and three speeds, explicit preview and manual Read, opt-in chat-scoped auto-read, progressive private Google audio with device fallback, and a persistent read-along dock with active-word restart, exact seeking where available, five-second skipping, pause, resume, and stop. Natural reading says “then” for right-arrow icons and keeps a verification introduction while it skips its long technical results list. Selecting text inside one completed Codex reply offers a temporary read-only quick question that inherits the whole selected conversation, follows the saved auto-read preference, and never changes the original chat or workspace; the same excerpt can instead be appended to the draft, sent immediately without replacing that draft, or dismissed on both popup and page chat. An explicit per-phone Web Push opt-in sends generic private alerts after a tracked Studio Codex supervisor turn completes successfully and after a stable Codex runtime update passes its health check, including while Studio is closed. The runtime checks official releases daily, waits for all Codex work to finish, shares one activated executable with chat and builder jobs, restores the previous version after a failed startup, and shows the exact version, lifecycle, and official release highlights in Settings. Studio source edits apply in place without restarting the workspace, and a compact top status announces the brief update while the current route, popup, draft, and conversation remain mounted. The launcher is present during startup checks, and a refresh restores the open selected conversation and its exact transcript reading position without changing the active prospect route. Exact-client preview capabilities stay private and out of the clean development URL. Observable activity and queue state appears without invented progress.',
+            revision: `v${selectedAgentPackage.version}.115`,
             change:
-              'Latest edit: the hello@madesolid.com.au website gate now opens its marked Codex iframe through the existing owner-authenticated Development Studio session, while every other parent and normal Studio document remains non-frameable.',
+              'Latest edit: the owner-only website chat now hides a discarded Android Chrome iframe immediately, reconnects on return, and reloads it safely when Studio does not acknowledge the restored frame.',
           },
           {
             id: 'inbound-client-email-review',
@@ -13424,88 +13424,176 @@ function CodexRuntimeUpdateSettings() {
       state,
     ),
   );
+  const astraModel = updateStatus?.availableModels?.find((model) => model.id === 'gpt-6-astra');
+  const modelCatalogReady = updateStatus?.modelCatalogStatus === 'ready';
+  const astraEfforts = astraModel?.efforts.map((effort) => effort.id).join(', ');
+  const astraFastTier = astraModel?.serviceTiers.find((tier) => tier.id === 'priority');
 
   return (
-    <Card
-      aria-busy={!updateStatus && !updateError}
-      className="workspace-panel settings-page__card settings-codex-updates"
-    >
-      <div className="settings-codex-updates__body">
-        <div className="settings-codex-updates__summary">
-          <div>
-            <Eyebrow>Automatic updates</Eyebrow>
-            <h2>Codex runtime</h2>
+    <>
+      <Card
+        aria-busy={!updateStatus && !updateError}
+        className="workspace-panel settings-page__card settings-codex-updates"
+      >
+        <div className="settings-codex-updates__body">
+          <div className="settings-codex-updates__summary">
+            <div>
+              <Eyebrow>Automatic updates</Eyebrow>
+              <h2>Codex runtime</h2>
+            </div>
+            <StatusBadge tone={statusBadge.tone}>{statusBadge.label}</StatusBadge>
           </div>
-          <StatusBadge tone={statusBadge.tone}>{statusBadge.label}</StatusBadge>
+          <p aria-live="polite" className="muted-copy" role="status">
+            {detail}
+          </p>
+          <div className="settings-codex-updates__checker">
+            <dl aria-label="Codex version details">
+              <div>
+                <dt>Installed version</dt>
+                <dd>{updateStatus ? `Codex v${updateStatus.currentVersion}` : 'Checking…'}</dd>
+              </div>
+              <div>
+                <dt>Latest stable</dt>
+                <dd>{updateStatus ? `Codex v${updateStatus.latestVersion}` : 'Checking…'}</dd>
+              </div>
+              <div>
+                <dt>Last checked</dt>
+                <dd>
+                  {updateStatus?.checkedAt
+                    ? formatDateTime(updateStatus.checkedAt)
+                    : 'Not checked yet'}
+                </dd>
+              </div>
+            </dl>
+            <Button
+              disabled={checkingNow || updateInProgress}
+              onClick={() => void checkForUpdates()}
+              variant="secondary"
+            >
+              {checkingNow ? (
+                <LoaderCircle aria-hidden="true" className="spin" size={16} />
+              ) : (
+                <SearchCheck aria-hidden="true" size={16} />
+              )}
+              {checkingNow ? 'Checking for updates…' : 'Check for updates'}
+            </Button>
+          </div>
+          {releases.length ? (
+            <div className="settings-codex-updates__releases">
+              <h3>What changed</h3>
+              {releases.slice(0, 3).map((release) => (
+                <section key={release.version} aria-labelledby={`codex-release-${release.version}`}>
+                  <h4 id={`codex-release-${release.version}`}>
+                    Codex v{release.version}
+                    {release.date ? <small>{release.date}</small> : null}
+                  </h4>
+                  {release.sections.map((section) => (
+                    <div key={section.title}>
+                      <strong>{section.title}</strong>
+                      <ul>
+                        {section.items.slice(0, 4).map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </section>
+              ))}
+              <ButtonGroup>
+                <ButtonLink
+                  href="https://github.com/openai/codex/releases"
+                  rel="noreferrer"
+                  target="_blank"
+                  variant="secondary"
+                >
+                  Open official Codex releases <ExternalLink aria-hidden="true" size={16} />
+                </ButtonLink>
+                <ButtonLink
+                  href="https://learn.chatgpt.com/docs/changelog?products=codex&topics=codex-cli"
+                  rel="noreferrer"
+                  target="_blank"
+                  variant="secondary"
+                >
+                  Open official Codex changelog <ExternalLink aria-hidden="true" size={16} />
+                </ButtonLink>
+              </ButtonGroup>
+            </div>
+          ) : null}
         </div>
-        <p aria-live="polite" className="muted-copy" role="status">
-          {detail}
-        </p>
-        <div className="settings-codex-updates__checker">
-          <dl aria-label="Codex version details">
-            <div>
-              <dt>Installed version</dt>
-              <dd>{updateStatus ? `Codex v${updateStatus.currentVersion}` : 'Checking…'}</dd>
-            </div>
-            <div>
-              <dt>Latest stable</dt>
-              <dd>{updateStatus ? `Codex v${updateStatus.latestVersion}` : 'Checking…'}</dd>
-            </div>
-            <div>
-              <dt>Last checked</dt>
-              <dd>
-                {updateStatus?.checkedAt
-                  ? formatDateTime(updateStatus.checkedAt)
-                  : 'Not checked yet'}
-              </dd>
-            </div>
-          </dl>
-          <Button
-            disabled={checkingNow || updateInProgress}
-            onClick={() => void checkForUpdates()}
-            variant="secondary"
+      </Card>
+      <Card className="workspace-panel settings-page__card settings-codex-model-rollout">
+        <div className="settings-codex-model-rollout__body">
+          <section
+            aria-labelledby="settings-codex-astra-title"
+            className="settings-codex-updates__astra"
           >
-            {checkingNow ? (
-              <LoaderCircle aria-hidden="true" className="spin" size={16} />
-            ) : (
-              <SearchCheck aria-hidden="true" size={16} />
-            )}
-            {checkingNow ? 'Checking for updates…' : 'Check for updates'}
-          </Button>
-        </div>
-        {releases.length ? (
-          <div className="settings-codex-updates__releases">
-            <h3>What changed</h3>
-            {releases.slice(0, 3).map((release) => (
-              <section key={release.version} aria-labelledby={`codex-release-${release.version}`}>
-                <h4 id={`codex-release-${release.version}`}>
-                  Codex v{release.version}
-                  {release.date ? <small>{release.date}</small> : null}
-                </h4>
-                {release.sections.map((section) => (
-                  <div key={section.title}>
-                    <strong>{section.title}</strong>
-                    <ul>
-                      {section.items.slice(0, 4).map((item) => (
-                        <li key={item}>{item}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-              </section>
-            ))}
+            <div className="settings-codex-updates__summary">
+              <div>
+                <Eyebrow>New model integration</Eyebrow>
+                <h2 id="settings-codex-astra-title">GPT-6 Astra</h2>
+              </div>
+              <StatusBadge tone={astraModel ? 'success' : 'warning'}>
+                {astraModel ? 'Available in Studio' : 'Rolling out'}
+              </StatusBadge>
+            </div>
+            <p className="muted-copy">
+              {astraModel
+                ? `Your signed-in Codex account now exposes Astra. Studio has added it to the Model picker${astraEfforts ? ` with ${astraEfforts} reasoning` : ''}${astraFastTier ? ` and ${astraFastTier.name} (${astraFastTier.description})` : ''}.`
+                : modelCatalogReady
+                  ? 'OpenAI has announced Astra, but this signed-in Codex account does not expose it yet. Studio checks the live model catalogue and will add it to the Model picker automatically when access arrives.'
+                  : 'Studio could not reach the live Codex model catalogue during this check. It will retry automatically without presenting Astra as available prematurely.'}
+            </p>
+            <ul aria-label="Astra capabilities">
+              <li>
+                <CheckCircle2 aria-hidden="true" size={17} />
+                Low through Max reasoning
+              </li>
+              <li>
+                <CheckCircle2 aria-hidden="true" size={17} />
+                Asynchronous tools and mid-turn steering
+              </li>
+              <li>
+                <CheckCircle2 aria-hidden="true" size={17} />
+                Fast only when the account exposes the tier
+              </li>
+            </ul>
             <ButtonLink
-              href="https://learn.chatgpt.com/docs/changelog?products=codex&topics=codex-cli"
+              href="https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6-astra"
               rel="noreferrer"
               target="_blank"
               variant="secondary"
             >
-              Open official Codex changelog <ExternalLink aria-hidden="true" size={16} />
+              Open official Astra guide <ExternalLink aria-hidden="true" size={16} />
             </ButtonLink>
-          </div>
-        ) : null}
-      </div>
-    </Card>
+          </section>
+          <section
+            aria-labelledby="settings-codex-compatibility-title"
+            className="settings-codex-updates__compatibility"
+          >
+            <h3 id="settings-codex-compatibility-title">How future updates reach Studio</h3>
+            <dl>
+              <div>
+                <dt>Runtime features</dt>
+                <dd>Automatic after the verified release activates</dd>
+              </div>
+              <div>
+                <dt>Models, reasoning and speed tiers</dt>
+                <dd>Automatic from the signed-in runtime catalogue</dd>
+              </div>
+              <div>
+                <dt>New Studio UI or API contracts</dt>
+                <dd>Versioned and tested from official release notes</dd>
+              </div>
+            </dl>
+            <p className="muted-copy">
+              Studio does not claim an unavailable model or silently guess a new API contract. It
+              activates runtime capabilities automatically, shows the official changes here, and
+              keeps Studio-specific adoption reviewable in the package ledger.
+            </p>
+          </section>
+        </div>
+      </Card>
+    </>
   );
 }
 
@@ -16815,6 +16903,97 @@ type EditVersion = {
   commitUrl?: string;
 };
 
+type WebsiteEditCheckpointView = {
+  kind: 'checking' | 'up_to_date' | 'changes_pending' | 'checkpoint_behind' | 'not_committed';
+  tone: 'neutral' | 'success' | 'warning' | 'danger';
+  label: string;
+  title: string;
+  detail: string;
+  workingLabel: string;
+  workingDetail: string;
+};
+
+function websiteEditCheckpointView(state: FinalEditState): WebsiteEditCheckpointView {
+  const changedCount = state.changedFiles?.length ?? 0;
+  const workingVersion = state.workingVersion ?? 1;
+  const committedVersion = state.committedVersion;
+  const headMatchesCheckpoint = Boolean(
+    state.commit && committedVersion && state.commit === committedVersion.commit,
+  );
+
+  if (state.status === 'loading') {
+    return {
+      kind: 'checking',
+      tone: 'neutral',
+      label: 'Checking versions',
+      title: 'Comparing the working website with its latest checkpoint',
+      detail: 'Studio is reading the current files and committed website version.',
+      workingLabel: 'Checking current website',
+      workingDetail: 'Reading Git status',
+    };
+  }
+
+  if (state.status === 'changes_pending' || changedCount > 0) {
+    return {
+      kind: 'changes_pending',
+      tone: 'warning',
+      label: 'Uncommitted changes',
+      title: committedVersion
+        ? `Working edit v${workingVersion} is newer than committed v${committedVersion.version}`
+        : `Working edit v${workingVersion} has not been committed`,
+      detail: committedVersion
+        ? `${changedCount} file change${changedCount === 1 ? ' is' : 's are'} in the working website but not in committed v${committedVersion.version}. Commit edit v${workingVersion} to bring the checkpoint up to date.`
+        : `${changedCount} file change${changedCount === 1 ? ' is' : 's are'} waiting for the first committed website version.`,
+      workingLabel: `Working edit v${workingVersion}`,
+      workingDetail: `${changedCount} uncommitted file change${changedCount === 1 ? '' : 's'}`,
+    };
+  }
+
+  if (headMatchesCheckpoint) {
+    return {
+      kind: 'up_to_date',
+      tone: 'success',
+      label: 'Up to date',
+      title: `Committed v${committedVersion?.version ?? workingVersion} matches the current website`,
+      detail: state.synced
+        ? `Both point to commit ${state.commit?.slice(0, 8)}. There are no uncommitted changes and the checkpoint is synced.`
+        : `Both point to commit ${state.commit?.slice(0, 8)} and there are no uncommitted changes. The checkpoint still needs to be synced.`,
+      workingLabel: `Matches committed v${committedVersion?.version ?? workingVersion}`,
+      workingDetail: state.synced
+        ? 'No uncommitted changes · synced'
+        : 'No uncommitted changes · not synced',
+    };
+  }
+
+  if (committedVersion && state.commit) {
+    return {
+      kind: 'checkpoint_behind',
+      tone: 'warning',
+      label: 'Checkpoint behind',
+      title: `The current website is newer than committed v${committedVersion.version}`,
+      detail: `The working files are clean at commit ${state.commit.slice(0, 8)}, but that commit is not saved as a Made Solid edit checkpoint yet.`,
+      workingLabel: `Commit ${state.commit.slice(0, 8)}`,
+      workingDetail: 'Clean source · not saved as an edit version',
+    };
+  }
+
+  return {
+    kind: 'not_committed',
+    tone: state.status === 'failed' ? 'danger' : 'warning',
+    label: state.status === 'failed' ? 'Comparison unavailable' : 'No committed version',
+    title:
+      state.status === 'failed'
+        ? 'Studio could not compare the website versions'
+        : 'The current website has no committed checkpoint yet',
+    detail:
+      state.status === 'failed'
+        ? state.detail
+        : 'Commit the working website to create the first version you can compare and reopen later.',
+    workingLabel: state.commit ? `Commit ${state.commit.slice(0, 8)}` : 'Not committed',
+    workingDetail: state.status === 'failed' ? 'Git status unavailable' : 'No saved edit version',
+  };
+}
+
 type CommittedPreviewProgress = {
   status: 'idle' | 'running' | 'complete' | 'failed';
   phase: string;
@@ -17081,7 +17260,7 @@ function EditVersionHistory({
         <div>
           <strong>
             {version.version === state.committedVersion?.version
-              ? 'Current committed edit'
+              ? 'Latest committed version'
               : 'Committed edit'}
           </strong>
           <small>
@@ -18381,34 +18560,13 @@ function WebsiteEditingPage({
   const isRunning = progress.status === 'running';
   const releaseIsRunning = releaseProgress.status === 'running';
   const canFinalise = state.status === 'changes_pending';
+  const checkpointView = websiteEditCheckpointView(state);
   const staleVerificationRuntime =
     state.releaseVerificationAvailable === undefined && state.businessId === undefined;
   const releaseVerificationBlocker = releaseVerificationBlockerForState(state);
   const canVerifyRelease = Boolean(!isRunning && !releaseIsRunning && !releaseVerificationBlocker);
-  const editingTitle =
-    state.status === 'loading'
-      ? 'Loading the current website'
-      : state.status === 'unavailable'
-        ? 'Create the current edited website'
-        : state.status === 'changes_pending'
-          ? `Working edit v${state.workingVersion ?? 1} has ${state.changedFiles?.length ?? 0} uncommitted change${state.changedFiles?.length === 1 ? '' : 's'}`
-          : state.status === 'finalised'
-            ? `Current edited website is committed as v${state.committedVersion?.version ?? 1}`
-            : state.status === 'failed'
-              ? 'Editing status needs attention'
-              : `Current edited website is synced at ${state.commit?.slice(0, 8) ?? 'the latest commit'}`;
-  const editingStatusLabel =
-    state.status === 'loading'
-      ? 'Loading'
-      : state.status === 'unavailable'
-        ? 'Workspace required'
-        : state.status === 'changes_pending'
-          ? `${state.changedFiles?.length ?? 0} changes pending`
-          : state.status === 'finalised'
-            ? 'Committed & synced'
-            : state.status === 'failed'
-              ? 'Status unavailable'
-              : 'Clean & synced';
+  const editingTitle = checkpointView.title;
+  const editingStatusLabel = checkpointView.label;
 
   async function finalise() {
     if (!canFinalise || isRunning) return;
@@ -18490,17 +18648,7 @@ function WebsiteEditingPage({
               current website source and verifies the exact commit that would move forward.
             </p>
           </div>
-          <StatusBadge
-            tone={
-              state.status === 'finalised' || state.status === 'ready'
-                ? 'success'
-                : state.status === 'failed'
-                  ? 'danger'
-                  : 'warning'
-            }
-          >
-            {editingStatusLabel}
-          </StatusBadge>
+          <StatusBadge tone={checkpointView.tone}>{editingStatusLabel}</StatusBadge>
         </div>
         <ol className="workflow-overview__steps" aria-label="Website editing workflow">
           <li className="is-complete">
@@ -18538,15 +18686,37 @@ function WebsiteEditingPage({
             <span>Derived into</span>
           </div>
           <div className="website-version-relationship__source website-version-relationship__source--working">
-            <Eyebrow>Current edited website</Eyebrow>
-            <strong>Commit {state.commit?.slice(0, 8) ?? 'not committed'}</strong>
-            <small>
-              {state.status === 'changes_pending'
-                ? `Working edit v${state.workingVersion ?? 1}`
-                : state.committedVersion
-                  ? `Committed edit v${state.committedVersion.version}`
-                  : 'Clean working source'}
-            </small>
+            <Eyebrow>Current working website</Eyebrow>
+            <strong>{checkpointView.workingLabel}</strong>
+            <small>{checkpointView.workingDetail}</small>
+          </div>
+          <div
+            className={`website-edit-sync website-edit-sync--${checkpointView.kind}`}
+            data-testid="website-edit-version-status"
+            role="status"
+          >
+            <div className="website-edit-sync__heading">
+              <div>
+                <Eyebrow>Working website vs committed version</Eyebrow>
+                <h3>{checkpointView.title}</h3>
+              </div>
+              <StatusBadge tone={checkpointView.tone}>{checkpointView.label}</StatusBadge>
+            </div>
+            <dl>
+              <div>
+                <dt>Current working website</dt>
+                <dd>{checkpointView.workingLabel}</dd>
+              </div>
+              <div>
+                <dt>Latest committed version</dt>
+                <dd>
+                  {state.committedVersion
+                    ? `v${state.committedVersion.version} · ${state.committedVersion.commit.slice(0, 8)}`
+                    : 'None yet'}
+                </dd>
+              </div>
+            </dl>
+            <p>{checkpointView.detail}</p>
           </div>
         </section>
       ) : null}
@@ -18739,16 +18909,20 @@ function WebsiteEditingPage({
         </div>
         <dl className="final-edit__facts">
           <div>
-            <dt>{state.status === 'changes_pending' ? 'Editing version' : 'Next edit version'}</dt>
-            <dd>v{state.workingVersion ?? 1}</dd>
+            <dt>Working website</dt>
+            <dd>{checkpointView.workingLabel}</dd>
           </div>
           <div>
-            <dt>Current committed</dt>
+            <dt>Latest committed</dt>
             <dd>
               {state.committedVersion
                 ? `v${state.committedVersion.version} · ${state.committedVersion.commit.slice(0, 8)}`
                 : 'None yet'}
             </dd>
+          </div>
+          <div>
+            <dt>Checkpoint status</dt>
+            <dd>{checkpointView.label}</dd>
           </div>
           <div>
             <dt>Derived from build</dt>
@@ -18850,7 +19024,7 @@ function WebsiteEditingPage({
           {isRunning
             ? `Committing edit v${state.workingVersion ?? 1}`
             : state.status === 'finalised'
-              ? `Edit v${state.committedVersion?.version ?? 1} committed`
+              ? `Committed v${state.committedVersion?.version ?? 1} is up to date`
               : `Commit edit v${state.workingVersion ?? 1}`}
         </Button>
       </Card>

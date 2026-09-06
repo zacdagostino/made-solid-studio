@@ -394,7 +394,7 @@ test('records the current permanent Codex Testing behaviour revision', async () 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
   const revision = behaviour.match(/revision: `v\$\{selectedAgentPackage\.version\}\.(\d+)`/);
   assert.ok(revision);
-  assert.equal(Number(revision[1]), 107);
+  assert.equal(Number(revision[1]), 115);
   assert.match(app, /presentedProspectIndex = true/);
   assert.match(app, /client-scoped Codex/);
   assert.match(app, /gives only the authenticated Studio owner a disclosed, reversible switch/);
@@ -1982,8 +1982,7 @@ test('registers recent-prompt chat titles above the retained local package ledge
     packageLedger.indexOf('localRecentPromptChatTitlesPackage,') <
       packageLedger.indexOf('localCameraRollPhotoUploadPackage,'),
   );
-  assert.match(component, /latestPrompt \|\| thread\?\.name/);
-  assert.match(component, /Captured from:/);
+  assert.match(component, /codexConversationTitle\(thread\)/);
 });
 
 test('registers concurrent per-chat activity above the retained package ledger', async () => {
@@ -2111,6 +2110,12 @@ test('uses shared controls, a compact model selector, and live model discovery f
   assert.match(service, /pathToFileURL\([\s\S]*codex-feedback-bridge\.mjs/);
   assert.match(service, /\?updated=\$\{modifiedAt\}/);
   assert.match(service, /nextBridge\.startedThreads = activeCodexFeedbackBridge\.startedThreads/);
+  assert.match(service, /await activeWork\.catch\(\(\) => undefined\)/);
+  assert.match(service, /return codexFeedbackBridge\(\)/);
+  assert.doesNotMatch(
+    service,
+    /modifiedAt === activeCodexFeedbackBridgeModifiedAt \|\|[\s\S]{0,160}maintenancePromise/,
+  );
   assert.match(hotUpdate, /vite:beforeUpdate/);
   assert.match(hotUpdate, /vite:afterUpdate/);
   assert.match(appShell, /subscribeToStudioUpdates/);
@@ -2779,7 +2784,7 @@ test('registers focused prospect preview modes above immutable v22.0', async () 
     fallbackLedger.indexOf('localFocusedProspectPreviewModesPackage,') <
       fallbackLedger.indexOf('localResilientDevelopmentStudioRuntimePackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.107`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.115`/);
   assert.match(app, /presentedProspectIndex = true/);
   assert.match(repository, /fit, exact 768px tablet, and exact 1440px desktop preview modes/);
 });
@@ -2819,9 +2824,12 @@ test('registers reliable Codex ephemeral chats above immutable v22.1', async () 
     fallbackLedger.indexOf('localReliableCodexEphemeralThreadsPackage,') <
       fallbackLedger.indexOf('localFocusedProspectPreviewModesPackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.107`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.115`/);
   assert.match(bridge, /watchTurn\(threadId\)/);
-  assert.match(bridge, /isUnmaterializedThreadReadError/);
+  assert.match(
+    bridge,
+    /this\.startedThreads\.has\(String\(thread\.id\)\) && !hasConversationContent\(thread\)/,
+  );
   assert.match(styles, /\.codex-quick-question-dialog \{[\s\S]*color-scheme: dark;/);
 });
 
@@ -2858,7 +2866,7 @@ test('registers queueable working Codex messages above immutable v22.3', async (
     fallbackLedger.indexOf('localQueueableWorkingCodexMessagesPackage,') <
       fallbackLedger.indexOf('localResumeAwareCodexProgressPackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.107`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.115`/);
   assert.match(component, /isCodexWorking && !prompt\.trim\(\) && draftAttachments\.length === 0/);
 });
 
@@ -2897,7 +2905,7 @@ test('registers the responsive development runtime above immutable v22.4', async
     fallbackLedger.indexOf('localResponsiveDevelopmentRuntimePackage,') <
       fallbackLedger.indexOf('localQueueableWorkingCodexMessagesPackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.107`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.115`/);
   assert.match(app, /const workspacePromise = repository\.listWorkspaces\(\)/);
   assert.match(app, /setLoadingPresentation\(false\)/);
   assert.match(component, /statusRefreshInFlightRef/);
@@ -2939,7 +2947,7 @@ test('registers resume-aware Codex progress above immutable v22.2', async () => 
     fallbackLedger.indexOf('localResumeAwareCodexProgressPackage,') <
       fallbackLedger.indexOf('localReliableCodexEphemeralThreadsPackage,'),
   );
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.107`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.115`/);
   assert.match(component, /activities: \[\]/);
   assert.match(component, /window\.addEventListener\('pageshow', refreshVisibleChat\)/);
   assert.match(component, /document\.addEventListener\('visibilitychange'/);

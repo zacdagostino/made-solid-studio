@@ -54,7 +54,7 @@ test('moves only an exact committed edit through a protected persisted handoff',
   assert.match(worker, /persistReleaseAttestation/);
   assert.match(worker, /loadVerifiedValueReport/);
   assert.match(worker, /\.eq\('schema_version', 10\)/);
-  assert.match(worker, /gpt-5\.6-sol-design-showcase-v2/);
+  assert.match(worker, /gpt-5\.6-sol-dynamic-design-showcase-v3/);
   assert.match(worker, /Create a current value report for this exact verified edit/);
   assert.match(worker, /report,/);
   assert.match(worker, /release-attestations/);

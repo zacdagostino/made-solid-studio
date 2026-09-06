@@ -54,7 +54,7 @@ test('worker keeps the secret server-side and resolves canonical screenshot prov
   assert.match(worker, /STUDIO_HANDOFF_SECRET/);
   assert.match(worker, /sourceReportId: source\.report\.id/);
   assert.match(worker, /report\.schema_version !== 10/);
-  assert.match(worker, /gpt-5\.6-sol-design-showcase-v2/);
+  assert.match(worker, /gpt-5\.6-sol-dynamic-design-showcase-v3/);
   assert.match(worker, /finding\?\.afterEvidence/);
   assert.match(worker, /source_release_attestations/);
   assert.match(worker, /\.eq\('business_id', job\.business_id\)/);

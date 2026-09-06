@@ -45,14 +45,10 @@ test('registers generated Next environment hygiene as immutable test package v23
   }
 
   const behaviour = app.slice(app.indexOf("id: 'client-url-release-contract'"));
-  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.5`/);
-  assert.match(behaviour, /byte-exact Next\.js development rewrite of next-env\.d\.ts/);
-  assert.match(
-    behaviour,
-    /manual environment declarations and real source changes remain pending edits/,
-  );
+  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.8`/);
+  assert.match(behaviour, /current working website exactly matches the latest committed version/);
 
-  assert.match(responsiveSpec, /agent-package-local-v23-4-persistent-codex-preferences/);
+  assert.match(responsiveSpec, /agent-package-local-v24-7-recent-request-chat-context/);
   assert.match(responsiveSpec, /\['v23\.4', 'Persistent Codex preferences'\]/);
   assert.match(responsiveSpec, /\['v23\.3', 'Generated Next environment hygiene'\]/);
   assert.match(responsiveSpec, /\['v23\.2', 'Configured final edit upstream'\]/);

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdtemp, readFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -42,8 +42,10 @@ function fakeConnection(state) {
         };
       }
       if (method === 'model/list') {
+        state.modelListParams ??= [];
+        state.modelListParams.push(params);
         return {
-          data: [
+          data: state.models || [
             {
               id: 'gpt-image-capable',
               displayName: 'Image capable',
@@ -387,6 +389,112 @@ test('discovers ChatGPT models, image support, efforts, and the active Studio th
   );
   assert.equal(status.models[1].supportsImages, false);
   assert.deepEqual(status.agents, []);
+});
+
+test('uses each thread latest saved request as its public preview', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-latest-previews-'));
+  const state = { busy: false, turns: [] };
+  const records = [
+    {
+      id: 'earlier-thread-1-request',
+      threadId: 'thread-1',
+      prompt: 'Review the original Studio screen.',
+      status: 'completed',
+      createdAt: '2026-09-06T09:00:00.000Z',
+    },
+    {
+      id: 'latest-thread-1-request',
+      threadId: 'thread-1',
+      prompt: 'Keep my latest request visible without crowding the chat.',
+      status: 'running',
+      createdAt: '2026-09-06T10:00:00.000Z',
+    },
+    {
+      id: 'latest-thread-2-request',
+      threadId: 'thread-2',
+      prompt: 'Finish the Clientspace navigation review.',
+      status: 'completed',
+      createdAt: '2026-09-06T09:30:00.000Z',
+    },
+  ];
+  await Promise.all(
+    records.map((record) =>
+      writeFile(join(directory, `${record.id}.json`), JSON.stringify(record), 'utf8'),
+    ),
+  );
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+
+  const status = await bridge.inspect({ threadId: 'thread-1' });
+
+  assert.equal(status.thread.preview, records[1].prompt);
+  assert.equal(
+    status.threads.find((thread) => thread.id === 'thread-1').preview,
+    records[1].prompt,
+  );
+  assert.equal(
+    status.threads.find((thread) => thread.id === 'thread-2').preview,
+    records[2].prompt,
+  );
+});
+
+test('makes a hidden Astra rollout selectable without exposing other internal models', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-astra-'));
+  const state = {
+    models: [
+      {
+        id: 'gpt-public',
+        displayName: 'GPT Public',
+        hidden: false,
+        supportedReasoningEfforts: [{ reasoningEffort: 'medium' }],
+      },
+      {
+        id: 'gpt-6-astra',
+        displayName: 'GPT-6 Astra',
+        hidden: true,
+        defaultReasoningEffort: 'medium',
+        supportedReasoningEfforts: [
+          { reasoningEffort: 'low' },
+          { reasoningEffort: 'medium' },
+          { reasoningEffort: 'high' },
+          { reasoningEffort: 'xhigh' },
+          { reasoningEffort: 'max' },
+        ],
+        serviceTiers: [{ id: 'priority', name: 'Fast', description: '2x speed, increased usage' }],
+      },
+      {
+        id: 'codex-auto-review',
+        displayName: 'Internal review model',
+        hidden: true,
+        supportedReasoningEfforts: [{ reasoningEffort: 'medium' }],
+      },
+    ],
+  };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+
+  const models = await bridge.listModels();
+  assert.deepEqual(
+    models.map((model) => model.id),
+    ['gpt-public', 'gpt-6-astra'],
+  );
+  assert.deepEqual(
+    models[1].efforts.map((effort) => effort.id),
+    ['low', 'medium', 'high', 'xhigh', 'max'],
+  );
+  assert.equal(models[1].serviceTiers[0].description, '2x speed, increased usage');
+  assert.ok(state.modelListParams.every((params) => params.includeHidden === true));
+
+  await bridge.createThread({ model: 'gpt-6-astra', effort: 'max', serviceTier: 'priority' });
+  assert.equal(state.threadStarts[0].model, 'gpt-6-astra');
+  assert.equal(state.threadStarts[0].serviceTier, 'priority');
+  assert.deepEqual(state.threadStarts[0].config, { model_reasoning_effort: 'max' });
 });
 
 test('reuses one healthy app-server connection across status inspections', async () => {
@@ -866,36 +974,50 @@ test('keeps a newly started empty thread selectable before thread/list includes 
   const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-new-thread-'));
   const state = { busy: false, turns: [] };
   const connection = fakeConnection(state);
-  let listCalls = 0;
+  let newThreadReadFailure = 'The newly created conversation is still being prepared.';
+  const connect = async () => {
+    const client = await connection();
+    return {
+      ...client,
+      async request(method, params) {
+        if (method === 'thread/start') {
+          const result = await client.request(method, params);
+          return {
+            ...result,
+            thread: { id: result.thread.id, status: result.thread.status },
+          };
+        }
+        if (method === 'thread/list') {
+          const result = await client.request(method, params);
+          return {
+            data: result.data
+              .filter((thread) => !thread.id.startsWith('thread-new-'))
+              .map((thread) => ({ ...thread, cwd: undefined })),
+          };
+        }
+        if (method === 'thread/read' && params.threadId.startsWith('thread-new-')) {
+          throw new Error(newThreadReadFailure);
+        }
+        return client.request(method, params);
+      },
+    };
+  };
   const bridge = new CodexFeedbackBridge({
     cwd: '/workspaces/siteforge-os',
     storageRoot: directory,
-    connect: async () => {
-      const client = await connection();
-      return {
-        ...client,
-        async request(method, params) {
-          if (method === 'thread/list') {
-            const result = await client.request(method, params);
-            listCalls += 1;
-            return listCalls === 1
-              ? { data: result.data.filter((thread) => !thread.id.startsWith('thread-new-')) }
-              : result;
-          }
-          if (method === 'thread/read' && params.threadId.startsWith('thread-new-')) {
-            throw new Error(
-              `thread ${params.threadId} is not materialized yet; includeTurns is unavailable before first user message`,
-            );
-          }
-          return client.request(method, params);
-        },
-      };
-    },
+    connect,
   });
 
   const created = await bridge.createThread({ model: 'gpt-image-capable', effort: 'medium' });
   const status = await bridge.inspect({ threadId: created.thread.id });
-  const polledStatus = await bridge.inspect({ threadId: created.thread.id });
+  bridge.close();
+
+  const reloadedBridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect,
+  });
+  const polledStatus = await reloadedBridge.inspect({ threadId: created.thread.id });
 
   assert.equal(status.thread.id, created.thread.id);
   assert.equal(status.threads[0].id, created.thread.id);
@@ -905,6 +1027,24 @@ test('keeps a newly started empty thread selectable before thread/list includes 
   assert.equal(polledStatus.threads[0].id, created.thread.id);
   assert.deepEqual(polledStatus.messages, []);
   assert.equal(polledStatus.threadIssue, undefined);
+  newThreadReadFailure = 'list_turns is not supported yet';
+  const deleted = await reloadedBridge.deleteEmptyThread({ threadId: created.thread.id });
+  assert.equal(deleted.deleted, true);
+  const persistedState = JSON.parse(
+    await readFile(join(directory, 'runtime', 'started-threads.json'), 'utf8'),
+  );
+  assert.deepEqual(persistedState.threads, []);
+  reloadedBridge.close();
+
+  const orphanRecoveryBridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect,
+  });
+  const recoveredStatus = await orphanRecoveryBridge.inspect({ threadId: created.thread.id });
+  assert.equal(recoveredStatus.thread, undefined);
+  assert.equal(recoveredStatus.threadIssue, undefined);
+  orphanRecoveryBridge.close();
 });
 
 test('keeps feedback queued while Codex is busy, then delivers every image and model override', async () => {
@@ -1411,6 +1551,32 @@ test('uses the Codex title after the first prompt and deletes only abandoned emp
   assert.equal(status.thread.discardable, false);
   const retained = await bridge.deleteEmptyThread(prompted.thread.id);
   assert.equal(retained.deleted, false);
+});
+
+test('deletes a saved idle conversation but retains active or queued work', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-delete-thread-'));
+  const state = { busy: false, turns: [], deletedThreads: [] };
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    connect: fakeConnection(state),
+  });
+
+  const deleted = await bridge.deleteThread({
+    threadId: 'thread-1',
+    threadScope: 'universal',
+  });
+  assert.equal(deleted.deleted, true);
+  assert.deepEqual(state.deletedThreads, ['thread-1']);
+
+  state.busy = true;
+  const retained = await bridge.deleteThread({
+    threadId: 'thread-2',
+    threadScope: 'universal',
+  });
+  assert.equal(retained.deleted, false);
+  assert.match(retained.detail, /still working/i);
+  assert.deepEqual(state.deletedThreads, ['thread-1']);
 });
 
 test('creates and returns a new persistent repository-scoped Codex conversation', async () => {

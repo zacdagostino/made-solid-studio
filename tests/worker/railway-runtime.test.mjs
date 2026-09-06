@@ -627,7 +627,7 @@ test('keeps the owner billing switch private while preserving both Railway works
     readFile('scripts/start-railway-runtime', 'utf8'),
     readFile('scripts/start-codex-app-server', 'utf8'),
   ]);
-  assert.match(dockerfile, /@openai\/codex@0\.152\.1/);
+  assert.match(dockerfile, /@openai\/codex@0\.153\.2/);
   assert.match(launcher, /SITEFORGE_CODEX_AUTH_MODE=runtime/);
   assert.match(launcher, /unset CODEX_API_KEY/);
   assert.match(launcher, /SITEFORGE_RUNTIME_AUTH_REQUIRED=1/);

@@ -63,6 +63,10 @@ import { studioRuntimeFetch } from '../lib/studio-runtime';
 import { openCodexPanelEvent } from '../lib/codex-panel-events';
 import { isSupabaseConfigured, usesLocalStorage } from '../lib/supabase';
 import {
+  codexConversationRequestText,
+  codexConversationTitle,
+} from '../lib/codex-conversation-title';
+import {
   useCallback,
   useEffect,
   Fragment,
@@ -150,6 +154,7 @@ type CodexStatus = {
   interruptingCount?: number;
   queuedMessages?: Array<{
     id: string;
+    threadId?: string;
     prompt: string;
     model: string;
     effort: string;
@@ -1074,17 +1079,7 @@ function lastUsedTime(timestamp: number | undefined, now: number) {
 }
 
 function threadTitle(thread: CodexThread | undefined) {
-  const latestPrompt = thread?.preview
-    ?.split(/\n\s*Captured from:/i, 1)[0]
-    .replace(/\s+/g, ' ')
-    .trim();
-  const source = latestPrompt || thread?.name?.trim() || 'New chat';
-  const maximumLength = 64;
-  if (source.length <= maximumLength) return source;
-  const candidate = source.slice(0, maximumLength + 1);
-  const wordBoundary = candidate.lastIndexOf(' ');
-  const shortened = candidate.slice(0, wordBoundary >= 32 ? wordBoundary : maximumLength).trimEnd();
-  return `${shortened}…`;
+  return codexConversationTitle(thread);
 }
 
 function threadLastUsedAt(thread: CodexThread | undefined) {
@@ -1173,6 +1168,7 @@ export function CodexFeedbackPanel({
   const unseenCompletionThreadIdsRef = useRef(
     new Set(initialConversationLifecycleRef.current.unseenCompletionThreadIds),
   );
+  const deletedThreadIdsRef = useRef(new Set<string>());
   const knownTimelineIdsRef = useRef(new Set<string>());
   const knownTimelineThreadRef = useRef('');
   const timelineAnimationTimerRef = useRef<number>();
@@ -1269,6 +1265,9 @@ export function CodexFeedbackPanel({
   const [deleteQueueId, setDeleteQueueId] = useState('');
   const [isStoppingTurn, setIsStoppingTurn] = useState(false);
   const [isCreatingThread, setIsCreatingThread] = useState(false);
+  const [deleteConversationId, setDeleteConversationId] = useState('');
+  const [isDeletingConversation, setIsDeletingConversation] = useState(false);
+  const [deleteConversationError, setDeleteConversationError] = useState('');
   const [conversationTransition, setConversationTransition] = useState<ConversationTransition>();
   const [isResumingThread, setIsResumingThread] = useState(false);
   const [teamResumeState, setTeamResumeState] = useState<TeamResumeState>();
@@ -2219,12 +2218,16 @@ export function CodexFeedbackPanel({
         if (requestedThreadId) query.set('threadId', requestedThreadId);
         if (workspaceDirectory) query.set('workspace', workspaceDirectory);
         if (requestedScope) query.set('threadScope', requestedScope);
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), 12_000);
         const response = await studioRuntimeFetch(
           `${statusEndpoint}${query.size ? `?${query.toString()}` : ''}`,
           {
             headers: { Accept: 'application/json' },
+            signal: controller.signal,
           },
         );
+        window.clearTimeout(timeout);
         if (requestSequence !== statusRequestSequenceRef.current) return false;
         if (
           response.status === 404 ||
@@ -2233,8 +2236,39 @@ export function CodexFeedbackPanel({
           setIsSupported(false);
           return false;
         }
-        if (!response.ok) return false;
-        const nextStatus = (await response.json()) as CodexStatus;
+        if (!response.ok) {
+          const failure = (await response.json().catch(() => ({}))) as { detail?: string };
+          setIsSupported(true);
+          setStatus((current) => ({
+            account: current?.account,
+            activities: current?.activities ?? [],
+            agents: current?.agents ?? [],
+            billing: current?.billing,
+            capabilities: current?.capabilities,
+            detail: failure.detail || 'The Codex service is reconnecting. Try again shortly.',
+            messages: current?.messages ?? [],
+            models: current?.models ?? [],
+            queuedCount: current?.queuedCount ?? 0,
+            queuedMessages: current?.queuedMessages ?? [],
+            status: 'unavailable',
+            subscriptionUsage: current?.subscriptionUsage,
+            thread: current?.thread,
+            threads: current?.threads ?? [],
+          }));
+          return false;
+        }
+        const receivedStatus = (await response.json()) as CodexStatus;
+        const nextThreads = receivedStatus.threads.filter(
+          (thread) => !deletedThreadIdsRef.current.has(thread.id),
+        );
+        const nextStatus = {
+          ...receivedStatus,
+          thread:
+            receivedStatus.thread && !deletedThreadIdsRef.current.has(receivedStatus.thread.id)
+              ? receivedStatus.thread
+              : nextThreads[0],
+          threads: nextThreads,
+        };
         setIsSupported(true);
         if (requestedThreadId !== selectedThreadIdRef.current) return false;
         recordConversationLifecycle(
@@ -2378,6 +2412,7 @@ export function CodexFeedbackPanel({
         window.parent.postMessage(
           {
             source: 'made-solid-codex-panel',
+            ready: isSupported !== undefined,
             open: phase !== 'closed',
             expanded: phase === 'selecting',
           },
@@ -2413,6 +2448,7 @@ export function CodexFeedbackPanel({
     return () => window.removeEventListener('message', receiveWorkspaceContext);
   }, [
     embedded,
+    isSupported,
     markConversationViewed,
     phase,
     refreshStatus,
@@ -2709,6 +2745,17 @@ export function CodexFeedbackPanel({
     pendingChatMessage?.threadId === displayedThreadId && !pendingChatAccepted;
   const showPendingVisualMessage =
     pendingVisualMessage?.threadId === displayedThreadId && !pendingVisualAccepted;
+  const latestQueuedRequest = [...(status?.queuedMessages ?? [])]
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .at(-1)?.prompt;
+  const latestUserRequest = codexConversationRequestText(
+    (showPendingVisualMessage ? pendingVisualMessage?.text : undefined) ||
+      (showPendingChatMessage ? pendingChatMessage?.text : undefined) ||
+      latestQueuedRequest ||
+      [...(status?.messages ?? [])]
+        .reverse()
+        .find((message) => message.role === 'user' && message.text.trim())?.text,
+  );
 
   const activeAgents = status?.agents?.filter((agent) => agent.working) ?? [];
   const transcriptEntries = useMemo(() => {
@@ -2911,17 +2958,21 @@ export function CodexFeedbackPanel({
     window.parent.postMessage(
       {
         source: 'made-solid-codex-panel',
+        ready: isSupported !== undefined,
         open: phase !== 'closed',
         expanded: phase === 'selecting',
       },
       '*',
     );
-  }, [embedded, phase]);
+  }, [embedded, isSupported, phase]);
 
   const availableModels = useMemo(() => status?.models ?? [], [status?.models]);
   const selectedThread =
     status?.threads.find((thread) => thread.id === (selectedThreadId || status?.thread?.id)) ??
     status?.thread;
+  const conversationPendingDeletion = status?.threads.find(
+    (thread) => thread.id === deleteConversationId,
+  );
   const clientWorkspaceLabel = workspaceDirectory
     ? workspaceDirectory.replace(/[._-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
     : '';
@@ -2933,8 +2984,8 @@ export function CodexFeedbackPanel({
     selectedModel ??
     availableModels.find((model) => model.isDefault) ??
     availableModels[0];
-  const fastModeAvailable =
-    selectedModel?.serviceTiers?.some((tier) => tier.id === 'priority') === true;
+  const selectedFastTier = selectedModel?.serviceTiers?.find((tier) => tier.id === 'priority');
+  const fastModeAvailable = Boolean(selectedFastTier);
   const selectedServiceTier = fastMode && fastModeAvailable ? 'priority' : 'default';
   const stopActiveTurnSupported = status?.capabilities?.stopActiveTurn === true;
   const isInterrupted = selectedThread?.interrupted === true;
@@ -3060,6 +3111,76 @@ export function CodexFeedbackPanel({
       );
     } catch {
       // A failed cleanup must not block navigation to another conversation.
+    }
+  };
+
+  const deleteConversation = async () => {
+    const threadId = deleteConversationId;
+    const candidate = status?.threads.find((thread) => thread.id === threadId);
+    if (!threadId || !candidate || isDeletingConversation) return;
+    setIsDeletingConversation(true);
+    setDeleteConversationError('');
+    try {
+      const response = await studioRuntimeFetch(feedbackEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          action: 'delete-thread',
+          threadId,
+          threadScope: candidate.scope || (workspaceDirectory ? 'client' : 'universal'),
+          workspace: workspaceDirectory,
+        }),
+      });
+      const result = (await response.json()) as { deleted?: boolean; detail?: string };
+      if (!response.ok || !result.deleted) {
+        throw new Error(result.detail || 'This conversation could not be deleted.');
+      }
+
+      deletedThreadIdsRef.current.add(threadId);
+      const remainingThreads = (status?.threads ?? []).filter((thread) => thread.id !== threadId);
+      const deletingSelected =
+        threadId === (selectedThreadIdRef.current || status?.thread?.id || '');
+      const fallbackThread = deletingSelected
+        ? (remainingThreads.find((thread) => thread.scope === candidate.scope) ??
+          remainingThreads[0])
+        : undefined;
+      const nextWorkingByThread = { ...workingByThreadRef.current };
+      delete nextWorkingByThread[threadId];
+      const nextUnseenThreadIds = new Set(unseenCompletionThreadIdsRef.current);
+      nextUnseenThreadIds.delete(threadId);
+      saveConversationLifecycle(nextWorkingByThread, nextUnseenThreadIds);
+      const nextPositions = { ...chatSessionRef.current.positions };
+      delete nextPositions[threadId];
+      updateChatSession({ positions: nextPositions });
+      setStatus((current) =>
+        current
+          ? {
+              ...current,
+              thread: current.thread?.id === threadId ? fallbackThread : current.thread,
+              threads: current.threads.filter((thread) => thread.id !== threadId),
+            }
+          : current,
+      );
+      setDeleteConversationId('');
+      setConversationPickerOpen(false);
+      if (deletingSelected && fallbackThread) {
+        selectConversation(fallbackThread.id, fallbackThread.scope);
+        await refreshStatus(fallbackThread.id, fallbackThread.scope, true);
+      } else if (deletingSelected) {
+        selectedThreadIdRef.current = '';
+        selectedThreadScopeRef.current = candidate.scope;
+        setSelectedThreadId('');
+        updateChatSession({
+          selectedThreadId: '',
+          selectedThreadScope: candidate.scope,
+        });
+      }
+    } catch (cause) {
+      setDeleteConversationError(
+        cause instanceof Error ? cause.message : 'This conversation could not be deleted.',
+      );
+    } finally {
+      setIsDeletingConversation(false);
     }
   };
 
@@ -4017,6 +4138,12 @@ export function CodexFeedbackPanel({
                 </small>
               </span>
             </section>
+            {status?.status === 'unavailable' ? (
+              <p className="codex-feedback-error" role="status">
+                <CircleAlert aria-hidden="true" size={18} />
+                {status.detail}
+              </p>
+            ) : null}
             <p aria-live="polite" className="sr-only" role="status">
               {speechStatus}
             </p>
@@ -4143,56 +4270,88 @@ export function CodexFeedbackPanel({
                             const unseenCompletion = unseenCompletionThreadIds.has(thread.id);
                             const lastUsedAt = threadLastUsedAt(thread);
                             const usedAt = timestampMilliseconds(lastUsedAt);
+                            const queuedWork = status?.queuedMessages?.some(
+                              (message) => message.threadId === thread.id,
+                            );
+                            const deletionBlocked = thread.working || queuedWork;
+                            const title = threadTitle(thread);
                             return (
-                              <Button
-                                aria-checked={selected}
-                                className="codex-conversation-picker__option"
-                                disabled={Boolean(conversationTransition)}
-                                key={thread.id}
-                                onClick={() => {
-                                  void discardEmptyConversation(
-                                    selectedThreadId || status?.thread?.id || '',
-                                  );
-                                  void switchConversation(thread);
-                                }}
-                                role="menuitemradio"
-                                variant="quiet"
-                              >
-                                <span
-                                  className={`codex-conversation-picker__state${unseenCompletion && !thread.working ? ' is-unread' : ''}`}
-                                  aria-hidden="true"
+                              <div className="codex-conversation-picker__row" key={thread.id}>
+                                <Button
+                                  aria-checked={selected}
+                                  className="codex-conversation-picker__option"
+                                  disabled={Boolean(conversationTransition)}
+                                  onClick={() => {
+                                    void discardEmptyConversation(
+                                      selectedThreadId || status?.thread?.id || '',
+                                    );
+                                    void switchConversation(thread);
+                                  }}
+                                  role="menuitemradio"
+                                  variant="quiet"
                                 >
-                                  {thread.working ? (
-                                    <LoaderCircle className="is-spinning" size={16} />
-                                  ) : unseenCompletion ? (
-                                    <BellRing size={15} />
-                                  ) : selected ? (
-                                    <Check size={16} />
-                                  ) : (
-                                    <Clock3 size={15} />
-                                  )}
-                                </span>
-                                <span className="codex-conversation-picker__option-copy">
-                                  <strong>{threadTitle(thread)}</strong>
-                                  <small>
-                                    <span>
-                                      {thread.working
-                                        ? 'Working'
-                                        : unseenCompletion
-                                          ? 'Finished · Unread'
-                                          : thread.interrupted
-                                            ? 'Interrupted'
-                                            : 'Ready'}
-                                    </span>
-                                    <time
-                                      dateTime={usedAt ? new Date(usedAt).toISOString() : undefined}
-                                      title={usedAt ? new Date(usedAt).toLocaleString() : undefined}
-                                    >
-                                      Last used {lastUsedTime(lastUsedAt, clock)}
-                                    </time>
-                                  </small>
-                                </span>
-                              </Button>
+                                  <span
+                                    className={`codex-conversation-picker__state${unseenCompletion && !thread.working ? ' is-unread' : ''}`}
+                                    aria-hidden="true"
+                                  >
+                                    {thread.working ? (
+                                      <LoaderCircle className="is-spinning" size={16} />
+                                    ) : unseenCompletion ? (
+                                      <BellRing size={15} />
+                                    ) : selected ? (
+                                      <Check size={16} />
+                                    ) : (
+                                      <Clock3 size={15} />
+                                    )}
+                                  </span>
+                                  <span className="codex-conversation-picker__option-copy">
+                                    <strong>{title}</strong>
+                                    <small>
+                                      <span>
+                                        {thread.working
+                                          ? 'Working'
+                                          : unseenCompletion
+                                            ? 'Finished · Unread'
+                                            : thread.interrupted
+                                              ? 'Interrupted'
+                                              : 'Ready'}
+                                      </span>
+                                      <time
+                                        dateTime={
+                                          usedAt ? new Date(usedAt).toISOString() : undefined
+                                        }
+                                        title={
+                                          usedAt ? new Date(usedAt).toLocaleString() : undefined
+                                        }
+                                      >
+                                        Last used {lastUsedTime(lastUsedAt, clock)}
+                                      </time>
+                                    </small>
+                                  </span>
+                                </Button>
+                                <IconButton
+                                  className="codex-conversation-picker__delete"
+                                  disabled={
+                                    Boolean(conversationTransition) ||
+                                    isDeletingConversation ||
+                                    deletionBlocked
+                                  }
+                                  label={`Delete ${title}`}
+                                  onClick={() => {
+                                    setDeleteConversationError('');
+                                    setDeleteConversationId(thread.id);
+                                  }}
+                                  role="menuitem"
+                                  title={
+                                    deletionBlocked
+                                      ? `${title} has active or queued work and cannot be deleted yet`
+                                      : `Delete ${title}`
+                                  }
+                                  variant="quiet"
+                                >
+                                  <Trash2 aria-hidden="true" size={15} />
+                                </IconButton>
+                              </div>
                             );
                           })
                         ) : (
@@ -4208,7 +4367,7 @@ export function CodexFeedbackPanel({
             </div>
 
             <div
-              className={`codex-chat-transcript${activeSpeechMessage ? ' has-speech-dock' : ''}`}
+              className={`codex-chat-transcript${activeSpeechMessage ? ' has-speech-dock' : ''}${latestUserRequest ? ' has-latest-request' : ''}`}
             >
               {activeSpeechMessage ? (
                 <section aria-label="Read aloud controls" className="codex-speech-dock">
@@ -4328,6 +4487,15 @@ export function CodexFeedbackPanel({
                     </div>
                   ) : null}
                 </section>
+              ) : null}
+              {latestUserRequest ? (
+                <aside aria-label="Your latest request" className="codex-chat-latest-request">
+                  <MessageSquareText aria-hidden="true" size={14} />
+                  <span>
+                    <strong>Your latest</strong>
+                    <span title={latestUserRequest}>{latestUserRequest}</span>
+                  </span>
+                </aside>
               ) : null}
               <div
                 aria-busy={Boolean(conversationTransition)}
@@ -5205,7 +5373,8 @@ export function CodexFeedbackPanel({
                           <strong>Fast</strong>
                           <small>
                             {fastModeAvailable
-                              ? 'Higher-speed Codex responses with increased usage'
+                              ? selectedFastTier?.description ||
+                                'Higher-speed Codex responses with increased usage'
                               : 'Unavailable for the selected model'}
                           </small>
                         </span>
@@ -5429,6 +5598,7 @@ export function CodexFeedbackPanel({
                             {availableModels.map((model) => (
                               <option key={model.id} value={model.id}>
                                 {model.label}
+                                {model.id === 'gpt-6-astra' ? ' · new' : ''}
                                 {model.supportsImages ? '' : ' · text only'}
                               </option>
                             ))}
@@ -5799,6 +5969,25 @@ export function CodexFeedbackPanel({
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
+      <ConfirmationDialog
+        confirmLabel="Delete chat"
+        confirmingLabel="Deleting chat"
+        detail={
+          conversationPendingDeletion
+            ? `“${threadTitle(conversationPendingDeletion)}” and its complete conversation history will be permanently deleted.`
+            : 'This conversation and its complete history will be permanently deleted.'
+        }
+        error={deleteConversationError}
+        isConfirming={isDeletingConversation}
+        onConfirm={() => void deleteConversation()}
+        onOpenChange={(open) => {
+          if (open || isDeletingConversation) return;
+          setDeleteConversationId('');
+          setDeleteConversationError('');
+        }}
+        open={Boolean(conversationPendingDeletion)}
+        title="Delete this chat?"
+      />
     </>
   );
 }

@@ -62,33 +62,57 @@ async function mockStudioPushNotifications(page) {
   });
 }
 
-async function mockCodexRuntimeUpdate(page, { onCheck, seen = true } = {}) {
+async function mockCodexRuntimeUpdate(page, { astraAvailable = false, onCheck, seen = true } = {}) {
   const status = {
+    availableModels: astraAvailable
+      ? [
+          {
+            id: 'gpt-6-astra',
+            label: 'GPT-6 Astra',
+            defaultEffort: 'medium',
+            efforts: ['low', 'medium', 'high', 'xhigh', 'max'].map((id) => ({
+              id,
+              description: `${id} reasoning`,
+            })),
+            supportsImages: true,
+            serviceTiers: [
+              {
+                id: 'priority',
+                name: 'Fast',
+                description: '2x speed, increased usage',
+              },
+            ],
+            defaultServiceTier: 'default',
+            isDefault: false,
+          },
+        ]
+      : [],
     checkedAt: '2026-09-02T08:30:00.000Z',
-    currentVersion: '0.152.1',
+    currentVersion: '0.153.2',
     failureSummary: null,
-    latestVersion: '0.152.1',
+    latestVersion: '0.153.2',
+    modelCatalogStatus: 'ready',
     releases: [
       {
-        date: '2026-09-01',
-        version: '0.152.1',
+        date: '2026-09-03',
+        version: '0.153.2',
         sections: [
           {
             title: 'Bug Fixes',
             items: [
-              'Guardian approval review now honors Node REPL policies provided through model metadata.',
+              'Corrected the GPT-6-Astra Fast tier description to say “2x speed, increased usage” instead of “1.5x.”',
             ],
           },
         ],
       },
       {
-        date: '2026-09-01',
-        version: '0.152.0',
+        date: '2026-09-03',
+        version: '0.153.1',
         sections: [
           {
             title: 'New Features',
             items: [
-              'App-server clients can configure thread shell-command timeouts, including deadlines longer than one hour.',
+              'Added support for configuring GPT-6-Astra through the API without changing the default model or showing it in the model picker.',
             ],
           },
         ],
@@ -102,7 +126,7 @@ async function mockCodexRuntimeUpdate(page, { onCheck, seen = true } = {}) {
     await page.addInitScript(() => {
       window.localStorage.setItem(
         'made-solid-codex-update-notice',
-        '0.152.1:2026-09-02T08:00:00.000Z',
+        '0.153.2:2026-09-02T08:00:00.000Z',
       );
     });
   }
@@ -1529,18 +1553,27 @@ test('keeps generation, website editing, and Made Solid handoff in separate rout
   await expectWorkspaceSectionSelected(page, 'Website editing');
   await expect(page.getByTestId('website-editing-page')).toBeVisible();
   await expect(
-    page.getByRole('heading', { name: 'Current edited website is committed as v1' }),
+    page.getByRole('heading', { name: 'Committed v1 matches the current website' }).first(),
   ).toBeVisible();
   await expect(page.getByText('Generated baseline', { exact: true }).first()).toBeVisible();
-  await expect(page.getByText('Current edited website', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Current working website', { exact: true }).first()).toBeVisible();
+  const versionStatus = page.getByTestId('website-edit-version-status');
+  await expect(versionStatus).toContainText('Up to date');
+  await expect(versionStatus).toContainText('Matches committed v1');
+  await expect(versionStatus).toContainText('v1 · d5e37351');
   await expect(page.getByTestId('release-verification')).toContainText('Release verified');
   await expect(page.getByTestId('release-verification')).toContainText('d5e37351');
-  await expect(page.getByText('Editing version').locator('..')).toContainText('v2');
-  await expect(page.getByText('Current committed', { exact: true }).locator('..')).toContainText(
+  await expect(page.getByText('Working website', { exact: true }).locator('..')).toContainText(
+    'Matches committed v1',
+  );
+  await expect(page.getByText('Latest committed', { exact: true }).locator('..')).toContainText(
     'v1',
   );
+  await expect(page.getByText('Checkpoint status', { exact: true }).locator('..')).toContainText(
+    'Up to date',
+  );
   await expect(page.getByText('Derived from build').locator('..')).toContainText('f906bbf7');
-  await expect(page.getByRole('button', { name: 'Edit v1 committed' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Committed v1 is up to date' })).toBeDisabled();
   const popupPromise = page.context().waitForEvent('page');
   await page.getByRole('button', { name: 'Open website' }).click();
   const committedPreview = await popupPromise;
@@ -1676,8 +1709,16 @@ test('separates the generated baseline from the exact verified edited website', 
   const relationship = page.getByRole('region', { name: 'Website source relationship' });
   await expect(relationship).toContainText('Generated baseline');
   await expect(relationship).toContainText('Build f906bbf7');
-  await expect(relationship).toContainText('Current edited website');
-  await expect(relationship).toContainText('Commit 923b61b9');
+  await expect(relationship).toContainText('Current working website');
+  await expect(relationship).toContainText('Matches committed v3');
+  const versionStatus = page.getByTestId('website-edit-version-status');
+  await expect(versionStatus).toContainText('Up to date');
+  await expect(versionStatus).toContainText('Committed v3 matches the current website');
+  await expect(versionStatus).toContainText('v3 · 923b61b9');
+  await expect(versionStatus.locator('dl > div')).toHaveCount(2);
+  await expect(versionStatus.getByText('Current working website', { exact: true })).toBeVisible();
+  await expect(versionStatus.getByText('Latest committed version', { exact: true })).toBeVisible();
+  await expect(versionStatus).toHaveScreenshot('website-edit-version-up-to-date.png');
 
   const release = page.getByTestId('release-verification');
   await expect(release).toContainText('Release verified');
@@ -1781,8 +1822,21 @@ test('closes the website edit dialog and reports verification failures on the pa
           manifestId: '91f62af2-2af3-4523-9f73-883628fcd478',
         },
         releaseStatus: 'missing',
-        versions: [],
-        workingVersion: 1,
+        versions: [
+          {
+            version: 3,
+            commit: '923b61b9d1d81e0c36243e3a21418b7ea7ca8f29',
+            committedAt: '2026-08-26T03:56:55.654Z',
+            subject: 'Finalize Made Solid edit: demo-local-services',
+          },
+        ],
+        committedVersion: {
+          version: 3,
+          commit: '923b61b9d1d81e0c36243e3a21418b7ea7ca8f29',
+          committedAt: '2026-08-26T03:56:55.654Z',
+          subject: 'Finalize Made Solid edit: demo-local-services',
+        },
+        workingVersion: 4,
       }),
     });
   });
@@ -1803,9 +1857,18 @@ test('closes the website edit dialog and reports verification failures on the pa
 
   await page.goto(`/#/prospects/${businessId}/editing`);
   await expectWorkspaceSectionSelected(page, 'Website editing');
-  const commitButton = page.getByRole('button', { name: 'Commit edit v1' });
+  const versionStatus = page.getByTestId('website-edit-version-status');
+  await expect(versionStatus).toContainText('Uncommitted changes');
+  await expect(versionStatus).toContainText('Working edit v4 is newer than committed v3');
+  await expect(versionStatus).toContainText('1 file change is in the working website');
+  await expect(versionStatus).toContainText('v3 · 923b61b9');
+  await expect(versionStatus.locator('dl > div')).toHaveCount(2);
+  await expect(versionStatus.getByText('Current working website', { exact: true })).toBeVisible();
+  await expect(versionStatus.getByText('Latest committed version', { exact: true })).toBeVisible();
+  await expect(versionStatus).toHaveScreenshot('website-edit-version-uncommitted.png');
+  const commitButton = page.getByRole('button', { name: 'Commit edit v4' });
   await commitButton.click();
-  const dialog = page.getByRole('dialog', { name: 'Commit website edit v1?' });
+  const dialog = page.getByRole('dialog', { name: 'Commit website edit v4?' });
   await dialog.getByRole('button', { name: 'Verify, commit and push' }).click();
   await expect(dialog).toBeHidden();
   const checkpoint = page.getByTestId('final-edit-checkpoint');
@@ -1813,7 +1876,7 @@ test('closes the website edit dialog and reports verification failures on the pa
     'Next.js build worker exited before verification completed.',
   );
   await expect(checkpoint.locator('.final-edit__progress')).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Commit edit v1' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Commit edit v4' })).toBeEnabled();
 
   const results = await new AxeBuilder({ page })
     .include('[data-testid="final-edit-checkpoint"]')
@@ -4069,9 +4132,15 @@ test('displays the newest test package above retained package versions', async (
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const packagePicker = page.getByLabel('Test agent package');
-  await expect(packagePicker).toHaveValue(
-    'agent-package-local-v23-9-authenticated-website-codex-embed',
-  );
+  await expect(packagePicker).toHaveValue('agent-package-local-v24-8-resilient-website-codex-resume');
+  await expect(packagePicker).toContainText('v24.8 · Approved test');
+  await expect(packagePicker).toContainText('v24.6 · Approved test');
+  await expect(packagePicker).toContainText('v24.5 · Approved test');
+  await expect(packagePicker).toContainText('v24.4 · Approved test');
+  await expect(packagePicker).toContainText('v24.3 · Approved test');
+  await expect(packagePicker).toContainText('v24.2 · Approved test');
+  await expect(packagePicker).toContainText('v24.1 · Approved test');
+  await expect(packagePicker).toContainText('v24.0 · Approved test');
   await expect(packagePicker).toContainText('v23.9 · Approved test');
   await expect(packagePicker).toContainText('v23.8 · Approved test');
   await expect(packagePicker).toContainText('v23.7 · Approved test');
@@ -4257,6 +4326,15 @@ test('displays the newest test package above retained package versions', async (
   const register = page.getByRole('region', { name: 'Every saved build package' });
   const versions = register.locator('.agent-package-version-ledger__list > article');
   const expectedVersions = [
+    ['v24.8', 'Resilient website Codex resume'],
+    ['v24.7', 'Recent request chat context'],
+    ['v24.6', 'Stale empty Codex chat recovery'],
+    ['v24.5', 'Explicit website edit version status'],
+    ['v24.4', 'Concise current-work chat titles'],
+    ['v24.3', 'Durable new Codex chat'],
+    ['v24.2', 'Restorable managed Codex chats'],
+    ['v24.1', 'Reliable new Codex chat'],
+    ['v24.0', 'Astra-ready Codex runtime'],
     ['v23.9', 'Authenticated website Codex embed'],
     ['v23.8', 'Owner-only website Codex panel'],
     ['v23.7', 'Codex update checker'],
@@ -5398,7 +5476,8 @@ test('opens the shared builder settings panel from the navigation settings page'
   await expect(page.getByRole('heading', { name: 'Codex Cloud' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Codex completion notifications' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Codex runtime' })).toBeVisible();
-  await expect(page.getByText('Updated to v0.152.1')).toBeVisible();
+  await expect(page.getByText('Updated to v0.153.2')).toBeVisible();
+  await expect(page.getByText('Rolling out')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'What changed' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Turn on phone notifications' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Open Codex Cloud' })).toHaveAttribute(
@@ -5487,6 +5566,7 @@ test('shows official Codex update features responsively and announces a new acti
   let manualChecks = 0;
   await mockStudioPushNotifications(page);
   await mockCodexRuntimeUpdate(page, {
+    astraAvailable: true,
     onCheck: () => {
       manualChecks += 1;
     },
@@ -5495,28 +5575,39 @@ test('shows official Codex update features responsively and announces a new acti
   await page.goto('/#/settings');
 
   const updateCard = page.locator('.settings-codex-updates');
-  await expect(updateCard).toContainText('Codex v0.152.1');
+  const modelCard = page.locator('.settings-codex-model-rollout');
+  await expect(updateCard).toContainText('Codex v0.153.2');
   await expect(updateCard.getByText('Installed version').locator('..')).toContainText(
-    'Codex v0.152.1',
+    'Codex v0.153.2',
   );
-  await expect(updateCard.getByText('Latest stable').locator('..')).toContainText('Codex v0.152.1');
+  await expect(updateCard.getByText('Latest stable').locator('..')).toContainText('Codex v0.153.2');
   await expect(updateCard.getByText('Last checked').locator('..')).toContainText('Sep 2, 08:30 AM');
   await updateCard.getByRole('button', { name: 'Check for updates' }).click();
   await expect.poll(() => manualChecks).toBe(1);
   await expect(updateCard.getByRole('button', { name: 'Check for updates' })).toBeEnabled();
-  await expect(updateCard).toContainText('Guardian approval review');
-  await expect(updateCard).toContainText('App-server clients can configure');
+  await expect(modelCard).toContainText('Available in Studio');
+  await expect(modelCard).toContainText('low, medium, high, xhigh, max reasoning');
+  await expect(modelCard).toContainText('2x speed, increased usage');
+  await expect(updateCard).toContainText('configuring GPT-6-Astra through the API');
+  await expect(page.getByRole('link', { name: 'Open official Astra guide' })).toHaveAttribute(
+    'href',
+    'https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6-astra',
+  );
   await expect(page.getByRole('link', { name: 'Open official Codex changelog' })).toHaveAttribute(
     'href',
     'https://learn.chatgpt.com/docs/changelog?products=codex&topics=codex-cli',
   );
-  await expect(page.locator('.toast')).toContainText('Codex updated to v0.152.1');
+  await expect(page.locator('.toast')).toContainText('Codex updated to v0.153.2');
   await page.getByRole('button', { name: 'Dismiss notification' }).click();
-  const accessibility = await new AxeBuilder({ page }).include('.settings-codex-updates').analyze();
+  const accessibility = await new AxeBuilder({ page })
+    .include('.settings-codex-updates')
+    .include('.settings-codex-model-rollout')
+    .analyze();
   expect(accessibility.violations).toEqual([]);
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
     .toBe(true);
+  await expect(modelCard).toHaveScreenshot(`settings-codex-astra-${testInfo.project.name}.png`);
   await expect(updateCard).toHaveScreenshot(
     `settings-codex-runtime-update-${testInfo.project.name}.png`,
   );

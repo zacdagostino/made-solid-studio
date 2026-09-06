@@ -12,6 +12,7 @@ const stableVersionPattern = /^\d+\.\d+\.\d+$/;
 const defaultCheckIntervalMs = 24 * 60 * 60 * 1_000;
 const defaultMaintenanceIntervalMs = 10_000;
 const changelogUrl = 'https://learn.chatgpt.com/docs/changelog';
+const githubReleasesUrl = 'https://api.github.com/repos/openai/codex/releases?per_page=20';
 const npmLatestUrl = 'https://registry.npmjs.org/@openai%2Fcodex/latest';
 
 function updateRoot(environment = process.env) {
@@ -115,6 +116,49 @@ export function parseCodexChangelog(source) {
   return releases;
 }
 
+function decodeMarkdown(value) {
+  return decodeHtml(
+    value
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/[`*~]/g, ''),
+  );
+}
+
+export function parseCodexGitHubReleases(source) {
+  if (!Array.isArray(source)) return [];
+  return source.flatMap((release) => {
+    const version = /^rust-v(\d+\.\d+\.\d+)$/.exec(String(release?.tag_name || ''))?.[1];
+    if (!version || typeof release?.body !== 'string') return [];
+    const sections = [];
+    let activeSection;
+    for (const line of release.body.split(/\r?\n/)) {
+      const heading = /^##\s+(.+?)\s*$/.exec(line)?.[1];
+      if (heading) {
+        const title = decodeMarkdown(heading);
+        activeSection = title.toLowerCase() === 'changelog' ? undefined : { title, items: [] };
+        if (activeSection) sections.push(activeSection);
+        continue;
+      }
+      const item = /^-\s+(.+?)\s*$/.exec(line)?.[1];
+      if (item && activeSection && activeSection.items.length < 8) {
+        const decoded = decodeMarkdown(item);
+        if (decoded) activeSection.items.push(decoded);
+      }
+    }
+    return [
+      {
+        date:
+          typeof release.published_at === 'string'
+            ? /^\d{4}-\d{2}-\d{2}/.exec(release.published_at)?.[0]
+            : undefined,
+        sections: sections.filter((section) => section.items.length),
+        version,
+      },
+    ];
+  });
+}
+
 async function executableVersion(executable) {
   const { stdout } = await execFile(executable, ['--version'], { timeout: 30_000 });
   const version = /(?:^|\s)([0-9]+\.[0-9]+\.[0-9]+)(?:\s|$)/.exec(stdout)?.[1];
@@ -187,23 +231,33 @@ async function latestRelease(fetchImplementation = globalThis.fetch) {
   return metadata.version;
 }
 
-async function releaseNotes(fromVersion, throughVersion, fetchImplementation = globalThis.fetch) {
-  try {
-    const response = await fetchImplementation(changelogUrl, {
+async function releaseNotes(throughVersion, fetchImplementation = globalThis.fetch) {
+  const [githubResult, changelogResult] = await Promise.allSettled([
+    fetchImplementation(githubReleasesUrl, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'Made-Solid-Studio-Codex-Updater',
+      },
+      signal: AbortSignal.timeout(30_000),
+    }).then(async (response) =>
+      response.ok ? parseCodexGitHubReleases(await response.json()) : [],
+    ),
+    fetchImplementation(changelogUrl, {
       headers: { Accept: 'text/html', 'User-Agent': 'Made-Solid-Studio-Codex-Updater' },
       signal: AbortSignal.timeout(30_000),
-    });
-    if (!response.ok) return [];
-    return parseCodexChangelog(await response.text())
-      .filter(
-        (release) =>
-          compareCodexVersions(release.version, fromVersion) > 0 &&
-          compareCodexVersions(release.version, throughVersion) <= 0,
-      )
-      .slice(0, 8);
-  } catch {
-    return [];
+    }).then(async (response) => (response.ok ? parseCodexChangelog(await response.text()) : [])),
+  ]);
+  const releases = new Map();
+  if (changelogResult.status === 'fulfilled') {
+    for (const release of changelogResult.value) releases.set(release.version, release);
   }
+  if (githubResult.status === 'fulfilled') {
+    for (const release of githubResult.value) releases.set(release.version, release);
+  }
+  return [...releases.values()]
+    .filter((release) => compareCodexVersions(release.version, throughVersion) <= 0)
+    .sort((left, right) => compareCodexVersions(right.version, left.version))
+    .slice(0, 8);
 }
 
 async function installRelease(version, environment = process.env, runner = execFile) {
@@ -281,7 +335,7 @@ export async function checkForCodexUpdate({
     const before = await readState(environment);
     await writeState(environment, { checkedAt: new Date().toISOString(), status: 'checking' });
     const latestVersion = await latestRelease(fetchImplementation);
-    const releases = await releaseNotes(before.currentVersion, latestVersion, fetchImplementation);
+    const releases = await releaseNotes(latestVersion, fetchImplementation);
     if (compareCodexVersions(latestVersion, before.currentVersion) <= 0) {
       return writeState(environment, {
         failureSummary: null,

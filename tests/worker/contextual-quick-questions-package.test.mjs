@@ -45,7 +45,7 @@ test('registers contextual auto-read Quick questions as immutable test package v
     );
   }
 
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.107`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.115`/);
   assert.match(
     app,
     /temporary read-only quick question that inherits the whole selected conversation/,

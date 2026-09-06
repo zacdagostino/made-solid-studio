@@ -64,6 +64,22 @@ test('encrypts an interoperable aes128gcm Web Push payload', () => {
   assert.deepEqual(decryptPayload(client, subscription, body), { title: 'Codex finished' });
 });
 
+test('serves concurrent configuration reads without temporary-file collisions', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-push-concurrent-'));
+  const storagePath = join(directory, 'push.json');
+  const notifications = new CodexPushNotifications({ storagePath });
+
+  const configurations = await Promise.all(
+    Array.from({ length: 20 }, () => notifications.configuration()),
+  );
+
+  assert.equal(configurations.length, 20);
+  assert.ok(configurations.every((configuration) => configuration.status === 'ready'));
+  assert.ok(configurations.every((configuration) => configuration.publicKey.length >= 80));
+  const stored = await readFile(storagePath, 'utf8');
+  assert.doesNotThrow(() => JSON.parse(stored));
+});
+
 test('persists subscriptions and sends only generic completion copy', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-push-'));
   const storagePath = join(directory, 'push.json');

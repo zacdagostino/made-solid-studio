@@ -179,7 +179,7 @@ export async function connectCodexAppServer({
 
 function isUnmaterializedThreadReadError(error) {
   const detail = error instanceof Error ? error.message : String(error || '');
-  return /not materialized|includeTurns.*(?:unavailable|not support)/i.test(detail);
+  return /not materialized|includeTurns|list_turns.*not supported/i.test(detail);
 }
 
 function publicModel(model) {
@@ -213,6 +213,17 @@ function publicModel(model) {
     defaultServiceTier: String(model.defaultServiceTier || 'default'),
     isDefault: model.isDefault === true,
   };
+}
+
+async function requestPublicModels(client) {
+  const result = await client.request('model/list', { limit: 100, includeHidden: true });
+  return (Array.isArray(result?.data) ? result.data : [])
+    .filter(
+      (model) =>
+        model?.hidden !== true || String(model?.id || model?.model || '') === 'gpt-6-astra',
+    )
+    .map(publicModel)
+    .filter((model) => model.id);
 }
 
 function publicRateLimitWindow(window) {
@@ -261,7 +272,7 @@ function selectThread(threads, cwd) {
   );
 }
 
-function publicThread(thread, { discardable = false, scope = 'universal' } = {}) {
+function publicThread(thread, { discardable = false, latestPrompt, scope = 'universal' } = {}) {
   const turn = activeTurn(thread);
   const hasTurnDetails = Array.isArray(thread?.turns);
   const lastTurn = [...(hasTurnDetails ? thread.turns : [])]
@@ -275,7 +286,12 @@ function publicThread(thread, { discardable = false, scope = 'universal' } = {})
   return {
     id: String(thread.id),
     name: typeof thread.name === 'string' ? thread.name : undefined,
-    preview: typeof thread.preview === 'string' ? thread.preview.slice(0, 160) : undefined,
+    preview:
+      typeof latestPrompt === 'string'
+        ? latestPrompt.slice(0, 600)
+        : typeof thread.preview === 'string'
+          ? thread.preview.slice(0, 160)
+          : undefined,
     status: String(thread.status?.type || 'unknown'),
     working,
     activeTurnId: typeof turn?.id === 'string' ? turn.id : undefined,
@@ -287,6 +303,16 @@ function publicThread(thread, { discardable = false, scope = 'universal' } = {})
     discardable,
     scope,
   };
+}
+
+function latestPromptByThread(records) {
+  const prompts = new Map();
+  for (const record of Array.isArray(records) ? records : []) {
+    const threadId = typeof record?.threadId === 'string' ? record.threadId : '';
+    const prompt = typeof record?.prompt === 'string' ? record.prompt.trim() : '';
+    if (threadId && prompt) prompts.set(threadId, prompt);
+  }
+  return prompts;
 }
 
 function humanizeAgentPath(value) {
@@ -1046,6 +1072,10 @@ export class CodexFeedbackBridge {
     this.connect = connect;
     this.reuseConnection = reuseConnection;
     this.threadReadTimeoutMs = threadReadTimeoutMs;
+    this.startedThreadsStatePath = resolve(this.storageRoot, 'runtime', 'started-threads.json');
+    this.startedThreadsLoaded = false;
+    this.startedThreadsLoadPromise = undefined;
+    this.startedThreadsWritePromise = Promise.resolve();
     this.flushRequested = false;
     this.flushPromise = undefined;
     this.flushRetryTimer = undefined;
@@ -1055,7 +1085,57 @@ export class CodexFeedbackBridge {
     this.sharedConnectionPromise = undefined;
   }
 
+  async loadStartedThreads() {
+    if (this.startedThreadsLoaded) return;
+    if (!this.startedThreadsLoadPromise) {
+      this.startedThreadsLoadPromise = readFile(this.startedThreadsStatePath, 'utf8')
+        .then((source) => JSON.parse(source))
+        .then((state) => {
+          const threads = Array.isArray(state?.threads) ? state.threads : [];
+          for (const thread of threads.slice(-10)) {
+            if (
+              typeof thread?.id !== 'string' ||
+              !/^[A-Za-z0-9-]{1,100}$/.test(thread.id) ||
+              typeof thread.cwd !== 'string' ||
+              !thread.cwd.trim() ||
+              !['universal', 'client'].includes(thread.__madeSolidScope)
+            ) {
+              continue;
+            }
+            if (!this.startedThreads.has(thread.id)) {
+              this.startedThreads.set(thread.id, thread);
+            }
+          }
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          this.startedThreadsLoaded = true;
+          this.startedThreadsLoadPromise = undefined;
+        });
+    }
+    await this.startedThreadsLoadPromise;
+  }
+
+  async persistStartedThreads() {
+    this.startedThreadsWritePromise = this.startedThreadsWritePromise
+      .catch(() => undefined)
+      .then(async () => {
+        await mkdir(resolve(this.storageRoot, 'runtime'), { recursive: true, mode: 0o700 });
+        const threads = [...this.startedThreads.values()].slice(-10).map((thread) => ({
+          id: thread.id,
+          cwd: thread.cwd,
+          __madeSolidScope: thread.__madeSolidScope,
+          status: thread.status,
+          createdAt: thread.createdAt,
+          updatedAt: thread.updatedAt,
+        }));
+        await atomicWriteJson(this.startedThreadsStatePath, { version: 1, threads });
+      });
+    await this.startedThreadsWritePromise;
+  }
+
   async openClient() {
+    await this.loadStartedThreads();
     if (!this.reuseConnection) return this.connect();
     if (this.sharedClient && !this.sharedClient.connection.isClosed?.()) {
       return this.sharedClient.lease;
@@ -1091,6 +1171,15 @@ export class CodexFeedbackBridge {
     this.sharedClient?.connection.close();
     this.sharedClient = undefined;
     this.sharedConnectionPromise = undefined;
+  }
+
+  async listModels() {
+    const client = await this.openClient();
+    try {
+      return requestPublicModels(client);
+    } finally {
+      client.close();
+    }
   }
 
   async readThreadForStatus(client, params) {
@@ -1187,10 +1276,10 @@ export class CodexFeedbackBridge {
       const [accountResult, rateLimitResult, modelResult, threadResult] = await Promise.all([
         client.request('account/read', {}),
         client.request('account/rateLimits/read', null).catch(() => undefined),
-        client.request('model/list', { limit: 100, includeHidden: false }),
+        requestPublicModels(client),
         this.listedThreads(client, scope).then((data) => ({ data })),
       ]);
-      const models = (modelResult.data || []).map(publicModel).filter((model) => model.id);
+      const models = modelResult;
       const listedThreads = Array.isArray(threadResult.data) ? threadResult.data : [];
       const startedThreadIds = new Set(this.startedThreads.keys());
       const threadCandidates = [
@@ -1198,7 +1287,15 @@ export class CodexFeedbackBridge {
           const listedThread = listedThreads.find(
             (candidate) => String(candidate.id) === String(startedThread.id),
           );
-          return listedThread ? { ...startedThread, ...listedThread } : startedThread;
+          const combined = listedThread ? { ...startedThread, ...listedThread } : startedThread;
+          return {
+            ...combined,
+            cwd:
+              typeof combined.cwd === 'string' && combined.cwd.trim()
+                ? combined.cwd
+                : startedThread.cwd,
+            __madeSolidScope: startedThread.__madeSolidScope,
+          };
         }),
         ...listedThreads.filter((thread) => !startedThreadIds.has(String(thread.id))),
       ]
@@ -1230,8 +1327,10 @@ export class CodexFeedbackBridge {
             includeTurns: true,
           });
         } catch (error) {
-          threadIssue =
-            error instanceof Error ? error.message : 'The selected conversation could not load.';
+          if (!isUnmaterializedThreadReadError(error)) {
+            threadIssue =
+              error instanceof Error ? error.message : 'The selected conversation could not load.';
+          }
           // A stale browser selection falls back to the newest listed Studio thread.
         }
         if (requestedThreadDetail?.thread?.id) {
@@ -1257,11 +1356,13 @@ export class CodexFeedbackBridge {
             includeTurns: true,
           });
           if (hasConversationContent(threadDetail?.thread)) {
-            this.startedThreads.delete(String(thread.id));
+            if (this.startedThreads.delete(String(thread.id))) {
+              await this.persistStartedThreads();
+            }
           }
         } catch (error) {
           const isStartedEmptyThread =
-            this.startedThreads.has(String(thread.id)) && isUnmaterializedThreadReadError(error);
+            this.startedThreads.has(String(thread.id)) && !hasConversationContent(thread);
           if (!isStartedEmptyThread) {
             threadIssue =
               error instanceof Error ? error.message : 'The selected conversation could not load.';
@@ -1273,6 +1374,11 @@ export class CodexFeedbackBridge {
         ? {
             ...thread,
             ...threadDetail.thread,
+            cwd:
+              typeof threadDetail.thread.cwd === 'string' && threadDetail.thread.cwd.trim()
+                ? threadDetail.thread.cwd
+                : thread.cwd,
+            __madeSolidScope: thread.__madeSolidScope,
             status: threadDetail.thread.status || thread.status,
             updatedAt: threadDetail.thread.updatedAt || thread.updatedAt,
           }
@@ -1365,6 +1471,7 @@ export class CodexFeedbackBridge {
           .sort((left, right) => Number(right.startedAt) - Number(left.startedAt))[0]?.id;
       };
       const records = await this.readRecords();
+      const latestPrompts = latestPromptByThread(records);
       const queued = records.filter((record) => record.status === 'queued');
       const selectedThreadScope = detailedThread
         ? detailedThread.__madeSolidScope || this.assertThreadScope(detailedThread, scope)
@@ -1399,6 +1506,7 @@ export class CodexFeedbackBridge {
         ),
         thread: detailedThread
           ? publicThread(detailedThread, {
+              latestPrompt: latestPrompts.get(String(detailedThread.id)),
               scope:
                 detailedThread.__madeSolidScope || this.assertThreadScope(detailedThread, scope),
               discardable:
@@ -1411,6 +1519,7 @@ export class CodexFeedbackBridge {
         threads: threadCandidates.map((candidate) =>
           String(candidate.id) === String(thread?.id)
             ? publicThread(detailedThread || candidate, {
+                latestPrompt: latestPrompts.get(String(candidate.id)),
                 scope: candidate.__madeSolidScope || this.assertThreadScope(candidate, scope),
                 discardable:
                   this.startedThreads.has(String(candidate.id)) ||
@@ -1419,6 +1528,7 @@ export class CodexFeedbackBridge {
                     !hasConversationContent(detailedThread)),
               })
             : publicThread(candidate, {
+                latestPrompt: latestPrompts.get(String(candidate.id)),
                 scope: candidate.__madeSolidScope || this.assertThreadScope(candidate, scope),
                 discardable:
                   this.startedThreads.has(String(candidate.id)) ||
@@ -1573,10 +1683,9 @@ export class CodexFeedbackBridge {
     let turnId;
     let turnWatcher;
     try {
-      const modelResult = await client.request('model/list', { limit: 100, includeHidden: false });
-      const model = (modelResult.data || [])
-        .map(publicModel)
-        .find((candidate) => candidate.id === requestedModel);
+      const model = (await requestPublicModels(client)).find(
+        (candidate) => candidate.id === requestedModel,
+      );
       if (!model) throw new Error('The quick-answer model is unavailable.');
       const effortOrder = ['minimal', 'low', 'medium', 'high', 'xhigh'];
       const effort =
@@ -1680,13 +1789,9 @@ export class CodexFeedbackBridge {
     }
     const client = await this.openClient();
     try {
-      const modelResult = await client.request('model/list', {
-        limit: 100,
-        includeHidden: false,
-      });
-      const availableModel = (modelResult.data || [])
-        .map(publicModel)
-        .find((candidate) => candidate.id === model);
+      const availableModel = (await requestPublicModels(client)).find(
+        (candidate) => candidate.id === model,
+      );
       if (!availableModel) throw new Error('The selected Codex model is unavailable.');
       if (
         availableModel.efforts.length &&
@@ -1705,14 +1810,26 @@ export class CodexFeedbackBridge {
         sessionStartSource: 'clear',
       });
       if (!result.thread?.id) throw new Error('Codex did not return a new conversation.');
-      this.startedThreads.set(String(result.thread.id), result.thread);
+      const startedThread = {
+        ...result.thread,
+        cwd:
+          typeof result.thread.cwd === 'string' && result.thread.cwd.trim()
+            ? result.thread.cwd
+            : scope.cwd,
+        __madeSolidScope: scope.scope,
+      };
+      if (this.assertThreadScope(startedThread, scope) !== scope.scope) {
+        throw new Error('Codex started the conversation in a different workspace.');
+      }
+      this.startedThreads.set(String(startedThread.id), startedThread);
       while (this.startedThreads.size > 10) {
         this.startedThreads.delete(this.startedThreads.keys().next().value);
       }
+      await this.persistStartedThreads();
       return {
         status: 'ready',
         detail: 'New Codex conversation created.',
-        thread: publicThread(result.thread, { discardable: true, scope: scope.scope }),
+        thread: publicThread(startedThread, { discardable: true, scope: scope.scope }),
       };
     } finally {
       client.close();
@@ -1816,12 +1933,10 @@ export class CodexFeedbackBridge {
     const client = await this.openClient();
     try {
       const [modelResult, threadResult] = await Promise.all([
-        client.request('model/list', { limit: 100, includeHidden: false }),
+        requestPublicModels(client),
         client.request('thread/read', { threadId, includeTurns: true }),
       ]);
-      const availableModel = (modelResult.data || [])
-        .map(publicModel)
-        .find((candidate) => candidate.id === model);
+      const availableModel = modelResult.find((candidate) => candidate.id === model);
       if (!availableModel) throw new Error('The selected Codex model is unavailable.');
       if (
         availableModel.efforts.length &&
@@ -2161,8 +2276,7 @@ export class CodexFeedbackBridge {
         result = await client.request('thread/read', { threadId, includeTurns: true });
       } catch (error) {
         const startedThread = this.startedThreads.get(threadId);
-        const detail = error instanceof Error ? error.message : '';
-        if (!startedThread || !/not materialized|includeTurns/i.test(detail)) throw error;
+        if (!startedThread || !isUnmaterializedThreadReadError(error)) throw error;
         result = { thread: startedThread };
       }
       if (this.assertThreadScope(result.thread, scope) !== scope.scope) {
@@ -2177,7 +2291,55 @@ export class CodexFeedbackBridge {
       }
       await client.request('thread/delete', { threadId });
       this.startedThreads.delete(threadId);
+      await this.persistStartedThreads();
       return { status: 'deleted', deleted: true, detail: 'Unused conversation removed.' };
+    } finally {
+      client.close();
+    }
+  }
+
+  async deleteThread(input) {
+    const threadId = input?.threadId;
+    const scope = this.workspaceScope(input);
+    if (typeof threadId !== 'string' || !/^[A-Za-z0-9-]{1,100}$/.test(threadId)) {
+      throw new Error('Choose a valid conversation to delete.');
+    }
+    const pendingRecords = (await this.readRecords()).filter(
+      (record) =>
+        String(record.threadId || '') === threadId &&
+        ['queued', 'running', 'recovering'].includes(record.status),
+    );
+    if (pendingRecords.length) {
+      return {
+        status: 'retained',
+        deleted: false,
+        detail: 'This conversation still has active or queued work. Stop or finish it first.',
+      };
+    }
+    const client = await this.openClient();
+    try {
+      let result;
+      try {
+        result = await client.request('thread/read', { threadId, includeTurns: true });
+      } catch (error) {
+        const startedThread = this.startedThreads.get(threadId);
+        if (!startedThread || !isUnmaterializedThreadReadError(error)) throw error;
+        result = { thread: startedThread };
+      }
+      if (this.assertThreadScope(result.thread, scope) !== scope.scope) {
+        throw new Error('That conversation belongs to a different workspace.');
+      }
+      if (result.thread?.status?.type === 'active' || activeTurn(result.thread)) {
+        return {
+          status: 'retained',
+          deleted: false,
+          detail: 'This conversation is still working. Stop it before deleting it.',
+        };
+      }
+      await client.request('thread/delete', { threadId });
+      this.startedThreads.delete(threadId);
+      await this.persistStartedThreads();
+      return { status: 'deleted', deleted: true, detail: 'Conversation deleted.' };
     } finally {
       client.close();
     }
@@ -2268,16 +2430,14 @@ export class CodexFeedbackBridge {
         if (!client) return;
         try {
           const [modelResult, threadResult] = await Promise.all([
-            client.request('model/list', { limit: 100, includeHidden: false }),
+            requestPublicModels(client),
             this.listedThreads(client, recordScope).then((data) => ({ data })),
           ]);
-          const availableModel = (modelResult.data || [])
-            .map(publicModel)
-            .find(
-              (model) =>
-                model.id === record.model &&
-                (!recordAttachmentIds(record).length || model.supportsImages),
-            );
+          const availableModel = modelResult.find(
+            (model) =>
+              model.id === record.model &&
+              (!recordAttachmentIds(record).length || model.supportsImages),
+          );
           if (!availableModel) {
             await this.markFailed(
               record,

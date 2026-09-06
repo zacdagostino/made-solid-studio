@@ -41,7 +41,7 @@ test('registers the Codex update checker once as immutable test package v23.7', 
   }
 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
-  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.107`/);
+  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.115`/);
   assert.match(app, /function CodexRuntimeUpdateSettings/);
   assert.match(app, /Installed version/);
   assert.match(app, /Latest stable/);

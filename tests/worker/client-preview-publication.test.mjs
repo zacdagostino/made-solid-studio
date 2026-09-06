@@ -37,7 +37,7 @@ test('publishes only an expiring private review capability through the Clientspa
   assert.match(source, /\.eq\('schema_version', 10\)/);
   assert.match(source, /\.eq\('review_state', 'approved'\)/);
   assert.match(source, /verified_redesign_value/);
-  assert.match(source, /gpt-5\.6-sol-design-showcase-v2/);
+  assert.match(source, /gpt-5\.6-sol-dynamic-design-showcase-v3/);
   assert.match(source, /\.\.\.reportData/);
   assert.match(source, /reviewedAt: report\.created_at/);
   assert.match(source, /schemaVersion: report\.schema_version/);

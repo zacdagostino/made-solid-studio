@@ -44,11 +44,8 @@ test('registers configured final edit upstream as immutable test package v23.2',
   }
 
   assert.match(app, /id: 'client-url-release-contract'/);
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.5`/);
-  assert.match(
-    app,
-    /byte-exact Next\.js development rewrite of next-env\.d\.ts is now treated as generated runtime metadata/,
-  );
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.8`/);
+  assert.match(app, /current working website exactly matches the latest committed version/);
   assert.match(responsiveSpec, /\['v23\.2', 'Configured final edit upstream'\]/);
   assert.match(responsiveSpec, /\['v23\.1', 'Seamless Studio resume'\]/);
   assert.match(responsiveSpec, /\['v23\.0', 'Contextual auto-read Quick questions'\]/);

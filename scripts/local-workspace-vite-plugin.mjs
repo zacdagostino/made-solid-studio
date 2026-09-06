@@ -1099,13 +1099,14 @@ export function localWorkspacePlugin() {
   let codexFeedbackBridgeLoadPromise;
   const codexFeedbackBridge = async () => {
     const modifiedAt = (await stat(codexFeedbackBridgeSource)).mtimeMs;
-    if (
-      activeCodexFeedbackBridge &&
-      (modifiedAt === activeCodexFeedbackBridgeModifiedAt ||
-        activeCodexFeedbackBridge.maintenancePromise ||
-        activeCodexFeedbackBridge.flushPromise)
-    ) {
+    if (activeCodexFeedbackBridge && modifiedAt === activeCodexFeedbackBridgeModifiedAt) {
       return activeCodexFeedbackBridge;
+    }
+    const activeWork =
+      activeCodexFeedbackBridge?.maintenancePromise || activeCodexFeedbackBridge?.flushPromise;
+    if (activeWork) {
+      await activeWork.catch(() => undefined);
+      return codexFeedbackBridge();
     }
     if (!codexFeedbackBridgeLoadPromise) {
       codexFeedbackBridgeLoadPromise = import(
@@ -1404,7 +1405,16 @@ export function localWorkspacePlugin() {
             }
             await checkForCodexUpdate({ environment: process.env });
           }
-          sendJson(response, 200, await publicCodexUpdateStatus(process.env));
+          const status = await publicCodexUpdateStatus(process.env);
+          let availableModels = [];
+          let modelCatalogStatus = 'unavailable';
+          try {
+            availableModels = await (await codexFeedbackBridge()).listModels();
+            modelCatalogStatus = 'ready';
+          } catch {
+            // Runtime updates remain visible while the App Server is restarting or unavailable.
+          }
+          sendJson(response, 200, { ...status, availableModels, modelCatalogStatus });
         } catch (error) {
           sendJson(response, 503, {
             status: 'unavailable',
@@ -1792,6 +1802,9 @@ export function localWorkspacePlugin() {
                 break;
               case 'delete-empty-thread':
                 result = await bridge.deleteEmptyThread(input);
+                break;
+              case 'delete-thread':
+                result = await bridge.deleteThread(input);
                 break;
               case 'temporary-question':
                 result = await bridge.temporaryQuestion(input);

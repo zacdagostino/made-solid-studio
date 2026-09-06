@@ -44,7 +44,7 @@ test('registers reliable Next website previews as immutable test package v23.5',
   }
 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
-  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.107`/);
+  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.115`/);
   assert.match(behaviour, /hello@madesolid\.com\.au website gate/);
   assert.match(app, /client-development-editor__loading-bar/);
   assert.match(app, /requestFullscreen/);

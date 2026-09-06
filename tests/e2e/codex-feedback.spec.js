@@ -476,6 +476,16 @@ test.beforeEach(async ({ page }) => {
     const incomingActivity = pageUrl.searchParams.has('codexIncomingActivity');
     const activityHistory = pageUrl.searchParams.has('codexActivityHistory');
     const evidenceNarrative = pageUrl.searchParams.has('codexEvidenceNarrative');
+    const conciseTitles = pageUrl.searchParams.has('codexConciseTitles');
+    const currentThreadPreview = conciseTitles
+      ? "Ok sweet, can we have every chat's title in the chat drop down be a consise summary of the latest thing it's done or is doing so I can identify it at a glance?\n\nCaptured from: Made Solid Studio"
+      : 'Open the Studio chat.\n\nCaptured from: Made Solid Studio';
+    const currentUserMessage = conciseTitles
+      ? "Ok sweet, can we have every chat's title in the chat drop down be a consise summary of the latest thing it's done or is doing so I can identify it at a glance?"
+      : 'Open the Studio chat.';
+    const historicalThreadPreview = conciseTitles
+      ? 'Please review the complete Clientspace navigation because the old page labels are confusing.\n\nCaptured from: Made Solid Studio'
+      : 'Review the earlier homepage.\n\nCaptured from: Made Solid Studio';
     const unreadableConversation =
       pageUrl.searchParams.has('codexUnreadableConversation') && selectedThreadId !== 'thread-2';
     const usageUnavailable = pageUrl.searchParams.has('codexUsageUnavailable');
@@ -527,14 +537,14 @@ test.beforeEach(async ({ page }) => {
             ? {
                 id: 'thread-2',
                 name: 'Earlier website review',
-                preview: 'Review the earlier homepage.\n\nCaptured from: Made Solid Studio',
+                preview: historicalThreadPreview,
                 status: 'idle',
                 updatedAt: Math.floor(Date.now() / 1_000) - 3_700,
               }
             : {
                 id: 'thread-1',
                 name: 'Studio',
-                preview: 'Open the Studio chat.\n\nCaptured from: Made Solid Studio',
+                preview: currentThreadPreview,
                 status: working ? 'active' : 'idle',
                 working,
                 activeTurnId: working
@@ -554,7 +564,7 @@ test.beforeEach(async ({ page }) => {
           {
             id: 'thread-1',
             name: 'Studio',
-            preview: 'Open the Studio chat.\n\nCaptured from: Made Solid Studio',
+            preview: currentThreadPreview,
             status: working ? 'active' : 'idle',
             working,
             interrupted,
@@ -566,7 +576,7 @@ test.beforeEach(async ({ page }) => {
           {
             id: 'thread-2',
             name: 'Earlier website review',
-            preview: 'Review the earlier homepage.\n\nCaptured from: Made Solid Studio',
+            preview: historicalThreadPreview,
             status: 'idle',
             updatedAt: Math.floor(Date.now() / 1_000) - 3_700,
           },
@@ -582,7 +592,7 @@ test.beforeEach(async ({ page }) => {
                 {
                   id: 'current-user',
                   role: 'user',
-                  text: 'Open the Studio chat.',
+                  text: currentUserMessage,
                   turnId: 'turn-team-1',
                   position: 0,
                 },
@@ -796,6 +806,24 @@ test.beforeEach(async ({ page }) => {
             ],
           },
           {
+            id: 'gpt-6-astra',
+            label: 'GPT-6 Astra',
+            defaultEffort: 'medium',
+            isDefault: false,
+            supportsImages: true,
+            serviceTiers: [
+              { id: 'priority', name: 'Fast', description: '2x speed, increased usage' },
+            ],
+            defaultServiceTier: 'default',
+            efforts: [
+              { id: 'low', description: 'Faster responses with lighter reasoning' },
+              { id: 'medium', description: 'Balanced reasoning' },
+              { id: 'high', description: 'Greater reasoning depth' },
+              { id: 'xhigh', description: 'Extra-high reasoning depth' },
+              { id: 'max', description: 'Maximum reasoning depth' },
+            ],
+          },
+          {
             id: 'gpt-5.6-luna',
             label: 'GPT-5.6-Luna',
             defaultEffort: 'medium',
@@ -860,7 +888,33 @@ test('keeps the Codex launcher visible while its initial status reconnects', asy
   await expect(page.getByRole('button', { name: 'Chat with Codex' })).toBeVisible();
 });
 
-test('resynchronizes a remembered open website chat after its iframe loads', async ({ page }) => {
+test('replaces a failed initial Codex status spinner with a recoverable chat state', async ({
+  page,
+}) => {
+  await page.route('**/__made-solid/codex-status*', async (route) => {
+    await route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'unavailable',
+        detail: 'Codex is reconnecting after Chrome resumed this tab.',
+      }),
+    });
+  });
+
+  await page.goto('/#/prospects');
+  const launcher = page.getByRole('button', { name: 'Chat with Codex' });
+  await expect(launcher).toBeVisible();
+  await expect(launcher).toHaveAttribute('aria-busy', 'false');
+  await launcher.click();
+  await expect(page.getByRole('dialog', { name: 'Codex', exact: true })).toContainText(
+    'Codex is reconnecting after Chrome resumed this tab.',
+  );
+});
+
+test('resynchronizes a remembered open website chat after its iframe loads', async ({
+  page,
+}, testInfo) => {
   await page.addInitScript(() => {
     window.localStorage.setItem(
       'made-solid-codex-chat-session-v1',
@@ -868,6 +922,13 @@ test('resynchronizes a remembered open website chat after its iframe loads', asy
     );
   });
   await page.goto('/');
+  await page.getByRole('button', { name: 'Close Codex chat' }).click();
+  await page.evaluate(() => {
+    window.localStorage.setItem(
+      'made-solid-codex-chat-session-v1',
+      JSON.stringify({ isOpen: true }),
+    );
+  });
   await page.setContent(`
     <main style="min-height:100dvh;background:#e7ff1f">
       <h1>Made Solid website</h1>
@@ -923,6 +984,39 @@ test('resynchronizes a remembered open website chat after its iframe loads', asy
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
     .toBe(true);
+  await expect(page).toHaveScreenshot('codex-website-restored-embed.png', {
+    animations: 'disabled',
+  });
+
+  const embeddedPanel = page.frameLocator('#made-solid-codex-panel');
+  await embeddedPanel.getByRole('button', { name: 'Close Codex chat' }).click();
+  await expect
+    .poll(async () => {
+      const box = await frame.boundingBox();
+      return box ? { height: box.height, width: box.width } : null;
+    })
+    .toEqual({ height: 68, width: 68 });
+  await expect(frame).toHaveScreenshot('codex-website-closed-embed.png', {
+    animations: 'disabled',
+  });
+  await embeddedPanel.getByRole('button', { name: 'Chat with Codex' }).click();
+  await expect(embeddedPanel.getByRole('dialog', { name: 'Codex' })).toBeVisible();
+
+  if (testInfo.project.name === 'mobile') {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await expect
+      .poll(async () => {
+        const box = await frame.boundingBox();
+        return box ? { height: box.height, width: box.width } : null;
+      })
+      .toEqual({ height: 568, width: 320 });
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    await expect(page).toHaveScreenshot('codex-website-restored-embed-320.png', {
+      animations: 'disabled',
+    });
+  }
 });
 
 test('provides Codex chat as a dedicated responsive Studio page', async ({ page }, testInfo) => {
@@ -3356,6 +3450,52 @@ test('creates a new conversation while another chat keeps working', async ({ pag
   );
 });
 
+test('deletes a saved conversation from the conversation picker after confirmation', async ({
+  page,
+}) => {
+  let deletionRequest;
+  await page.route('**/__made-solid/codex-feedback', async (route) => {
+    deletionRequest = route.request().postDataJSON();
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({ status: 'deleted', deleted: true, detail: 'Conversation deleted.' }),
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await composer.getByRole('button', { name: 'Conversation' }).click();
+  await composer.getByRole('menuitemradio', { name: /^Review the earlier homepage/ }).click();
+  await expect(composer.getByRole('button', { name: 'Conversation' })).toContainText(
+    'Review the earlier homepage',
+  );
+  await composer.getByRole('button', { name: 'Conversation' }).click();
+  await composer.getByRole('menuitem', { name: 'Delete Review the earlier homepage' }).click();
+
+  const confirmation = page.getByRole('dialog', { name: 'Delete this chat?' });
+  await expect(confirmation).toContainText('Review the earlier homepage');
+  await expect(confirmation).toHaveScreenshot('codex-conversation-delete-confirmation.png');
+  await confirmation.getByRole('button', { name: 'Delete chat' }).click();
+  await expect(confirmation).toBeHidden();
+  expect(deletionRequest).toEqual({
+    action: 'delete-thread',
+    threadId: 'thread-2',
+    threadScope: 'universal',
+  });
+  await expect(composer.getByRole('button', { name: 'Conversation' })).toContainText(
+    'Open the Studio chat',
+  );
+
+  await composer.getByRole('button', { name: 'Conversation' }).click();
+  await expect(
+    composer.getByRole('menuitemradio', { name: /^Review the earlier homepage/ }),
+  ).toHaveCount(0);
+  const accessibility = await new AxeBuilder({ page }).include('.codex-chat-dialog').analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
 test('refreshes a loading Codex conversation as soon as the page resumes', async ({ page }) => {
   let resumed = false;
   let statusRequests = 0;
@@ -3429,6 +3569,27 @@ test('coalesces slow Codex status polls instead of stacking reconnect work', asy
   await page.goto('/?codexWorking=1');
   await expect.poll(() => statusRequests, { timeout: 6_000 }).toBeGreaterThan(1);
   expect(maximumActiveRequests).toBe(1);
+});
+
+test('offers Astra with only its catalogue-provided reasoning and Fast controls', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  await openRunSettings(composer);
+  const model = composer.getByLabel('Model');
+  await expect(model).toContainText('GPT-6 Astra · new');
+  await model.selectOption('gpt-6-astra');
+  await expect(composer.getByLabel('Reasoning')).toHaveValue('medium');
+  await composer.getByLabel('Reasoning').selectOption('max');
+  await expect(composer.getByLabel('Reasoning')).toHaveValue('max');
+  await composer.getByRole('button', { name: 'Run setup' }).click();
+  await openChatSettings(composer);
+  const fast = composer.getByRole('button', { name: /^Fast/ });
+  await expect(fast).toBeEnabled();
+  await expect(fast).toContainText('2x speed, increased usage');
 });
 
 test('keeps the selected model, reasoning, and Fast preference after reopen', async ({ page }) => {
@@ -3679,6 +3840,52 @@ test('keeps Stop disabled when the running server does not advertise cancellatio
   await expect(composer.getByRole('button', { name: 'Send message' })).toHaveCount(0);
 });
 
+test('summarises every conversation from its latest work in the chat chooser', async ({ page }) => {
+  await page.goto('/?codexConciseTitles=1');
+  await page.getByRole('button', { name: 'Chat with Codex' }).click();
+  const composer = page.getByRole('dialog', { name: 'Codex', exact: true });
+  const conversationPicker = composer.getByRole('button', { name: 'Conversation' });
+
+  await expect(conversationPicker).toContainText("Summarise each chat's latest work");
+  await expect(conversationPicker).not.toContainText('so I can identify it at a glance');
+  const closedSelectorTitle = await conversationPicker.locator('strong').innerText();
+  await conversationPicker.click();
+
+  const menu = composer.getByRole('menu', { name: 'Available conversations' });
+  const selectedMenuItem = menu.getByRole('menuitemradio', {
+    name: /^Summarise each chat's latest work/,
+  });
+  await expect(selectedMenuItem).toBeVisible();
+  await expect(selectedMenuItem.locator('strong')).toHaveText(closedSelectorTitle);
+  await expect(
+    menu.getByRole('menuitemradio', {
+      name: /^Review Clientspace navigation/,
+    }),
+  ).toBeVisible();
+  await expect(menu).not.toContainText('Captured from');
+  await expect(menu).not.toContainText('because the old page labels are confusing');
+  await expect.poll(async () => (await menu.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(300);
+  expect(await menu.evaluate((element) => element.scrollWidth - element.clientWidth)).toBe(0);
+  await expect(menu).toHaveScreenshot('codex-concise-current-work-titles.png', {
+    animations: 'allow',
+  });
+
+  await conversationPicker.click();
+  const latestRequest = composer.getByLabel('Your latest request');
+  await expect(latestRequest).toContainText('Your latest');
+  await expect(latestRequest).toContainText("every chat's title in the chat drop down");
+  await expect(latestRequest).not.toContainText('Captured from');
+  await expect(latestRequest).toHaveScreenshot('codex-compact-latest-request.png', {
+    animations: 'allow',
+  });
+  await expect(composer).toHaveScreenshot('codex-latest-request-chat.png', {
+    animations: 'allow',
+  });
+
+  const accessibility = await new AxeBuilder({ page }).include('.codex-chat-dialog').analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
 test('shows real Codex working state, queued work, and a live elapsed timer', async ({ page }) => {
   await page.goto('/?codexWorking=1&codexEvidenceNarrative=1');
   await page.getByRole('button', { name: 'Codex is working' }).click();
@@ -3687,6 +3894,9 @@ test('shows real Codex working state, queued work, and a live elapsed timer', as
   const chatLog = composer.getByRole('log', { name: 'Codex chat log' });
   const activityRows = chatLog.locator('.codex-chat-activity');
 
+  await expect(composer.getByLabel('Your latest request')).toContainText(
+    'Check the hero spacing at desktop width.',
+  );
   await expect(composer.getByRole('button', { name: 'Stop Codex' })).toBeEnabled();
   await expect(composer.getByRole('button', { name: 'Send message' })).toHaveCount(0);
 
@@ -3753,11 +3963,12 @@ test('shows real Codex working state, queued work, and a live elapsed timer', as
   const conversationPicker = composer.getByRole('button', { name: 'Conversation' });
   await conversationPicker.click();
   const activeConversation = composer.getByRole('menuitemradio', {
-    name: /^Open the Studio chat\./,
+    name: /^Open the Studio chat/,
   });
   await expect(activeConversation.locator('.is-spinning')).toBeVisible();
   await expect(activeConversation).toContainText('Working');
   await expect(activeConversation).toContainText('Last used');
+  await page.mouse.move(0, 0);
   await expect(composer.getByRole('menu', { name: 'Available conversations' })).toHaveScreenshot(
     'codex-conversation-menu.png',
   );

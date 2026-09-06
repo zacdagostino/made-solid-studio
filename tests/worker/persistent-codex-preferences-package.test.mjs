@@ -40,7 +40,7 @@ test('registers persistent Codex preferences as immutable test package v23.4', a
   }
 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
-  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.107`/);
+  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.115`/);
   assert.match(behaviour, /hello@madesolid\.com\.au website gate/);
   assert.match(responsiveSpec, /\['v23\.5', 'Reliable Next website preview'\]/);
   assert.match(responsiveSpec, /\['v23\.4', 'Persistent Codex preferences'\]/);

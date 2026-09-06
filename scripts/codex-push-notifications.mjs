@@ -69,7 +69,7 @@ function parseSubscription(input) {
 
 async function atomicWriteJson(path, value) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const temporaryPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+  const temporaryPath = `${path}.${process.pid}.${Date.now()}.${randomBytes(8).toString('hex')}.tmp`;
   await writeFile(temporaryPath, JSON.stringify(value, null, 2), { mode: 0o600 });
   await rename(temporaryPath, path);
 }

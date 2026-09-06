@@ -32,9 +32,6 @@ test('registers exact edited-site release as immutable test package v22.6', asyn
   );
   assert.match(repository, /missingPackages = \[[\s\S]*localExactEditedSiteReleasePackage/);
 
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.5`/);
-  assert.match(
-    app,
-    /manual environment declarations and real source changes remain pending edits/i,
-  );
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.8`/);
+  assert.match(app, /current working website exactly matches the latest committed version/i);
 });

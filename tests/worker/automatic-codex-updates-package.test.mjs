@@ -42,8 +42,8 @@ test('registers automatic Codex updates once as immutable test package v23.6', a
   }
 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
-  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.107`/);
-  assert.match(behaviour, /hello@madesolid\.com\.au website gate/);
+  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.115`/);
+  assert.match(behaviour, /owner-only website chat now hides a discarded Android Chrome iframe/);
   assert.match(app, /function CodexRuntimeUpdateSettings/);
   assert.match(app, /What changed/);
   assert.match(launcher, /codex-runtime-updates\.mjs" daemon/);
@@ -53,7 +53,7 @@ test('registers automatic Codex updates once as immutable test package v23.6', a
   assert.match(updater, /registry\.npmjs\.org\/@openai%2Fcodex\/latest/);
   assert.match(updater, /learn\.chatgpt\.com\/docs\/changelog/);
   assert.match(updater, /waiting_for_idle/);
-  assert.match(dockerfile, /@openai\/codex@0\.152\.1/);
+  assert.match(dockerfile, /@openai\/codex@0\.153\.2/);
   assert.match(responsiveSpec, /\['v23\.6', 'Automatic Codex updates'\]/);
   assert.match(responsiveSpec, /settings-codex-runtime-update/);
 });

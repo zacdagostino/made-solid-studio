@@ -124,6 +124,7 @@ test('Workspace Studio configuration rejects insecure origins and colliding port
     secret,
     studioOrigin: 'https://studio.madesolid.com.au',
     upstreamPort: 5173,
+    websiteOrigin: undefined,
     workspaceOrigin: 'https://workspace.madesolid.com.au',
     workspaceOrigins: ['https://workspace.madesolid.com.au'],
   });

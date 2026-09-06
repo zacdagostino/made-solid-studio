@@ -11,6 +11,7 @@ import {
   compareCodexVersions,
   completePendingUpdate,
   parseCodexChangelog,
+  parseCodexGitHubReleases,
   publicCodexUpdateStatus,
   requestIdleActivation,
   resolveCodexExecutable,
@@ -37,6 +38,22 @@ const changelogFixture = `
   <h2>Changelog</h2><ul><li>Internal entry that should not be shown.</li></ul>
 </li>`;
 
+const githubReleaseFixture = [
+  {
+    tag_name: 'rust-v0.152.1',
+    published_at: '2026-09-01T23:53:12Z',
+    body: `## Bug Fixes
+
+- Corrected the [Fast tier](https://example.test/fast) description to say \`2x speed\`.
+- Set \`tui.auto_recap\` to false while keeping manual recap available.
+
+## Changelog
+
+- Internal entry that should not be shown.`,
+  },
+  { tag_name: 'nightly', published_at: '2026-09-02T00:00:00Z', body: '## New Features' },
+];
+
 async function fixture() {
   const directory = await mkdtemp(resolve(tmpdir(), 'codex-updates-'));
   const bundled = resolve(directory, 'bundled-codex');
@@ -58,6 +75,13 @@ function releaseFetch(input) {
   if (url.includes('registry.npmjs.org')) {
     return Promise.resolve(
       new Response(JSON.stringify({ name: '@openai/codex', version: '0.152.1' }), {
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+  }
+  if (url.includes('api.github.com')) {
+    return Promise.resolve(
+      new Response(JSON.stringify(githubReleaseFixture), {
         headers: { 'content-type': 'application/json' },
       }),
     );
@@ -89,6 +113,24 @@ test('extracts official Codex CLI release features and fixes', () => {
         },
       ],
       version: '0.152.0',
+    },
+  ]);
+});
+
+test('extracts immediate official GitHub release notes without raw links or changelog noise', () => {
+  assert.deepEqual(parseCodexGitHubReleases(githubReleaseFixture), [
+    {
+      date: '2026-09-01',
+      sections: [
+        {
+          title: 'Bug Fixes',
+          items: [
+            'Corrected the Fast tier description to say 2x speed.',
+            'Set tui.auto_recap to false while keeping manual recap available.',
+          ],
+        },
+      ],
+      version: '0.152.1',
     },
   ]);
 });

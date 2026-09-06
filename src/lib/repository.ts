@@ -464,6 +464,21 @@ const localCodexUpdateCheckerPackageId = 'agent-package-local-v23-7-codex-update
 const localOwnerOnlyWebsiteCodexPackageId = 'agent-package-local-v23-8-owner-only-website-codex';
 const localAuthenticatedWebsiteCodexEmbedPackageId =
   'agent-package-local-v23-9-authenticated-website-codex-embed';
+const localAstraReadyCodexRuntimePackageId = 'agent-package-local-v24-0-astra-ready-codex-runtime';
+const localReliableNewCodexChatPackageId = 'agent-package-local-v24-1-reliable-new-codex-chat';
+const localRestorableManagedCodexChatsPackageId =
+  'agent-package-local-v24-2-restorable-managed-codex-chats';
+const localDurableNewCodexChatPackageId = 'agent-package-local-v24-3-durable-new-codex-chat';
+const localConciseCurrentWorkChatTitlesPackageId =
+  'agent-package-local-v24-4-concise-current-work-chat-titles';
+const localExplicitWebsiteEditVersionStatusPackageId =
+  'agent-package-local-v24-5-explicit-website-edit-version-status';
+const localRecoverStaleEmptyCodexChatPackageId =
+  'agent-package-local-v24-6-recover-stale-empty-codex-chat';
+const localRecentRequestChatContextPackageId =
+  'agent-package-local-v24-7-recent-request-chat-context';
+const localResilientWebsiteCodexResumePackageId =
+  'agent-package-local-v24-8-resilient-website-codex-resume';
 
 type StoreName =
   | 'activities'
@@ -3814,10 +3829,172 @@ export class SiteforgeRepository {
         'Makes the authorized development-website launcher load reliably without weakening the existing owner-only Studio boundary.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localAstraReadyCodexRuntimePackage: AgentPackage = {
+      ...localAuthenticatedWebsiteCodexEmbedPackage,
+      id: localAstraReadyCodexRuntimePackageId,
+      version: 24,
+      basePackageId: localAuthenticatedWebsiteCodexEmbedPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v24.0',
+      contractAddendum:
+        'The protected Studio runtime includes stable Codex CLI 0.153.2 and reads both the visible and hidden signed-in App Server model catalogue, exposing only public models plus the explicitly supported GPT-6 Astra rollout. Settings shows whether Astra is available to the account, the exact runtime-advertised reasoning and service tiers, and how future runtime, model-metadata, and Studio-contract changes are adopted. Immediate feature notes may come from the official OpenAI Codex GitHub releases while the official changelog page catches up.',
+      instructionsAddendum:
+        'Treat the signed-in App Server model catalogue as the availability boundary. Never synthesize Astra access: include gpt-6-astra in the Studio picker only when model/list returns it, accept only that named rollout model from hidden entries, validate every requested reasoning level and service tier against its returned metadata, and keep all other hidden internal models unavailable. Retain daily verified stable updates, idle activation, health checks, rollback, and notifications. Merge release notes only from official OpenAI Codex sources, prefer the immediate GitHub release entry for duplicate versions, and keep arbitrary future Studio UI or API changes versioned and tested rather than claiming they can be safely guessed.',
+      summary:
+        'Astra-ready Codex runtime test package: bundles Codex 0.153.2, safely unlocks GPT-6 Astra when the account receives it, and documents automatic versus versioned update adoption.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps Studio current with Codex runtime and model rollouts while making account availability, exact model controls, feature notes, and Studio-specific adoption truthful and reviewable.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localReliableNewCodexChatPackage: AgentPackage = {
+      ...localAstraReadyCodexRuntimePackage,
+      id: localReliableNewCodexChatPackageId,
+      version: 24.1,
+      basePackageId: localAstraReadyCodexRuntimePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v24.1',
+      contractAddendum:
+        'A newly created Codex conversation remains the selected safe empty chat while the live App Server is still materializing its first transcript. The bridge binds the sparse thread/start result to the already validated universal or client workspace and does not turn a temporary initial thread/read failure into an unreadable-conversation warning.',
+      instructionsAddendum:
+        'Normalize every successful thread/start response with the exact requested workspace path and scope before storing or returning it. Preserve those trusted fields when thread/list or thread/read temporarily omits them. While the bridge still owns a newly started empty thread, treat a failed initial read as an empty transcript and retry through normal polling; retain the existing safety warning for every established or untrusted thread read failure.',
+      summary:
+        'Reliable new Codex chat test package: keeps a fresh empty conversation usable while the live runtime materializes it instead of showing a false safety error.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes New chat dependable against sparse and temporarily unreadable App Server responses without weakening workspace isolation for existing conversations.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localRestorableManagedCodexChatsPackage: AgentPackage = {
+      ...localReliableNewCodexChatPackage,
+      id: localRestorableManagedCodexChatsPackageId,
+      version: 24.2,
+      basePackageId: localReliableNewCodexChatPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v24.2',
+      contractAddendum:
+        'The cross-origin Clientspace Codex embed recovers deterministically after Chrome process or back-forward-cache restoration. The host conceals partial iframe rendering until a trusted ready state, repeats its synchronization handshake after load, focus, visibility, and pageshow events, and the panel converts transient status failures into a retryable connected surface instead of an indefinite spinner. Saved idle conversations expose a confirmed delete action in the conversation picker.',
+      instructionsAddendum:
+        'Do not rely on animation-completion or a one-shot postMessage handshake for restored browser state. Keep the embedded surface hidden and non-interactive until its trusted Studio frame responds ready, retry synchronization after browser lifecycle events, bound status requests, and keep normal polling able to reconnect. Allow permanent thread deletion only after explicit confirmation and exact workspace-scope validation; reject active or queued work, remove deleted lifecycle and transcript-position state, and select a safe remaining conversation when the active chat is deleted.',
+      summary:
+        'Restorable managed Codex chats test package: repairs Chrome-restored embed and loading states and adds confirmed deletion for saved idle chats.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps the cross-product Codex chat usable after mobile Chrome restoration and lets the Studio owner safely remove unwanted saved conversations.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localDurableNewCodexChatPackage: AgentPackage = {
+      ...localRestorableManagedCodexChatsPackage,
+      id: localDurableNewCodexChatPackageId,
+      version: 24.3,
+      basePackageId: localRestorableManagedCodexChatsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v24.3',
+      contractAddendum:
+        'A validated newly created Codex conversation remains safely selectable across browser refreshes and live bridge reloads while Codex App Server 0.153.1 reports list_turns as unsupported for its still-empty transcript. The bridge persists only bounded thread identity, exact workspace scope and path, runtime status, and timestamps in private server storage, then removes that record when the conversation materializes or is deleted.',
+      instructionsAddendum:
+        'Persist at most ten bridge-created empty-thread trust records atomically outside the feedback queue. Hydrate them before opening the App Server connection, validate their exact workspace path and scope on every use, and never persist transcript or prompt content. Treat an unsupported initial list_turns read as an empty transcript only for one of those trusted records. Remove the record after readable content appears or deletion succeeds; retain the existing safety warning for every untrusted thread read failure.',
+      summary:
+        'Durable new Codex chat test package: keeps a validated empty chat usable across refreshes and bridge reloads while the live runtime finishes materializing it.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes New chat reliable against the exact Codex 0.153.1 empty-transcript response without weakening client-workspace isolation or persisting conversation content.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localConciseCurrentWorkChatTitlesPackage: AgentPackage = {
+      ...localDurableNewCodexChatPackage,
+      id: localConciseCurrentWorkChatTitlesPackageId,
+      version: 24.4,
+      basePackageId: localDurableNewCodexChatPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v24.4',
+      contractAddendum:
+        'Every Studio Codex conversation title is a compact summary of that thread’s latest requested work. The title removes conversational lead-ins, capture provenance, links, and trailing purpose clauses while the existing adjacent state reports whether the work is active, finished, unread, interrupted, or ready.',
+      instructionsAddendum:
+        'Derive every conversation chooser label from the newest thread preview without making another model or per-thread network request. Normalize common conversational requests into direct work summaries, preserve a saved thread name only when no preview exists, shorten at a readable word boundary, and keep live lifecycle and last-used information as separate accessible metadata.',
+      summary:
+        'Concise current-work chat titles test package: makes every conversation recognizable at a glance from its latest task without slowing the chooser.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the chat chooser scannable by turning each latest request into a short current-work label while retaining truthful live state and timing.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localExplicitWebsiteEditVersionStatusPackage: AgentPackage = {
+      ...localConciseCurrentWorkChatTitlesPackage,
+      id: localExplicitWebsiteEditVersionStatusPackageId,
+      version: 24.5,
+      basePackageId: localConciseCurrentWorkChatTitlesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v24.5',
+      contractAddendum:
+        'Website editing presents the current working website and latest committed Made Solid edit checkpoint as separate, directly comparable states. It derives an explicit up-to-date, uncommitted-changes, checkpoint-behind, not-synced, or unavailable result from the exact Git head, changed-file list, committed-version record, and upstream sync state.',
+      instructionsAddendum:
+        'Never imply that the next available version number already exists. Compare the current Git head with the latest committed edit record, report pending file changes separately, keep remote sync distinct from local checkpoint equality, and give the reviewer a direct next action whenever the checkpoint is behind.',
+      summary:
+        'Explicit website edit version status test package: makes it immediately clear whether the latest committed version contains the current working website.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents stale committed checkpoints and pending working edits from being mistaken for the same website version.',
+      stagedBehaviourIds: ['client-url-release-contract'],
+    };
+    const localRecoverStaleEmptyCodexChatPackage: AgentPackage = {
+      ...localExplicitWebsiteEditVersionStatusPackage,
+      id: localRecoverStaleEmptyCodexChatPackageId,
+      version: 24.6,
+      basePackageId: localExplicitWebsiteEditVersionStatusPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v24.6',
+      contractAddendum:
+        'A browser selection that points to an older empty Codex thread without a durable bridge record no longer traps the Studio owner behind a false safety warning. When the live App Server returns its specific unsupported list_turns response for that unmaterialized selection, Studio exposes none of the unknown thread and falls back to a separately validated listed conversation or an empty ready surface. A changed bridge waits for the current maintenance or queue flush checkpoint and then replaces the old instance instead of allowing recurring maintenance to starve live reload indefinitely.',
+      instructionsAddendum:
+        'Continue to show the preserved-conversation safety warning for every genuine read error. Suppress it only when the requested untrusted identifier returns the App Server unmaterialized-thread signature. Do not adopt, display, send to, or infer a workspace for that orphan identifier; discard the stale selection and use only an independently listed, exact-workspace conversation. Keep durable trust records for all newly bridge-created empty chats. When bridge source mtime changes, await only the active maintenance or flush promise, retry bridge resolution immediately, transfer trusted started-thread state, and close the old instance.',
+      summary:
+        'Stale empty Codex chat recovery test package: loads the current bridge and releases older orphaned New chat selections from the false safety warning without trusting or exposing them.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Ensures the live development endpoint adopts the recovery, letting affected browsers recover while retaining the exact safety boundary for real unreadable and cross-workspace conversations.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localRecentRequestChatContextPackage: AgentPackage = {
+      ...localRecoverStaleEmptyCodexChatPackage,
+      id: localRecentRequestChatContextPackageId,
+      version: 24.7,
+      basePackageId: localRecoverStaleEmptyCodexChatPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v24.7',
+      contractAddendum:
+        'Every Studio Codex chooser label is derived from the newest privately saved request for that exact conversation, with the runtime thread preview retained only as a fallback. The open conversation keeps a compact, non-interactive copy of the reviewer’s latest request above the scrolling transcript, including queued and just-sent requests, while capture provenance stays hidden.',
+      instructionsAddendum:
+        'Build one latest-request map from the already loaded private feedback records and apply it only to conversations that passed the existing workspace-scope checks; do not issue per-thread reads or model calls for titles. In the selected chat, prefer a just-sent request, then the newest queued request, then the newest rendered user message. Keep the pinned reminder outside the scrolling log, limit it to two visual lines, expose the full cleaned request as its title, and preserve the transcript’s available height at mobile, tablet, and desktop widths.',
+      summary:
+        'Recent request chat context test package: keeps every chat title current and pins the latest request in a compact reminder.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes conversations identifiable from their actual latest work and keeps the current ask visible without repeated scrolling or a crowded chat surface.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localResilientWebsiteCodexResumePackage: AgentPackage = {
+      ...localRecentRequestChatContextPackage,
+      id: localResilientWebsiteCodexResumePackageId,
+      version: 24.8,
+      basePackageId: localRecentRequestChatContextPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v24.8',
+      contractAddendum:
+        'The owner-only Codex iframe on the Made Solid development website never leaves a discarded browser frame visible after Android Chrome restores a backgrounded or closed tab. The website conceals the old frame during page hide and every foreground synchronization, waits for a trusted ready acknowledgement from the exact Studio origin and iframe window, and reloads the same authenticated embed with a cache-busting resume token when no acknowledgement arrives within a bounded delay.',
+      instructionsAddendum:
+        'Preserve the iframe-owned open or closed conversation state across recovery. Keep the stale frame non-interactive and invisible, show only a compact owner-only reconnecting placeholder in its footprint, and reveal the iframe only after its validated panel-ready response. Apply the same path to focus, pageshow, online, and visible-state restoration without exposing the control to signed-out or non-owner accounts.',
+      summary:
+        'Resilient website Codex resume test package: replaces broken restored frames with bounded automatic recovery.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents Android Chrome from exposing a dead embedded Studio document when the Made Solid development website returns from the background.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localResilientWebsiteCodexResumePackage,
+          localRecentRequestChatContextPackage,
+          localRecoverStaleEmptyCodexChatPackage,
+          localExplicitWebsiteEditVersionStatusPackage,
+          localConciseCurrentWorkChatTitlesPackage,
+          localDurableNewCodexChatPackage,
+          localRestorableManagedCodexChatsPackage,
+          localReliableNewCodexChatPackage,
+          localAstraReadyCodexRuntimePackage,
           localAuthenticatedWebsiteCodexEmbedPackage,
           localOwnerOnlyWebsiteCodexPackage,
           localCodexUpdateCheckerPackage,
@@ -4005,6 +4182,15 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localResilientWebsiteCodexResumePackage,
+          localRecentRequestChatContextPackage,
+          localRecoverStaleEmptyCodexChatPackage,
+          localExplicitWebsiteEditVersionStatusPackage,
+          localConciseCurrentWorkChatTitlesPackage,
+          localDurableNewCodexChatPackage,
+          localRestorableManagedCodexChatsPackage,
+          localReliableNewCodexChatPackage,
+          localAstraReadyCodexRuntimePackage,
           localAuthenticatedWebsiteCodexEmbedPackage,
           localOwnerOnlyWebsiteCodexPackage,
           localCodexUpdateCheckerPackage,
@@ -4195,6 +4381,15 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localResilientWebsiteCodexResumePackage,
+            localRecentRequestChatContextPackage,
+            localRecoverStaleEmptyCodexChatPackage,
+            localExplicitWebsiteEditVersionStatusPackage,
+            localConciseCurrentWorkChatTitlesPackage,
+            localDurableNewCodexChatPackage,
+            localRestorableManagedCodexChatsPackage,
+            localReliableNewCodexChatPackage,
+            localAstraReadyCodexRuntimePackage,
             localAuthenticatedWebsiteCodexEmbedPackage,
             localOwnerOnlyWebsiteCodexPackage,
             localCodexUpdateCheckerPackage,

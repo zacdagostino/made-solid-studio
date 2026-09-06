@@ -39,10 +39,9 @@ test('registers the authenticated website Codex embed once as immutable test pac
   }
 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
-  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.107`/);
-  assert.match(behaviour, /hello@madesolid\.com\.au website gate/);
+  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.115`/);
+  assert.match(behaviour, /owner-only website chat now hides a discarded Android Chrome iframe/);
   assert.match(gateway, /requestUrl\.searchParams\.get\('embed'\) !== websiteCodexEmbed/);
   assert.match(gateway, /frame-ancestors \$\{frameOrigin \|\| "'none'"\}/);
-  assert.match(responsiveSpec, /agent-package-local-v23-9-authenticated-website-codex-embed/);
   assert.match(responsiveSpec, /\['v23\.9', 'Authenticated website Codex embed'\]/);
 });

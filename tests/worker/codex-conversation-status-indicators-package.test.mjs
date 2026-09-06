@@ -49,7 +49,7 @@ test('registers Codex conversation status indicators as immutable test package v
       fallbackLedger.indexOf('localEditorOnlyClientChatScopePackage,'),
   );
 
-  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.107`/);
+  assert.match(app, /revision: `v\$\{selectedAgentPackage\.version\}\.115`/);
   assert.match(app, /hello@madesolid\.com\.au website gate/);
   assert.match(responsiveSpec, /\['v22\.9', 'Codex conversation status indicators'\]/);
 });
