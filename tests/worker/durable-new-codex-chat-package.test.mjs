@@ -48,6 +48,6 @@ test('registers durable New chat once as immutable test package v24.3', async ()
   assert.match(bridge, /list_turns\.\*not supported/);
   assert.match(bridgeTest, /const reloadedBridge = new CodexFeedbackBridge/);
   assert.match(bridgeTest, /list_turns is not supported yet/);
-  assert.match(responsiveSpec, /agent-package-local-v24-7-recent-request-chat-context/);
+  assert.match(responsiveSpec, /agent-package-local-v24-8-resilient-website-codex-resume/);
   assert.match(responsiveSpec, /\['v24\.3', 'Durable new Codex chat'\]/);
 });

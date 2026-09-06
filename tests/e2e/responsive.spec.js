@@ -4132,8 +4132,11 @@ test('displays the newest test package above retained package versions', async (
   await expect(page.getByLabel('Loading Made Solid Studio workspace')).toBeHidden();
 
   const packagePicker = page.getByLabel('Test agent package');
-  await expect(packagePicker).toHaveValue('agent-package-local-v24-8-resilient-website-codex-resume');
+  await expect(packagePicker).toHaveValue(
+    'agent-package-local-v24-8-resilient-website-codex-resume',
+  );
   await expect(packagePicker).toContainText('v24.8 · Approved test');
+  await expect(packagePicker).toContainText('v24.7 · Approved test');
   await expect(packagePicker).toContainText('v24.6 · Approved test');
   await expect(packagePicker).toContainText('v24.5 · Approved test');
   await expect(packagePicker).toContainText('v24.4 · Approved test');

@@ -45,6 +45,6 @@ test('registers concise current-work chat titles once as immutable test package 
   assert.match(titleSource, /function conciseWorkSummary/);
   assert.match(titleSource, /Captured from:/);
   assert.match(titleTest, /Summarise each chat's latest work/);
-  assert.match(responsiveSpec, /agent-package-local-v24-7-recent-request-chat-context/);
+  assert.match(responsiveSpec, /agent-package-local-v24-8-resilient-website-codex-resume/);
   assert.match(responsiveSpec, /\['v24\.4', 'Concise current-work chat titles'\]/);
 });

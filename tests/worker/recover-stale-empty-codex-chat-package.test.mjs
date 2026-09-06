@@ -49,6 +49,6 @@ test('registers stale empty Codex chat recovery once as immutable test package v
   assert.match(service, /return codexFeedbackBridge\(\)/);
   assert.match(bridgeTest, /const orphanRecoveryBridge = new CodexFeedbackBridge/);
   assert.match(bridgeTest, /recoveredStatus\.threadIssue, undefined/);
-  assert.match(responsiveSpec, /agent-package-local-v24-7-recent-request-chat-context/);
+  assert.match(responsiveSpec, /agent-package-local-v24-8-resilient-website-codex-resume/);
   assert.match(responsiveSpec, /\['v24\.6', 'Stale empty Codex chat recovery'\]/);
 });

@@ -45,6 +45,6 @@ test('registers restorable managed Codex chats once as immutable test package v2
   assert.match(component, /action: 'delete-thread'/);
   assert.match(component, /ready: isSupported !== undefined/);
   assert.match(bridge, /async deleteThread\(input\)/);
-  assert.match(responsiveSpec, /agent-package-local-v24-7-recent-request-chat-context/);
+  assert.match(responsiveSpec, /agent-package-local-v24-8-resilient-website-codex-resume/);
   assert.match(responsiveSpec, /\['v24\.2', 'Restorable managed Codex chats'\]/);
 });

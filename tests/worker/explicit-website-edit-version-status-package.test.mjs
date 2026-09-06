@@ -42,6 +42,6 @@ test('registers explicit website edit version status once as immutable test pack
   assert.match(behaviour, /current working website exactly matches the latest committed version/);
   assert.match(app, /function websiteEditCheckpointView/);
   assert.match(app, /Working website vs committed version/);
-  assert.match(responsiveSpec, /agent-package-local-v24-7-recent-request-chat-context/);
+  assert.match(responsiveSpec, /agent-package-local-v24-8-resilient-website-codex-resume/);
   assert.match(responsiveSpec, /\['v24\.5', 'Explicit website edit version status'\]/);
 });

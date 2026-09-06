@@ -54,6 +54,5 @@ test('registers recent request chat context once as immutable test package v24.7
   assert.match(styles, /-webkit-line-clamp: 2/);
   assert.match(bridgeTest, /uses each thread latest saved request as its public preview/);
   assert.match(e2e, /codex-compact-latest-request\.png/);
-  assert.match(responsiveSpec, /agent-package-local-v24-7-recent-request-chat-context/);
   assert.match(responsiveSpec, /\['v24\.7', 'Recent request chat context'\]/);
 });
