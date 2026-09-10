@@ -21,6 +21,9 @@ const isCodexPanelRoute = window.location.hash.startsWith('#/codex-panel');
 const isClientReviewRevocationFixture =
   import.meta.env.VITE_SITEFORGE_E2E_FIXTURES === 'true' &&
   window.location.hash === '#/__e2e/client-review-revocation';
+const isClientHandoffEmailFixture =
+  import.meta.env.VITE_SITEFORGE_E2E_FIXTURES === 'true' &&
+  window.location.hash === '#/__e2e/client-handoff-email';
 const codexPanelDirectory = (() => {
   if (!isCodexPanelRoute) return undefined;
   const query = new URLSearchParams(window.location.hash.slice('#/codex-panel?'.length));
@@ -43,7 +46,16 @@ const announceStudioMounted = () => {
     window.dispatchEvent(new Event('made-solid:studio-mounted'));
   });
 };
-if (isClientReviewRevocationFixture) {
+if (isClientHandoffEmailFixture) {
+  void import('./ClientHandoffEmailFixture').then(({ ClientHandoffEmailFixture }) => {
+    root.render(
+      <StrictMode>
+        <ClientHandoffEmailFixture />
+      </StrictMode>,
+    );
+    announceStudioMounted();
+  });
+} else if (isClientReviewRevocationFixture) {
   void import('./ClientReviewRevocationFixture').then(({ ClientReviewRevocationFixture }) => {
     root.render(
       <StrictMode>

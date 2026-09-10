@@ -679,3 +679,25 @@ export function formatAud(cents: number) {
     maximumFractionDigits: cents % 100 ? 2 : 0,
   }).format(cents / 100);
 }
+
+// Dates and quote references identify a saved offer; only commercial/source changes invalidate it.
+export function pricingQuoteMatches(quote: PricingQuoteSnapshot, calculation: PricingCalculation) {
+  const terms = (value: PricingCalculation | PricingQuoteSnapshot) =>
+    JSON.stringify({
+      pricingVersion: value.pricingVersion,
+      sourceManifestId: value.sourceManifestId,
+      sourceScope: value.sourceScope,
+      options: value.options,
+      lineItems: value.lineItems,
+      totalCents: value.totalCents,
+      offerChoices: value.offerChoices,
+      serviceTermsVersion: value.serviceTermsVersion,
+      privacyNoticeVersion: value.privacyNoticeVersion,
+    });
+  return (
+    quote.status === 'approved' &&
+    Date.parse(quote.validUntil) > Date.now() &&
+    !calculation.reviewRequired &&
+    terms(quote) === terms(calculation)
+  );
+}

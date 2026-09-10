@@ -14,6 +14,7 @@ import {
   calculateBuildPricing,
   defaultPricingOptions,
   formatAud,
+  pricingQuoteMatches,
   type PricingOptions,
   type PricingQuoteSnapshot,
   type PricingSourceScope,
@@ -31,10 +32,16 @@ export function PricingCalculator({
   manifest,
   sourceScope,
   onApprovedQuoteChange,
+  savedQuote,
+  savedOptions,
+  onOptionsChange,
 }: {
   manifest?: BuildManifest;
   sourceScope?: PricingSourceScope;
   onApprovedQuoteChange: (quote?: PricingQuoteSnapshot) => void;
+  savedQuote?: PricingQuoteSnapshot;
+  savedOptions?: PricingOptions;
+  onOptionsChange?: (options: PricingOptions) => void;
 }) {
   const configuredDefaults = useMemo(
     () => ({
@@ -43,19 +50,23 @@ export function PricingCalculator({
     }),
     [],
   );
-  const [options, setOptions] = useState<PricingOptions>(configuredDefaults);
-  const [approved, setApproved] = useState<PricingQuoteSnapshot>();
+  const [options, setOptions] = useState<PricingOptions>(
+    savedOptions ?? savedQuote?.options ?? configuredDefaults,
+  );
+  const [approved, setApproved] = useState<PricingQuoteSnapshot | undefined>(savedQuote);
   const sourceScopeKey = JSON.stringify(sourceScope ?? null);
+  const manifestKey = JSON.stringify(manifest ?? null);
   const calculation = useMemo(
     () => (manifest ? calculateBuildPricing(manifest, options, sourceScope) : undefined),
     // The scope key prevents the 10-second source refresh from invalidating an unchanged quote.
-    [manifest, options, sourceScopeKey],
+    [manifestKey, options, sourceScopeKey],
   );
 
   useEffect(() => {
-    setApproved(undefined);
-    onApprovedQuoteChange(undefined);
-  }, [calculation, onApprovedQuoteChange]);
+    const valid = approved && calculation && pricingQuoteMatches(approved, calculation);
+    if (approved && !valid) setApproved(undefined);
+    onApprovedQuoteChange(valid ? approved : undefined);
+  }, [calculation, approved, onApprovedQuoteChange]);
 
   if (!manifest || !calculation) {
     return (
@@ -71,7 +82,9 @@ export function PricingCalculator({
   const currentCalculation = calculation;
 
   function updateOption<Key extends keyof PricingOptions>(key: Key, value: PricingOptions[Key]) {
-    setOptions((current) => ({ ...current, [key]: value }));
+    const next = { ...options, [key]: value };
+    setOptions(next);
+    onOptionsChange?.(next);
   }
 
   function approve() {
@@ -100,205 +113,211 @@ export function PricingCalculator({
         </StatusBadge>
       </div>
 
-      <div className="pricing-calculator__metrics" aria-label="Build pricing signals">
-        <span>
-          <strong>{calculation.metrics.corePages}</strong>
-          <small>Core pages</small>
-        </span>
-        <span>
-          <strong>{calculation.metrics.contentEntries}</strong>
-          <small>Content entries</small>
-        </span>
-        <span>
-          <strong>{calculation.metrics.redirectRoutes}</strong>
-          <small>Unbilled redirects</small>
-        </span>
-        <span>
-          <strong>{calculation.metrics.uniquePageTypes}</strong>
-          <small>Page systems</small>
-        </span>
-      </div>
-
-      <p className="pricing-calculator__source" role="status">
-        <strong>{calculation.sourceScope.revisionLabel}</strong>
-        <span>
-          {calculation.sourceScope.source === 'working_source'
-            ? 'Pricing follows the newest uncommitted source. Finalising the edit will lock this exact scope to the quote.'
-            : 'Pricing is locked to the newest available source scope.'}
-        </span>
+      <p className="muted-copy">
+        One quote for this website version. Approving it saves the offer; payment collection is
+        configured separately in Clientspace.
       </p>
-
-      <div className="pricing-calculator__guardrail">
-        <span>
-          <small>Internal full-scope value</small>
-          <strong>{formatAud(calculation.fullScopeValueCents)}</strong>
-        </span>
-        <span>
-          <small>Automatic cold-offer ceiling</small>
-          <strong>{formatAud(calculation.automaticOfferCeilingCents)}</strong>
-        </span>
-        <p>
-          The client sees clear fixed choices. Company size or net worth never changes the price;
-          only the latest reviewed build scope does.
-        </p>
-      </div>
-
-      <div className="pricing-calculator__offers" aria-label="Client offer choices">
-        <div className="pricing-calculator__section-heading">
-          <span aria-hidden="true">
-            <WalletCards size={18} />
+      <details className="proposal-details">
+        <summary>Adjust pricing and inspect scope</summary>
+        <div className="pricing-calculator__metrics" aria-label="Build pricing signals">
+          <span>
+            <strong>{calculation.metrics.corePages}</strong>
+            <small>Core pages</small>
           </span>
-          <div>
-            <strong>Client choice menu</strong>
-            <small>Every amount is a complete commitment, not a teaser price.</small>
+          <span>
+            <strong>{calculation.metrics.contentEntries}</strong>
+            <small>Content entries</small>
+          </span>
+          <span>
+            <strong>{calculation.metrics.redirectRoutes}</strong>
+            <small>Unbilled redirects</small>
+          </span>
+          <span>
+            <strong>{calculation.metrics.uniquePageTypes}</strong>
+            <small>Page systems</small>
+          </span>
+        </div>
+
+        <p className="pricing-calculator__source" role="status">
+          <strong>{calculation.sourceScope.revisionLabel}</strong>
+          <span>
+            {calculation.sourceScope.source === 'working_source'
+              ? 'Pricing follows the newest uncommitted source. Finalising the edit will lock this exact scope to the quote.'
+              : 'Pricing is locked to the newest available source scope.'}
+          </span>
+        </p>
+
+        <div className="pricing-calculator__guardrail">
+          <span>
+            <small>Internal full-scope value</small>
+            <strong>{formatAud(calculation.fullScopeValueCents)}</strong>
+          </span>
+          <span>
+            <small>Automatic cold-offer ceiling</small>
+            <strong>{formatAud(calculation.automaticOfferCeilingCents)}</strong>
+          </span>
+          <p>
+            The client sees clear fixed choices. Company size or net worth never changes the price;
+            only the latest reviewed build scope does.
+          </p>
+        </div>
+
+        <div className="pricing-calculator__offers" aria-label="Client offer choices">
+          <div className="pricing-calculator__section-heading">
+            <span aria-hidden="true">
+              <WalletCards size={18} />
+            </span>
+            <div>
+              <strong>Client choice menu</strong>
+              <small>Every amount is a complete commitment, not a teaser price.</small>
+            </div>
+          </div>
+          <div className="pricing-calculator__offer-grid">
+            {calculation.offerChoices.map((offer) => (
+              <article
+                className={
+                  offer.recommended
+                    ? 'pricing-calculator__offer pricing-calculator__offer--recommended'
+                    : 'pricing-calculator__offer'
+                }
+                key={offer.id}
+              >
+                <div>
+                  <span>
+                    {offer.recommended
+                      ? 'Recommended'
+                      : offer.kind === 'managed'
+                        ? 'Lower upfront'
+                        : 'Alternative'}
+                  </span>
+                  <strong>{offer.label}</strong>
+                </div>
+                <p>{offer.summary}</p>
+                <strong className="pricing-calculator__offer-price">
+                  {offer.kind === 'managed'
+                    ? `${formatAud(offer.setupCents)} + ${formatAud(offer.recurringCents)}/mo`
+                    : formatAud(offer.totalCommitmentCents)}
+                </strong>
+                {offer.kind === 'managed' ? (
+                  <small>
+                    {offer.recurringMonths} months · {formatAud(offer.totalCommitmentCents)} total
+                    commitment
+                  </small>
+                ) : (
+                  <small>
+                    {offer.paymentSchedule.length}{' '}
+                    {offer.paymentSchedule.length === 1 ? 'payment' : 'fixed payments'} ·{' '}
+                    {offer.scopeLabel}
+                  </small>
+                )}
+              </article>
+            ))}
           </div>
         </div>
-        <div className="pricing-calculator__offer-grid">
-          {calculation.offerChoices.map((offer) => (
-            <article
-              className={
-                offer.recommended
-                  ? 'pricing-calculator__offer pricing-calculator__offer--recommended'
-                  : 'pricing-calculator__offer'
-              }
-              key={offer.id}
-            >
-              <div>
-                <span>
-                  {offer.recommended
-                    ? 'Recommended'
-                    : offer.kind === 'managed'
-                      ? 'Lower upfront'
-                      : 'Alternative'}
-                </span>
-                <strong>{offer.label}</strong>
-              </div>
-              <p>{offer.summary}</p>
-              <strong className="pricing-calculator__offer-price">
-                {offer.kind === 'managed'
-                  ? `${formatAud(offer.setupCents)} + ${formatAud(offer.recurringCents)}/mo`
-                  : formatAud(offer.totalCommitmentCents)}
-              </strong>
-              {offer.kind === 'managed' ? (
-                <small>
-                  {offer.recurringMonths} months · {formatAud(offer.totalCommitmentCents)} total
-                  commitment
-                </small>
-              ) : (
-                <small>
-                  {offer.paymentSchedule.length}{' '}
-                  {offer.paymentSchedule.length === 1 ? 'payment' : 'fixed payments'} ·{' '}
-                  {offer.scopeLabel}
-                </small>
-              )}
-            </article>
-          ))}
-        </div>
-      </div>
 
-      <details className="pricing-calculator__scope" open>
-        <summary>
-          <span>
-            <strong>Build-derived scope</strong>
-            <small>{calculation.lineItems.length} priced components · internal review only</small>
-          </span>
-        </summary>
-        <div className="pricing-calculator__lines">
-          {calculation.lineItems.map((item) => (
-            <div key={item.id}>
-              <span>
-                <strong>{item.label}</strong>
-                <small>{item.detail}</small>
-              </span>
-              <strong>{formatAud(item.amountCents)}</strong>
-            </div>
-          ))}
+        <details className="pricing-calculator__scope" open>
+          <summary>
+            <span>
+              <strong>Build-derived scope</strong>
+              <small>{calculation.lineItems.length} priced components · internal review only</small>
+            </span>
+          </summary>
+          <div className="pricing-calculator__lines">
+            {calculation.lineItems.map((item) => (
+              <div key={item.id}>
+                <span>
+                  <strong>{item.label}</strong>
+                  <small>{item.detail}</small>
+                </span>
+                <strong>{formatAud(item.amountCents)}</strong>
+              </div>
+            ))}
+          </div>
+        </details>
+
+        <div className="pricing-calculator__controls">
+          <label>
+            <span>Content preparation</span>
+            <select
+              onChange={(event) =>
+                updateOption('contentMode', event.target.value as PricingOptions['contentMode'])
+              }
+              value={options.contentMode}
+            >
+              <option value="client_ready">Client supplies launch-ready copy</option>
+              <option value="refine">Made Solid refines supplied content</option>
+              <option value="write">Made Solid writes new website copy</option>
+            </select>
+          </label>
+          <label>
+            <span>Motion treatment</span>
+            <select
+              onChange={(event) =>
+                updateOption('motionTier', event.target.value as PricingOptions['motionTier'])
+              }
+              value={options.motionTier}
+            >
+              <option value="standard">Standard interaction polish</option>
+              <option value="advanced">Advanced motion system</option>
+              <option value="signature">Signature motion direction</option>
+            </select>
+          </label>
+          <label>
+            <span>Reviewed adjustment (AUD)</span>
+            <input
+              inputMode="decimal"
+              onChange={(event) =>
+                updateOption('adjustmentCents', Math.round((Number(event.target.value) || 0) * 100))
+              }
+              step="100"
+              type="number"
+              value={options.adjustmentCents / 100 || ''}
+            />
+          </label>
+          <label className="pricing-calculator__wide">
+            <span>Adjustment reason</span>
+            <input
+              maxLength={500}
+              onChange={(event) => updateOption('adjustmentReason', event.target.value)}
+              placeholder="Required for any manual adjustment"
+              type="text"
+              value={options.adjustmentReason}
+            />
+          </label>
+          <label className="pricing-calculator__check">
+            <input
+              checked={options.applyGst}
+              onChange={(event) => updateOption('applyGst', event.target.checked)}
+              type="checkbox"
+            />
+            <span>Apply 10% GST</span>
+          </label>
+          <label className="pricing-calculator__check">
+            <input
+              checked={options.rush}
+              onChange={(event) => updateOption('rush', event.target.checked)}
+              type="checkbox"
+            />
+            <span>Reserve priority delivery (+20%)</span>
+          </label>
+          <label className="pricing-calculator__check">
+            <input
+              checked={options.includeManaged}
+              onChange={(event) => updateOption('includeManaged', event.target.checked)}
+              type="checkbox"
+            />
+            <span>Offer a 24-month managed plan</span>
+          </label>
+          <label className="pricing-calculator__check">
+            <input
+              checked={options.includeEssentials}
+              onChange={(event) => updateOption('includeEssentials', event.target.checked)}
+              type="checkbox"
+            />
+            <span>Offer a focused essentials launch</span>
+          </label>
         </div>
       </details>
-
-      <div className="pricing-calculator__controls">
-        <label>
-          <span>Content preparation</span>
-          <select
-            onChange={(event) =>
-              updateOption('contentMode', event.target.value as PricingOptions['contentMode'])
-            }
-            value={options.contentMode}
-          >
-            <option value="client_ready">Client supplies launch-ready copy</option>
-            <option value="refine">Made Solid refines supplied content</option>
-            <option value="write">Made Solid writes new website copy</option>
-          </select>
-        </label>
-        <label>
-          <span>Motion treatment</span>
-          <select
-            onChange={(event) =>
-              updateOption('motionTier', event.target.value as PricingOptions['motionTier'])
-            }
-            value={options.motionTier}
-          >
-            <option value="standard">Standard interaction polish</option>
-            <option value="advanced">Advanced motion system</option>
-            <option value="signature">Signature motion direction</option>
-          </select>
-        </label>
-        <label>
-          <span>Reviewed adjustment (AUD)</span>
-          <input
-            inputMode="decimal"
-            onChange={(event) =>
-              updateOption('adjustmentCents', Math.round((Number(event.target.value) || 0) * 100))
-            }
-            step="100"
-            type="number"
-            value={options.adjustmentCents / 100 || ''}
-          />
-        </label>
-        <label className="pricing-calculator__wide">
-          <span>Adjustment reason</span>
-          <input
-            maxLength={500}
-            onChange={(event) => updateOption('adjustmentReason', event.target.value)}
-            placeholder="Required for any manual adjustment"
-            type="text"
-            value={options.adjustmentReason}
-          />
-        </label>
-        <label className="pricing-calculator__check">
-          <input
-            checked={options.applyGst}
-            onChange={(event) => updateOption('applyGst', event.target.checked)}
-            type="checkbox"
-          />
-          <span>Apply 10% GST</span>
-        </label>
-        <label className="pricing-calculator__check">
-          <input
-            checked={options.rush}
-            onChange={(event) => updateOption('rush', event.target.checked)}
-            type="checkbox"
-          />
-          <span>Reserve priority delivery (+20%)</span>
-        </label>
-        <label className="pricing-calculator__check">
-          <input
-            checked={options.includeManaged}
-            onChange={(event) => updateOption('includeManaged', event.target.checked)}
-            type="checkbox"
-          />
-          <span>Offer a 24-month managed plan</span>
-        </label>
-        <label className="pricing-calculator__check">
-          <input
-            checked={options.includeEssentials}
-            onChange={(event) => updateOption('includeEssentials', event.target.checked)}
-            type="checkbox"
-          />
-          <span>Offer a focused essentials launch</span>
-        </label>
-      </div>
-
       <dl className="pricing-calculator__totals">
         <div>
           <dt>Recommended subtotal</dt>
@@ -311,14 +330,6 @@ export function PricingCalculator({
         <div className="pricing-calculator__total">
           <dt>Total investment</dt>
           <dd>{formatAud(calculation.totalCents)}</dd>
-        </div>
-        <div>
-          <dt>Opening payment</dt>
-          <dd>{formatAud(calculation.depositCents)}</dd>
-        </div>
-        <div>
-          <dt>Release balance</dt>
-          <dd>{formatAud(calculation.balanceCents)}</dd>
         </div>
       </dl>
 
@@ -370,7 +381,14 @@ export function PricingCalculator({
           <Button disabled={calculation.reviewRequired} onClick={approve} type="button">
             <Sparkles aria-hidden="true" size={16} /> Approve calculated quote
           </Button>
-          <Button onClick={() => setOptions(configuredDefaults)} type="button" variant="secondary">
+          <Button
+            onClick={() => {
+              setOptions(configuredDefaults);
+              onOptionsChange?.(configuredDefaults);
+            }}
+            type="button"
+            variant="secondary"
+          >
             <RotateCcw aria-hidden="true" size={16} /> Reset review choices
           </Button>
         </ButtonGroup>

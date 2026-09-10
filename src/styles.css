@@ -11433,7 +11433,7 @@ a:focus-visible {
   font-size: 0.84rem;
   font-weight: 700;
 }
-.client-publication__fields :is(input, textarea) {
+.client-publication__fields :is(input, select, textarea) {
   width: 100%;
   min-width: 0;
   border: 1px solid var(--color-line);
@@ -11445,6 +11445,9 @@ a:focus-visible {
 }
 .client-publication__fields textarea {
   resize: vertical;
+}
+.client-publication__fields select {
+  min-height: 44px;
 }
 .client-publication__notes {
   grid-column: 1 / -1;
@@ -12891,6 +12894,7 @@ a:focus-visible {
   font-weight: 800;
 }
 .handoff-submit__fields input,
+.handoff-submit__fields select,
 .handoff-submit__fields textarea {
   width: 100%;
   min-width: 0;
@@ -12907,6 +12911,7 @@ a:focus-visible {
   resize: vertical;
 }
 .handoff-submit__fields input:focus-visible,
+.handoff-submit__fields select:focus-visible,
 .handoff-submit__fields textarea:focus-visible {
   border-color: var(--color-selection-border);
   outline: 3px solid color-mix(in srgb, var(--color-brand) 24%, transparent);
@@ -12914,6 +12919,126 @@ a:focus-visible {
 }
 .handoff-submit__notes {
   grid-column: 1 / -1;
+}
+.proposal-website,
+.proposal-next,
+.proposal-fields {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-4);
+}
+.proposal-fields {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.proposal-fields legend {
+  padding: 0 0 var(--space-3);
+  font-weight: 700;
+}
+.proposal-details {
+  min-width: 0;
+  border-block: 1px solid var(--color-line);
+}
+.proposal-details > summary {
+  min-height: 44px;
+  padding: var(--space-3) 0;
+  cursor: pointer;
+  font-weight: 600;
+}
+.proposal-details > summary:hover {
+  color: var(--color-ink);
+  background: var(--color-panel);
+}
+.proposal-details > summary:focus-visible {
+  outline: 3px solid var(--color-brand);
+  outline-offset: 3px;
+}
+.proposal-details[open] > :not(summary) {
+  margin-block: var(--space-4);
+}
+.proposal-next ol {
+  display: grid;
+  gap: var(--space-4);
+  padding-inline-start: var(--space-5);
+  max-width: 70ch;
+}
+.handoff-workflow {
+  overflow-wrap: anywhere;
+}
+.client-handoff-email-field {
+  display: grid;
+  grid-column: 1 / -1;
+  min-width: 0;
+  gap: var(--space-2);
+}
+.client-handoff-email-field > label,
+.client-handoff-email-field__alternatives {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
+}
+.client-handoff-email-field__alternatives select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: var(--space-3);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius);
+  color: var(--color-ink);
+  background: var(--color-panel);
+  font: inherit;
+  font-weight: 600;
+}
+.client-handoff-email-field__alternatives select:focus-visible {
+  border-color: var(--color-selection-border);
+  outline: 3px solid color-mix(in srgb, var(--color-brand) 24%, transparent);
+  outline-offset: 1px;
+}
+.client-handoff-email-field__evidence {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--color-success) 38%, var(--color-line));
+  border-radius: var(--radius);
+  color: var(--color-ink);
+  background: color-mix(in srgb, var(--color-success) 7%, var(--color-panel));
+}
+.client-handoff-email-field__evidence--warning {
+  border-color: color-mix(in srgb, var(--color-warning) 44%, var(--color-line));
+  background: color-mix(in srgb, var(--color-warning) 8%, var(--color-panel));
+}
+.client-handoff-email-field__evidence > svg {
+  color: var(--color-success);
+}
+.client-handoff-email-field__evidence--warning > svg {
+  color: var(--color-warning);
+}
+.client-handoff-email-field__evidence > span {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-1);
+}
+.client-handoff-email-field__evidence strong,
+.client-handoff-email-field__evidence small {
+  overflow-wrap: anywhere;
+}
+.client-handoff-email-field__evidence small {
+  color: var(--color-muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+.client-handoff-email-field__evidence a {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-ink);
+  font-size: 0.78rem;
+  font-weight: 800;
 }
 .handoff-submit__form > .button,
 .handoff-submit__progress > .button {
@@ -19410,6 +19535,16 @@ a:focus-visible {
   }
   .client-publication__fields {
     grid-template-columns: 1fr;
+  }
+  .client-handoff-email-field {
+    grid-column: auto;
+  }
+  .client-handoff-email-field__evidence {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .client-handoff-email-field__evidence a {
+    grid-column: 2;
+    justify-self: start;
   }
   .client-publication__notes {
     grid-column: auto;

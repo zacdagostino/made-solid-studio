@@ -92,6 +92,7 @@ import { AgentArchitectureOverview } from './components/AgentArchitectureOvervie
 import { MarkdownContent } from './components/MarkdownContent';
 import { TaxExpensesPage } from './components/TaxExpensesPage';
 import { PricingCalculator } from './components/PricingCalculator';
+import { useProposalDraft } from './components/useProposalDraft';
 import { OutreachReadinessPanel } from './components/OutreachReadinessPanel';
 import { ClientEmailDesk } from './components/ClientEmailDesk';
 import {
@@ -162,7 +163,7 @@ import {
   type VisualContentCandidate,
 } from './lib/domain';
 import { groupVisualAssets } from './lib/visual-asset-groups';
-import { capturedPublicEmail } from './lib/handoff-contact';
+import { resolveClientHandoffEmail, type HandoffEmailSelection } from './lib/handoff-contact';
 import { SupabaseWorkspaceRepository } from './lib/cloud-repository';
 import { manifestSourceMatchesBrief } from './lib/build-manifest';
 import { brandColourEvidenceSummary, rankBrandColourEvidence } from './lib/brand-colours';
@@ -9036,9 +9037,9 @@ function BuilderRunPanel({
             title: 'Framework and responsive quality gates',
             detail:
               'Generated source must pass formatting, lint, strict typing, production build, route and provenance checks, browser interactions, accessibility, and exact responsive evidence.',
-            revision: `v${selectedAgentPackage.version}.91`,
+            revision: `v${selectedAgentPackage.version}.93`,
             change:
-              'Latest edit: completed prospect builds now lead with their current outcome and repair action, while build inputs, passed checks, technical activity, replacement builds, and deletion move into secondary disclosures.',
+              'Latest edit: one saved client proposal replaces duplicate handoff forms and quotes, preserves editable captured details, checks quote freshness and leads into the existing Clientspace with explicit invitation, payment and launch steps.',
           },
         ]
       : [];
@@ -19306,12 +19307,135 @@ function AgentLearningHandoff({
   );
 }
 
+function useClientHandoffEmail(workspace: ProspectWorkspace) {
+  const selection = useMemo(
+    () =>
+      resolveClientHandoffEmail({
+        contacts: workspace.contacts,
+        facts: workspace.facts,
+        packet: workspace.researchPacket,
+        websiteUrl: workspace.website?.url,
+      }),
+    [workspace.contacts, workspace.facts, workspace.researchPacket, workspace.website?.url],
+  );
+  const [field, setField] = useState({
+    businessId: workspace.business.id,
+    email: selection.email,
+    edited: false,
+  });
+
+  useEffect(() => {
+    setField((current) => {
+      if (current.businessId !== workspace.business.id) {
+        return { businessId: workspace.business.id, email: selection.email, edited: false };
+      }
+      if (!current.edited && current.email !== selection.email) {
+        return { ...current, email: selection.email };
+      }
+      return current;
+    });
+  }, [selection.email, workspace.business.id]);
+
+  return {
+    email: field.businessId === workspace.business.id ? field.email : selection.email,
+    selection,
+    setEmail: (email: string) =>
+      setField({ businessId: workspace.business.id, email, edited: true }),
+  };
+}
+
+function ClientHandoffEmailField({
+  label,
+  onChange,
+  required = false,
+  selection,
+  value,
+}: {
+  label: string;
+  onChange: (email: string) => void;
+  required?: boolean;
+  selection: HandoffEmailSelection;
+  value: string;
+}) {
+  const hintId = useId();
+  const activeCandidate = selection.alternatives.find(
+    (candidate) => candidate.email === value.trim().toLowerCase(),
+  );
+  const source =
+    activeCandidate ?? (value === selection.email ? selection.alternatives[0] : undefined);
+  const manualValue = Boolean(value.trim() && !source);
+
+  return (
+    <div className="client-handoff-email-field">
+      <label>
+        <span>{label}</span>
+        <input
+          aria-describedby={hintId}
+          autoComplete="email"
+          maxLength={254}
+          onChange={(event) => onChange(event.target.value)}
+          required={required}
+          type="email"
+          value={value}
+        />
+      </label>
+      <div
+        className={`client-handoff-email-field__evidence${selection.needsChoice ? ' client-handoff-email-field__evidence--warning' : ''}`}
+        id={hintId}
+        role="status"
+      >
+        <Mail aria-hidden="true" size={18} />
+        <span>
+          <strong>
+            {manualValue
+              ? 'Entered for this handoff'
+              : (source?.sourceLabel ?? selection.sourceLabel)}
+          </strong>
+          <small>
+            {selection.needsChoice && !manualValue
+              ? 'Several equally strong public addresses were found. Confirm the right one before creating Clientspace.'
+              : source?.source === 'captured_website'
+                ? 'Found by the website capture. Confirm it is the right client contact; nothing is sent automatically.'
+                : source
+                  ? 'This saved contact takes priority over public website evidence.'
+                  : manualValue
+                    ? 'This change applies to the current handoff. Nothing is sent automatically.'
+                    : 'Enter the client address manually or run a fresh website capture from Research.'}
+          </small>
+        </span>
+        {source?.sourceUrl ? (
+          <a href={source.sourceUrl} rel="noreferrer" target="_blank">
+            View source <ExternalLink aria-hidden="true" size={14} />
+          </a>
+        ) : null}
+      </div>
+      {selection.alternatives.length > 1 ? (
+        <label className="client-handoff-email-field__alternatives">
+          <span>
+            {selection.needsChoice ? 'Choose the client address' : 'Other captured addresses'}
+          </span>
+          <select
+            aria-label="Choose another captured client email"
+            onChange={(event) => onChange(event.target.value)}
+            value={source?.email ?? ''}
+          >
+            {manualValue ? <option value="">Keep the address entered above</option> : null}
+            {selection.alternatives.map((candidate) => (
+              <option key={candidate.email} value={candidate.email}>
+                {candidate.email} — {candidate.sourceLabel}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+    </div>
+  );
+}
+
 function MadeSolidHandoffPage({
   agentPackages,
-  onCancelClientReview,
   onCancelHandoff,
   onOpenLearningInbox,
-  onPublishClientReview,
   onPushHandoff,
   onSendLearning,
   workspace,
@@ -19343,15 +19467,39 @@ function MadeSolidHandoffPage({
     state.releaseAttestation.sourceBuilderRunId === state.sourceBuild?.buildId &&
     state.releaseAttestation.businessId === workspace.business.id,
   );
+  const proposalReport = workspace.report ? prospectValueReportView(workspace.report) : undefined;
+  const reportReady = Boolean(
+    workspace.report?.status === 'approved' &&
+    proposalReport &&
+    proposalReport.redesign.attestationId === state.releaseAttestation?.id &&
+    proposalReport.redesign.sourceCommit === state.commit &&
+    proposalReport.redesign.sourceEditVersion === state.committedVersion?.version,
+  );
   const preferredContact = workspace.contacts.find((contact) => Boolean(contact.email));
-  const capturedClientEmail = capturedPublicEmail(workspace.researchPacket);
-  const initialClientEmail = preferredContact?.email?.trim() || capturedClientEmail;
-  const [clientName, setClientName] = useState(workspace.business.name);
-  const [contactName, setContactName] = useState(preferredContact?.name ?? '');
-  const [clientEmail, setClientEmail] = useState(initialClientEmail);
-  const [projectName, setProjectName] = useState(`${workspace.business.name} website`);
-  const [handoffNotes, setHandoffNotes] = useState('');
+  const handoffEmail = useClientHandoffEmail(workspace);
+  const proposal = useProposalDraft(workspace.business.id);
+  const [editingProposal, setEditingProposal] = useState(false);
+  const savedHandoff = [...workspace.madeSolidHandoffs].sort((a, b) =>
+    b.updatedAt.localeCompare(a.updatedAt),
+  )[0];
+  const clientName =
+    proposal.draft.clientName ?? savedHandoff?.clientName ?? workspace.business.name;
+  const contactName =
+    proposal.draft.contactName ?? savedHandoff?.contactName ?? preferredContact?.name ?? '';
+  const projectName =
+    proposal.draft.projectName ?? savedHandoff?.projectName ?? `${workspace.business.name} website`;
+  const clientEmail =
+    proposal.draft.clientEmail ?? (savedHandoff?.clientEmail || handoffEmail.email);
+  const handoffNotes = proposal.draft.handoffNotes ?? savedHandoff?.handoffNotes ?? '';
+  const { update: updateProposal } = proposal;
   const [approvedQuote, setApprovedQuote] = useState<PricingQuoteSnapshot>();
+  const acceptQuote = useCallback(
+    (quote?: PricingQuoteSnapshot) => {
+      setApprovedQuote(quote);
+      updateProposal({ approvedQuote: quote });
+    },
+    [updateProposal],
+  );
   const [submitting, setSubmitting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [message, setMessage] = useState('');
@@ -19363,9 +19511,16 @@ function MadeSolidHandoffPage({
     .filter((candidate) => candidate.status === 'ready')
     .sort((left, right) => right.sourceEditVersion - left.sourceEditVersion)[0];
   const active = handoff?.status === 'queued' || handoff?.status === 'running';
+  const sourcePricingReady = Boolean(
+    state.pricingScope?.source === 'committed_source' &&
+    state.pricingScope.sourceCommit === state.commit &&
+    state.pricingScope.sourceEditVersion === state.committedVersion?.version,
+  );
   const canPush = Boolean(
     finalised &&
     releaseVerified &&
+    reportReady &&
+    sourcePricingReady &&
     state.synced &&
     state.commit?.match(/^[a-f0-9]{40}$/i) &&
     state.committedVersion &&
@@ -19384,6 +19539,7 @@ function MadeSolidHandoffPage({
       !state.commit ||
       !state.committedVersion ||
       !approvedQuote ||
+      proposal.status !== 'saved' ||
       submitting
     )
       return;
@@ -19402,6 +19558,7 @@ function MadeSolidHandoffPage({
         handoffNotes: handoffNotes.trim(),
         pricingSnapshot: approvedQuote,
       });
+      setEditingProposal(false);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'The handoff could not be queued.');
     } finally {
@@ -19426,11 +19583,11 @@ function MadeSolidHandoffPage({
       <section className="workflow-overview" aria-labelledby="handoff-workflow-title">
         <div className="workflow-overview__heading">
           <div>
-            <Eyebrow>Made Solid handoff</Eyebrow>
-            <h2 id="handoff-workflow-title">Prepare the final source for the client workspace</h2>
+            <Eyebrow>Client proposal</Eyebrow>
+            <h2 id="handoff-workflow-title">Prepare {workspace.business.name} for Clientspace</h2>
             <p>
-              This gate keeps the edited prospect repository, final commit and future client-admin
-              record tied together.
+              Confirm the website, client details and one offer. Prepare the private Clientspace
+              handoff here, then review the invitation before sending it.
             </p>
           </div>
           <StatusBadge tone={finalised && releaseVerified ? 'success' : 'warning'}>
@@ -19442,8 +19599,8 @@ function MadeSolidHandoffPage({
         workspace.report.crawlRunId === workspace.latestCapture?.id ? (
           <div className="audit-report-ready">
             <div>
-              <Eyebrow>Before handoff</Eyebrow>
-              <h3>Review report version {workspace.report.version} as the client will see it</h3>
+              <Eyebrow>Supporting report</Eyebrow>
+              <h3>Client report version {workspace.report.version}</h3>
               <p>
                 This opens a private Studio preview only. It does not create or change a client
                 project.
@@ -19459,86 +19616,111 @@ function MadeSolidHandoffPage({
           </div>
         ) : null}
       </section>
-      <ClientPreviewPublicationPanel
-        onCancel={onCancelClientReview}
-        onPublish={onPublishClientReview}
-        workspace={workspace}
-      />
-      <Card className="workspace-panel handoff-readiness">
-        <div className="handoff-readiness__header">
-          <div>
-            <Eyebrow>Readiness</Eyebrow>
-            <h2>Final source checkpoint</h2>
-          </div>
-          <StatusBadge tone={finalised && releaseVerified ? 'success' : 'warning'}>
-            {finalised && releaseVerified ? 'Passed' : 'Blocked'}
-          </StatusBadge>
-        </div>
-        <dl className="final-edit__facts">
-          <div>
-            <dt>Final edit</dt>
-            <dd>{finalised ? 'Committed' : 'Required'}</dd>
-          </div>
-          <div>
-            <dt>Remote sync</dt>
-            <dd>{state.synced ? 'Synced' : 'Required'}</dd>
-          </div>
-          <div>
-            <dt>Exact release verification</dt>
-            <dd>{releaseVerified ? 'Passed' : 'Required'}</dd>
-          </div>
-          <div>
-            <dt>Commit</dt>
-            <dd>
-              {state.committedVersion
-                ? `v${state.committedVersion.version} · ${state.committedVersion.commit.slice(0, 8)}`
-                : 'Not available'}
-            </dd>
-          </div>
-          <div>
-            <dt>Refinements</dt>
-            <dd>{state.refinementCount ?? 0}</dd>
-          </div>
-          <div>
-            <dt>Derived build</dt>
-            <dd>{state.sourceBuild?.buildId?.slice(0, 8) || 'Not available'}</dd>
-          </div>
-        </dl>
-        <section
-          className="handoff-readiness__version"
-          aria-labelledby="handoff-committed-version-title"
-        >
-          <div>
-            <Eyebrow>Committed website</Eyebrow>
-            <h3 id="handoff-committed-version-title">Review the exact handoff version</h3>
-          </div>
-          <EditVersionHistory compact directory={directory} state={state} />
-        </section>
-        {repository?.repositoryUrl ? (
-          <ButtonLink
-            href={repository.repositoryUrl}
-            rel="noreferrer"
-            target="_blank"
-            variant="secondary"
-          >
-            <Github aria-hidden="true" size={16} />
-            Open final source repository
-          </ButtonLink>
+      <section className="proposal-website" aria-labelledby="proposal-website-title">
+        <Eyebrow>1 · Website</Eyebrow>
+        <h3 id="proposal-website-title">
+          {state.committedVersion
+            ? `Committed website v${state.committedVersion.version}`
+            : 'Choose a committed website'}
+        </h3>
+        <p>
+          {finalised && releaseVerified
+            ? 'The current committed website passed release verification.'
+            : 'Finish and verify the current website before preparing its Clientspace handoff.'}
+        </p>
+        {priorHandoff?.websiteAdminUrl ? (
+          <p>
+            There is already a Made Solid handoff for edit v{priorHandoff.sourceEditVersion}.
+            Continue with that record to avoid creating another project.
+          </p>
         ) : null}
-      </Card>
-      <AgentLearningHandoff
-        agentPackages={agentPackages}
-        directory={directory}
-        finalEdit={state}
-        onOpenLearningInbox={onOpenLearningInbox}
-        onSend={onSendLearning}
-        workspace={workspace}
-      />
-      <Card className="workspace-panel handoff-submit">
+        <ButtonGroup>
+          <ButtonLink href={`#/prospects/${workspace.business.id}/editing`} variant="secondary">
+            {finalised && releaseVerified
+              ? 'View website and edits'
+              : 'Finish website verification'}
+            <ArrowRight size={16} aria-hidden="true" />
+          </ButtonLink>
+          {priorHandoff?.websiteAdminUrl ? (
+            <ButtonLink href={priorHandoff.websiteAdminUrl} target="_blank" variant="secondary">
+              Open existing Clientspace handoff
+              <ExternalLink size={16} aria-hidden="true" />
+            </ButtonLink>
+          ) : null}
+        </ButtonGroup>
+      </section>
+      <details className="proposal-details">
+        <summary>Website verification and version history</summary>
+        <section className="handoff-readiness">
+          <div className="handoff-readiness__header">
+            <div>
+              <Eyebrow>Readiness</Eyebrow>
+              <h2>Final source checkpoint</h2>
+            </div>
+            <StatusBadge tone={finalised && releaseVerified ? 'success' : 'warning'}>
+              {finalised && releaseVerified ? 'Passed' : 'Blocked'}
+            </StatusBadge>
+          </div>
+          <dl className="final-edit__facts">
+            <div>
+              <dt>Final edit</dt>
+              <dd>{finalised ? 'Committed' : 'Required'}</dd>
+            </div>
+            <div>
+              <dt>Remote sync</dt>
+              <dd>{state.synced ? 'Synced' : 'Required'}</dd>
+            </div>
+            <div>
+              <dt>Exact release verification</dt>
+              <dd>{releaseVerified ? 'Passed' : 'Required'}</dd>
+            </div>
+            <div>
+              <dt>Commit</dt>
+              <dd>
+                {state.committedVersion
+                  ? `v${state.committedVersion.version} · ${state.committedVersion.commit.slice(0, 8)}`
+                  : 'Not available'}
+              </dd>
+            </div>
+            <div>
+              <dt>Refinements</dt>
+              <dd>{state.refinementCount ?? 0}</dd>
+            </div>
+            <div>
+              <dt>Derived build</dt>
+              <dd>{state.sourceBuild?.buildId?.slice(0, 8) || 'Not available'}</dd>
+            </div>
+          </dl>
+          <section
+            className="handoff-readiness__version"
+            aria-labelledby="handoff-committed-version-title"
+          >
+            <div>
+              <Eyebrow>Committed website</Eyebrow>
+              <h3 id="handoff-committed-version-title">Review the exact handoff version</h3>
+            </div>
+            <EditVersionHistory compact directory={directory} state={state} />
+          </section>
+          {repository?.repositoryUrl ? (
+            <ButtonLink
+              href={repository.repositoryUrl}
+              rel="noreferrer"
+              target="_blank"
+              variant="secondary"
+            >
+              <Github aria-hidden="true" size={16} />
+              Open final source repository
+            </ButtonLink>
+          ) : null}
+        </section>
+      </details>
+      <section className="handoff-submit">
         <div className="handoff-readiness__header">
           <div>
-            <Eyebrow>Client workspace transfer</Eyebrow>
-            <h2>Push to the Made Solid website</h2>
+            <Eyebrow>2 · Client details and offer</Eyebrow>
+            <h2>
+              {handoff?.status === 'ready' ? 'Your handoff is saved' : 'Prepare client proposal'}
+            </h2>
           </div>
           <StatusBadge
             tone={
@@ -19551,23 +19733,26 @@ function MadeSolidHandoffPage({
                     : 'neutral'
             }
           >
-            {handoff?.status.replaceAll('_', ' ') ?? 'Ready to queue'}
+            {handoff?.status.replaceAll('_', ' ') ?? 'Not transferred'}
           </StatusBadge>
         </div>
         <p className="muted-copy">
-          Send the exact committed repository revision into the private Made Solid admin workspace.
-          This creates an isolated review deployment and records its source lineage. It never
-          assigns a production domain, creates a client account, or sends an email.
+          Preparation saves the verified website and approved quote in your private Made Solid
+          workspace. Creating Clientspace, sending the invitation and launching are separate
+          actions.
         </p>
-        {handoff?.status === 'ready' && handoff.websiteAdminUrl ? (
+        {handoff?.status === 'ready' && handoff.websiteAdminUrl && !editingProposal ? (
           <section className="handoff-submit__ready" aria-labelledby="made-solid-handoff-ready">
             <CheckCircle2 aria-hidden="true" size={22} />
             <div>
-              <h3 id="made-solid-handoff-ready">Committed edit recorded in Made Solid</h3>
+              <h3 id="made-solid-handoff-ready">Next: review Clientspace and the invitation</h3>
               <p>{handoff.progressDetail}</p>
               <ButtonLink href={handoff.websiteAdminUrl} target="_blank" variant="secondary">
-                Open in Made Solid <ExternalLink aria-hidden="true" size={16} />
+                Continue in Clientspace <ExternalLink aria-hidden="true" size={16} />
               </ButtonLink>
+              <Button onClick={() => setEditingProposal(true)} type="button" variant="secondary">
+                Edit client details or offer
+              </Button>
             </div>
           </section>
         ) : active ? (
@@ -19606,72 +19791,84 @@ function MadeSolidHandoffPage({
           </section>
         ) : (
           <form className="handoff-submit__form" onSubmit={pushHandoff}>
-            <PricingCalculator
-              manifest={workspace.buildManifest}
-              sourceScope={state.pricingScope}
-              onApprovedQuoteChange={setApprovedQuote}
-            />
-            {state.pricingScope?.source === 'working_source' && priorHandoff ? (
-              <p className="handoff-submit__notice" role="status">
-                <CircleDollarSign aria-hidden="true" size={18} />
-                Clientspace currently holds edit v{priorHandoff.sourceEditVersion}. This draft is
-                priced from {state.pricingScope.revisionLabel.toLowerCase()} and will become a new
-                quote version only after the edit is finalised and transferred.
-              </p>
+            <p role="status">
+              {proposal.status === 'loading'
+                ? 'Loading your saved proposal…'
+                : proposal.status === 'saving'
+                  ? 'Saving proposal…'
+                  : proposal.status === 'error'
+                    ? proposal.error
+                    : 'Proposal saved. Prefilled details remain editable.'}
+            </p>
+            {proposal.status === 'error' ? (
+              <Button onClick={proposal.retry} type="button" variant="secondary">
+                Retry saving or loading
+              </Button>
             ) : null}
-            <div className="handoff-submit__fields">
-              <label>
-                <span>Business or client name</span>
-                <input
-                  maxLength={160}
-                  onChange={(event) => setClientName(event.target.value)}
-                  required
-                  value={clientName}
-                />
-              </label>
-              <label>
-                <span>Project name</span>
-                <input
-                  maxLength={200}
-                  onChange={(event) => setProjectName(event.target.value)}
-                  required
-                  value={projectName}
-                />
-              </label>
-              <label>
-                <span>Contact name (confirm later if uncertain)</span>
-                <input
-                  maxLength={160}
-                  onChange={(event) => setContactName(event.target.value)}
-                  value={contactName}
-                />
-              </label>
-              <label>
-                <span>Client email (review before Clientspace)</span>
-                <input
-                  autoComplete="email"
-                  maxLength={254}
-                  onChange={(event) => setClientEmail(event.target.value)}
-                  type="email"
+            <fieldset className="proposal-fields" disabled={!proposal.loaded}>
+              <legend>Client details</legend>
+              {state.pricingScope?.source === 'working_source' && priorHandoff ? (
+                <p className="handoff-submit__notice" role="status">
+                  <CircleDollarSign aria-hidden="true" size={18} />
+                  Clientspace currently holds edit v{priorHandoff.sourceEditVersion}. This draft is
+                  priced from {state.pricingScope.revisionLabel.toLowerCase()} and will become a new
+                  quote version only after the edit is finalised and transferred.
+                </p>
+              ) : null}
+              <div className="handoff-submit__fields">
+                <label>
+                  <span>Business or client name</span>
+                  <input
+                    maxLength={160}
+                    onChange={(event) => updateProposal({ clientName: event.target.value })}
+                    required
+                    value={clientName}
+                  />
+                </label>
+                <label>
+                  <span>Project name</span>
+                  <input
+                    maxLength={200}
+                    onChange={(event) => updateProposal({ projectName: event.target.value })}
+                    required
+                    value={projectName}
+                  />
+                </label>
+                <label>
+                  <span>Contact name (confirm later if uncertain)</span>
+                  <input
+                    maxLength={160}
+                    onChange={(event) => updateProposal({ contactName: event.target.value })}
+                    value={contactName}
+                  />
+                </label>
+                <ClientHandoffEmailField
+                  label="Client email (review before Clientspace)"
+                  onChange={(email) => updateProposal({ clientEmail: email })}
+                  selection={handoffEmail.selection}
                   value={clientEmail}
                 />
-                {!preferredContact?.email && capturedClientEmail ? (
-                  <small>
-                    Prefilled from the public email captured in this Research Packet. Confirm it is
-                    the right client contact before handoff.
-                  </small>
-                ) : null}
-              </label>
-              <label className="handoff-submit__notes">
-                <span>Internal handoff notes (optional)</span>
-                <textarea
-                  maxLength={4000}
-                  onChange={(event) => setHandoffNotes(event.target.value)}
-                  rows={3}
-                  value={handoffNotes}
-                />
-              </label>
-            </div>
+                <label className="handoff-submit__notes">
+                  <span>Internal handoff notes (optional)</span>
+                  <textarea
+                    maxLength={4000}
+                    onChange={(event) => updateProposal({ handoffNotes: event.target.value })}
+                    rows={3}
+                    value={handoffNotes}
+                  />
+                </label>
+              </div>
+            </fieldset>
+            {proposal.loaded ? (
+              <PricingCalculator
+                manifest={workspace.buildManifest}
+                sourceScope={state.pricingScope}
+                savedQuote={proposal.draft.approvedQuote ?? savedHandoff?.pricingSnapshot}
+                savedOptions={proposal.draft.pricingOptions}
+                onOptionsChange={(options) => updateProposal({ pricingOptions: options })}
+                onApprovedQuoteChange={acceptQuote}
+              />
+            ) : null}
             {!canPush ? (
               <p className="handoff-submit__notice" role="alert">
                 <ShieldAlert aria-hidden="true" size={18} />
@@ -19679,12 +19876,22 @@ function MadeSolidHandoffPage({
                   ? 'Commit the final edit on Website editing first.'
                   : !releaseVerified
                     ? `Run release verification for commit ${state.commit?.slice(0, 8) ?? 'the current source'} on Website editing first.`
-                    : !repository?.repositoryUrl
-                      ? 'Create and sync the private editable source repository first.'
-                      : !workspace.madeSolidHandoffWorkerAvailable
-                        ? 'Made Solid handoff is not connected. Start the protected handoff worker first.'
-                        : 'The exact commit and source lineage must be verified before handoff.'}
+                    : !reportReady
+                      ? 'The handoff service needs a current report for this website version. Prepare it from Report before continuing.'
+                      : !sourcePricingReady
+                        ? 'Reopen Website editing to refresh pricing from this exact committed version. An original-build estimate cannot be transferred as the current offer.'
+                        : !repository?.repositoryUrl
+                          ? 'Create and sync the private editable source repository first.'
+                          : !workspace.madeSolidHandoffWorkerAvailable
+                            ? 'Made Solid handoff is not connected. Start the protected handoff worker first.'
+                            : 'The exact commit and source lineage must be verified before handoff.'}
               </p>
+            ) : null}
+            {!reportReady ? (
+              <ButtonLink href={`#/prospects/${workspace.business.id}/report`} variant="secondary">
+                Prepare current report
+                <ArrowRight size={16} aria-hidden="true" />
+              </ButtonLink>
             ) : null}
             {handoff?.status === 'failed' && handoff.errorSummary ? (
               <p className="form-message form-message--error" role="alert">
@@ -19702,13 +19909,18 @@ function MadeSolidHandoffPage({
                 Review and approve the build-derived quote before transferring this project.
               </p>
             ) : null}
-            <Button disabled={!canPush || !approvedQuote || submitting} type="submit">
+            <Button
+              disabled={!canPush || !approvedQuote || submitting || proposal.status !== 'saved'}
+              type="submit"
+            >
               <PackageCheck aria-hidden="true" size={16} />
               {submitting
                 ? 'Queueing exact edit'
                 : handoff?.status === 'failed'
                   ? 'Retry Made Solid handoff'
-                  : 'Push committed edit to Made Solid'}
+                  : priorHandoff
+                    ? 'Prepare updated handoff'
+                    : 'Prepare Clientspace handoff'}
             </Button>
             <small>
               Source: {state.commit ? state.commit.slice(0, 12) : 'not committed'} · edit v
@@ -19716,7 +19928,44 @@ function MadeSolidHandoffPage({
             </small>
           </form>
         )}
-      </Card>
+      </section>
+      <section className="proposal-next" aria-labelledby="proposal-next-title">
+        <Eyebrow>3 · What happens next</Eyebrow>
+        <h3 id="proposal-next-title">From proposal to launch</h3>
+        <ol>
+          <li>
+            <strong>Review Clientspace.</strong> Open the existing project, or create it from the
+            prepared handoff. Confirm the contact, website and offer.
+          </li>
+          <li>
+            <strong>Test, then invite.</strong> Rehearse with your own test client first. Sending an
+            invitation is a deliberate action in Clientspace.
+          </li>
+          <li>
+            <strong>Client approval and payment.</strong> Confirm the agreed payment schedule and
+            working payment links before sharing the offer.
+          </li>
+          <li>
+            <strong>Hosting and domain.</strong> Confirm the hosting choice and delegated access or
+            DNS instructions.
+          </li>
+          <li>
+            <strong>Launch checks.</strong> Verify the live domain, HTTPS, forms and mobile
+            navigation, then record the launch.
+          </li>
+        </ol>
+      </section>
+      <details className="proposal-details">
+        <summary>Internal tools · agent learning</summary>
+        <AgentLearningHandoff
+          agentPackages={agentPackages}
+          directory={directory}
+          finalEdit={state}
+          onOpenLearningInbox={onOpenLearningInbox}
+          onSend={onSendLearning}
+          workspace={workspace}
+        />
+      </details>
     </div>
   );
 }
@@ -19737,9 +19986,9 @@ export function ClientPreviewPublicationPanel({
       )
     : undefined;
   const preferredContact = workspace.contacts.find((contact) => Boolean(contact.email));
+  const handoffEmail = useClientHandoffEmail(workspace);
   const [clientName, setClientName] = useState(workspace.business.name);
   const [contactName, setContactName] = useState(preferredContact?.name ?? '');
-  const [clientEmail, setClientEmail] = useState(preferredContact?.email ?? '');
   const [projectName, setProjectName] = useState(`${workspace.business.name} website`);
   const [approvedQuote, setApprovedQuote] = useState<PricingQuoteSnapshot>();
   const [handoffNotes, setHandoffNotes] = useState('');
@@ -19760,7 +20009,7 @@ export function ClientPreviewPublicationPanel({
       await onPublish(completedBuild.id, {
         clientName: clientName.trim(),
         contactName: contactName.trim(),
-        clientEmail: clientEmail.trim(),
+        clientEmail: handoffEmail.email.trim(),
         projectName: projectName.trim(),
         finalBalanceCents: approvedQuote.balanceCents,
         pricingSnapshot: approvedQuote,
@@ -19897,17 +20146,13 @@ export function ClientPreviewPublicationPanel({
                   value={contactName}
                 />
               </label>
-              <label>
-                <span>Client email</span>
-                <input
-                  autoComplete="email"
-                  maxLength={254}
-                  onChange={(event) => setClientEmail(event.target.value)}
-                  required
-                  type="email"
-                  value={clientEmail}
-                />
-              </label>
+              <ClientHandoffEmailField
+                label="Client email"
+                onChange={handoffEmail.setEmail}
+                required
+                selection={handoffEmail.selection}
+                value={handoffEmail.email}
+              />
               <label>
                 <span>Project name</span>
                 <input
@@ -21269,6 +21514,7 @@ function WorkspaceContent({
   if (tab === 'handoff') {
     return (
       <MadeSolidHandoffPage
+        key={workspace.business.id}
         agentPackages={agentPackages}
         onCancelClientReview={cancelClientReview}
         onCancelHandoff={cancelMadeSolidHandoff}

@@ -1545,6 +1545,7 @@ test('keeps generation, website editing, and Made Solid handoff in separate rout
       }),
     });
   });
+  await openReadyBuildManifest(page);
   await page.goto(`/#/prospects/${businessId}/redesign`);
   await expectWorkspaceSectionSelected(page, 'Build & preview');
   await expect(page.getByTestId('local-development-publication')).toHaveCount(0);
@@ -1592,35 +1593,52 @@ test('keeps generation, website editing, and Made Solid handoff in separate rout
   await page.goto(`/#/prospects/${businessId}/handoff`);
   await expectWorkspaceSectionSelected(page, 'Made Solid handoff');
   await expect(page.getByTestId('made-solid-handoff-page')).toBeVisible();
-  const clientReview = page.getByTestId('client-preview-publication');
-  await expect(clientReview).toBeVisible();
-  await expect(clientReview).toContainText('Create a seven-day private review link');
-  const createReviewButton = clientReview.getByRole('button', {
-    name: 'Create private review link',
+  await expect(page.getByTestId('client-preview-publication')).toHaveCount(0);
+  await expect(page.getByTestId('pricing-calculator')).toHaveCount(1);
+  const emailDraft = page.getByLabel('Client email (review before Clientspace)');
+  await emailDraft.fill('owner-test@example.com');
+  await expect(page.getByText('Proposal saved. Prefilled details remain editable.')).toBeVisible();
+  await page.getByRole('button', { name: 'Approve calculated quote' }).click();
+  await expect(page.getByText('Quote approved for handoff')).toBeVisible();
+  await expect(page.getByText('Proposal saved. Prefilled details remain editable.')).toBeVisible();
+  await page.reload();
+  await expect(emailDraft).toHaveValue('owner-test@example.com');
+  await expect(page.getByText('Quote approved for handoff')).toBeVisible();
+  await page.evaluate(() => {
+    const write = Storage.prototype.setItem;
+    window.restoreProposalStorage = () => {
+      Storage.prototype.setItem = write;
+    };
+    Storage.prototype.setItem = function (key, value) {
+      if (key.startsWith('proposal-draft:')) throw new Error('Storage temporarily unavailable');
+      return write.call(this, key, value);
+    };
   });
-  await createReviewButton.scrollIntoViewIfNeeded();
-  await expect(createReviewButton).toBeVisible();
-  await expect(createReviewButton).toBeDisabled();
-  await clientReview.scrollIntoViewIfNeeded();
-  await expect(clientReview).toHaveScreenshot('private-client-review.png');
+  await emailDraft.fill('corrected-test@example.com');
+  await expect(page.getByText('Storage temporarily unavailable', { exact: true })).toBeVisible();
+  await expect(emailDraft).toHaveValue('corrected-test@example.com');
+  await page.evaluate(() => window.restoreProposalStorage());
+  await page.getByRole('button', { name: 'Retry saving or loading' }).click();
+  await expect(page.getByText('Proposal saved. Prefilled details remain editable.')).toBeVisible();
+  await emailDraft.fill('owner-test@example.com');
+  await expect(page.getByText('Proposal saved. Prefilled details remain editable.')).toBeVisible();
+  await page.getByText('Website verification and version history', { exact: true }).click();
   await expect(page.getByText('v1 · d5e37351')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Open website' })).toBeVisible();
-  await expect(
-    page.getByRole('button', { name: 'Push committed edit to Made Solid' }),
-  ).toBeDisabled();
-  await expect(
-    page.getByText(/create and sync the private editable source repository first/i),
-  ).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Prepare Clientspace handoff' })).toBeDisabled();
+  await expect(page.getByText(/handoff service needs a current report/i)).toBeVisible();
   await expect(page.getByLabel('Client email (review before Clientspace)')).toBeVisible();
   await expect(
     page.getByText(
-      /never assigns a production domain, creates a client account, or sends an email/i,
+      /creating Clientspace, sending the invitation and launching are separate actions/i,
     ),
   ).toBeVisible();
-  const sourceTransfer = page.locator('.handoff-submit');
-  await sourceTransfer.scrollIntoViewIfNeeded();
-  await expect(sourceTransfer).toHaveScreenshot('made-solid-handoff-transfer.png');
+  await page.getByText('Website verification and version history', { exact: true }).click();
+  await emailDraft.scrollIntoViewIfNeeded();
+  await expect(page).toHaveScreenshot('client-proposal-form.png');
   const learningHandoff = page.getByTestId('agent-learning-handoff');
+  await expect(learningHandoff).toBeHidden();
+  await page.getByText('Internal tools · agent learning', { exact: true }).click();
   await expect(learningHandoff).toBeVisible();
   await expect(learningHandoff.getByText('2 selected', { exact: true })).toBeVisible();
   await expect(
@@ -1629,7 +1647,7 @@ test('keeps generation, website editing, and Made Solid handoff in separate rout
   await expect(learningHandoff.getByText('Prospect-specific decisions')).toBeVisible();
   await expect(learningHandoff.getByLabel('LECE uses a dark blue logo strip')).not.toBeChecked();
   await learningHandoff.scrollIntoViewIfNeeded();
-  await expect(page).toHaveScreenshot('agent-learning-handoff-page.png');
+  await expect(page).toHaveScreenshot('client-proposal-learning-tools.png');
 
   const results = await new AxeBuilder({ page })
     .include('[data-testid="made-solid-handoff-page"]')

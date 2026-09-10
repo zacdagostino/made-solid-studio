@@ -479,6 +479,12 @@ const localRecentRequestChatContextPackageId =
   'agent-package-local-v24-7-recent-request-chat-context';
 const localResilientWebsiteCodexResumePackageId =
   'agent-package-local-v24-8-resilient-website-codex-resume';
+const localClientPreviewCodexIsolationPackageId =
+  'agent-package-local-v25-0-client-preview-codex-isolation';
+const localImmediateWebsiteCodexOpenPackageId =
+  'agent-package-local-v25-1-immediate-website-codex-open';
+const localAutomaticClientEmailHandoffPackageId =
+  'agent-package-local-v24-9-automatic-client-email-handoff';
 
 type StoreName =
   | 'activities'
@@ -3982,10 +3988,79 @@ export class SiteforgeRepository {
         'Prevents Android Chrome from exposing a dead embedded Studio document when the Made Solid development website returns from the background.',
       stagedBehaviourIds: ['visual-codex-feedback'],
     };
+    const localAutomaticClientEmailHandoffPackage: AgentPackage = {
+      ...localResilientWebsiteCodexResumePackage,
+      id: localAutomaticClientEmailHandoffPackageId,
+      version: 24.9,
+      basePackageId: localResilientWebsiteCodexResumePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v24.9',
+      contractAddendum:
+        'Every Clientspace handoff surface resolves one client email from the latest immutable Research Packet and its page-level public evidence, unless a saved prospect contact takes priority. Contact-page and general business addresses rank ahead of weaker candidates, rejected and no-reply values are excluded, and equally strong alternatives require a visible choice.',
+      instructionsAddendum:
+        'Use the existing website capture instead of scraping again during handoff. Keep the selected address synchronized while evidence loads, stop automatic replacement after the reviewer edits it, show its source and alternatives, and never treat prefilling as permission to send email or create an account automatically.',
+      summary:
+        'Automatic client email handoff test package: carries the best captured public address into both Clientspace handoff paths with visible provenance and ambiguity controls.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Removes repeated email entry while making the captured source, competing addresses, and no-send boundary clear before Clientspace creation.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localClientPreviewCodexIsolationPackage: AgentPackage = {
+      ...localAutomaticClientEmailHandoffPackage,
+      id: localClientPreviewCodexIsolationPackageId,
+      version: 25,
+      basePackageId: localAutomaticClientEmailHandoffPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v25.0',
+      contractAddendum:
+        'The owner-only Codex control belongs only to a top-level Made Solid development website. Clientspace thumbnails and interactive website-review frames never render the Studio Codex iframe or its reconnecting placeholder, even when the reviewer is simultaneously authenticated as the Studio owner.',
+      instructionsAddendum:
+        'Reject the website Codex surface server-side when the browser requests the document as an iframe. Retain a client-side nested-frame guard for deployments or proxies that omit request-destination metadata. Remove both the Codex iframe and reconnecting placeholder without disturbing the separate client feedback bridge, and preserve the top-level owner-only Codex experience.',
+      summary:
+        'Client preview Codex isolation test package: keeps Studio chat controls out of client-facing website frames.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents authenticated owner tooling from appearing inside Clientspace thumbnails and the interactive client website preview.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localImmediateWebsiteCodexOpenPackage: AgentPackage = {
+      ...localClientPreviewCodexIsolationPackage,
+      id: localImmediateWebsiteCodexOpenPackageId,
+      version: 25.1,
+      basePackageId: localClientPreviewCodexIsolationPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v25.1',
+      contractAddendum:
+        'The owner-only Codex launcher on the Made Solid development website accepts the first tap while its embedded Studio capability check is still connecting. The website queues that open request until the authenticated embedded listener is available and expands the trusted panel as soon as it acknowledges the open state, without waiting for the status request to complete.',
+      instructionsAddendum:
+        'Render the connecting fallback as a keyboard- and touch-operable 56-pixel button. On activation, announce its opening state, repeatedly deliver the pending open request alongside host synchronization, and reveal only an iframe that has sent a validated open acknowledgement from the exact configured Studio origin and contentWindow. Preserve stale-frame recovery, top-level owner authorization, and client-preview exclusion.',
+      summary:
+        'Immediate website Codex open test package: makes the connecting launcher accept the first tap and open as soon as the trusted embedded UI responds.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Removes the dead first-tap period on slower mobile loads without exposing an untrusted or discarded iframe.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localUnifiedProposalPackage: AgentPackage = {
+      ...localImmediateWebsiteCodexOpenPackage,
+      id: 'agent-package-local-v25-2-unified-client-proposal',
+      version: 25.2,
+      basePackageId: localImmediateWebsiteCodexOpenPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v25.2',
+      contractAddendum:
+        'Studio prepares one client proposal from the current committed website. Saved editable client details and one source-bound approved quote follow the prospect into the existing Clientspace handoff. Preparation, invitation, payment and launch remain distinct observable stages.',
+      instructionsAddendum:
+        'Prefill from saved contacts and captured evidence, preserve explicit edits, serialize draft saves and explain failures. Retain approved pricing across refreshes only while scope, commercial terms and validity still match. Keep original-build review creation out of the main proposal flow and hide internal learning tools behind disclosure. Carry the approved quote into immutable Clientspace quote history without treating a proposed deposit as paid.',
+      summary:
+        'Unified client proposal test package: one saved form and quote, existing handoff navigation, transparent payment setup and clear launch steps.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localUnifiedProposalPackage,
+          localImmediateWebsiteCodexOpenPackage,
+          localClientPreviewCodexIsolationPackage,
+          localAutomaticClientEmailHandoffPackage,
           localResilientWebsiteCodexResumePackage,
           localRecentRequestChatContextPackage,
           localRecoverStaleEmptyCodexChatPackage,
@@ -4182,6 +4257,10 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localUnifiedProposalPackage,
+          localImmediateWebsiteCodexOpenPackage,
+          localClientPreviewCodexIsolationPackage,
+          localAutomaticClientEmailHandoffPackage,
           localResilientWebsiteCodexResumePackage,
           localRecentRequestChatContextPackage,
           localRecoverStaleEmptyCodexChatPackage,
@@ -4381,6 +4460,10 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localUnifiedProposalPackage,
+            localImmediateWebsiteCodexOpenPackage,
+            localClientPreviewCodexIsolationPackage,
+            localAutomaticClientEmailHandoffPackage,
             localResilientWebsiteCodexResumePackage,
             localRecentRequestChatContextPackage,
             localRecoverStaleEmptyCodexChatPackage,

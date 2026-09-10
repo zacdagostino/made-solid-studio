@@ -3304,7 +3304,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
   }
 
   async requestMadeSolidHandoff(builderRunId: string, input: MadeSolidHandoffInput) {
-    const { data, error } = await this.client.rpc('request_made_solid_handoff_v2', {
+    const { data, error } = await this.client.rpc('request_made_solid_handoff_v3', {
       target_builder_run_id: builderRunId,
       target_source_repository_url: input.sourceRepositoryUrl,
       target_source_branch: input.sourceBranch,

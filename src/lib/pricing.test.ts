@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { BuildManifest } from './domain';
-import { approvePricingCalculation, calculateBuildPricing, defaultPricingOptions } from './pricing';
+import {
+  approvePricingCalculation,
+  calculateBuildPricing,
+  defaultPricingOptions,
+  pricingQuoteMatches,
+} from './pricing';
 
 function manifest(
   overrides: {
@@ -69,6 +74,31 @@ function manifest(
 }
 
 describe('build pricing', () => {
+  it('retains approval across refresh timestamps but invalidates changed scope, terms and expiry', () => {
+    const calculated = calculateBuildPricing(manifest());
+    const approved = approvePricingCalculation(calculated, 'persisted-quote');
+    expect(
+      pricingQuoteMatches(approved, { ...calculated, generatedAt: '2099-01-01T00:00:00Z' }),
+    ).toBe(true);
+    expect(pricingQuoteMatches(approved, calculateBuildPricing(manifest({ pages: 20 })))).toBe(
+      false,
+    );
+    expect(
+      pricingQuoteMatches(
+        approved,
+        calculateBuildPricing(manifest(), { ...defaultPricingOptions, applyGst: true }),
+      ),
+    ).toBe(false);
+    expect(
+      pricingQuoteMatches({ ...approved, validUntil: '2000-01-01T00:00:00Z' }, calculated),
+    ).toBe(false);
+    expect(
+      pricingQuoteMatches(approved, {
+        ...calculated,
+        sourceScope: { ...calculated.sourceScope, sourceCommit: 'changed' },
+      }),
+    ).toBe(false);
+  });
   it('starts a preview-first build at $6,900 with fixed client choices', () => {
     const result = calculateBuildPricing(manifest(), defaultPricingOptions);
     expect(result.subtotalCents).toBe(690_000);
