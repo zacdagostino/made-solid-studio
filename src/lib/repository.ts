@@ -4053,10 +4053,29 @@ export class SiteforgeRepository {
         'Unified client proposal test package: one saved form and quote, existing handoff navigation, transparent payment setup and clear launch steps.',
       stagedBehaviourIds: ['framework-quality-gates'],
     };
+    const localBoundedCodexQueuePackage: AgentPackage = {
+      ...localUnifiedProposalPackage,
+      id: 'agent-package-local-v25-3-bounded-codex-queue',
+      version: 25.3,
+      status: 'test_ready',
+      basePackageId: localUnifiedProposalPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v25.3',
+      contractAddendum:
+        'Bound every Codex RPC, release stalled shared connections and keep independent chats usable after a request failure.',
+      instructionsAddendum:
+        'Preserve saved chats. Requeue only definite busy rejections. Never automatically replay a send with an unknown acknowledgement; surface the failure and ask the owner to check the conversation before retrying.',
+      summary:
+        'Bounded Codex queue: stalled requests and Interrupt fail visibly, connections recover, and definite busy rejections remain retryable.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents a silent Codex connection from holding the shared chat queue indefinitely.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
+          localBoundedCodexQueuePackage,
           localUnifiedProposalPackage,
           localImmediateWebsiteCodexOpenPackage,
           localClientPreviewCodexIsolationPackage,
@@ -4257,6 +4276,7 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
+          localBoundedCodexQueuePackage,
           localUnifiedProposalPackage,
           localImmediateWebsiteCodexOpenPackage,
           localClientPreviewCodexIsolationPackage,
@@ -4460,6 +4480,7 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
+            localBoundedCodexQueuePackage,
             localUnifiedProposalPackage,
             localImmediateWebsiteCodexOpenPackage,
             localClientPreviewCodexIsolationPackage,

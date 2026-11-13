@@ -42,8 +42,8 @@ test('registers stale empty Codex chat recovery once as immutable test package v
   }
 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
-  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.115`/);
-  assert.match(behaviour, /owner-only website chat now hides a discarded Android Chrome iframe/);
+  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.116`/);
+  assert.match(behaviour, /stalled Codex connections time out and reconnect/);
   assert.match(bridge, /if \(!isUnmaterializedThreadReadError\(error\)\)/);
   assert.match(service, /await activeWork\.catch\(\(\) => undefined\)/);
   assert.match(service, /return codexFeedbackBridge\(\)/);

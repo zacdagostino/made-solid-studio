@@ -40,8 +40,8 @@ test('registers durable New chat once as immutable test package v24.3', async ()
   }
 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
-  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.115`/);
-  assert.match(behaviour, /owner-only website chat now hides a discarded Android Chrome iframe/);
+  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.116`/);
+  assert.match(behaviour, /stalled Codex connections time out and reconnect/);
   assert.match(bridge, /'runtime',\s*'started-threads\.json'/);
   assert.match(bridge, /await this\.loadStartedThreads\(\)/);
   assert.match(bridge, /await this\.persistStartedThreads\(\)/);

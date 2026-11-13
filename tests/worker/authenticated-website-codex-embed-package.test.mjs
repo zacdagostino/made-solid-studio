@@ -39,8 +39,8 @@ test('registers the authenticated website Codex embed once as immutable test pac
   }
 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
-  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.115`/);
-  assert.match(behaviour, /owner-only website chat now hides a discarded Android Chrome iframe/);
+  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.116`/);
+  assert.match(behaviour, /stalled Codex connections time out and reconnect/);
   assert.match(gateway, /requestUrl\.searchParams\.get\('embed'\) !== websiteCodexEmbed/);
   assert.match(gateway, /frame-ancestors \$\{frameOrigin \|\| "'none'"\}/);
   assert.match(responsiveSpec, /\['v23\.9', 'Authenticated website Codex embed'\]/);

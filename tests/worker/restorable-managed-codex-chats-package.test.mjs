@@ -40,8 +40,8 @@ test('registers restorable managed Codex chats once as immutable test package v2
   }
 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
-  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.115`/);
-  assert.match(behaviour, /owner-only website chat now hides a discarded Android Chrome iframe/);
+  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.116`/);
+  assert.match(behaviour, /stalled Codex connections time out and reconnect/);
   assert.match(component, /action: 'delete-thread'/);
   assert.match(component, /ready: isSupported !== undefined/);
   assert.match(bridge, /async deleteThread\(input\)/);

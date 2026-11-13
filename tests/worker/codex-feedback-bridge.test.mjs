@@ -11,6 +11,139 @@ import {
 const imageDataUrl = `data:image/png;base64,${Buffer.from('private screenshot').toString('base64')}`;
 const secondImageDataUrl = `data:image/webp;base64,${Buffer.from('second private image').toString('base64')}`;
 
+function rpcSocket(handler, { closeEvent = true } = {}) {
+  return class extends EventTarget {
+    constructor() {
+      super();
+      queueMicrotask(() => this.dispatchEvent(new Event('open')));
+    }
+    send(payload) {
+      const { id, method, params } = JSON.parse(payload);
+      if (id === undefined) return;
+      void Promise.resolve()
+        .then(() => handler(method, params))
+        .then(
+          (result) => this.reply({ id, result }),
+          (error) => this.reply({ id, error: { message: error.message } }),
+        );
+    }
+    reply(message) {
+      this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(message) }));
+    }
+    close() {
+      if (closeEvent) this.dispatchEvent(new Event('close'));
+    }
+  };
+}
+
+test('bounds initialization even when the server never replies or finishes closing', async () => {
+  await assert.rejects(
+    connectCodexAppServer({
+      WebSocketImplementation: rpcSocket(() => new Promise(() => {}), { closeEvent: false }),
+      requestTimeoutMs: 20,
+    }),
+    /stopped responding/,
+  );
+});
+
+test('rejects every pending request and reconnects after a stalled shared connection', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'made-solid-codex-timeout-'));
+  const state = { busy: false, turns: [] };
+  const fake = await fakeConnection(state)();
+  let stall = true;
+  const Socket = rpcSocket(
+    (method, params) => {
+      if (method === 'initialize') return {};
+      if (stall && method === 'model/list') return new Promise(() => {});
+      return fake.request(method, params);
+    },
+    { closeEvent: false },
+  );
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: directory,
+    reuseConnection: true,
+    connect: () => connectCodexAppServer({ WebSocketImplementation: Socket, requestTimeoutMs: 30 }),
+  });
+  try {
+    await assert.rejects(
+      bridge.enqueue({
+        prompt: 'First request',
+        model: 'gpt-text-only',
+        effort: 'medium',
+        threadId: 'thread-1',
+      }),
+      /stopped responding/,
+    );
+    assert.equal(bridge.flushPromise, undefined);
+    stall = false;
+    const fresh = await bridge.createThread({ model: 'gpt-text-only', effort: 'medium' });
+    const result = await bridge.enqueue({
+      prompt: 'A new chat must still run',
+      model: 'gpt-text-only',
+      effort: 'medium',
+      threadId: fresh.thread.id,
+    });
+    assert.equal(result.status, 'accepted');
+    assert.equal(state.turns.length, 1);
+  } finally {
+    bridge.close();
+  }
+});
+
+test('interrupt reports a stalled server instead of waiting indefinitely', async () => {
+  const state = { busy: true, turns: [] };
+  const fake = await fakeConnection(state)();
+  const bridge = new CodexFeedbackBridge({
+    cwd: '/workspaces/siteforge-os',
+    storageRoot: await mkdtemp(join(tmpdir(), 'made-solid-codex-interrupt-timeout-')),
+    connect: () =>
+      connectCodexAppServer({
+        requestTimeoutMs: 30,
+        WebSocketImplementation: rpcSocket((method, params) => {
+          if (method === 'initialize') return {};
+          if (method === 'turn/interrupt') return new Promise(() => {});
+          return fake.request(method, params);
+        }),
+      }),
+  });
+  await assert.rejects(bridge.stopActiveTurn({ threadId: 'thread-1' }), /stopped responding/);
+});
+
+test('requeues a definite busy rejection but never replays an unacknowledged send', async () => {
+  for (const failure of ['Turn already in progress', 'Codex stopped responding.']) {
+    const state = { busy: false, turns: [] };
+    const fake = await fakeConnection(state)();
+    const bridge = new CodexFeedbackBridge({
+      cwd: '/workspaces/siteforge-os',
+      storageRoot: await mkdtemp(join(tmpdir(), 'made-solid-codex-dispatch-')),
+      connect: async () => ({
+        ...fake,
+        async request(method, params) {
+          if (method === 'turn/start') throw new Error(failure);
+          return fake.request(method, params);
+        },
+      }),
+    });
+    const submission = bridge.enqueue({
+      prompt: 'Test delivery',
+      model: 'gpt-text-only',
+      effort: 'medium',
+      threadId: 'thread-1',
+    });
+    if (failure.startsWith('Turn')) {
+      assert.equal((await submission).status, 'queued');
+      assert.equal((await bridge.readRecords('queued')).length, 1);
+      clearTimeout(bridge.flushRetryTimer);
+    } else {
+      await assert.rejects(submission, /stopped responding/);
+      assert.equal((await bridge.readRecords('failed')).length, 1);
+    }
+    assert.equal((await bridge.readRecords('dispatching')).length, 0);
+    assert.equal(state.turns.length, 0);
+  }
+});
+
 function fakeConnection(state) {
   return async () => ({
     async request(method, params) {
@@ -1999,12 +2132,15 @@ test('rejects unsupported models and prompts before creating a Codex turn', asyn
     }),
     /prompt or attach an image/i,
   );
-  await bridge.enqueue({
-    screenshot: imageDataUrl,
-    prompt: 'Inspect this.',
-    model: 'gpt-text-only',
-    effort: 'medium',
-  });
+  await assert.rejects(
+    bridge.enqueue({
+      screenshot: imageDataUrl,
+      prompt: 'Inspect this.',
+      model: 'gpt-text-only',
+      effort: 'medium',
+    }),
+    /no longer accepts images/,
+  );
   await new Promise((resolveWait) => setTimeout(resolveWait, 20));
   assert.equal((await bridge.readRecords('failed')).length, 1);
   assert.equal(state.turns.length, 0);

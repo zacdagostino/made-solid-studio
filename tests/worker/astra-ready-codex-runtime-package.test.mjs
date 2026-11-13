@@ -42,7 +42,7 @@ test('registers the Astra-ready Codex runtime once as immutable test package v24
   }
 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
-  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.115`/);
+  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.116`/);
   assert.match(app, /GPT-6 Astra/);
   assert.match(app, /How future updates reach Studio/);
   assert.match(bridge, /includeHidden: true/);

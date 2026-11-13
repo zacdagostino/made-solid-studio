@@ -40,8 +40,8 @@ test('registers the owner-only website Codex behavior once as immutable test pac
   }
 
   const behaviour = app.slice(app.indexOf("id: 'visual-codex-feedback'"));
-  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.115`/);
-  assert.match(behaviour, /owner-only website chat now hides a discarded Android Chrome iframe/);
+  assert.match(behaviour, /revision: `v\$\{selectedAgentPackage\.version\}\.116`/);
+  assert.match(behaviour, /stalled Codex connections time out and reconnect/);
   assert.match(panel, /event\.data\.action === 'synchronize'/);
   assert.match(panel, /open: phase !== 'closed'/);
   assert.match(panel, /expanded: phase === 'selecting'/);

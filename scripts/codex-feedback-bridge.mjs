@@ -49,11 +49,17 @@ function waitForOpen(socket, timeoutMs = 3_000) {
 export async function connectCodexAppServer({
   serverUrl = process.env.MADE_SOLID_CODEX_APP_SERVER_URL || defaultServerUrl,
   WebSocketImplementation = globalThis.WebSocket,
+  requestTimeoutMs = 15_000,
 } = {}) {
   if (!WebSocketImplementation)
     throw new Error('This Node runtime does not provide WebSocket support.');
   const socket = new WebSocketImplementation(serverUrl);
-  await waitForOpen(socket);
+  try {
+    await waitForOpen(socket);
+  } catch (error) {
+    socket.close();
+    throw error;
+  }
   let socketClosed = false;
   let resolveClosed;
   const whenClosed = new Promise((resolveClose) => {
@@ -62,11 +68,37 @@ export async function connectCodexAppServer({
   let nextId = 1;
   const pending = new Map();
   const notificationListeners = new Set();
+  const closeConnection = (error) => {
+    if (socketClosed) return;
+    socketClosed = true;
+    for (const pendingRequest of pending.values()) {
+      clearTimeout(pendingRequest.timeout);
+      pendingRequest.reject(error);
+    }
+    pending.clear();
+    resolveClosed();
+    socket.close();
+  };
   const request = (method, params = {}) =>
     new Promise((resolveRequest, reject) => {
+      if (socketClosed) {
+        reject(new Error('The local Codex connection is closed. Reconnect and try again.'));
+        return;
+      }
       const id = nextId++;
-      pending.set(id, { resolveRequest, reject });
-      socket.send(JSON.stringify({ method, id, params }));
+      const timeout = setTimeout(() => {
+        closeConnection(
+          new Error(
+            'Codex stopped responding. Reconnect and check the conversation before retrying.',
+          ),
+        );
+      }, requestTimeoutMs);
+      pending.set(id, { resolveRequest, reject, timeout });
+      try {
+        socket.send(JSON.stringify({ method, id, params }));
+      } catch (error) {
+        closeConnection(error);
+      }
     });
   const handleMessage = (event) => {
     let message;
@@ -82,30 +114,34 @@ export async function connectCodexAppServer({
     if (!pending.has(message.id)) return;
     const pendingRequest = pending.get(message.id);
     pending.delete(message.id);
+    clearTimeout(pendingRequest.timeout);
     if (message.error)
       pendingRequest.reject(new Error(String(message.error.message || 'Codex request failed.')));
     else pendingRequest.resolveRequest(message.result);
   };
   socket.addEventListener('message', handleMessage);
   socket.addEventListener('close', () => {
-    socketClosed = true;
-    for (const pendingRequest of pending.values()) {
-      pendingRequest.reject(new Error('The local Codex connection closed unexpectedly.'));
-    }
-    pending.clear();
-    resolveClosed();
+    closeConnection(new Error('The local Codex connection closed unexpectedly.'));
   });
-  await request('initialize', {
-    clientInfo: {
-      name: 'made_solid_studio',
-      title: 'Made Solid Studio',
-      version: '0.1.0',
-    },
-    capabilities: {
-      experimentalApi: true,
-    },
+  socket.addEventListener('error', () => {
+    closeConnection(new Error('The local Codex connection failed.'));
   });
-  socket.send(JSON.stringify({ method: 'initialized', params: {} }));
+  try {
+    await request('initialize', {
+      clientInfo: {
+        name: 'made_solid_studio',
+        title: 'Made Solid Studio',
+        version: '0.1.0',
+      },
+      capabilities: {
+        experimentalApi: true,
+      },
+    });
+    socket.send(JSON.stringify({ method: 'initialized', params: {} }));
+  } catch (error) {
+    closeConnection(error);
+    throw error;
+  }
   return {
     request,
     isClosed() {
@@ -172,7 +208,7 @@ export async function connectCodexAppServer({
       };
     },
     close() {
-      if (!socketClosed) socket.close();
+      closeConnection(new Error('The local Codex connection was closed.'));
     },
   };
 }
@@ -1640,6 +1676,9 @@ export class CodexFeedbackBridge {
     await atomicWriteJson(recordPath, record);
     await this.flush();
     const savedRecord = (await this.readRecords()).find((candidate) => candidate.id === id);
+    if (savedRecord?.status === 'failed') {
+      throw new Error(savedRecord.failure || 'Codex could not accept this request.');
+    }
     const accepted = ['running', 'completed', 'delivered'].includes(savedRecord?.status);
     return {
       status: accepted ? 'accepted' : 'queued',
@@ -2547,9 +2586,14 @@ export class CodexFeedbackBridge {
             });
           } catch (error) {
             if (
-              /active|running|in progress|turn/i.test(error instanceof Error ? error.message : '')
-            )
+              /(?:already (?:has an? )?(?:active|running) turn|turn (?:is )?(?:already )?(?:active|running|in progress))/i.test(
+                error instanceof Error ? error.message : '',
+              )
+            ) {
+              // A definite busy rejection is safe to retry. An unknown delivery outcome is not.
+              await this.updateRecordStatus(record, 'queued');
               continue;
+            }
             throw error;
           }
         } catch (error) {
