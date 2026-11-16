@@ -500,19 +500,23 @@ export function AutomatedReportPanel({
                       : 'GPT-5.6 Sol is building the report'
                     : generationStopped
                       ? 'The replacement report needs attention'
-                      : preparing
-                        ? legacyReport
-                          ? 'Replacing the legacy report automatically'
-                          : 'Generating the report automatically'
-                        : comparisonRefreshFailed
-                          ? 'The comparison refresh needs attention'
-                          : freshResponsiveAuditRequired
-                            ? 'Capture current responsive evidence once'
-                            : comparisonRefreshRequired
-                              ? 'Fresh audit complete — update the comparison screenshots'
-                              : legacyReport
-                                ? 'The earlier report will be replaced automatically'
-                                : 'Automatic report preparation'}
+                        : preparing
+                          ? legacyReport
+                            ? 'Replacing the legacy report automatically'
+                            : 'Generating the report automatically'
+                          : comparisonRefreshFailed
+                            ? 'The comparison refresh needs attention'
+                            : releaseSchemaUnavailable
+                              ? 'Studio update required'
+                              : !releaseReady
+                                ? 'Verify current edited website'
+                                : freshResponsiveAuditRequired
+                                  ? 'Capture current responsive evidence once'
+                                  : comparisonRefreshRequired
+                                    ? 'Fresh audit complete — update the comparison screenshots'
+                                    : legacyReport
+                                      ? 'The earlier report will be replaced automatically'
+                                      : 'Automatic report preparation'}
               </h3>
               <p>
                 {comparisonRefreshActive
@@ -585,7 +589,15 @@ export function AutomatedReportPanel({
               </small>
             </div>
           ) : null}
-          {freshResponsiveAuditRequired && onRetryAudit ? (
+          {!releaseSchemaUnavailable && !releaseReady ? (
+            <ButtonLink
+              href={`#/prospects/${currentAudit.businessId}/editing`}
+              variant="primary"
+            >
+              Verify current edited website <ArrowRight aria-hidden="true" size={17} />
+            </ButtonLink>
+          ) : null}
+          {releaseReady && freshResponsiveAuditRequired && onRetryAudit ? (
             <Button disabled={retrying} onClick={() => void retryAudit()} variant="primary">
               {retrying ? (
                 <LoaderCircle aria-hidden="true" className={styles.spin} size={17} />

@@ -12,7 +12,22 @@ export type WorkspaceCacheSnapshot = {
 const databaseName = 'made-solid-studio-workspace-cache';
 const storeName = 'snapshots';
 const maximumCacheAge = 7 * 24 * 60 * 60 * 1_000;
+const cacheHintPrefix = 'made-solid-studio-workspace-cache.';
 let databasePromise: Promise<IDBDatabase> | undefined;
+
+function cacheHintKey(key: string) {
+  return `${cacheHintPrefix}${key}`;
+}
+
+export function hasWorkspaceCache(key: string) {
+  if (!key) return false;
+  try {
+    const savedAt = window.localStorage.getItem(cacheHintKey(key));
+    return Boolean(savedAt && Date.now() - Date.parse(savedAt) <= maximumCacheAge);
+  } catch {
+    return false;
+  }
+}
 
 function database() {
   if (!databasePromise) {
@@ -42,7 +57,10 @@ export async function readWorkspaceCache(key: string) {
       request.onsuccess = () => resolve(request.result as WorkspaceCacheSnapshot | undefined);
       request.onerror = () => reject(request.error);
     });
-    if (!snapshot) return undefined;
+    if (!snapshot) {
+      window.localStorage.removeItem(cacheHintKey(key));
+      return undefined;
+    }
     if (Date.now() - Date.parse(snapshot.savedAt) <= maximumCacheAge) return snapshot;
     await clearWorkspaceCache(key);
   } catch {
@@ -63,6 +81,7 @@ export async function writeWorkspaceCache(snapshot: WorkspaceCacheSnapshot) {
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error);
     });
+    window.localStorage.setItem(cacheHintKey(snapshot.key), snapshot.savedAt);
   } catch {
     // Continue without cached startup when storage is unavailable or full.
   }
@@ -80,6 +99,7 @@ export async function clearWorkspaceCache(key: string) {
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error);
     });
+    window.localStorage.removeItem(cacheHintKey(key));
   } catch {
     // The authenticated repository remains usable when cache cleanup is unavailable.
   }

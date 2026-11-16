@@ -140,6 +140,11 @@ maintain_codex_app_server() {
       if [[ -n "$activated_version" ]]; then
         echo "[railway-runtime] activating Codex $activated_version after active work finished."
       fi
+    else
+      activated_version="$(node "$application_directory/scripts/codex-runtime-updates.mjs" activation-version 2>/dev/null || true)"
+      if [[ -n "$activated_version" ]]; then
+        echo "[railway-runtime] resuming the interrupted startup check for Codex $activated_version."
+      fi
     fi
     SITEFORGE_CODEX_BIN="$(node "$application_directory/scripts/codex-runtime-updates.mjs" resolve-bin 2>/dev/null || true)"
     SITEFORGE_CODEX_BIN="${SITEFORGE_CODEX_BIN:-codex}"
@@ -212,6 +217,7 @@ maintain_workspace_studio() {
         VITE_SITEFORGE_DEVELOPMENT_ORIGIN="$development_origin" \
         VITE_SITEFORGE_DEVELOPMENT_COMPATIBILITY_ORIGINS="${SITEFORGE_DEVELOPMENT_COMPATIBILITY_ORIGINS:-}" \
         VITE_SITEFORGE_PREVIEW_ORIGIN="${VITE_SITEFORGE_PREVIEW_ORIGIN:-}" \
+        VITE_SITEFORGE_INSPECT_ORIGIN="${VITE_SITEFORGE_INSPECT_ORIGIN:-}" \
         VITE_SUPABASE_PUBLISHABLE_KEY="${VITE_SUPABASE_PUBLISHABLE_KEY:-}" \
         VITE_SUPABASE_URL="${VITE_SUPABASE_URL:-}" \
         node "$application_directory/node_modules/vite/bin/vite.js" \

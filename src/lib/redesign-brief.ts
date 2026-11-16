@@ -13,6 +13,7 @@ import type {
   VisualContentCandidate,
 } from './domain';
 import { detectCapabilities } from './capability-inventory';
+import { isPublicWebsitePageUrl, normaliseWebsitePageUrl } from './public-page-url';
 
 type PacketPage = {
   url?: unknown;
@@ -54,31 +55,19 @@ function stringValue(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function normalisePageUrl(value: string) {
-  try {
-    const url = new URL(value);
-    url.hash = '';
-    url.search = '';
-    url.pathname = url.pathname.replace(/\/+$/, '') || '/';
-    return url.toString();
-  } catch {
-    return value;
-  }
-}
-
 function packetPages(packet: ResearchPacket): SourcePage[] {
   const pages = Array.isArray(packet.data.pages) ? packet.data.pages : [];
   return pages
     .filter((page): page is Record<string, unknown> => typeof page === 'object' && page !== null)
     .map((page) => ({
-      url: normalisePageUrl(stringValue((page as PacketPage).url)),
+      url: normaliseWebsitePageUrl(stringValue((page as PacketPage).url)),
       pageType: stringValue((page as PacketPage).pageType),
       title: stringValue((page as PacketPage).title),
       primaryHeading: stringValue((page as PacketPage).primaryHeading),
       description: stringValue((page as PacketPage).description),
       canonicalUrl: stringValue((page as PacketPage).canonicalUrl),
     }))
-    .filter((page) => page.url);
+    .filter((page) => page.url && isPublicWebsitePageUrl(page.url));
 }
 
 function sourcePages(packet: ResearchPacket, capturedPages: CapturedPage[]) {
@@ -86,7 +75,8 @@ function sourcePages(packet: ResearchPacket, capturedPages: CapturedPage[]) {
   const merged = new Map<string, SourcePage>();
 
   for (const capturedPage of capturedPages) {
-    const url = normalisePageUrl(capturedPage.url);
+    if (!isPublicWebsitePageUrl(capturedPage.url)) continue;
+    const url = normaliseWebsitePageUrl(capturedPage.url);
     const packetPage = packetByUrl.get(url);
     merged.set(url, {
       url,
@@ -166,11 +156,14 @@ export function pageDisposition(page: SourcePage, pages: SourcePage[]) {
   const path = pathname(page);
   const role = architectureRole(page);
   const home = pages.find((candidate) => architectureRole(candidate) === 'home');
-  const canonical = page.canonicalUrl ? normalisePageUrl(page.canonicalUrl) : '';
+  const canonical = page.canonicalUrl ? normaliseWebsitePageUrl(page.canonicalUrl) : '';
   const canonicalTarget = canonical
-    ? pages.find((candidate) => normalisePageUrl(candidate.url) === canonical)
+    ? pages.find((candidate) => normaliseWebsitePageUrl(candidate.url) === canonical)
     : undefined;
-  if (canonicalTarget && normalisePageUrl(canonicalTarget.url) !== normalisePageUrl(page.url)) {
+  if (
+    canonicalTarget &&
+    normaliseWebsitePageUrl(canonicalTarget.url) !== normaliseWebsitePageUrl(page.url)
+  ) {
     return {
       disposition: 'redirect' as PageDisposition,
       dispositionReason: 'The captured canonical URL points to another selected page.',
@@ -313,11 +306,21 @@ function proposedSitemapFor(pages: SourcePage[]): BriefSitemapEntry[] {
 
 function planForPage(page: SourcePage, pages: SourcePage[]): BriefPagePlan {
   const role = architectureRole(page);
+  const capturedOpening = page.primaryHeading || page.description || page.title;
+  const supportingRoutes = pages.filter((candidate) => candidate.url !== page.url);
+  const serviceCount = supportingRoutes.filter((candidate) =>
+    ['service_hub', 'service_detail'].includes(architectureRole(candidate)),
+  ).length;
+  const audienceCount = supportingRoutes.filter((candidate) =>
+    ['sector', 'about', 'projects'].includes(architectureRole(candidate)),
+  ).length;
   const plans: Record<ArchitectureRole, string[]> = {
     home: [
-      'Verified value proposition and primary action',
-      'Clear pathways into captured services, sectors, and resources',
-      'Trust content only where captured and verified',
+      capturedOpening
+        ? `Ground the opening in captured homepage evidence: ${capturedOpening}`
+        : 'Establish what the organisation does from the captured homepage dossier before choosing the opening composition',
+      `Explain the organisation and visitor path using ${countLabel(serviceCount, 'captured service route')} and ${countLabel(audienceCount, 'captured audience or proof route')}; do not substitute a generic value proposition`,
+      'Choose hero media only from approved page-matched assets or specific verified content; when neither exists, use a distinctive evidence-led typographic composition without a decorative fallback panel',
     ],
     contact: [
       'Clear contact context from the captured page',
@@ -484,7 +487,7 @@ export function createBriefDraft(
 ) {
   const pages = sourcePages(packet, capturedPages);
   const selectedUrls = selectedPageUrls
-    ? new Set(selectedPageUrls.map(normalisePageUrl))
+    ? new Set(selectedPageUrls.filter(isPublicWebsitePageUrl).map(normaliseWebsitePageUrl))
     : undefined;
   const architecturePages = selectedUrls
     ? pages.filter((page) => selectedUrls.has(page.url))

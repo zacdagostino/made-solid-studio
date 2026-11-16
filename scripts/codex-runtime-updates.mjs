@@ -11,6 +11,7 @@ const execFile = promisify(executeFile);
 const stableVersionPattern = /^\d+\.\d+\.\d+$/;
 const defaultCheckIntervalMs = 24 * 60 * 60 * 1_000;
 const defaultMaintenanceIntervalMs = 10_000;
+const defaultUpdatePhaseTimeoutMs = 10 * 60_000;
 const changelogUrl = 'https://learn.chatgpt.com/docs/changelog';
 const githubReleasesUrl = 'https://api.github.com/repos/openai/codex/releases?per_page=20';
 const npmLatestUrl = 'https://registry.npmjs.org/@openai%2Fcodex/latest';
@@ -189,6 +190,7 @@ async function readState(environment = process.env) {
     checkedAt: null,
     currentExecutable,
     currentVersion,
+    statusChangedAt: new Date().toISOString(),
     releases: [],
     status: 'current',
     updateAvailable: false,
@@ -199,7 +201,14 @@ async function readState(environment = process.env) {
 
 async function writeState(environment, patch) {
   const paths = updatePaths(environment);
-  const state = { ...(await readState(environment)), ...patch };
+  const current = await readState(environment);
+  const state = {
+    ...current,
+    ...patch,
+    ...(patch.status && patch.status !== current.status && !patch.statusChangedAt
+      ? { statusChangedAt: new Date().toISOString() }
+      : {}),
+  };
   await atomicWriteJson(paths.state, state);
   return state;
 }
@@ -213,6 +222,7 @@ export async function publicCodexUpdateStatus(environment = process.env) {
     latestVersion: state.latestVersion || state.currentVersion,
     releases: Array.isArray(state.releases) ? state.releases : [],
     status: state.status,
+    statusChangedAt: state.statusChangedAt || state.checkedAt || null,
     updateAvailable: Boolean(state.updateAvailable),
     updatedAt: state.updatedAt || null,
   };
@@ -377,6 +387,28 @@ export async function checkForCodexUpdate({
   }
 }
 
+export async function retryCodexUpdate({
+  environment = process.env,
+  fetchImplementation = globalThis.fetch,
+  installer = installRelease,
+} = {}) {
+  const state = await readState(environment);
+  if (
+    ['checking', 'downloading', 'restart_pending', 'restarting', 'waiting_for_idle'].includes(
+      state.status,
+    )
+  ) {
+    return state;
+  }
+  await writeState(environment, {
+    failedVersion: null,
+    failureSummary: null,
+    pendingExecutable: null,
+    pendingVersion: null,
+  });
+  return checkForCodexUpdate({ environment, fetchImplementation, installer });
+}
+
 async function activeFeedbackRecord(paths) {
   try {
     const files = (await readdir(paths.feedbackRoot)).filter((file) => file.endsWith('.json'));
@@ -456,18 +488,34 @@ async function switchCurrentLink(target, environment = process.env) {
 }
 
 export async function activatePendingUpdate(environment = process.env) {
-  const paths = updatePaths(environment);
   const state = await readState(environment);
-  if (!state.pendingVersion || !state.pendingExecutable) return '';
+  if (!state.pendingVersion || !state.pendingExecutable) {
+    await rm(updatePaths(environment).restartRequest, { force: true });
+    return '';
+  }
+  if (state.status === 'restarting') return state.pendingVersion;
   const versionRoot = resolve(state.pendingExecutable, '../../..');
   await switchCurrentLink(versionRoot, environment);
-  await rm(paths.restartRequest, { force: true });
   await writeState(environment, {
     currentExecutable: state.pendingExecutable,
     currentVersion: state.pendingVersion,
     previousExecutable: state.currentExecutable,
     previousVersion: state.currentVersion,
     status: 'restarting',
+  });
+  return state.pendingVersion;
+}
+
+export async function pendingActivationVersion(environment = process.env) {
+  const state = await readState(environment);
+  if (state.status !== 'restarting' || !state.pendingVersion) return '';
+  const paths = updatePaths(environment);
+  await mkdir(paths.root, { recursive: true, mode: 0o700 });
+  await writeFile(paths.restartRequest, `${state.pendingVersion}\n`, {
+    flag: 'wx',
+    mode: 0o600,
+  }).catch((error) => {
+    if (error?.code !== 'EEXIST') throw error;
   });
   return state.pendingVersion;
 }
@@ -484,6 +532,7 @@ export async function completePendingUpdate(environment = process.env) {
     updateAvailable: false,
     updatedAt,
   });
+  await rm(updatePaths(environment).restartRequest, { force: true });
   const notifications = new CodexPushNotifications({
     storagePath: updatePaths(environment).notifications,
     subject: environment.SITEFORGE_PUBLIC_ORIGIN,
@@ -535,6 +584,30 @@ export async function rollbackPendingUpdate(
   return true;
 }
 
+export async function recoverStalledCodexUpdate(environment = process.env) {
+  const state = await readState(environment);
+  const timeout =
+    Number(environment.SITEFORGE_CODEX_UPDATE_PHASE_TIMEOUT_MS) || defaultUpdatePhaseTimeoutMs;
+  const changedAt = Date.parse(state.statusChangedAt || state.checkedAt || '');
+  if (!Number.isFinite(changedAt) || Date.now() - changedAt < timeout) return false;
+  if (state.status === 'restarting') {
+    return rollbackPendingUpdate(
+      `Codex v${state.currentVersion} did not finish its startup health check within ${Math.ceil(timeout / 60_000)} minutes.`,
+      environment,
+    );
+  }
+  if (!['checking', 'downloading', 'restart_pending'].includes(state.status)) return false;
+  const paths = updatePaths(environment);
+  await rm(paths.restartRequest, { force: true });
+  await rm(paths.checkLock, { force: true, recursive: true });
+  await writeState(environment, {
+    failureSummary: `The Codex update remained in ${state.status.replaceAll('_', ' ')} for more than ${Math.ceil(timeout / 60_000)} minutes. Studio stopped that attempt and kept Codex v${state.currentVersion} available.`,
+    status: 'failed',
+    updateAvailable: Boolean(state.pendingVersion || state.updateAvailable),
+  });
+  return true;
+}
+
 export async function resolveCodexExecutable(environment = process.env) {
   const state = await readState(environment);
   return state.currentExecutable || bundledExecutable(environment);
@@ -573,6 +646,7 @@ export async function runUpdateDaemon({ environment = process.env } = {}) {
     Number(environment.SITEFORGE_CODEX_UPDATE_MAINTENANCE_INTERVAL_MS) ||
     defaultMaintenanceIntervalMs;
   while (true) {
+    await recoverStalledCodexUpdate(environment);
     const state = await readState(environment);
     const checkedAt = Date.parse(state.checkedAt || '');
     if (
@@ -592,6 +666,7 @@ async function main() {
   if (command === 'check') return void (await checkForCodexUpdate());
   if (command === 'request-activation') return void (await requestIdleActivation());
   if (command === 'activate') return console.log(await activatePendingUpdate());
+  if (command === 'activation-version') return console.log(await pendingActivationVersion());
   if (command === 'complete') return void (await completePendingUpdate());
   if (command === 'rollback') return void (await rollbackPendingUpdate(process.argv[3]));
   if (command === 'resolve-bin') return console.log(await resolveCodexExecutable());

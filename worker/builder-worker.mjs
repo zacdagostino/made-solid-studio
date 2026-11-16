@@ -172,15 +172,26 @@ function builderExecutionProfile(run, agentPackage) {
   const efficientPackage = Number(agentPackage?.version) >= 7.2;
   if (!efficientPackage) {
     return {
-      model: configuredModel || undefined,
-      reasoningEffort: configuredEffort || undefined,
+      model: configuredModel || run?.model || undefined,
+      reasoningEffort: configuredEffort || run?.reasoning_effort || undefined,
+      source: configuredModel || configuredEffort ? 'environment' : undefined,
     };
   }
   const economicalTest = ['homepage_test', 'page_test'].includes(run?.build_mode);
   return {
-    model: configuredModel || (economicalTest ? 'gpt-5.6-terra' : 'gpt-5.6-sol'),
-    reasoningEffort: configuredEffort || (economicalTest ? 'medium' : 'high'),
+    model: configuredModel || run?.model || (economicalTest ? 'gpt-5.6-terra' : 'gpt-5.6-sol'),
+    reasoningEffort:
+      configuredEffort || run?.reasoning_effort || (economicalTest ? 'medium' : 'high'),
+    source:
+      configuredModel || configuredEffort
+        ? 'environment'
+        : run?.execution_profile_source || 'recommended',
   };
+}
+
+async function codexRuntimeVersion(codexExecutable, environment) {
+  const result = await runCommand(codexExecutable, ['--version'], { env: environment });
+  return `${result.stdout}\n${result.stderr}`.match(/\b\d+\.\d+\.\d+(?:[-+][\w.-]+)?\b/)?.[0];
 }
 
 class BuilderCheckpointError extends Error {
@@ -412,6 +423,18 @@ function codexFailureFromEvent(event) {
   return type === 'error' && typeof record.message === 'string' ? record.message : '';
 }
 
+function codexExecutionBlockedMessage(value) {
+  const message = safeCodexStreamText(value || '');
+  if (
+    /bwrap:\s*creating new namespace failed:\s*permission denied/i.test(message) ||
+    /execution environment[^.]{0,120}blocked/i.test(message) ||
+    /all shell commands fail[^.]{0,120}permission denied/i.test(message)
+  ) {
+    return message;
+  }
+  return '';
+}
+
 function failureDetails(error) {
   const message = error instanceof Error ? error.message : '';
   const base = {
@@ -427,6 +450,18 @@ function failureDetails(error) {
       action:
         'Add credits to the worker API account, then resume this build from its saved private source checkpoint.',
       context: { provider: 'openai', reason: 'credits_exhausted' },
+    };
+  }
+  if (/Codex CLI could not modify the disposable website workspace/i.test(message)) {
+    return {
+      ...base,
+      retryable: true,
+      code: 'codex_workspace_execution_unavailable',
+      stage: 'codex_execution',
+      summary: 'Codex could not run website editing commands inside the disposable workspace.',
+      action:
+        'The builder will retry once with the protected workspace execution policy. If that also fails, review the worker runtime rather than the website.',
+      context: { operation: 'codex_workspace_execution' },
     };
   }
   if (/Codex builder is not signed in with ChatGPT/i.test(message)) {
@@ -977,6 +1012,11 @@ async function sourceFileHashes(siteDirectory) {
     hashes.set(relativePath, sha256(await readFile(file)));
   }
   return hashes;
+}
+
+function sourceHashMapsDiffer(before, after) {
+  const paths = new Set([...before.keys(), ...after.keys()]);
+  return [...paths].some((path) => before.get(path) !== after.get(path));
 }
 
 function checkpointableSourcePath(relativePath) {
@@ -1896,6 +1936,60 @@ function manifestSectionCounts(data) {
   );
 }
 
+const approvedPhotographyRoles = new Set(['worksite_photo', 'project_photo', 'team_photo']);
+
+function visualInputSummary(fullData, selectedPages, stagedAssets) {
+  const selectedPageUrls = sourceUrlSet(selectedPages);
+  const approvedPhotography = stagedAssets.filter((asset) =>
+    approvedPhotographyRoles.has(recordValue(asset).role),
+  );
+  const approvedContentVisuals = stagedAssets.filter((asset) => {
+    const role = recordValue(asset).role;
+    return typeof role === 'string' && !['primary_logo', 'secondary_mark'].includes(role);
+  });
+  const capturedImageCandidates = (
+    Array.isArray(recordValue(fullData).selectedAssets) ? recordValue(fullData).selectedAssets : []
+  ).filter((candidate) => {
+    const asset = recordValue(candidate);
+    if (!/^image\/(?:avif|gif|jpe?g|png|webp)$/i.test(String(asset.contentType ?? ''))) {
+      return false;
+    }
+    if (/logo|favicon|social/i.test(String(asset.label ?? ''))) return false;
+    const sourcePageUrls = Array.isArray(asset.sourcePageUrls) ? asset.sourcePageUrls : [];
+    return sourcePageUrls.some((sourcePageUrl) => {
+      if (typeof sourcePageUrl !== 'string') return false;
+      try {
+        return selectedPageUrls.has(normaliseSourceUrl(sourcePageUrl));
+      } catch {
+        return false;
+      }
+    });
+  });
+  const mode = approvedPhotography.length
+    ? 'approved_photography'
+    : approvedContentVisuals.length
+      ? 'approved_non_photographic_visuals'
+      : stagedAssets.some((asset) => recordValue(asset).logoFamilyPrimaryAssetId)
+        ? 'logo_only'
+        : 'no_approved_visual_assets';
+  return {
+    mode,
+    approvedPhotographyCount: approvedPhotography.length,
+    approvedContentVisualCount: approvedContentVisuals.length,
+    capturedUnapprovedImageCandidateCount: Math.max(
+      capturedImageCandidates.length - approvedContentVisuals.length,
+      0,
+    ),
+    heroMediaRequired: false,
+    warning:
+      !approvedPhotography.length && capturedImageCandidates.length
+        ? 'The selected source includes captured image candidates, but no page photography is approved for reuse. Do not treat those private candidates as permission to use them, and do not fabricate decorative hero media to replace them.'
+        : !approvedPhotography.length
+          ? 'No page photography is approved for reuse. A typographic or verified information-led hero is valid; decorative fallback media is not.'
+          : undefined,
+  };
+}
+
 function applicableFeatureContracts(data, selectedPages, buildMode) {
   const contracts = ['component-architecture.md', 'mobile-navigation.md'];
   if (recordValue(data.brandKit).primaryLogoAssetId) {
@@ -2000,6 +2094,7 @@ function buildContextSummary({
   const fullBytes = Buffer.byteLength(JSON.stringify(fullData));
   const projectedBytes = Buffer.byteLength(JSON.stringify(projectedData));
   const contracts = applicableFeatureContracts(projectedData, selectedPages, buildMode);
+  const visualInputs = visualInputSummary(fullData, selectedPages, stagedAssets);
   return {
     version: 1,
     mode: buildMode,
@@ -2017,6 +2112,7 @@ function buildContextSummary({
     fullSectionCounts: manifestSectionCounts(fullData),
     stagedSectionCounts: manifestSectionCounts(projectedData),
     sectionCounts: manifestSectionCounts(projectedData),
+    visualInputs,
     applicableContracts: contracts,
     inputFiles: scopedRevision
       ? {
@@ -2037,6 +2133,8 @@ function buildContextSummary({
       approvedVisualContentGroupCount: Array.isArray(projectedData.approvedVisualContentGroups)
         ? projectedData.approvedVisualContentGroups.length
         : 0,
+      approvedPhotographyCount: visualInputs.approvedPhotographyCount,
+      capturedUnapprovedImageCandidateCount: visualInputs.capturedUnapprovedImageCandidateCount,
     },
     inspectionPolicy:
       'Read build-context.json first. Use targeted JSON queries and bounded output; never print an entire manifest, source dossier, or asset index.',
@@ -2183,23 +2281,31 @@ async function prepareWorkspace(client, run, manifest, workerId, diagnostics) {
         .map((sourceUrl) => normaliseSourceUrl(sourceUrl))
     : [];
   let sourceRun = run;
+  let sourceQualitySummary = recordValue(run.quality_summary);
   if (run.parent_builder_run_id) {
     const { data: parentRun, error: parentError } = await client
       .from('builder_runs')
-      .select('id, organization_id, business_id, build_manifest_id, build_mode, target_source_url')
+      .select(
+        'id, organization_id, business_id, build_manifest_id, build_mode, target_source_url, quality_summary',
+      )
       .eq('id', run.parent_builder_run_id)
       .maybeSingle();
+    const manualQualityRepair =
+      recordValue(run.failure_context).executionMode === 'manual_quality_repair';
+    const parentModeCompatible = manualQualityRepair
+      ? parentRun?.build_mode === run.build_mode
+      : run.build_mode === 'site_test'
+        ? ['homepage_test', 'page_test', 'site_test', 'full_site'].includes(parentRun?.build_mode)
+        : ['homepage_test', 'page_test'].includes(parentRun?.build_mode) &&
+          (parentRun?.target_source_url
+            ? normaliseSourceUrl(parentRun.target_source_url)
+            : undefined) === targetSourceUrl;
     if (
       parentError ||
       !parentRun ||
       parentRun.organization_id !== run.organization_id ||
       parentRun.business_id !== run.business_id ||
-      (run.build_mode === 'site_test'
-        ? !['homepage_test', 'page_test', 'site_test', 'full_site'].includes(parentRun.build_mode)
-        : !['homepage_test', 'page_test'].includes(parentRun.build_mode) ||
-          (parentRun.target_source_url
-            ? normaliseSourceUrl(parentRun.target_source_url)
-            : undefined) !== targetSourceUrl)
+      !parentModeCompatible
     ) {
       throw new BuilderCheckpointError(
         'The selected homepage test source is no longer available.',
@@ -2232,7 +2338,10 @@ async function prepareWorkspace(client, run, manifest, workerId, diagnostics) {
         );
       }
     }
-    sourceRun = parentRun;
+    sourceQualitySummary = recordValue(parentRun.quality_summary);
+    const cleanManualRepair =
+      manualQualityRepair && recordValue(run.failure_context).validatedCheckpointAvailable !== true;
+    sourceRun = cleanManualRepair ? run : parentRun;
   }
   // A full-site build may restore a completed test as its design baseline, but it
   // must still receive the complete manifest and generate every selected page.
@@ -2352,6 +2461,7 @@ async function prepareWorkspace(client, run, manifest, workerId, diagnostics) {
     restoredFromLegacyDrafts: checkpoint.restoredFromLegacyDrafts,
     restoredCheckpointFileCount: checkpoint.fileCount ?? 0,
     restoredHomepageTest: sourceRun.id !== run.id,
+    sourceQualitySummary,
     scopedRevision,
     rebasedToCurrentManifest,
     revisionScopePath: revisionScope?.scopePath,
@@ -2419,6 +2529,10 @@ function buildPrompt(workspace, buildInstruction) {
     typeof buildInstruction === 'string' && buildInstruction.trim()
       ? buildInstruction.trim()
       : undefined;
+  const visualInputs = recordValue(contextSummary?.visualInputs);
+  const approvedPhotographyCount = Number(visualInputs.approvedPhotographyCount ?? 0);
+  const visualInputWarning =
+    typeof visualInputs.warning === 'string' ? visualInputs.warning.trim() : '';
   if (scopedRevision) {
     return [
       rebasedToCurrentManifest
@@ -2479,6 +2593,12 @@ function buildPrompt(workspace, buildInstruction) {
             : 'You are the Made Solid Studio Next.js website builder. Build the complete private redesign now.',
     'Read ../input/build-context.json first, then ../input/manifest.json, ../input/approved-assets.json, and ../input/source-pages/index.json before writing any website files.',
     'Follow the build-context inspection policy: use targeted JSON queries and bounded output. Never print an entire input JSON file, source dossier, or asset index into the conversation.',
+    'Before choosing typography, colour direction, or hero composition, read the complete staged dossier for the selected route. Create src/DESIGN_DECISIONS.json with schemaVersion 1. Its companyContext must use the exact fields whatTheyDo, audience, supportedDifferentiators, primaryAction, and sourceEvidence; sourceEvidence must be an array of specific captured excerpts or heading/fact references. Its hero object must use the exact fields concept, composition, mediaMode (approved_photography, verified_content, typographic, or none), sourceEvidence, and avoids. Unknowns must remain explicit; do not turn inference into a business claim. If the design approaches the dark split/eyebrow/serif-italic/media-panel formula, hero.patternJustification must contain at least two specific brand or content evidence references or you must choose another composition.',
+    visualInputWarning ||
+      `${approvedPhotographyCount} approved page photograph${approvedPhotographyCount === 1 ? '' : 's'} are available for the selected route.`,
+    approvedPhotographyCount
+      ? 'Use the approved page-matched photography as meaningful content where its reviewed role and cautions permit it. Mark a reviewed hero image itself with data-siteforge-hero-media="approved-photography". Do not replace it with generic generated geometry.'
+      : 'No approved page photography is available. Do not create an abstract hero panel, orbit/line artwork, fake dashboard, empty media frame, or decorative card to fill a presumed media slot. A distinctive typographic or information-led hero is valid. Use a hero media component only when it communicates specific verified dossier content; mark it data-siteforge-hero-media="verified-content" with a non-empty data-siteforge-content-evidence reference, and record that evidence in DESIGN_DECISIONS.json. Otherwise omit data-siteforge-hero-media entirely.',
     ...(efficientPackage ? [efficientExecutionInstruction] : []),
     ...(creativeAutonomyPackage ? [creativeAutonomyInstruction] : []),
     `Follow AGENTS.md and only the applicable feature contracts listed in build-context.json: ${contextSummary?.applicableContracts?.join(', ') || 'none'}. The projected manifest is the factual, route, architecture, capability, and permission boundary for this run.`,
@@ -2516,7 +2636,7 @@ function buildPrompt(workspace, buildInstruction) {
       : []),
     'Do not invent or imply unsupported business facts. Preserve unresolved items for the human reviewer rather than guessing.',
     'Use only approved assets in public/assets/ through their staged publicPath. Do not make network requests, import remote resources, or add dependencies.',
-    'approved-assets.json includes each asset’s reviewed role, observed description, safe reuse note, cautions, and visible text beside its usable publicPath. When the selected page has permitted approved worksite_photo or project_photo assets, use at least two distinct photographs when two are available, or the one available photograph, as meaningful page content with accurate alt text; do not discard approved photography in favour of an image-free generic composition.',
+    'approved-assets.json includes each asset’s reviewed role, observed description, safe reuse note, cautions, and visible text beside its usable publicPath. When the selected page has permitted approved worksite_photo or project_photo assets, use at least two distinct photographs when two are available, or the one available photograph, as meaningful page content with accurate alt text; do not discard approved photography in favour of an image-free generic composition. Captured but unstaged images are private evidence only and are not reusable.',
     ...(usesContract('contextual-logo-selection.md')
       ? [
           'Read and implement feature-contracts/contextual-logo-selection.md. The approved primary logo family is mandatory in the header and footer. Use the explicit logoFamilyPrimaryAssetId and logoAppearance fields in approved-assets.json to choose a contrast-safe approved version for each direct background surface, and annotate every logo image as required by the contract. Use every enabled reviewed brand colour as its exact matching semantic token. Read the palette mode: primary_and_accent locks both roles, accent_only lets you derive primary, primary_only lets you derive accent, and builder_derived lets you choose both. Builder-derived roles must be coherent and accessible but are not verified brand facts; do not copy a weak legacy colour system or replace the identity with a generic one.',
@@ -2558,6 +2678,45 @@ function buildPrompt(workspace, buildInstruction) {
           : siteTest
             ? 'Finish by running npm run verify. Report the feature-only changes, preserved route count, and navigation paths verified.'
             : 'Finish by running npm run verify. Report the completed route count, component layers created, source pages mapped to clean paths, production runtime handoff, and unresolved manifest questions.',
+  ].join('\n');
+}
+
+function automaticQualityRepairState(run) {
+  return recordValue(recordValue(run.failure_context).automaticQualityRepair);
+}
+
+function shouldAttemptAutomaticQualityRepair(run, quality) {
+  const context = recordValue(run.failure_context);
+  const priorRepair = automaticQualityRepairState(run);
+  return (
+    quality?.summary?.status !== 'passed' &&
+    !['quality_recheck', 'manual_quality_repair'].includes(context.executionMode) &&
+    Number(priorRepair.attempt ?? 0) < 1
+  );
+}
+
+function qualityRepairPrompt(workspace, quality, mode = 'automatic') {
+  const findings = (quality?.summary?.checks ?? [])
+    .filter((check) => check.status !== 'passed')
+    .map(
+      (check, index) =>
+        `${index + 1}. [${check.id}] ${check.label}: ${safeDiagnosticDetail(check.detail, 1_200)}`,
+    );
+  return [
+    mode === 'manual'
+      ? 'You are the Made Solid Studio website builder performing one requested quality repair on a private website that did not pass review.'
+      : 'You are the Made Solid Studio website builder performing one bounded automatic quality repair on the generated private website.',
+    workspace.restoredCheckpoint && workspace.checkpointState === 'post_codex_validated'
+      ? 'Start from the saved source. Change only what is necessary to resolve the exact automated findings below, then run npm run verify.'
+      : 'No validated generated-source checkpoint exists because the earlier Codex pass did not change the locked starter. Rebuild this selected scope from the immutable manifest, replace the starter completely, and resolve the exact findings below before running npm run verify.',
+    'Follow AGENTS.md, the immutable build context, approved assets, permitted facts, selected routes, locked foundation, and current file-scope boundary exactly.',
+    workspace.scopedRevision
+      ? `Keep every change inside these allowed source files: ${workspace.allowedSourcePaths.map((path) => `src/${path}`).join(', ')}; or these allowed generated component prefixes: ${workspace.allowedSourcePrefixes.map((path) => `src/${path}`).join(', ')}.`
+      : 'Preserve every generated route, provenance marker, approved asset, business fact, and unrelated design decision. Do not redesign or rewrite content while repairing checks.',
+    'Do not add dependencies, change build tooling, edit locked files, make network requests, invent claims, suppress checks, weaken accessibility, or remove required content to make a check pass.',
+    'Automated findings to repair:',
+    ...findings,
+    'Inspect the relevant generated source, implement the smallest robust fixes, run npm run verify, and report the source files changed for this repair.',
   ].join('\n');
 }
 
@@ -2762,7 +2921,12 @@ function motionRuntimeProblems(htmlFiles, allFiles) {
   return problems;
 }
 
-function motionCompositionProblems(htmlFiles, expressive = false, immersive = false) {
+function motionCompositionProblems(
+  htmlFiles,
+  expressive = false,
+  immersive = false,
+  evidenceLedComposition = false,
+) {
   const supportedVariants = new Set([
     'fade-up',
     'fade-left',
@@ -2791,33 +2955,37 @@ function motionCompositionProblems(htmlFiles, expressive = false, immersive = fa
         `${file.relativePath} does not make an intentional element-motion choice with data-reveal.`,
       );
     }
-    if (expressive && accepted.length < 4) {
+    if (expressive && !evidenceLedComposition && accepted.length < 4) {
       problems.push(
         `${file.relativePath} must choreograph at least four explicit elements or groups; animating only a title is not sufficient.`,
       );
     }
-    if (expressive && new Set(accepted).size < 3) {
+    if (expressive && !evidenceLedComposition && new Set(accepted).size < 3) {
       problems.push(
         `${file.relativePath} must combine at least three fitting motion treatments for its hero and subsequent content.`,
       );
     }
-    if (expressive && !accepted.includes('stagger')) {
+    if (expressive && !evidenceLedComposition && !accepted.includes('stagger')) {
       problems.push(
         `${file.relativePath} does not sequence a genuinely related group with stagger.`,
       );
     }
-    if (immersive && !accepted.includes('sequence')) {
+    if (immersive && !evidenceLedComposition && !accepted.includes('sequence')) {
       problems.push(
         `${file.relativePath} does not reveal a meaningful stacked text group sequentially.`,
       );
     }
-    if (immersive && !/\bdata-scroll-zoom(?:\s*=\s*["'][^"']*["'])?/i.test(file.contents)) {
+    if (
+      immersive &&
+      !evidenceLedComposition &&
+      !/\bdata-scroll-zoom(?:\s*=\s*["'][^"']*["'])?/i.test(file.contents)
+    ) {
       problems.push(
         `${file.relativePath} does not include a reversible scroll-responsive depth container.`,
       );
     }
   }
-  if (htmlFiles.length && siteVariants.size < 2) {
+  if (htmlFiles.length && !evidenceLedComposition && siteVariants.size < 2) {
     problems.push(
       'The generated site must combine at least two restrained motion treatments instead of applying one generic reveal everywhere.',
     );
@@ -2863,7 +3031,7 @@ async function expressiveNavigationMotionProblems(
   return problems;
 }
 
-async function creativeAutonomyProblems(siteDirectory) {
+async function creativeAutonomyProblems(siteDirectory, evidenceLedComposition = false) {
   const sourceDirectory = join(siteDirectory, 'src');
   const authoredFiles = (await collectFiles(sourceDirectory)).filter((file) => {
     const normalized = file.split(sep).join('/');
@@ -2881,7 +3049,7 @@ async function creativeAutonomyProblems(siteDirectory) {
     /position\s*:\s*sticky|perspective\s*:|clip-path\s*:|mask(?:-image)?\s*:|mix-blend-mode\s*:|backdrop-filter\s*:/i,
   ].filter((pattern) => pattern.test(source)).length;
   const problems = [];
-  if (effectFamilies < 2) {
+  if (!evidenceLedComposition && effectFamilies < 2) {
     problems.push(
       'The creative-autonomy package needs at least two coordinated authored effect families—pointer response, scroll/depth behaviour, or layered visual treatment—rather than only locked reveal markers.',
     );
@@ -2925,12 +3093,181 @@ function responsiveImageProblems(htmlFiles) {
   return [...new Set(problems)];
 }
 
-function firstViewportHeroHookProblems(htmlFiles) {
+function evidenceReferenceCount(value) {
+  if (!Array.isArray(value)) return 0;
+  return value.filter((entry) => {
+    if (typeof entry === 'string') return entry.trim().length >= 12;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+    return Object.values(entry).some(
+      (field) => typeof field === 'string' && field.trim().length >= 12,
+    );
+  }).length;
+}
+
+function concreteDecisionText(value, minimumLength = 16) {
+  return typeof value === 'string' && value.trim().length >= minimumLength;
+}
+
+async function heroArtDirectionProblems(siteDirectory, htmlFiles, stagedAssets) {
+  let document;
+  try {
+    document = JSON.parse(
+      await readFile(join(siteDirectory, 'src', 'DESIGN_DECISIONS.json'), 'utf8'),
+    );
+  } catch {
+    return ['src/DESIGN_DECISIONS.json is missing or invalid for evidence-led art direction.'];
+  }
+
+  const problems = [];
+  const companyContext = recordValue(document?.companyContext);
+  const hero = recordValue(document?.hero);
+  if (document?.schemaVersion !== 1) {
+    problems.push('DESIGN_DECISIONS.json must use schemaVersion 1.');
+  }
+  for (const [field, minimumLength] of [
+    ['whatTheyDo', 24],
+    ['audience', 16],
+    ['primaryAction', 12],
+  ]) {
+    if (!concreteDecisionText(companyContext[field], minimumLength)) {
+      problems.push(`DESIGN_DECISIONS.json needs a concrete companyContext.${field}.`);
+    }
+  }
+  const differentiators = companyContext.supportedDifferentiators;
+  if (
+    !concreteDecisionText(differentiators, 16) &&
+    !(
+      Array.isArray(differentiators) &&
+      differentiators.some((entry) => concreteDecisionText(entry, 8))
+    )
+  ) {
+    problems.push(
+      'DESIGN_DECISIONS.json needs at least one evidence-grounded companyContext.supportedDifferentiators entry.',
+    );
+  }
+  if (!evidenceReferenceCount(companyContext.sourceEvidence)) {
+    problems.push('DESIGN_DECISIONS.json needs companyContext.sourceEvidence from the dossier.');
+  }
+  for (const [field, minimumLength] of [
+    ['concept', 24],
+    ['composition', 24],
+    ['avoids', 16],
+  ]) {
+    if (!concreteDecisionText(hero[field], minimumLength)) {
+      problems.push(`DESIGN_DECISIONS.json needs a concrete hero.${field}.`);
+    }
+  }
+  if (!evidenceReferenceCount(hero.sourceEvidence)) {
+    problems.push('DESIGN_DECISIONS.json needs hero.sourceEvidence from the dossier.');
+  }
+
+  const mediaMode = hero.mediaMode;
+  const supportedMediaModes = new Set([
+    'approved_photography',
+    'verified_content',
+    'typographic',
+    'none',
+  ]);
+  if (!supportedMediaModes.has(mediaMode)) {
+    problems.push('DESIGN_DECISIONS.json hero.mediaMode is missing or unsupported.');
+  }
+  const approvedPhotographyCount = stagedAssets.filter((asset) =>
+    approvedPhotographyRoles.has(recordValue(asset).role),
+  ).length;
+  if (mediaMode === 'approved_photography' && !approvedPhotographyCount) {
+    problems.push(
+      'The hero claims approved photography, but no reviewed page photography is staged for this build.',
+    );
+  }
+
+  const renderedSource = htmlFiles.map((file) => file.contents).join('\n');
+  const mediaTags =
+    renderedSource.match(/<[^>]*\bdata-siteforge-hero-media(?:\s*=\s*["'][^"']*["'])?[^>]*>/gi) ??
+    [];
+  if (['typographic', 'none'].includes(mediaMode) && mediaTags.length) {
+    problems.push(
+      `A ${mediaMode} hero must omit data-siteforge-hero-media instead of filling a presumed media slot.`,
+    );
+  }
+  if (mediaMode === 'approved_photography') {
+    if (!mediaTags.length) {
+      problems.push('The approved-photography hero does not identify its reviewed hero image.');
+    } else if (
+      mediaTags.some(
+        (tag) =>
+          !/data-siteforge-hero-media=["']approved-photography["']/i.test(tag) ||
+          !/<img\b/i.test(tag),
+      )
+    ) {
+      problems.push(
+        'Approved hero photography must use data-siteforge-hero-media="approved-photography" on its image element.',
+      );
+    }
+  }
+  if (mediaMode === 'verified_content') {
+    if (!mediaTags.length) {
+      problems.push(
+        'The verified-content hero does not identify its evidence-led content component.',
+      );
+    } else if (
+      mediaTags.some(
+        (tag) =>
+          !/data-siteforge-hero-media=["']verified-content["']/i.test(tag) ||
+          !/data-siteforge-content-evidence=["'][^"']{8,}["']/i.test(tag),
+      )
+    ) {
+      problems.push(
+        'Verified hero content must declare data-siteforge-hero-media="verified-content" and a specific data-siteforge-content-evidence reference.',
+      );
+    }
+  }
+  if (
+    mediaTags.some(
+      (tag) =>
+        !/data-siteforge-hero-media=["'](?:approved-photography|verified-content)["']/i.test(tag),
+    )
+  ) {
+    problems.push(
+      'Hero media must be explicitly classified as approved photography or verified content; decorative fallback media is not allowed.',
+    );
+  }
+
+  const sourceDirectory = join(siteDirectory, 'src');
+  const authoredFiles = (await collectFiles(sourceDirectory)).filter((file) => {
+    const normalized = file.split(sep).join('/');
+    return (
+      /\.(?:css|jsx?|tsx?)$/i.test(normalized) &&
+      !normalized.endsWith('/components/foundation/site-runtime.tsx')
+    );
+  });
+  const authoredSource = (
+    await Promise.all(authoredFiles.map((file) => readFile(file, 'utf8')))
+  ).join('\n');
+  const genericFormulaSignals = [
+    /Georgia|Times New Roman|font-serif|\bserif\b/i.test(authoredSource),
+    /font-style\s*:\s*italic|\bitalic\b/i.test(authoredSource),
+    /\beyebrow\b/i.test(authoredSource),
+    /grid-template-columns\s*:[^;]*(?:fr|minmax)|(?:md|lg):grid-cols-2/i.test(authoredSource),
+    /(?:hero|masthead)[\s\S]{0,500}(?:background|bg-)[\s\S]{0,100}(?:#0|#1|dark|ink)/i.test(
+      authoredSource,
+    ),
+    mediaTags.length > 0,
+  ].filter(Boolean).length;
+  if (genericFormulaSignals >= 5 && evidenceReferenceCount(hero.patternJustification) < 2) {
+    problems.push(
+      'The hero repeats the dark split/eyebrow/serif-italic/media-panel formula without two specific brand or content reasons in hero.patternJustification.',
+    );
+  }
+
+  return [...new Set(problems)];
+}
+
+function firstViewportHeroHookProblems(htmlFiles, requireMedia = true) {
   const requiredHooks = [
     ['data-siteforge-hero', 'hero section'],
     ['data-siteforge-hero-heading', 'hero heading'],
     ['data-siteforge-hero-primary-action', 'hero primary action'],
-    ['data-siteforge-hero-media', 'hero media'],
+    ...(requireMedia ? [['data-siteforge-hero-media', 'hero media']] : []),
   ];
   return htmlFiles.flatMap((file) =>
     requiredHooks
@@ -3090,40 +3427,82 @@ async function runCodex(
   authentication,
   eventWriter,
   diagnostics,
+  execution = {},
 ) {
   await assertBuildActive(client, run, workerId);
-  const codexBuildDetail = workspace.scopedRevision
-    ? workspace.rebasedToCurrentManifest
-      ? 'Codex is rebasing the completed page onto the current manifest and approved assets.'
-      : 'Codex is applying the requested scoped page refinement.'
-    : 'Codex is designing and implementing the private website.';
+  const qualityRepair = ['quality_repair', 'manual_quality_repair'].includes(execution.purpose);
+  const manualQualityRepair = execution.purpose === 'manual_quality_repair';
+  const progressPhase = qualityRepair ? 'repairing_quality' : 'building_website';
+  const codexBuildDetail = qualityRepair
+    ? 'Codex is repairing the quality findings from the first browser check.'
+    : workspace.scopedRevision
+      ? workspace.rebasedToCurrentManifest
+        ? 'Codex is rebasing the completed page onto the current manifest and approved assets.'
+        : 'Codex is applying the requested scoped page refinement.'
+      : 'Codex is designing and implementing the private website.';
   await updateProgress(client, run, workerId, {
-    progress_phase: 'building_website',
+    progress_phase: progressPhase,
     progress_detail: codexBuildDetail,
     total_items: 7,
     completed_items: 2,
   });
   await eventWriter(
     'stage',
-    workspace.scopedRevision
-      ? 'Codex has started the scoped private page refinement.'
-      : 'Codex has started the private website build.',
+    qualityRepair
+      ? manualQualityRepair
+        ? 'Codex has started the requested repair pass for the recorded quality findings.'
+        : 'Codex has started one automatic repair pass for the recorded quality findings.'
+      : workspace.scopedRevision
+        ? 'Codex has started the scoped private page refinement.'
+        : 'Codex has started the private website build.',
     {
-      scope: workspace.scopedRevision ? 'scoped_revision' : 'website_build',
+      scope: qualityRepair
+        ? manualQualityRepair
+          ? 'manual_quality_repair'
+          : 'automatic_quality_repair'
+        : workspace.scopedRevision
+          ? 'scoped_revision'
+          : 'website_build',
       authentication: authentication.billingMode,
       terminalRuntime: 'tmux',
+      sandbox: 'workspace-write',
+      approvalsReviewer: 'auto_review',
     },
   );
   const codexExecutable = await codexBinary();
   const codexEnvironment = builderCodexEnvironment(authentication);
   await assertBuilderCodexAuthentication(codexExecutable, authentication, codexEnvironment);
   const executionProfile = builderExecutionProfile(run, workspace.agentPackage);
-  const { model, reasoningEffort } = executionProfile;
-  const outputPath = join(workspace.runDirectory, 'codex-final-message.txt');
+  const { model, reasoningEffort, source } = executionProfile;
+  const runtimeVersion = await codexRuntimeVersion(codexExecutable, codexEnvironment);
+  const { error: profileSnapshotError } = await client
+    .from('builder_runs')
+    .update({
+      model: model || null,
+      reasoning_effort: reasoningEffort || null,
+      codex_runtime_version: runtimeVersion || null,
+      execution_profile_source: source || null,
+    })
+    .eq('id', run.id)
+    .eq('worker_id', workerId);
+  if (profileSnapshotError) {
+    throw new Error('The builder worker could not save its resolved Codex execution profile.');
+  }
+  run.model = model || null;
+  run.reasoning_effort = reasoningEffort || null;
+  run.codex_runtime_version = runtimeVersion || null;
+  run.execution_profile_source = source || null;
+  const outputPath = join(
+    workspace.runDirectory,
+    qualityRepair ? 'codex-quality-repair-final-message.txt' : 'codex-final-message.txt',
+  );
+  const sourceHashesBefore = await sourceFileHashes(workspace.siteDirectory);
   const events = [];
-  let latestDetail = workspace.scopedRevision
-    ? 'Codex is applying the requested scoped page refinement.'
-    : 'Codex is designing the private website.';
+  let latestDetail = qualityRepair
+    ? 'Codex is repairing the recorded quality findings.'
+    : workspace.scopedRevision
+      ? 'Codex is applying the requested scoped page refinement.'
+      : 'Codex is designing the private website.';
   let lastProgressAt = 0;
   let lastActivity = '';
   let syncingDraft = false;
@@ -3153,8 +3532,7 @@ async function runCodex(
     workspace.siteDirectory,
     '--json',
     '--ephemeral',
-    '--sandbox',
-    'workspace-write',
+    '--approve-for-me',
     '--output-last-message',
     outputPath,
   ];
@@ -3162,7 +3540,11 @@ async function runCodex(
   if (reasoningEffort) {
     codexArguments.push('--config', `model_reasoning_effort="${reasoningEffort}"`);
   }
-  codexArguments.push(buildPrompt(workspace, run.build_instruction));
+  codexArguments.push(
+    typeof execution.prompt === 'string' && execution.prompt.trim()
+      ? execution.prompt.trim()
+      : buildPrompt(workspace, run.build_instruction),
+  );
   const child = spawn(codexExecutable, codexArguments, {
     cwd: workspace.siteDirectory,
     env: codexEnvironment,
@@ -3244,11 +3626,15 @@ async function runCodex(
           }
         }
         if (item.type === 'agent_message') {
-          latestDetail = workspace.scopedRevision
-            ? 'Codex is refining the selected private page.'
-            : 'Codex is refining the private website.';
+          latestDetail = qualityRepair
+            ? 'Codex is applying focused quality repairs.'
+            : workspace.scopedRevision
+              ? 'Codex is refining the selected private page.'
+              : 'Codex is refining the private website.';
           const text = textFromCodexItem(item);
           if (text) {
+            const blockedMessage = codexExecutionBlockedMessage(text);
+            if (blockedMessage) codexFailureMessage = blockedMessage;
             writeCodexStream(text, { eventType: 'agent_message' });
           }
           if (lastActivity !== latestDetail) {
@@ -3263,7 +3649,7 @@ async function runCodex(
     if (Date.now() - lastProgressAt > 1_500) {
       lastProgressAt = Date.now();
       void updateProgress(client, run, workerId, {
-        progress_phase: 'building_website',
+        progress_phase: progressPhase,
         progress_detail: latestDetail,
         total_items: 7,
         completed_items: 2,
@@ -3321,6 +3707,7 @@ async function runCodex(
       eventCount: events.length,
       executionProfile,
       buildContext: workspace.contextSummary,
+      executionPurpose: execution.purpose || 'website_build',
       billingMode: authentication.billingMode,
       authenticationMode: authentication.mode,
       terminalRuntime: 'tmux',
@@ -3334,6 +3721,14 @@ async function runCodex(
       `Codex CLI could not finish the build: ${diagnosticText(codexFailureMessage, 500) || stderr.slice(-500) || exit.signal || exit.code}`,
     );
   }
+  const blockedExecution =
+    codexExecutionBlockedMessage(codexFailureMessage) || codexExecutionBlockedMessage(stderr);
+  const sourceHashesAfter = await sourceFileHashes(workspace.siteDirectory);
+  if (blockedExecution || !sourceHashMapsDiffer(sourceHashesBefore, sourceHashesAfter)) {
+    throw new Error(
+      `Codex CLI could not modify the disposable website workspace: ${blockedExecution || 'the run completed without changing generated source.'}`,
+    );
+  }
   await assertLockedFiles(workspace.siteDirectory, workspace.lockedFiles);
   await assertScopedRevisionFiles(workspace);
   await syncDraftFiles(client, run, workspace, eventWriter, {
@@ -3343,7 +3738,11 @@ async function runCodex(
   await syncDraftOutputFiles(client, run, workspace, eventWriter);
   await eventWriter(
     'stage',
-    'Codex finished writing the website. Compiling the private preview now.',
+    qualityRepair
+      ? manualQualityRepair
+        ? 'Codex finished the requested repair pass. Compiling and rechecking the private preview now.'
+        : 'Codex finished the automatic repair pass. Compiling and rechecking the private preview now.'
+      : 'Codex finished writing the website. Compiling the private preview now.',
   );
   const finalMessage = await readFile(outputPath, 'utf8').catch(
     () => 'Codex completed without a final message.',
@@ -4125,6 +4524,19 @@ async function activateCompactNavigationTrigger(trigger) {
   };
 }
 
+async function waitForCompactNavigationExit(...layers) {
+  const results = await Promise.all(
+    layers.map(async (layer) => {
+      if (!layer || (await layer.count()) === 0) return true;
+      return layer
+        .waitFor({ state: 'hidden', timeout: 2_000 })
+        .then(() => true)
+        .catch(() => false);
+    }),
+  );
+  return results.every(Boolean);
+}
+
 async function waitForBrandIntroHandoff(page) {
   await page.locator('[data-siteforge-brand-intro]').waitFor({ state: 'detached', timeout: 6_000 });
   await page.waitForFunction(
@@ -4693,6 +5105,16 @@ async function responsiveInteractionEvidence(
       `${htmlFile.relativePath} does not restore focus to the compact trigger after Escape at ${viewport.width}px.`,
     );
   }
+  const exitSettled = await waitForCompactNavigationExit(
+    dialog,
+    page.locator('[data-siteforge-navigation-backdrop]').first(),
+  );
+  if (!exitSettled) {
+    problems.push(
+      `${htmlFile.relativePath} compact-navigation exit layer continues intercepting pointer input after Escape at ${viewport.width}px.`,
+    );
+    return { problems };
+  }
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const reducedMotionAttempt = await activateCompactNavigationTrigger(openTrigger);
   if (!reducedMotionAttempt.activated) {
@@ -4813,10 +5235,12 @@ async function runQualityChecks(
   const immediateBrandPackage = packageVersion >= 7.1;
   const decodedNavigationPackage = packageVersion >= 7.3;
   const creativeAutonomyPackage = packageVersion >= 7.4;
+  const evidenceLedHomepagePackage = packageVersion >= 35.2;
   const motionComposition = motionCompositionProblems(
     scopedHtmlFiles,
     expressivePackage,
     immersiveMotionPackage,
+    evidenceLedHomepagePackage,
   );
   const navigationMotion = expressivePackage
     ? await expressiveNavigationMotionProblems(
@@ -4826,12 +5250,22 @@ async function runQualityChecks(
       )
     : [];
   const creativeAutonomy = creativeAutonomyPackage
-    ? await creativeAutonomyProblems(workspace.siteDirectory)
+    ? await creativeAutonomyProblems(workspace.siteDirectory, evidenceLedHomepagePackage)
     : [];
   const responsiveImages = expressivePackage ? responsiveImageProblems(scopedHtmlFiles) : [];
   const firstViewportHeroHooks = firstViewportPackage
-    ? firstViewportHeroHookProblems(scopedHtmlFiles)
+    ? firstViewportHeroHookProblems(scopedHtmlFiles, !evidenceLedHomepagePackage)
     : [];
+  const heroArtDirection =
+    evidenceLedHomepagePackage &&
+    workspace.buildMode === 'homepage_test' &&
+    !workspace.scopedRevision
+      ? await heroArtDirectionProblems(
+          workspace.siteDirectory,
+          scopedHtmlFiles,
+          workspace.stagedAssets,
+        )
+      : [];
   const brandIntroCheckProblems = brandIntroProblems(
     manifest,
     scopedHtmlFiles,
@@ -4936,6 +5370,18 @@ async function runQualityChecks(
           : 'No approved page photography was required, or a reviewed worksite or project image is used.',
     },
     {
+      id: 'evidence-led-hero-art-direction',
+      label: 'Evidence-led homepage art direction',
+      status: heroArtDirection.length ? 'failed' : 'passed',
+      detail: heroArtDirection.length
+        ? heroArtDirection.join(' ')
+        : evidenceLedHomepagePackage &&
+            workspace.buildMode === 'homepage_test' &&
+            !workspace.scopedRevision
+          ? 'Company context and hero composition are recorded from source evidence, and any hero media is approved photography or explicitly verified content.'
+          : 'The selected build scope does not require the evidence-led homepage decision check.',
+    },
+    {
       id: 'design-system-rhythm',
       label: 'Reusable section rhythm',
       status: designSystemProblems.length ? 'failed' : 'passed',
@@ -4959,9 +5405,11 @@ async function runQualityChecks(
       status: motionComposition.length ? 'failed' : 'passed',
       detail: motionComposition.length
         ? motionComposition.join(' ')
-        : immersiveMotionPackage
-          ? 'Generated pages combine sequential text, reversible scroll depth, staggered groups, and fitting word, directional, scale, or fade treatments.'
-          : 'Generated pages combine intentional word, staggered, directional, scale, or fade motion treatments.',
+        : evidenceLedHomepagePackage
+          ? 'Generated pages use only the restrained motion treatments that support their evidence-led composition.'
+          : immersiveMotionPackage
+            ? 'Generated pages combine sequential text, reversible scroll depth, staggered groups, and fitting word, directional, scale, or fade treatments.'
+            : 'Generated pages combine intentional word, staggered, directional, scale, or fade motion treatments.',
     },
     {
       id: 'navigation-motion-composition',
@@ -4981,9 +5429,11 @@ async function runQualityChecks(
       status: creativeAutonomy.length ? 'failed' : 'passed',
       detail: creativeAutonomy.length
         ? creativeAutonomy.join(' ')
-        : creativeAutonomyPackage
-          ? 'The generated source combines authored typography, multiple coordinated custom effect families, and a reduced-motion fallback beyond the locked reveal baseline.'
-          : 'The selected package does not require expanded creative-direction evidence.',
+        : evidenceLedHomepagePackage
+          ? 'The generated source establishes authored typography and reduced-motion behaviour without imposing decorative effect quotas.'
+          : creativeAutonomyPackage
+            ? 'The generated source combines authored typography, multiple coordinated custom effect families, and a reduced-motion fallback beyond the locked reveal baseline.'
+            : 'The selected package does not require expanded creative-direction evidence.',
     },
     {
       id: 'responsive-image-loading',
@@ -5000,7 +5450,9 @@ async function runQualityChecks(
       detail: firstViewportHeroHooks.length
         ? firstViewportHeroHooks.join(' ')
         : firstViewportPackage
-          ? 'The hero exposes its proposition, primary action, and media for rendered first-viewport checks.'
+          ? evidenceLedHomepagePackage
+            ? 'The hero exposes its proposition and primary action; media is present only when approved or evidence-led.'
+            : 'The hero exposes its proposition, primary action, and media for rendered first-viewport checks.'
           : 'The selected package does not require first-viewport hero evidence.',
     },
     {
@@ -5427,6 +5879,40 @@ function canContinueWithoutCodex(run, workspace) {
   ].includes(resumeFailureCode(run));
 }
 
+async function createAutomaticQualityRepairFallback(workspace) {
+  const fallbackDirectory = join(workspace.runDirectory, 'automatic-quality-repair-fallback');
+  await mkdir(fallbackDirectory, { recursive: true });
+  await cp(join(workspace.siteDirectory, 'src'), join(fallbackDirectory, 'src'), {
+    recursive: true,
+  });
+  const outputDirectory = join(workspace.siteDirectory, compiledOutputDirectoryName);
+  try {
+    await stat(outputDirectory);
+    await cp(outputDirectory, join(fallbackDirectory, compiledOutputDirectoryName), {
+      recursive: true,
+    });
+  } catch {
+    // The first quality pass can only produce findings after compilation, but
+    // keep recovery safe if a future build profile changes that ordering.
+  }
+  return fallbackDirectory;
+}
+
+async function restoreAutomaticQualityRepairFallback(workspace, fallbackDirectory) {
+  const sourceDirectory = join(workspace.siteDirectory, 'src');
+  await rm(sourceDirectory, { recursive: true, force: true });
+  await cp(join(fallbackDirectory, 'src'), sourceDirectory, { recursive: true });
+  const fallbackOutput = join(fallbackDirectory, compiledOutputDirectoryName);
+  try {
+    await stat(fallbackOutput);
+    const outputDirectory = join(workspace.siteDirectory, compiledOutputDirectoryName);
+    await rm(outputDirectory, { recursive: true, force: true });
+    await cp(fallbackOutput, outputDirectory, { recursive: true });
+  } catch {
+    // No compiled fallback was available.
+  }
+}
+
 async function processBuild(client, run, workerId, authentication) {
   const { data: manifest, error } = await client
     .from('build_manifests')
@@ -5491,6 +5977,8 @@ async function processBuild(client, run, workerId, authentication) {
       },
     );
     const continueFromCheckpoint = canContinueWithoutCodex(run, workspace);
+    const manualQualityRepair =
+      recordValue(run.failure_context).executionMode === 'manual_quality_repair';
     let codexOutput;
     if (continueFromCheckpoint) {
       await assertLockedFiles(workspace.siteDirectory, workspace.lockedFiles);
@@ -5518,6 +6006,16 @@ async function processBuild(client, run, workerId, authentication) {
         authentication,
         eventWriter,
         diagnostics,
+        manualQualityRepair
+          ? {
+              purpose: 'manual_quality_repair',
+              prompt: qualityRepairPrompt(
+                workspace,
+                { summary: workspace.sourceQualitySummary },
+                'manual',
+              ),
+            }
+          : undefined,
       );
     }
     const appliedBrandTokens = await enforceBrandPaletteTokens(manifest, workspace.siteDirectory);
@@ -5533,7 +6031,7 @@ async function processBuild(client, run, workerId, authentication) {
       });
     }
     await buildWebsite(client, run, workerId, workspace, eventWriter, diagnostics);
-    const quality = await runQualityChecks(
+    let quality = await runQualityChecks(
       client,
       run,
       workerId,
@@ -5542,6 +6040,141 @@ async function processBuild(client, run, workerId, authentication) {
       eventWriter,
       diagnostics,
     );
+    if (shouldAttemptAutomaticQualityRepair(run, quality)) {
+      const initialQuality = quality;
+      const initialFindingIds = initialQuality.summary.checks
+        .filter((check) => check.status !== 'passed')
+        .map((check) => check.id);
+      const repairState = {
+        attempt: 1,
+        initialStatus: initialQuality.summary.status,
+        initialFindingIds,
+        startedAt: new Date().toISOString(),
+        result: 'running',
+      };
+      const failureContext = {
+        ...recordValue(run.failure_context),
+        automaticQualityRepair: repairState,
+      };
+      const { error: repairStateError } = await client
+        .from('builder_runs')
+        .update({
+          failure_context: failureContext,
+          progress_phase: 'repairing_quality',
+          progress_detail: `Codex is automatically repairing ${initialFindingIds.length} quality finding${initialFindingIds.length === 1 ? '' : 's'} before the final review.`,
+        })
+        .eq('id', run.id)
+        .eq('worker_id', workerId);
+      if (repairStateError) {
+        throw new Error('The builder worker could not record its automatic quality repair.');
+      }
+      run.failure_context = failureContext;
+      await uploadArtifact(client, run, {
+        kind: 'quality',
+        label: 'Quality results before automatic repair',
+        relativePath: 'quality/automatic-repair-input.json',
+        body: Buffer.from(JSON.stringify(initialQuality.summary, null, 2)),
+        contentType: 'application/json',
+        metadata: {
+          status: initialQuality.summary.status,
+          state: 'automatic_repair_input',
+          attempt: 1,
+        },
+      });
+      await eventWriter(
+        'quality',
+        `The first quality pass found ${initialFindingIds.length} item${initialFindingIds.length === 1 ? '' : 's'}. Starting one automatic Codex repair pass.`,
+        { attempt: 1, findingIds: initialFindingIds },
+      );
+      const fallbackDirectory = await createAutomaticQualityRepairFallback(workspace);
+      try {
+        const repairOutput = await runCodex(
+          client,
+          run,
+          workerId,
+          workspace,
+          authentication,
+          eventWriter,
+          diagnostics,
+          {
+            purpose: 'quality_repair',
+            prompt: qualityRepairPrompt(workspace, initialQuality),
+          },
+        );
+        const repairedBrandTokens = await enforceBrandPaletteTokens(
+          manifest,
+          workspace.siteDirectory,
+        );
+        if (repairedBrandTokens.length) {
+          await syncDraftFiles(client, run, workspace, eventWriter, {
+            force: true,
+            checkpointState: 'post_codex_validated',
+          });
+        }
+        await buildWebsite(client, run, workerId, workspace, eventWriter, diagnostics);
+        quality = await runQualityChecks(
+          client,
+          run,
+          workerId,
+          workspace,
+          manifest,
+          eventWriter,
+          diagnostics,
+        );
+        const remainingFindingIds = quality.summary.checks
+          .filter((check) => check.status !== 'passed')
+          .map((check) => check.id);
+        quality.automaticRepair = {
+          ...repairState,
+          completedAt: new Date().toISOString(),
+          result: quality.summary.status === 'passed' ? 'passed' : 'review_required',
+          remainingFindingIds,
+        };
+        codexOutput = {
+          events: [...codexOutput.events, ...repairOutput.events],
+          finalMessage: repairOutput.finalMessage,
+          initialFinalMessage: codexOutput.finalMessage,
+        };
+        await eventWriter(
+          'quality',
+          quality.summary.status === 'passed'
+            ? 'Automatic quality repair passed the complete browser quality suite.'
+            : `Automatic quality repair completed, but ${remainingFindingIds.length} finding${remainingFindingIds.length === 1 ? '' : 's'} still require review.`,
+          {
+            attempt: 1,
+            result: quality.automaticRepair.result,
+            remainingFindingIds,
+          },
+        );
+      } catch (error) {
+        if (error instanceof BuilderCancelledError || error instanceof BuilderStorageError) {
+          throw error;
+        }
+        await restoreAutomaticQualityRepairFallback(workspace, fallbackDirectory);
+        quality = initialQuality;
+        quality.automaticRepair = {
+          ...repairState,
+          completedAt: new Date().toISOString(),
+          result: 'repair_failed',
+          remainingFindingIds: initialFindingIds,
+          failureSummary:
+            'The automatic repair pass could not finish. The original private preview was preserved.',
+        };
+        await diagnostics.record({
+          scope: 'automatic_quality_repair',
+          title: 'Automatic quality repair stopped',
+          status: 'failed',
+          detail: error instanceof Error ? error.message : 'The automatic repair did not finish.',
+        });
+        await eventWriter(
+          'quality',
+          'The automatic repair pass could not finish. The original private preview and its quality evidence were preserved for review.',
+          { attempt: 1, result: 'repair_failed' },
+        );
+      } finally {
+        await rm(fallbackDirectory, { recursive: true, force: true });
+      }
+    }
     await saveOutputs(
       client,
       run,
@@ -5619,6 +6252,7 @@ async function markFailed(client, run, error) {
       failure_stage: details.stage,
       failure_action: details.action,
       failure_context: {
+        ...recordValue(run.failure_context),
         attempt: Number(run.attempt_count ?? 0),
         retryable: details.retryable,
         retryAfter: retryAt ?? null,
@@ -5664,8 +6298,12 @@ async function processNextBuild(client, workerId, authentication) {
         progress_phase: 'complete',
         progress_detail:
           quality.summary.status === 'passed'
-            ? 'Private preview ready. Automated quality checks passed.'
-            : 'Private preview generated, but automated quality results require review before sharing.',
+            ? quality.automaticRepair
+              ? 'Private preview ready. Automatic repair completed and the full quality suite passed.'
+              : 'Private preview ready. Automated quality checks passed.'
+            : quality.automaticRepair
+              ? 'Automatic repair completed, but remaining quality findings require review before sharing.'
+              : 'Private preview generated, but automated quality results require review before sharing.',
         total_items: quality.totalItems,
         completed_items: quality.totalItems,
         quality_summary: quality.summary,
@@ -5673,7 +6311,9 @@ async function processNextBuild(client, workerId, authentication) {
         failure_code: null,
         failure_stage: null,
         failure_action: null,
-        failure_context: {},
+        failure_context: quality.automaticRepair
+          ? { automaticQualityRepair: quality.automaticRepair }
+          : {},
         retry_after: null,
       })
       .eq('id', run.id)
@@ -5684,14 +6324,22 @@ async function processNextBuild(client, workerId, authentication) {
       business_id: run.business_id,
       type: 'note',
       message: reviewRequired
-        ? 'Private redesign preview generated with quality results requiring review before sharing.'
-        : 'Private redesign preview generated. Review the preview and quality results before sharing.',
+        ? quality.automaticRepair
+          ? 'Automatic quality repair completed, but the private redesign still has findings requiring review before sharing.'
+          : 'Private redesign preview generated with quality results requiring review before sharing.'
+        : quality.automaticRepair
+          ? 'Automatic quality repair completed and the private redesign passed its full quality suite.'
+          : 'Private redesign preview generated. Review the preview and quality results before sharing.',
     });
     await createEventWriter(client, run)(
       'stage',
       reviewRequired
-        ? 'Private preview generated with quality review required before sharing.'
-        : 'Private preview generated and automated quality checks passed.',
+        ? quality.automaticRepair
+          ? 'Automatic repair completed with quality review still required before sharing.'
+          : 'Private preview generated with quality review required before sharing.'
+        : quality.automaticRepair
+          ? 'Automatic repair completed and every automated quality check passed.'
+          : 'Private preview generated and automated quality checks passed.',
     );
     console.log(`[builder-worker] completed ${run.id}`);
   } catch (error) {
@@ -5764,11 +6412,13 @@ export {
   BuilderInputError,
   BuilderManifestError,
   activateCompactNavigationTrigger,
+  waitForCompactNavigationExit,
   approvedAssetDescriptor,
   approvedImageUsageProblems,
   applicableFeatureContracts,
   assertRequiredCompiledOutputs,
   assetMatchesSelectedPages,
+  automaticQualityRepairState,
   buildContextSummary,
   buildPrompt,
   builderCodexAuthentication,
@@ -5776,6 +6426,7 @@ export {
   builderExecutionProfile,
   canContinueWithoutCodex,
   checkpointSourceBody,
+  codexExecutionBlockedMessage,
   codexFailureFromEvent,
   collectBrowsableSourceFiles,
   contentTypeFor,
@@ -5787,6 +6438,7 @@ export {
   failureDetails,
   fetchWithRequestTimeout,
   groupApprovedAssetsByContent,
+  heroArtDirectionProblems,
   expressiveNavigationMotionProblems,
   inconsistentHeaderNavigationProblems,
   lockedFoundationPaths,
@@ -5799,11 +6451,14 @@ export {
   scrollbarStylingProblems,
   multiPageHeaderRouteNavigationProblems,
   projectManifestData,
+  qualityRepairPrompt,
   refreshLockedFoundation,
   restoreCheckpointFile,
   revisionManifestCompatible,
   selectedSourcePages,
   sourceCheckpointPayload,
+  sourceHashMapsDiffer,
+  shouldAttemptAutomaticQualityRepair,
   semanticCompositionDecisionCheck,
   semanticContentCoverageCheck,
   stageRevisionScope,

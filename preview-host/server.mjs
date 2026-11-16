@@ -1,10 +1,19 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import { lookup } from 'node:dns/promises';
 import { createServer, request as createProxyRequest } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { verifyWorkspacePreviewToken } from '../scripts/workspace-preview-access.mjs';
 import { studioDevelopmentOrigins } from '../scripts/studio-development-origins.mjs';
+import {
+  devicePreviewConfiguration,
+  devicePreviewDocument,
+  devicePreviewReview,
+  devicePreviewTarget,
+  isDevicePreviewRelayRequest,
+  isDevicePreviewRequest,
+} from './device-preview.mjs';
 
 const defaultPort = 8787;
 const previewRoutePrefixes = ['/test/', '/build/', '/review/', '/site/'];
@@ -12,6 +21,14 @@ const workspaceFrameRoutePrefix = '/__made-solid/workspace-frame/';
 const directoryPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 const workspaceRevisionPattern = /^(?:working|[0-9a-f]{40})$/i;
 const workspaceTokenPattern = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+const comparisonUserAgents = {
+  phone:
+    'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36',
+  tablet:
+    'Mozilla/5.0 (iPad; CPU OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1',
+  desktop:
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+};
 
 function requiredEnvironment(name, environment = process.env) {
   const value = environment[name]?.trim();
@@ -33,6 +50,7 @@ export function previewHostConfiguration(environment = process.env) {
     throw new Error('PREVIEW_PUBLIC_ORIGIN must use HTTPS outside local development.');
   }
   const developmentOrigins = studioDevelopmentOrigins(environment);
+  const devicePreview = devicePreviewConfiguration(environment);
   const configuredClientspaceOrigin = environment.CLIENTSPACE_PUBLIC_ORIGIN?.trim();
   const configuredClientspaceHandoff = environment.CLIENTSPACE_HANDOFF_URL?.trim();
   let clientspaceReviewOrigin;
@@ -52,6 +70,7 @@ export function previewHostConfiguration(environment = process.env) {
   return {
     activeWorkspacePreviewPath: environment.SITEFORGE_ACTIVE_PREVIEW_PATH?.trim(),
     clientspaceReviewOrigin,
+    devicePreview,
     port: Number(environment.SITEFORGE_PREVIEW_PORT) || defaultPort,
     publicOrigin: configuredOrigin,
     serviceRoleKey,
@@ -310,24 +329,36 @@ const previewNavigationScript = `
         ? new URL(rawHref.replace(/^\\/+/, ''), base)
         : new URL(rawHref, document.baseURI);
       if (next.origin !== base.origin || !next.pathname.startsWith(root)) return;
+      const previewParameters = new URL(window.location.href).searchParams;
+      for (const parameter of [
+        '__made_solid_inspect',
+        '__made_solid_compare',
+        '__made_solid_device',
+      ]) {
+        const value = previewParameters.get(parameter);
+        if (value) next.searchParams.set(parameter, value);
+      }
       event.preventDefault();
       window.location.assign(next.href);
     }, true);
   })();
 `;
 
-export function preparePreviewHtml(source, base, clientspaceReviewOrigin) {
+export function preparePreviewHtml(source, base, clientspaceReviewOrigin, comparisonMode = false) {
   const rootedSource = rewritePreviewRootReferences(source, base);
   const baseElement = `<base href="${base}">`;
   const navigation = `<script data-siteforge-preview-navigation>${previewNavigationScript}</script>`;
+  const comparisonBridge = comparisonMode
+    ? `<script data-made-solid-comparison-bridge>${comparisonBridgeScript}</script>`
+    : '';
   const reviewBridge = clientspaceReviewOrigin
     ? `<script src="${clientspaceReviewOrigin}/review-bridge.js?v=20260825-private-review" data-made-solid-parent-origin="${clientspaceReviewOrigin}" data-made-solid-review-bridge></script>`
     : '';
   const withBase = rootedSource.replace(/<head(\s[^>]*)?>/i, (match) => `${match}${baseElement}`);
   if (/<\/body>/i.test(withBase)) {
-    return withBase.replace(/<\/body>/i, `${navigation}${reviewBridge}</body>`);
+    return withBase.replace(/<\/body>/i, `${navigation}${comparisonBridge}${reviewBridge}</body>`);
   }
-  return `${baseElement}${withBase}${navigation}${reviewBridge}`;
+  return `${baseElement}${withBase}${navigation}${comparisonBridge}${reviewBridge}`;
 }
 
 export function prepareWorkspaceFrameHtml(source, base) {
@@ -382,8 +413,12 @@ function tokenHash(token) {
   return createHash('sha256').update(token).digest('hex');
 }
 
-function previewCsp(previewMode, clientspaceReviewOrigin) {
+function previewCsp(previewMode, clientspaceReviewOrigin, inspectOrigin) {
   const reviewOrigin = previewMode === 'review' ? clientspaceReviewOrigin : undefined;
+  const frameOrigins = [
+    inspectOrigin,
+    ...(previewMode !== 'draft' && clientspaceReviewOrigin ? [clientspaceReviewOrigin] : []),
+  ].filter(Boolean);
   return [
     "default-src 'self' data: blob:",
     "img-src 'self' data: blob:",
@@ -393,22 +428,224 @@ function previewCsp(previewMode, clientspaceReviewOrigin) {
     `connect-src 'self'${reviewOrigin ? ` ${reviewOrigin}` : ''}`,
     "form-action 'none'",
     "base-uri 'self'",
-    reviewOrigin ? `frame-ancestors ${reviewOrigin}` : "frame-ancestors 'none'",
+    frameOrigins.length
+      ? `frame-ancestors ${[...new Set(frameOrigins)].join(' ')}`
+      : "frame-ancestors 'none'",
   ].join('; ');
 }
 
-function responseHeaders(contentType, previewMode = 'ready', clientspaceReviewOrigin) {
+function responseHeaders(
+  contentType,
+  previewMode = 'ready',
+  clientspaceReviewOrigin,
+  inspectOrigin,
+) {
   const headers = {
     'cache-control': 'no-store, private',
-    'content-security-policy': previewCsp(previewMode, clientspaceReviewOrigin),
+    'content-security-policy': previewCsp(previewMode, clientspaceReviewOrigin, inspectOrigin),
     'content-type': contentType,
     'cross-origin-opener-policy': 'same-origin',
     'referrer-policy': 'no-referrer',
     'x-content-type-options': 'nosniff',
     'x-robots-tag': 'noindex, nofollow, noarchive',
   };
-  if (previewMode !== 'review') headers['x-frame-options'] = 'DENY';
+  if (!inspectOrigin && !(previewMode !== 'draft' && clientspaceReviewOrigin))
+    headers['x-frame-options'] = 'DENY';
   return headers;
+}
+
+async function devicePreviewResponse(requestUrl, configuration) {
+  const target = devicePreviewTarget(
+    requestUrl.searchParams.get('source'),
+    configuration.devicePreview,
+  );
+  if (!target) {
+    return new Response('Device preview unavailable', {
+      status: 404,
+      headers: {
+        'cache-control': 'no-store, private',
+        'content-type': 'text/plain; charset=utf-8',
+        'x-content-type-options': 'nosniff',
+        'x-robots-tag': 'noindex, nofollow, noarchive',
+      },
+    });
+  }
+  const review = await devicePreviewReview(requestUrl, configuration.devicePreview);
+  const nonce = randomBytes(18).toString('base64');
+  const document = devicePreviewDocument(requestUrl, configuration.devicePreview, nonce, review);
+  const imageSources = review?.imageOrigins?.length
+    ? `; img-src ${review.imageOrigins.join(' ')}`
+    : '';
+  const frameSources = [requestUrl.origin, target.origin, ...(review?.frameOrigins || [])]
+    .filter((origin, index, values) => values.indexOf(origin) === index)
+    .join(' ');
+  return new Response(document, {
+    headers: {
+      'cache-control': 'no-store, private',
+      'content-security-policy': `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; frame-src ${frameSources}${imageSources}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+      'content-type': 'text/html; charset=utf-8',
+      'cross-origin-opener-policy': 'same-origin',
+      'referrer-policy': 'no-referrer',
+      'x-content-type-options': 'nosniff',
+      'x-frame-options': 'DENY',
+      'x-robots-tag': 'noindex, nofollow, noarchive',
+    },
+  });
+}
+
+const comparisonBridgeScript = `
+  (() => {
+    if (window.__madeSolidComparisonBridge) return;
+    window.__madeSolidComparisonBridge = true;
+    let applyingRemoteScroll = false;
+    let remoteScrollTimer;
+    const post = (message) => window.parent.postMessage(message, '*');
+    const scrollProgress = () => {
+      const root = document.scrollingElement || document.documentElement;
+      const distance = Math.max(0, root.scrollHeight - window.innerHeight);
+      return distance ? Math.min(1, Math.max(0, root.scrollTop / distance)) : 0;
+    };
+    const announceInput = () => post({ type: 'made-solid-comparison-input-v1' });
+    for (const eventName of ['wheel', 'touchstart', 'pointerdown', 'keydown']) {
+      window.addEventListener(eventName, announceInput, { capture: true, passive: true });
+    }
+    window.addEventListener('scroll', () => {
+      if (applyingRemoteScroll) return;
+      post({
+        type: 'made-solid-comparison-user-scroll-v1',
+        progress: scrollProgress(),
+      });
+    }, { passive: true });
+    window.addEventListener('message', (event) => {
+      if (
+        event.source !== window.parent ||
+        event.data?.type !== 'made-solid-comparison-scroll-v1' ||
+        !Number.isFinite(event.data.progress)
+      ) return;
+      const root = document.scrollingElement || document.documentElement;
+      const distance = Math.max(0, root.scrollHeight - window.innerHeight);
+      applyingRemoteScroll = true;
+      window.scrollTo(0, distance * Math.min(1, Math.max(0, event.data.progress)));
+      window.clearTimeout(remoteScrollTimer);
+      remoteScrollTimer = window.setTimeout(() => { applyingRemoteScroll = false; }, 120);
+    });
+    const announceReady = () => post({
+      type: 'made-solid-comparison-ready-v1',
+      height: Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0),
+    });
+    window.addEventListener('load', announceReady, { once: true });
+    window.setTimeout(announceReady, 0);
+  })();
+`;
+
+function comparisonRelayHtml(source, target) {
+  const base = target.href.replaceAll('&', '&amp;').replaceAll('"', '&quot;');
+  const withoutCsp = source.replace(
+    /<meta\b[^>]*http-equiv=["']?Content-Security-Policy["']?[^>]*>/gi,
+    '',
+  );
+  const additions = `<base href="${base}"><script data-made-solid-comparison-bridge>${comparisonBridgeScript}</script>`;
+  if (/<head(?:\s[^>]*)?>/i.test(withoutCsp)) {
+    return withoutCsp.replace(/<head(\s[^>]*)?>/i, (match) => `${match}${additions}`);
+  }
+  return `${additions}${withoutCsp}`;
+}
+
+function comparisonRelayHeaders(configuration) {
+  return {
+    'cache-control': 'no-store, private',
+    'content-security-policy': `form-action 'none'; frame-ancestors ${configuration.inspectOrigin}`,
+    'content-type': 'text/html; charset=utf-8',
+    'referrer-policy': 'no-referrer',
+    'x-content-type-options': 'nosniff',
+    'x-robots-tag': 'noindex, nofollow, noarchive',
+  };
+}
+
+function privateNetworkAddress(address) {
+  const normalized = address.toLowerCase();
+  if (
+    normalized === '::' ||
+    normalized === '::1' ||
+    normalized.startsWith('fc') ||
+    normalized.startsWith('fd') ||
+    normalized.startsWith('fe8') ||
+    normalized.startsWith('fe9') ||
+    normalized.startsWith('fea') ||
+    normalized.startsWith('feb')
+  ) {
+    return true;
+  }
+  const ipv4 = normalized.startsWith('::ffff:') ? normalized.slice(7) : normalized;
+  const parts = ipv4.split('.').map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) return false;
+  return (
+    parts[0] === 0 ||
+    parts[0] === 10 ||
+    parts[0] === 127 ||
+    (parts[0] === 169 && parts[1] === 254) ||
+    (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+    (parts[0] === 192 && parts[1] === 168) ||
+    parts[0] >= 224
+  );
+}
+
+async function safeComparisonRelayTarget(target, configuration) {
+  const inspectHost = new URL(configuration.inspectOrigin).hostname;
+  const localDevelopment = ['127.0.0.1', 'localhost'].includes(inspectHost);
+  if (localDevelopment && ['127.0.0.1', 'localhost'].includes(target.hostname)) return true;
+  if (target.protocol !== 'https:' || target.username || target.password) return false;
+  const addresses = await lookup(target.hostname, { all: true, verbatim: true });
+  return addresses.length > 0 && addresses.every(({ address }) => !privateNetworkAddress(address));
+}
+
+async function devicePreviewRelayResponse(requestUrl, configuration) {
+  const device = requestUrl.searchParams.get('device');
+  const side = requestUrl.searchParams.get('side');
+  const review = await devicePreviewReview(requestUrl, configuration.devicePreview);
+  const redesign = devicePreviewTarget(
+    requestUrl.searchParams.get('source'),
+    configuration.devicePreview,
+  );
+  if (!review || !redesign || !Object.hasOwn(comparisonUserAgents, device)) {
+    return new Response('Live comparison unavailable', { status: 404 });
+  }
+  try {
+    if (side !== 'current' && side !== 'redesign') {
+      return new Response('Live comparison unavailable', { status: 404 });
+    }
+    const target = new URL(side === 'current' ? review.current : redesign.href);
+    if (!(await safeComparisonRelayTarget(target, configuration.devicePreview))) {
+      return new Response('Live comparison unavailable', { status: 404 });
+    }
+    const response = await fetch(target, {
+      headers: {
+        accept: 'text/html,application/xhtml+xml',
+        'accept-language': 'en-AU,en;q=0.9',
+        'user-agent': comparisonUserAgents[device],
+      },
+      redirect: 'error',
+      signal: AbortSignal.timeout(15_000),
+    });
+    const contentLength = Number(response.headers.get('content-length') || 0);
+    if (
+      !response.ok ||
+      !response.headers.get('content-type')?.toLowerCase().includes('text/html') ||
+      contentLength > 8_000_000
+    ) {
+      throw new Error('The authorized website did not return bounded HTML.');
+    }
+    const source = await response.text();
+    if (source.length > 8_000_000) throw new Error('The authorized website HTML was too large.');
+    return new Response(comparisonRelayHtml(source, target), {
+      headers: comparisonRelayHeaders(configuration.devicePreview),
+    });
+  } catch {
+    return new Response('Live comparison temporarily unavailable', {
+      status: 502,
+      headers: comparisonRelayHeaders(configuration.devicePreview),
+    });
+  }
 }
 
 function apiHeaders(serviceRoleKey) {
@@ -483,9 +720,46 @@ function requestPublicOrigin(request, configuration) {
 
 export async function handlePreviewRequest(request, configuration = previewHostConfiguration()) {
   const requestUrl = new URL(request.url);
+  const configuredDevicePreview =
+    configuration.devicePreview || devicePreviewConfiguration(Object.create(null));
+  const requestHost =
+    request.headers.get('x-forwarded-host') || request.headers.get('host') || requestUrl.host;
+  if (isDevicePreviewRelayRequest(requestUrl)) {
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return new Response('Method not allowed', { status: 405 });
+    }
+    const response = await devicePreviewRelayResponse(requestUrl, {
+      ...configuration,
+      devicePreview: configuredDevicePreview,
+    });
+    return request.method === 'HEAD'
+      ? new Response(null, { status: response.status, headers: response.headers })
+      : response;
+  }
+  if (isDevicePreviewRequest(requestUrl, requestHost, configuredDevicePreview)) {
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return new Response('Method not allowed', { status: 405 });
+    }
+    const response = await devicePreviewResponse(requestUrl, {
+      ...configuration,
+      devicePreview: configuredDevicePreview,
+    });
+    return request.method === 'HEAD'
+      ? new Response(null, { status: response.status, headers: response.headers })
+      : response;
+  }
   if (requestUrl.pathname === '/health') {
     return new Response('ok', {
-      headers: { 'cache-control': 'no-store', 'content-type': 'text/plain; charset=utf-8' },
+      headers: {
+        'cache-control': 'no-store',
+        'content-type': 'text/plain; charset=utf-8',
+        'x-made-solid-device-preview': configuredDevicePreview.inspectOrigin
+          ? 'ready'
+          : 'unconfigured',
+        'x-made-solid-clientspace-preview': configuration.clientspaceReviewOrigin
+          ? 'clientspace-admin-website-preview-v1'
+          : 'unconfigured',
+      },
     });
   }
   if (request.method !== 'GET' && request.method !== 'HEAD') {
@@ -504,6 +778,9 @@ export async function handlePreviewRequest(request, configuration = previewHostC
       contentTypeFor(artifact.filePath),
       parsed.previewMode,
       configuration.clientspaceReviewOrigin,
+      requestUrl.searchParams.get('__made_solid_inspect') === '1'
+        ? configuredDevicePreview.inspectOrigin
+        : undefined,
     );
     if (request.method === 'HEAD') return new Response(null, { headers });
 
@@ -526,6 +803,9 @@ export async function handlePreviewRequest(request, configuration = previewHostC
               'text/plain; charset=utf-8',
               parsed.previewMode,
               configuration.clientspaceReviewOrigin,
+              requestUrl.searchParams.get('__made_solid_inspect') === '1'
+                ? configuredDevicePreview.inspectOrigin
+                : undefined,
             ),
           },
         );
@@ -535,6 +815,7 @@ export async function handlePreviewRequest(request, configuration = previewHostC
           source,
           base,
           parsed.previewMode === 'review' ? configuration.clientspaceReviewOrigin : undefined,
+          requestUrl.searchParams.get('__made_solid_compare') === '1',
         ),
         { headers },
       );
@@ -594,7 +875,15 @@ function workspaceFrameConfiguration(configuration) {
     activeWorkspacePreviewPath,
     publicOrigin,
     workspaceOrigin,
-    workspaceOrigins: [...new Set(workspaceOrigins)],
+    workspaceOrigins: [
+      ...new Set([
+        ...workspaceOrigins,
+        ...(configuration.clientspaceReviewOrigin ? [configuration.clientspaceReviewOrigin] : []),
+        ...(configuration.devicePreview?.inspectOrigin
+          ? [configuration.devicePreview.inspectOrigin]
+          : []),
+      ]),
+    ],
     workspacePreviewSecret,
   };
 }

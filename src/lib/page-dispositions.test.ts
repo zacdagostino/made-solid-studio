@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { pageDisposition } from './redesign-brief';
+import { createBriefDraft, pageDisposition } from './redesign-brief';
+import type { CapturedPage, ResearchPacket } from './domain';
 
 const home = {
   url: 'https://example.com/',
@@ -43,5 +44,44 @@ describe('pageDisposition', () => {
       disposition: 'redirect',
       targetSourceUrl: home.url,
     });
+  });
+});
+
+describe('public redesign sources', () => {
+  it('excludes authentication redirects and normalises selected public URLs', () => {
+    const publicPage = {
+      id: 'page-public',
+      businessId: 'business',
+      crawlRunId: 'capture',
+      url: 'https://example.com/about/?campaign=spring',
+      pageType: 'about',
+      title: 'About',
+      canonicalUrl: 'https://example.com/about/',
+      createdAt: '2026-10-01T00:00:00.000Z',
+    } as unknown as CapturedPage;
+    const authenticationRedirect = {
+      ...publicPage,
+      id: 'page-auth',
+      url: 'https://accounts.example.com/auth/v2?s=temporary-session',
+      title: 'Sign in',
+    };
+    const packet = {
+      data: {
+        pages: [
+          { url: publicPage.url, pageType: 'about', title: 'About' },
+          { url: authenticationRedirect.url, pageType: 'other', title: 'Sign in' },
+        ],
+      },
+    } as unknown as ResearchPacket;
+
+    const generated = createBriefDraft('Example', packet, [], [], undefined, [
+      publicPage,
+      authenticationRedirect,
+    ]);
+
+    expect(generated.sourceSelections.pageUrls).toEqual(['https://example.com/about']);
+    expect(generated.draft.pagePlans.map((plan) => plan.sourceUrl)).toEqual([
+      'https://example.com/about',
+    ]);
   });
 });

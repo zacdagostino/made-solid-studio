@@ -1,12 +1,14 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { basename, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
+import { waitForHomepageCapture } from './homepage-capture-readiness.mjs';
 import { authorizeStudioRuntimeRequest } from './studio-runtime-auth.mjs';
+import { reconfirmRehearsalQuote, rehearsalWorkspace } from './rehearsal-workspace.mjs';
 import {
   apiCreditsBillingMode,
   runtimeAiBillingStatus,
@@ -28,9 +30,21 @@ import { CodexChatPreferencesStore } from './codex-chat-preferences.mjs';
 import {
   checkForCodexUpdate,
   publicCodexUpdateStatus,
+  retryCodexUpdate,
   updatePaths,
 } from './codex-runtime-updates.mjs';
 import { studioDevelopmentOrigins } from './studio-development-origins.mjs';
+import { queueBuilderQualityRepair } from './builder-quality-repair.mjs';
+import {
+  runAutomaticDevelopmentRelease,
+  runFeatureDeployment,
+} from './feature-release-deployment.mjs';
+import { FeatureReleaseStore } from './feature-release-store.mjs';
+import {
+  capturedResponsiveHomepageGifs,
+  responsiveComparisonTimeline,
+  responsiveDesktopProfile,
+} from './scrolling-homepage-gif.mjs';
 import {
   meaningfulGitStatus,
   restoreGeneratedNextEnvironment,
@@ -40,6 +54,7 @@ const localWorkspaceEndpoint = '/__made-solid/local-workspace';
 const workspacePreviewAccessEndpoint = '/__made-solid/workspace-preview-access';
 const workspaceDevelopmentAccessEndpoint = '/__made-solid/workspace-development-access';
 const developmentProjectsEndpoint = '/__made-solid/development-projects';
+const featureReleasesEndpoint = '/__made-solid/feature-releases';
 const workspaceCodexEndpoint = '/__made-solid/workspace-codex';
 const refinementLedgerEndpoint = '/__made-solid/refinement-ledger';
 const learningBundleEndpoint = '/__made-solid/learning-bundle';
@@ -54,6 +69,11 @@ const codexUpdatesEndpoint = '/__made-solid/codex-updates';
 const codexPreferencesEndpoint = '/__made-solid/codex-preferences';
 const aiBillingModeEndpoint = '/__made-solid/ai-billing-mode';
 const codexSpeechEndpoint = '/__made-solid/codex-speech';
+const builderQualityRepairEndpoint = '/__made-solid/builder-quality-repair';
+const clientspaceQuoteReconfirmationEndpoint =
+  '/__made-solid/integrations/clientspace/reconfirm-quote';
+const clientspaceHomepageCaptureEndpoint =
+  '/__made-solid/integrations/clientspace/homepage-capture';
 const codexAttachmentPrefix = '/__made-solid/codex-attachment/';
 const localPageCaptureEndpoint = '/__made-solid/page-screenshot';
 const captureAssetEndpoint = '/__made-solid/capture-asset';
@@ -63,6 +83,269 @@ const directoryPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 const workspaceRevisionPattern = /^(?:working|[0-9a-f]{40})$/i;
 const maximumCaptureAssetBytes = 5 * 1024 * 1024;
 const captureAssetCache = new Map();
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export async function captureClientspaceHomepage(browser, input) {
+  if (!uuidPattern.test(input?.projectId || '') || !uuidPattern.test(input?.rehearsalId || '')) {
+    throw new Error('The Clientspace capture identifiers are invalid.');
+  }
+  const target = await assertPublicUrl(input?.websiteUrl || '');
+  if (
+    target.protocol !== 'https:' ||
+    (target.hostname !== 'madesolid.com.au' && !target.hostname.endsWith('.madesolid.com.au'))
+  ) {
+    throw new Error('Only a verified Made Solid preview can be captured for Clientspace.');
+  }
+  const comparisonTarget = input?.comparisonUrl ? await assertPublicUrl(input.comparisonUrl) : null;
+  if (comparisonTarget && comparisonTarget.protocol !== 'https:') {
+    throw new Error('The current website comparison must use HTTPS.');
+  }
+  if (!comparisonTarget) {
+    throw new Error('The verified current website is required for a paired comparison.');
+  }
+
+  const goto = (page, url) => page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  const warmAndSettle = async (page) => {
+    await page.evaluate(async () => {
+      for (const image of globalThis.document.images) {
+        image.loading = 'eager';
+        image.fetchPriority = 'high';
+      }
+      const bottom = Math.max(
+        globalThis.document.documentElement.scrollHeight - globalThis.innerHeight,
+        0,
+      );
+      const step = Math.max(280, Math.floor(globalThis.innerHeight * 0.75));
+      for (let top = 0; top <= bottom; top += step) {
+        globalThis.scrollTo({ top, behavior: 'instant' });
+        await new Promise((resolve) => setTimeout(resolve, 35));
+      }
+      globalThis.scrollTo({ top: 0, behavior: 'instant' });
+    });
+    await waitForHomepageCapture(page);
+  };
+  const comparisonAsset = (kind, device, content, viewport, pageHeight) => ({
+    kind,
+    device,
+    content: content.toString('base64'),
+    contentType: 'image/jpeg',
+    width: viewport.width,
+    height: viewport.height,
+    pageHeight: Math.max(viewport.height, Math.round(pageHeight)),
+  });
+
+  const captureDevice = async ({ viewport, profile }) => {
+    const [currentContext, redesignContext] = await Promise.all([
+      browser.newContext({ viewport, reducedMotion: 'no-preference', colorScheme: 'light' }),
+      browser.newContext({ viewport, reducedMotion: 'no-preference', colorScheme: 'light' }),
+    ]);
+    try {
+      const [currentPage, redesignPage] = await Promise.all([
+        currentContext.newPage(),
+        redesignContext.newPage(),
+      ]);
+      await Promise.all([
+        goto(currentPage, comparisonTarget.href),
+        goto(redesignPage, target.href),
+      ]);
+      await Promise.all([
+        currentPage.waitForLoadState('networkidle', { timeout: 4_000 }).catch(() => undefined),
+        redesignPage.waitForLoadState('networkidle', { timeout: 4_000 }).catch(() => undefined),
+      ]);
+      await Promise.all([warmAndSettle(currentPage), warmAndSettle(redesignPage)]);
+      const [currentComparison, redesignComparison] = await Promise.all([
+        currentPage.screenshot({ type: 'jpeg', quality: 68 }),
+        redesignPage.screenshot({ type: 'jpeg', quality: 68 }),
+      ]);
+
+      // Reload only the redesign so its authentic loader and hero entrance are
+      // replayed while the current site remains visible beside it.
+      await goto(redesignPage, target.href);
+      await redesignPage.evaluate(() => {
+        for (const image of globalThis.document.images) {
+          image.loading = 'eager';
+          image.fetchPriority = 'high';
+        }
+        globalThis.scrollTo({ top: 0, behavior: 'instant' });
+      });
+      const screenshot = (page) => page.screenshot({ type: 'jpeg', quality: 76 });
+      const currentTop = await screenshot(currentPage);
+      const pairs = [];
+      const delays = [];
+      let loadingFrameCount = 0;
+      const captureIntervalMs = 80;
+      for (let index = 0; index < 20; index += 1) {
+        const startedAt = Date.now();
+        pairs.push({ current: currentTop, redesign: await screenshot(redesignPage) });
+        delays.push(captureIntervalMs);
+        loadingFrameCount += 1;
+        const introVisible = await redesignPage.evaluate(() => {
+          const intro = globalThis.document.querySelector('[data-siteforge-brand-intro]');
+          if (!(intro instanceof globalThis.HTMLElement)) return false;
+          const style = globalThis.getComputedStyle(intro);
+          return (
+            style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            Number(style.opacity) > 0.01
+          );
+        });
+        if (index >= 8 && !introVisible) break;
+        const remaining = captureIntervalMs - (Date.now() - startedAt);
+        if (remaining > 0) await redesignPage.waitForTimeout(remaining);
+      }
+      const revealFrameCount = 15;
+      for (let index = 0; index < revealFrameCount; index += 1) {
+        const startedAt = Date.now();
+        pairs.push({ current: currentTop, redesign: await screenshot(redesignPage) });
+        delays.push(captureIntervalMs);
+        const remaining = captureIntervalMs - (Date.now() - startedAt);
+        if (remaining > 0) await redesignPage.waitForTimeout(remaining);
+      }
+      await warmAndSettle(redesignPage);
+      const [currentHeight, redesignHeight] = await Promise.all([
+        currentPage.evaluate(() => globalThis.document.documentElement.scrollHeight),
+        redesignPage.evaluate(() => globalThis.document.documentElement.scrollHeight),
+      ]);
+      const currentDistance = Math.max(0, currentHeight - viewport.height);
+      const redesignDistance = Math.max(0, redesignHeight - viewport.height);
+      const timeline = responsiveComparisonTimeline(
+        profile.width * profile.height * 3,
+        pairs.length,
+      );
+      for (const [index, progress] of timeline.progress.entries()) {
+        await Promise.all([
+          currentPage.evaluate(
+            (top) => globalThis.scrollTo({ top, behavior: 'instant' }),
+            Math.round(currentDistance * progress),
+          ),
+          redesignPage.evaluate(
+            (top) => globalThis.scrollTo({ top, behavior: 'instant' }),
+            Math.round(redesignDistance * progress),
+          ),
+        ]);
+        await redesignPage.waitForTimeout(45);
+        const [current, redesign] = await Promise.all([
+          screenshot(currentPage),
+          screenshot(redesignPage),
+        ]);
+        pairs.push({ current, redesign });
+        delays.push(index === timeline.progress.length - 1 ? 1_200 : timeline.scrollDelayMs);
+      }
+      const animations = await capturedResponsiveHomepageGifs(
+        {
+          pairs,
+          delays,
+          loadingFrameCount,
+          revealFrameCount,
+          scrollFrameCount: timeline.scrollFrameCount,
+        },
+        { profile },
+      );
+      if (!animations) throw new Error('The desktop comparisons exceeded the email image limit.');
+      const media = await redesignPage.evaluate(() => {
+        const images = Array.from(globalThis.document.images).filter(
+          (candidate) => candidate.currentSrc || candidate.src,
+        );
+        return {
+          imageCount: images.length,
+          loadedImageCount: images.filter(
+            (candidate) => candidate.complete && candidate.naturalWidth > 0,
+          ).length,
+        };
+      });
+      const result = (kind, animation) => ({
+        kind,
+        content: animation.content.toString('base64'),
+        contentType: 'image/gif',
+        width: animation.width,
+        height: animation.height,
+        animation: {
+          frameCount: animation.frameCount,
+          durationMs: animation.durationMs,
+          loop: true,
+          phases: animation.phases,
+        },
+        media,
+      });
+      return {
+        captures: {
+          current: result('current', animations.current),
+          redesign: result('redesign', animations.redesign),
+        },
+        comparisons: {
+          current: comparisonAsset(
+            'current',
+            'desktop',
+            currentComparison,
+            viewport,
+            currentHeight,
+          ),
+          redesign: comparisonAsset(
+            'redesign',
+            'desktop',
+            redesignComparison,
+            viewport,
+            redesignHeight,
+          ),
+        },
+      };
+    } finally {
+      await Promise.all([currentContext.close(), redesignContext.close()]);
+    }
+  };
+
+  const captureStaticDevice = async (device, viewport) => {
+    const [currentContext, redesignContext] = await Promise.all([
+      browser.newContext({ viewport, reducedMotion: 'reduce', colorScheme: 'light' }),
+      browser.newContext({ viewport, reducedMotion: 'reduce', colorScheme: 'light' }),
+    ]);
+    try {
+      const [currentPage, redesignPage] = await Promise.all([
+        currentContext.newPage(),
+        redesignContext.newPage(),
+      ]);
+      await Promise.all([
+        goto(currentPage, comparisonTarget.href),
+        goto(redesignPage, target.href),
+      ]);
+      await Promise.all([
+        currentPage.waitForLoadState('networkidle', { timeout: 4_000 }).catch(() => undefined),
+        redesignPage.waitForLoadState('networkidle', { timeout: 4_000 }).catch(() => undefined),
+      ]);
+      await Promise.all([warmAndSettle(currentPage), warmAndSettle(redesignPage)]);
+      const [current, redesign, currentHeight, redesignHeight] = await Promise.all([
+        currentPage.screenshot({ type: 'jpeg', quality: 68 }),
+        redesignPage.screenshot({ type: 'jpeg', quality: 68 }),
+        currentPage.evaluate(() => globalThis.document.documentElement.scrollHeight),
+        redesignPage.evaluate(() => globalThis.document.documentElement.scrollHeight),
+      ]);
+      return {
+        current: comparisonAsset('current', device, current, viewport, currentHeight),
+        redesign: comparisonAsset('redesign', device, redesign, viewport, redesignHeight),
+      };
+    } finally {
+      await Promise.all([currentContext.close(), redesignContext.close()]);
+    }
+  };
+
+  const desktop = await captureDevice({
+    viewport: { width: 1440, height: 900 },
+    profile: responsiveDesktopProfile,
+  });
+  const [phone, tablet] = await Promise.all([
+    captureStaticDevice('phone', { width: 375, height: 812 }),
+    captureStaticDevice('tablet', { width: 768, height: 1024 }),
+  ]);
+  return {
+    readinessContract: 'rendered-email-homepage-capture-v3',
+    captures: desktop.captures,
+    comparisons: {
+      phone,
+      tablet,
+      desktop: desktop.comparisons,
+    },
+  };
+}
 
 function requestCookie(request, requestedName) {
   for (const source of String(request.headers.cookie || '').split(';')) {
@@ -75,6 +358,18 @@ function requestCookie(request, requestedName) {
     }
   }
   return undefined;
+}
+
+function clientspaceIntegrationAuthorised(request, environment = process.env) {
+  const expected = Buffer.from(environment.STUDIO_HANDOFF_SECRET?.trim() || '');
+  const supplied = Buffer.from(
+    String(request.headers.authorization || '')
+      .replace(/^Bearer /i, '')
+      .trim(),
+  );
+  return Boolean(
+    expected.length && expected.length === supplied.length && timingSafeEqual(expected, supplied),
+  );
 }
 
 export function workspaceCodexCookieName(directory) {
@@ -1073,6 +1368,28 @@ async function launchCommittedPreview({ directory, commit, request, writeEvent, 
 
 export function localWorkspacePlugin() {
   const runtimeDataDirectory = process.env.SITEFORGE_RUNTIME_DATA_DIR?.trim();
+  const featureRepositories = [
+    {
+      id: 'studio',
+      product: 'studio',
+      label: 'Made Solid Studio',
+      directory: process.env.SITEFORGE_STUDIO_WORKSPACE_DIR?.trim() || process.cwd(),
+    },
+    process.env.MADE_SOLID_WEBSITE_DIRECTORY?.trim()
+      ? {
+          id: 'website',
+          product: 'website',
+          label: 'Made Solid website & Clientspace',
+          directory: process.env.MADE_SOLID_WEBSITE_DIRECTORY.trim(),
+        }
+      : undefined,
+  ].filter(Boolean);
+  const featureReleaseStore = new FeatureReleaseStore({
+    repositories: featureRepositories,
+    storagePath: runtimeDataDirectory
+      ? resolve(runtimeDataDirectory, 'feature-releases.json')
+      : resolve('.made-solid', 'feature-releases.json'),
+  });
   const codexChatPreferences = new CodexChatPreferencesStore({
     storagePath: runtimeDataDirectory
       ? resolve(runtimeDataDirectory, 'codex-chat-preferences.json')
@@ -1093,6 +1410,14 @@ export function localWorkspacePlugin() {
       ? resolve(runtimeDataDirectory, 'codex-feedback')
       : resolve('.made-solid', 'codex-feedback'),
     notifyCompletion: (record) => codexPushNotifications.notifyCompletion(record),
+    canDispatch: () => !existsSync(updatePaths(process.env).restartRequest),
+    featureReleaseStore,
+    onFeatureRecorded: (feature) =>
+      runAutomaticDevelopmentRelease({
+        feature,
+        featureReleaseStore,
+        repositories: featureRepositories,
+      }),
   };
   let activeCodexFeedbackBridge;
   let activeCodexFeedbackBridgeModifiedAt = 0;
@@ -1116,6 +1441,14 @@ export function localWorkspacePlugin() {
           const nextBridge = new CodexFeedbackBridge(codexFeedbackBridgeOptions);
           if (activeCodexFeedbackBridge?.startedThreads) {
             nextBridge.startedThreads = activeCodexFeedbackBridge.startedThreads;
+          }
+          if (activeCodexFeedbackBridge?.trustedThreadScopes) {
+            nextBridge.trustedThreadScopes = activeCodexFeedbackBridge.trustedThreadScopes;
+          }
+          if (activeCodexFeedbackBridge?.conversationTitles) {
+            nextBridge.conversationTitles = activeCodexFeedbackBridge.conversationTitles;
+            nextBridge.conversationTitlesLoaded =
+              activeCodexFeedbackBridge.conversationTitlesLoaded;
           }
           activeCodexFeedbackBridge?.close();
           activeCodexFeedbackBridge = nextBridge;
@@ -1178,7 +1511,10 @@ export function localWorkspacePlugin() {
   const configureWorkspaceServer = (server) => {
     const maintainCodexFeedbackBridge = () =>
       void codexFeedbackBridge()
-        .then((bridge) => bridge.maintain())
+        .then((bridge) => {
+          void bridge.maintain().catch(() => undefined);
+          void bridge.syncCompletedFeatureReleases().catch(() => undefined);
+        })
         .catch(() => undefined);
     maintainCodexFeedbackBridge();
     const feedbackFlush = setInterval(maintainCodexFeedbackBridge, 2_000);
@@ -1191,7 +1527,58 @@ export function localWorkspacePlugin() {
     server.middlewares.use(async (request, response, next) => {
       const requestUrl = new URL(request.url ?? '/', 'http://made-solid.local');
       if (requestUrl.pathname === '/health') {
-        sendJson(response, 200, { status: 'ready' });
+        sendJson(response, 200, {
+          status: 'ready',
+          runtimeContract: 'made-solid-studio-runtime-v30.3',
+          capabilities: [
+            'clientspace-rehearsal-v1',
+            'automatic-rehearsal-preview-v1',
+            'guided-clientspace-test-v1',
+            'universal-builder-profiles-v1',
+            'resilient-codex-runtime-updates-v1',
+            'manual-codex-update-retry-v1',
+            'branded-exact-client-preview-v1',
+            'email-ready-homepage-preview-v1',
+            'clientspace-admin-website-preview-v1',
+            'settled-email-homepage-capture-v2',
+            'rendered-email-homepage-capture-v3',
+            'automatic-builder-quality-repair-v1',
+            'reliable-builder-repair-v1',
+            'settled-navigation-quality-v1',
+            'owner-device-preview-v1',
+            'clientspace-balance-sync-v1',
+            'continuous-client-email-inbox-v1',
+            'purpose-aware-codex-branching-v1',
+            'retrospective-chat-context-v1',
+            'validated-codex-branch-actions-v1',
+            'polished-device-preview-toolbar-v1',
+            'pinned-tagged-codex-chats-v1',
+            'feature-release-management-v1',
+            'feature-release-metadata-v2',
+            'automatic-feature-development-release-v1',
+            'continuous-feature-release-reconciliation-v1',
+            'clientspace-quote-reconfirmation-v1',
+            'automatic-clientspace-homepage-capture-v1',
+            'animated-clientspace-homepage-preview-v1',
+            'animated-clientspace-homepage-preview-v2',
+            'animated-clientspace-homepage-preview-v3',
+            'animated-clientspace-homepage-preview-v4',
+            'animated-clientspace-homepage-preview-v5',
+            'paired-device-clientspace-homepage-preview-v6',
+            'desktop-only-clientspace-homepage-preview-v7',
+            'responsive-split-clientspace-homepage-preview-v8',
+            'responsive-comparison-review-v1',
+            'live-synchronized-comparison-v1',
+            'interactive-device-correct-comparison-v1',
+            'proxy-safe-live-comparison-v1',
+            'exact-redesign-comparison-v1',
+            'simplified-old-new-review-v1',
+            'truthful-live-codex-progress-v1',
+            'evidence-led-homepage-art-direction-v1',
+            'inspect-email-reply-cta-v1',
+            'railway-only-product-releases-v1',
+          ],
+        });
         return;
       }
       if (requestUrl.pathname === workspaceCodexEndpoint) {
@@ -1240,6 +1627,50 @@ export function localWorkspacePlugin() {
         else response.end(document);
         return;
       }
+      if (requestUrl.pathname === clientspaceQuoteReconfirmationEndpoint) {
+        if (request.method !== 'POST') {
+          sendJson(response, 405, { detail: 'Use POST to reconfirm a rehearsal quote.' });
+          return;
+        }
+        if (!clientspaceIntegrationAuthorised(request)) {
+          sendJson(response, 401, { detail: 'Clientspace integration access required.' });
+          return;
+        }
+        try {
+          const input = JSON.parse(await readRequestBody(request, 8 * 1024));
+          sendJson(response, 200, await reconfirmRehearsalQuote(input));
+        } catch (error) {
+          sendJson(response, 409, {
+            detail:
+              error instanceof Error
+                ? error.message
+                : 'The rehearsal quote could not be reconfirmed.',
+          });
+        }
+        return;
+      }
+      if (requestUrl.pathname === clientspaceHomepageCaptureEndpoint) {
+        if (request.method !== 'POST') {
+          sendJson(response, 405, { detail: 'Use POST to capture a Clientspace homepage.' });
+          return;
+        }
+        if (!clientspaceIntegrationAuthorised(request)) {
+          sendJson(response, 401, { detail: 'Clientspace integration access required.' });
+          return;
+        }
+        try {
+          const input = JSON.parse(await readRequestBody(request, 16 * 1024));
+          sendJson(response, 200, await captureClientspaceHomepage(await captureBrowser(), input));
+        } catch (error) {
+          sendJson(response, 409, {
+            detail:
+              error instanceof Error
+                ? error.message
+                : 'The verified homepage could not be captured.',
+          });
+        }
+        return;
+      }
       let runtimeAuthorization;
       if (requestUrl.pathname.startsWith('/__made-solid/')) {
         const authorization = await authorizeStudioRuntimeRequest(request);
@@ -1251,6 +1682,37 @@ export function localWorkspacePlugin() {
           return;
         }
         runtimeAuthorization = authorization;
+      }
+      if (requestUrl.pathname === '/__made-solid/rehearsal') {
+        if (request.method !== 'POST') {
+          sendJson(response, 405, { detail: 'Use POST for rehearsal actions.' });
+          return;
+        }
+        try {
+          const input = JSON.parse(await readRequestBody(request, 128 * 1024));
+          sendJson(response, 200, await rehearsalWorkspace(input, runtimeAuthorization));
+        } catch (error) {
+          sendJson(response, 400, {
+            detail: error instanceof Error ? error.message : 'The rehearsal could not be prepared.',
+          });
+        }
+        return;
+      }
+      if (requestUrl.pathname === builderQualityRepairEndpoint) {
+        if (request.method !== 'POST') {
+          sendJson(response, 405, { detail: 'Use POST to request a builder quality repair.' });
+          return;
+        }
+        try {
+          const input = JSON.parse(await readRequestBody(request, 8 * 1024));
+          sendJson(response, 202, await queueBuilderQualityRepair(input, runtimeAuthorization));
+        } catch (error) {
+          sendJson(response, 400, {
+            detail:
+              error instanceof Error ? error.message : 'The quality repair could not be queued.',
+          });
+        }
+        return;
       }
       if (requestUrl.pathname === workspaceDevelopmentAccessEndpoint) {
         if (request.method !== 'GET') {
@@ -1309,6 +1771,89 @@ export function localWorkspacePlugin() {
             status: 'unavailable',
             detail:
               error instanceof Error ? error.message : 'Development project status is unavailable.',
+          });
+        }
+        return;
+      }
+      if (requestUrl.pathname === featureReleasesEndpoint) {
+        const fetchSite = String(request.headers['sec-fetch-site'] || '').toLowerCase();
+        if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site') {
+          sendJson(response, 403, {
+            status: 'failed',
+            detail: 'Feature releases are only available from Made Solid Studio.',
+          });
+          return;
+        }
+        try {
+          if (request.method === 'GET') {
+            sendJson(response, 200, {
+              status: 'ready',
+              features: await featureReleaseStore.list(),
+            });
+            return;
+          }
+          if (request.method !== 'POST') {
+            response.statusCode = 405;
+            response.end('Method not allowed');
+            return;
+          }
+          const input = JSON.parse(await readRequestBody(request, 64 * 1024));
+          if (input.action === 'link-thread') {
+            await featureReleaseStore.linkThread(input);
+            sendJson(response, 200, { status: 'saved' });
+            return;
+          }
+          if (input.action === 'update-metadata') {
+            const feature = await featureReleaseStore.updateMetadata(input);
+            sendJson(response, 200, { status: 'saved', feature });
+            return;
+          }
+          if (input.action === 'regenerate-metadata') {
+            const feature = await featureReleaseStore.regenerateMetadata(input);
+            sendJson(response, 200, { status: 'saved', feature });
+            return;
+          }
+          if (input.action === 'merge-features') {
+            const feature = await featureReleaseStore.mergeFeatures(input);
+            sendJson(response, 200, { status: 'saved', feature });
+            return;
+          }
+          if (input.action !== 'deploy') throw new Error('Choose a valid feature release action.');
+          if (input.environment === 'production' && input.confirmed !== true) {
+            throw new Error('Confirm the exact production promotion before continuing.');
+          }
+          const started = await featureReleaseStore.deploymentStarted(input);
+          void runFeatureDeployment({
+            feature: started.feature,
+            run: started.run,
+            repositories: featureRepositories,
+          })
+            .then((urls) =>
+              featureReleaseStore.deploymentFinished({
+                featureId: started.feature.id,
+                runId: started.run.id,
+                status: 'completed',
+                detail: `The exact ${started.run.environment} release was deployed and verified.`,
+                urls,
+              }),
+            )
+            .catch((error) =>
+              featureReleaseStore.deploymentFinished({
+                featureId: started.feature.id,
+                runId: started.run.id,
+                status: 'failed',
+                detail: error instanceof Error ? error.message : 'The deployment did not finish.',
+              }),
+            );
+          sendJson(response, 202, {
+            status: 'queued',
+            feature: started.feature,
+            run: started.run,
+          });
+        } catch (error) {
+          sendJson(response, 400, {
+            status: 'failed',
+            detail: error instanceof Error ? error.message : 'Feature releases are unavailable.',
           });
         }
         return;
@@ -1377,7 +1922,7 @@ export function localWorkspacePlugin() {
             });
             return;
           }
-          if (updateAction !== 'check') {
+          if (!['check', 'retry'].includes(updateAction)) {
             sendJson(response, 400, {
               status: 'failed',
               detail: 'Choose a valid update action.',
@@ -1403,7 +1948,9 @@ export function localWorkspacePlugin() {
               });
               return;
             }
-            await checkForCodexUpdate({ environment: process.env });
+            await (updateAction === 'retry' ? retryCodexUpdate : checkForCodexUpdate)({
+              environment: process.env,
+            });
           }
           const status = await publicCodexUpdateStatus(process.env);
           let availableModels = [];
@@ -1726,8 +2273,20 @@ export function localWorkspacePlugin() {
             sendJson(response, 200, {
               ...inspected,
               billing: runtimeAiBillingStatus(),
-              capabilities: { stopActiveTurn: true },
+              capabilities: { aiConversationTitles: true, stopActiveTurn: true },
+              runtimeUpdate: await publicCodexUpdateStatus(process.env).catch(() => undefined),
             });
+            const untitledThreads = inspected.threads.filter(
+              (thread) => !thread.compactTitle || !thread.dropdownTitle,
+            );
+            if (untitledThreads.length) {
+              void bridge.scheduleConversationTitles({
+                threadScope:
+                  requestUrl.searchParams.get('threadScope') === 'client' ? 'client' : 'universal',
+                workspace,
+                threads: untitledThreads,
+              });
+            }
           } catch (error) {
             sendJson(response, 503, {
               status: 'unavailable',
@@ -1735,6 +2294,7 @@ export function localWorkspacePlugin() {
                 error instanceof Error ? error.message : 'The local Codex service is unavailable.',
               models: [],
               queuedCount: 0,
+              runtimeUpdate: await publicCodexUpdateStatus(process.env).catch(() => undefined),
             });
           }
           return;
@@ -1765,28 +2325,40 @@ export function localWorkspacePlugin() {
             [
               undefined,
               'enqueue',
+              'refresh-conversation-titles',
               'temporary-question',
               'new-thread',
               'branch-thread',
+              'repair-thread',
               'continue-interrupted-thread',
             ].includes(input.action);
-          if (startsCodexWork && existsSync(updatePaths(process.env).restartRequest)) {
+          const updateActivationPending = existsSync(updatePaths(process.env).restartRequest);
+          const canQueueDuringUpdate =
+            requestUrl.pathname === codexFeedbackEndpoint &&
+            [undefined, 'enqueue'].includes(input.action);
+          if (startsCodexWork && updateActivationPending && !canQueueDuringUpdate) {
             sendJson(response, 409, {
               status: 'updating',
               detail:
-                'Codex is activating a verified update. Your message was not sent; try again after the Workspace Agent reconnects.',
+                'Codex is activating a verified update. This action will be available after the Workspace Agent reconnects.',
             });
             return;
           }
           const bridge = await codexFeedbackBridge();
           let result;
           if (requestUrl.pathname === codexBranchEndpoint) {
-            result = await bridge.forkThread(input);
+            if (!['branch-thread', 'repair-thread'].includes(input.action)) {
+              throw new Error('Choose a valid conversation action.');
+            }
+            result =
+              input.action === 'repair-thread'
+                ? await bridge.repairThread(input)
+                : await bridge.forkThread(input);
           } else {
             switch (input.action) {
               case undefined:
               case 'enqueue':
-                result = await bridge.enqueue(input);
+                result = await bridge.enqueue(input, { deferDelivery: updateActivationPending });
                 break;
               case 'update-queued':
                 result = await bridge.updateQueued(input.id, input);
@@ -1806,6 +2378,12 @@ export function localWorkspacePlugin() {
               case 'delete-thread':
                 result = await bridge.deleteThread(input);
                 break;
+              case 'update-thread-organization':
+                result = await bridge.updateThreadOrganization(input);
+                break;
+              case 'refresh-conversation-titles':
+                result = await bridge.refreshConversationTitles(input);
+                break;
               case 'temporary-question':
                 result = await bridge.temporaryQuestion(input);
                 break;
@@ -1814,6 +2392,9 @@ export function localWorkspacePlugin() {
                 break;
               case 'branch-thread':
                 result = await bridge.forkThread(input);
+                break;
+              case 'repair-thread':
+                result = await bridge.repairThread(input);
                 break;
               case 'continue-interrupted-thread':
                 result = await bridge.continueInterruptedThread(input);

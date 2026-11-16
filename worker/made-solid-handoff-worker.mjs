@@ -1,9 +1,11 @@
 import { hostname } from 'node:os';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
 
 const pollMs = Math.max(1_000, Number(process.env.SITEFORGE_HANDOFF_POLL_MS || 5_000));
@@ -13,6 +15,12 @@ const workerId =
 const execFileAsync = promisify(execFile);
 const vercelTeamSlug = process.env.VERCEL_TEAM_SLUG?.trim() || 'made-solid';
 const vercelCliVersion = process.env.VERCEL_CLI_VERSION?.trim() || '58.9.2';
+const brandedPreviewApex = (
+  process.env.MADE_SOLID_BRANDED_PREVIEW_APEX?.trim() || 'madesolid.com.au'
+).toLowerCase();
+const brandedPreviewVercelConfig = fileURLToPath(
+  new URL('../scripts/branded-preview.vercel.json', import.meta.url),
+);
 const reservedHostnameLabels = new Set([
   'www',
   'dev',
@@ -49,6 +57,13 @@ const requiredReleaseCheckIds = new Set([
   'accessibility',
 ]);
 
+if (
+  brandedPreviewApex.split('.').length < 2 ||
+  brandedPreviewApex.split('.').some((label) => !dnsLabelPattern.test(label))
+) {
+  throw new Error('MADE_SOLID_BRANDED_PREVIEW_APEX must be a valid DNS name.');
+}
+
 function requiredEnvironment(name) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required for the Made Solid handoff worker.`);
@@ -62,6 +77,11 @@ const supabase = createClient(
 );
 const handoffUrl = requiredEnvironment('MADE_SOLID_HANDOFF_URL');
 const handoffSecret = requiredEnvironment('MADE_SOLID_HANDOFF_SECRET');
+const vercelToken =
+  process.env.VERCEL_ACCESS_TOKEN?.trim() || process.env.VERCEL_TOKEN?.trim() || '';
+if (!vercelToken) {
+  throw new Error('VERCEL_ACCESS_TOKEN is required for private handoff preview deployments.');
+}
 const handoffEndpoint = new URL(handoffUrl);
 if (handoffEndpoint.protocol !== 'https:' || handoffEndpoint.username || handoffEndpoint.password) {
   throw new Error('MADE_SOLID_HANDOFF_URL must use HTTPS.');
@@ -69,6 +89,25 @@ if (handoffEndpoint.protocol !== 'https:' || handoffEndpoint.username || handoff
 
 function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function handoffFailureMessage(payload) {
+  const fallback = 'The Made Solid website did not accept this revision.';
+  if (!payload || typeof payload !== 'object') return fallback;
+  const message =
+    typeof payload.message === 'string' && payload.message.trim()
+      ? payload.message.trim()
+      : fallback;
+  const fieldErrors = payload.issues?.fieldErrors;
+  if (!fieldErrors || typeof fieldErrors !== 'object') return message;
+  const details = Object.entries(fieldErrors).flatMap(([field, errors]) =>
+    Array.isArray(errors)
+      ? errors
+          .filter((error) => typeof error === 'string' && error.trim())
+          .map((error) => `${field}: ${error.trim()}`)
+      : [],
+  );
+  return details.length ? `${message} ${details.join('; ')}` : message;
 }
 
 function sourceRepositorySlug(repositoryUrl) {
@@ -123,11 +162,25 @@ function previewDeploymentUrl(value) {
   return previewUrl.toString();
 }
 
-function deploymentWorkspace(job) {
+function brandedPreviewHostname(projectName) {
+  const hostname = `preview.${projectName}.${brandedPreviewApex}`;
+  if (hostname.length > 253) {
+    throw new Error('The branded preview hostname is too long.');
+  }
+  return hostname;
+}
+
+function deploymentWorkspaceCandidates(job) {
+  const slug = sourceRepositorySlug(job.source_repository_url);
   const root = process.env.SITEFORGE_PROSPECT_WORKSPACES_DIR?.trim()
     ? resolve(process.env.SITEFORGE_PROSPECT_WORKSPACES_DIR.trim())
     : resolve(process.cwd(), 'prospect-workspaces');
-  return resolve(root, sourceRepositorySlug(job.source_repository_url));
+  const studioRoot = process.env.SITEFORGE_STUDIO_WORKSPACE_DIR?.trim();
+  return [
+    resolve(root, slug),
+    ...(studioRoot ? [resolve(studioRoot, 'prospect-workspaces', slug)] : []),
+    resolve(process.cwd(), 'prospect-workspaces', slug),
+  ].filter((candidate, index, candidates) => candidates.indexOf(candidate) === index);
 }
 
 async function runWorkspaceCommand(command, args, cwd, timeout = 60_000) {
@@ -139,21 +192,66 @@ async function runWorkspaceCommand(command, args, cwd, timeout = 60_000) {
   });
 }
 
+async function exactSourceWorkspace(job) {
+  let repositoryWithCommit;
+  for (const candidate of deploymentWorkspaceCandidates(job)) {
+    const hasCommit = await runWorkspaceCommand(
+      'git',
+      ['cat-file', '-e', `${job.source_commit}^{commit}`],
+      candidate,
+    )
+      .then(() => true)
+      .catch(() => false);
+    if (!hasCommit) continue;
+    repositoryWithCommit ||= candidate;
+    const [{ stdout: head }, { stdout: status }] = await Promise.all([
+      runWorkspaceCommand('git', ['rev-parse', 'HEAD'], candidate),
+      runWorkspaceCommand('git', ['status', '--porcelain'], candidate),
+    ]);
+    if (head.trim().toLowerCase() === job.source_commit.toLowerCase() && !status.trim()) {
+      return { cwd: candidate, cleanup: async () => undefined };
+    }
+  }
+  if (!repositoryWithCommit) {
+    throw new Error('The exact handed-off commit is not available in a verified local repository.');
+  }
+  const temporaryRoot = await mkdtemp(join(tmpdir(), 'made-solid-handoff-'));
+  const cwd = join(temporaryRoot, sourceRepositorySlug(job.source_repository_url));
+  try {
+    await runWorkspaceCommand(
+      'git',
+      ['worktree', 'add', '--detach', cwd, job.source_commit],
+      repositoryWithCommit,
+    );
+  } catch (error) {
+    await rm(temporaryRoot, { recursive: true, force: true });
+    throw new Error('The exact handed-off commit could not be isolated for preview.', {
+      cause: error,
+    });
+  }
+  return {
+    cwd,
+    cleanup: async () => {
+      await runWorkspaceCommand(
+        'git',
+        ['worktree', 'remove', '--force', cwd],
+        repositoryWithCommit,
+      ).catch(() => undefined);
+      await rm(temporaryRoot, { recursive: true, force: true });
+    },
+  };
+}
+
 async function verifyExactSourceWorkspace(job) {
-  const cwd = deploymentWorkspace(job);
-  const [
-    { stdout: commit },
-    { stdout: tree },
-    { stdout: status },
-    { stdout: remote },
-    { stdout: gitDirectory },
-  ] = await Promise.all([
-    runWorkspaceCommand('git', ['rev-parse', 'HEAD'], cwd),
-    runWorkspaceCommand('git', ['rev-parse', 'HEAD^{tree}'], cwd),
-    runWorkspaceCommand('git', ['status', '--porcelain'], cwd),
-    runWorkspaceCommand('git', ['remote', 'get-url', 'origin'], cwd),
-    runWorkspaceCommand('git', ['rev-parse', '--git-dir'], cwd),
-  ]);
+  const isolated = await exactSourceWorkspace(job);
+  const cwd = isolated.cwd;
+  const [{ stdout: commit }, { stdout: tree }, { stdout: status }, { stdout: gitDirectory }] =
+    await Promise.all([
+      runWorkspaceCommand('git', ['rev-parse', 'HEAD'], cwd),
+      runWorkspaceCommand('git', ['rev-parse', 'HEAD^{tree}'], cwd),
+      runWorkspaceCommand('git', ['status', '--porcelain'], cwd),
+      runWorkspaceCommand('git', ['rev-parse', '--git-common-dir'], cwd),
+    ]);
   if (commit.trim().toLowerCase() !== job.source_commit.toLowerCase()) {
     throw new Error('The local deployment workspace is not on the handed-off commit.');
   }
@@ -161,15 +259,42 @@ async function verifyExactSourceWorkspace(job) {
     throw new Error('The local deployment workspace has uncommitted changes.');
   }
   const expected = new URL(job.source_repository_url).pathname.replace(/\.git$/i, '').toLowerCase();
-  const actual = new URL(remote.trim()).pathname.replace(/\.git$/i, '').toLowerCase();
-  if (actual !== expected) {
-    throw new Error('The local deployment workspace belongs to a different repository.');
+  const remote = await runWorkspaceCommand('git', ['remote', 'get-url', 'origin'], cwd).catch(
+    () => undefined,
+  );
+  if (remote?.stdout.trim()) {
+    const actual = new URL(remote.stdout.trim()).pathname.replace(/\.git$/i, '').toLowerCase();
+    if (actual !== expected) {
+      throw new Error('The local deployment workspace belongs to a different repository.');
+    }
+  } else {
+    const { data: publication, error } = await supabase
+      .from('github_workspace_publications')
+      .select('github_repository_url')
+      .eq('builder_run_id', job.builder_run_id)
+      .eq('status', 'ready')
+      .order('completed_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const published = publication?.github_repository_url
+      ? new URL(publication.github_repository_url).pathname.replace(/\.git$/i, '').toLowerCase()
+      : '';
+    if (error || published !== expected) {
+      throw new Error(
+        'The local workspace has no origin remote and its approved GitHub publication could not be verified.',
+      );
+    }
   }
   const sourceTree = tree.trim().toLowerCase();
   if (!commitPattern.test(sourceTree)) {
     throw new Error('The local deployment workspace has no valid Git tree identity.');
   }
-  return { cwd, gitDirectory: resolve(cwd, gitDirectory.trim()), sourceTree };
+  return {
+    cwd,
+    cleanup: isolated.cleanup,
+    gitDirectory: resolve(cwd, gitDirectory.trim()),
+    sourceTree,
+  };
 }
 
 function requiredAttestationText(attestation, field) {
@@ -347,7 +472,15 @@ async function loadVerifiedValueReport(job, releaseAttestation) {
 }
 
 function vercelArgs(...args) {
-  return ['--yes', `vercel@${vercelCliVersion}`, ...args, '--scope', vercelTeamSlug];
+  return [
+    '--yes',
+    `vercel@${vercelCliVersion}`,
+    ...args,
+    '--scope',
+    vercelTeamSlug,
+    '--token',
+    vercelToken,
+  ];
 }
 
 async function ensureVercelProject(projectName, cwd) {
@@ -367,28 +500,147 @@ async function ensureVercelProject(projectName, cwd) {
   }
 }
 
+function vercelDeploymentRecord(payload) {
+  return payload?.deployment && typeof payload.deployment === 'object'
+    ? payload.deployment
+    : payload;
+}
+
+function parseVercelJson(stdout, failureMessage) {
+  try {
+    return JSON.parse(stdout.trim());
+  } catch (error) {
+    throw new Error(failureMessage, { cause: error });
+  }
+}
+
+async function reusableExactPreview(job, projectName, cwd) {
+  const { stdout } = await runWorkspaceCommand(
+    'npx',
+    vercelArgs('ls', projectName, '--json'),
+    cwd,
+    2 * 60_000,
+  );
+  const payload = parseVercelJson(stdout, 'Vercel preview history could not be read.');
+  const deployment = payload?.deployments?.find(
+    (candidate) =>
+      candidate?.name === projectName &&
+      candidate?.state === 'READY' &&
+      (candidate?.target === null || candidate?.target === 'preview') &&
+      candidate?.meta?.sourceCommit?.toLowerCase() === job.source_commit.toLowerCase() &&
+      candidate?.meta?.brandedPreviewPolicy === 'noindex-v1',
+  );
+  return deployment?.url ? previewDeploymentUrl(deployment.url) : null;
+}
+
+async function waitForReadyVercelDeployment(payload, cwd) {
+  let deployment = vercelDeploymentRecord(payload);
+  const previewUrl = previewDeploymentUrl(deployment?.url);
+  const deadline = Date.now() + 15 * 60_000;
+  while (Date.now() < deadline) {
+    const state = `${deployment?.readyState || deployment?.state || ''}`.toUpperCase();
+    if (state === 'READY') return previewUrl;
+    if (['ERROR', 'CANCELED', 'CANCELLED'].includes(state)) {
+      throw new Error(
+        `Vercel stopped the exact-commit preview in the ${state.toLowerCase()} state.`,
+      );
+    }
+    await wait(5_000);
+    const { stdout } = await runWorkspaceCommand(
+      'npx',
+      vercelArgs('inspect', previewUrl, '--json'),
+      cwd,
+      2 * 60_000,
+    );
+    deployment = vercelDeploymentRecord(
+      parseVercelJson(stdout, 'Vercel preview status could not be read.'),
+    );
+  }
+  throw new Error('Vercel did not finish the exact-commit preview within 15 minutes.');
+}
+
+async function assignBrandedPreview(exactPreviewUrl, projectName, cwd) {
+  const hostname = brandedPreviewHostname(projectName);
+  await runWorkspaceCommand(
+    'npx',
+    vercelArgs('domains', 'add', hostname, projectName),
+    cwd,
+    2 * 60_000,
+  );
+  await runWorkspaceCommand(
+    'npx',
+    vercelArgs('alias', 'set', exactPreviewUrl, hostname),
+    cwd,
+    2 * 60_000,
+  );
+
+  const brandedUrl = `https://${hostname}/`;
+  const { stdout } = await runWorkspaceCommand(
+    'npx',
+    vercelArgs('inspect', brandedUrl, '--json'),
+    cwd,
+    2 * 60_000,
+  );
+  const inspected = vercelDeploymentRecord(
+    parseVercelJson(stdout, 'The branded preview assignment could not be verified.'),
+  );
+  if (
+    `${inspected?.readyState || inspected?.state || ''}`.toUpperCase() !== 'READY' ||
+    previewDeploymentUrl(inspected?.url) !== exactPreviewUrl
+  ) {
+    throw new Error('The branded preview does not point to the exact verified deployment.');
+  }
+
+  const response = await fetch(brandedUrl, {
+    method: 'HEAD',
+    redirect: 'follow',
+    signal: AbortSignal.timeout(30_000),
+  });
+  const finalUrl = new URL(response.url);
+  const robotsTag = response.headers.get('x-robots-tag')?.toLowerCase() || '';
+  if (
+    !response.ok ||
+    finalUrl.hostname.toLowerCase() !== hostname ||
+    !robotsTag.split(',').some((directive) => directive.trim() === 'noindex')
+  ) {
+    throw new Error(
+      'The branded preview is not publicly reachable without a provider login and protected from indexing.',
+    );
+  }
+  return brandedUrl;
+}
+
 async function deployExactSource(job, cwd) {
   const projectName = deploymentProjectName(job);
   await ensureVercelProject(projectName, cwd);
-  const { stdout } = await runWorkspaceCommand(
-    'npx',
-    vercelArgs(
-      'deploy',
-      '--yes',
-      '--project',
-      projectName,
-      '--meta',
-      `sourceCommit=${job.source_commit}`,
-      '--json',
-    ),
-    cwd,
-    15 * 60_000,
-  );
-  const payload = JSON.parse(stdout.trim());
-  if (payload?.status !== 'ok' || payload?.deployment?.readyState !== 'READY') {
-    throw new Error('Vercel did not return a ready exact-commit deployment.');
+  const reusablePreviewUrl = await reusableExactPreview(job, projectName, cwd);
+  let exactPreviewUrl = reusablePreviewUrl;
+  if (!exactPreviewUrl) {
+    const { stdout } = await runWorkspaceCommand(
+      'npx',
+      vercelArgs(
+        'deploy',
+        '--yes',
+        '--local-config',
+        brandedPreviewVercelConfig,
+        '--project',
+        projectName,
+        '--meta',
+        `sourceCommit=${job.source_commit}`,
+        '--meta',
+        'brandedPreviewPolicy=noindex-v1',
+        '--json',
+      ),
+      cwd,
+      15 * 60_000,
+    );
+    const payload = parseVercelJson(stdout, 'Vercel did not return a valid preview deployment.');
+    exactPreviewUrl = await waitForReadyVercelDeployment(payload, cwd);
   }
-  return { previewUrl: previewDeploymentUrl(payload.deployment.url) };
+  return {
+    previewUrl: await assignBrandedPreview(exactPreviewUrl, projectName, cwd),
+    exactPreviewUrl,
+  };
 }
 
 async function updateJob(job, patch) {
@@ -421,6 +673,7 @@ async function cancelled(job, savedAdminRevision = false) {
 }
 
 async function processJob(job) {
+  let workspace;
   try {
     if (await cancelled(job)) return;
     await updateJob(job, {
@@ -430,15 +683,22 @@ async function processJob(job) {
       completed_items: 0,
       lease_expires_at: new Date(Date.now() + 20 * 60_000).toISOString(),
     });
-    const workspace = await verifyExactSourceWorkspace(job);
+    workspace = await verifyExactSourceWorkspace(job);
     const releaseAttestation = await verifyReleaseAttestation(job, workspace);
     await persistReleaseAttestation(job, releaseAttestation);
     const report = await loadVerifiedValueReport(job, releaseAttestation);
+    await updateJob(job, {
+      progress_phase: 'deploying_preview',
+      progress_detail:
+        'Exact source verified. Reusing a matching private preview or waiting for Vercel to finish a new one.',
+      completed_items: 1,
+      lease_expires_at: new Date(Date.now() + 20 * 60_000).toISOString(),
+    });
     const deployment = await deployExactSource(job, workspace.cwd);
     await updateJob(job, {
       progress_phase: 'preview_ready',
       progress_detail:
-        'Vercel built the exact commit as an isolated preview deployment. No production domain was assigned.',
+        'Vercel built the exact commit and pinned its branded preview hostname. No live client domain was assigned.',
       completed_items: 2,
       lease_expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
     });
@@ -480,7 +740,7 @@ async function processJob(job) {
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok || !payload?.handoff?.id || !payload?.adminUrl) {
-      throw new Error(payload?.message || 'The Made Solid website did not accept this revision.');
+      throw new Error(handoffFailureMessage(payload));
     }
     const adminUrl = new URL(payload.adminUrl);
     if (adminUrl.origin !== handoffEndpoint.origin || !adminUrl.pathname.startsWith('/admin')) {
@@ -517,6 +777,8 @@ async function processJob(job) {
       lease_expires_at: null,
       completed_at: new Date().toISOString(),
     }).catch(() => undefined);
+  } finally {
+    await workspace?.cleanup?.();
   }
 }
 

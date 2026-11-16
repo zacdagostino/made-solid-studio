@@ -35,6 +35,7 @@
     "setup:builder": "npm ci --prefix worker/builder-template",
     "workers": "node worker/supervisor.mjs",
     "export:local-build": "node scripts/export-local-build.mjs",
+    "deploy:synchronized-runtime": "bash scripts/deploy-synchronized-runtime",
     "workspace:open": "node scripts/open-prospect-workspace.mjs",
     "test:worker": "node --test tests/worker/*.test.mjs",
     "verify": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run test:e2e"
@@ -51,6 +52,7 @@
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "sharp": "^0.35.5",
     "tailwind-merge": "^3.6.0",
     "vite": "^8.1.4"
   },

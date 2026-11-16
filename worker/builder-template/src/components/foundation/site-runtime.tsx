@@ -226,6 +226,32 @@ function prefersReducedMotion() {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
+function installMadeSolidReviewBridge() {
+  if (window.self === window.top) return;
+  if (document.querySelector('[data-made-solid-review-bridge]')) return;
+
+  let parentOrigin = 'https://madesolid.com.au';
+  try {
+    const referrer = new URL(document.referrer);
+    const trustedParent =
+      referrer.hostname === 'madesolid.com.au' ||
+      referrer.hostname.endsWith('.madesolid.com.au') ||
+      referrer.hostname === 'localhost' ||
+      referrer.hostname === '127.0.0.1';
+    if (!trustedParent) return;
+    parentOrigin = referrer.origin;
+  } catch {
+    // Production Clientspace is the safe default when referrer detail is unavailable.
+  }
+
+  const script = document.createElement('script');
+  script.src = 'https://madesolid.com.au/review-bridge.js?v=20261002-settled-email-capture-v2';
+  script.dataset.madeSolidParentOrigin = parentOrigin;
+  script.dataset.madeSolidReviewBridge = 'true';
+  script.defer = true;
+  document.head.appendChild(script);
+}
+
 function channelLuminance(channel: number) {
   const value = channel / 255;
   return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
@@ -766,6 +792,7 @@ export function SiteRuntime() {
 
   useLayoutEffect(() => {
     document.documentElement.classList.add('sf-runtime');
+    installMadeSolidReviewBridge();
     prioritiseBrandLogos();
     const stopNavigationMotion = startNavigationMotion();
     const stopNavigationInteractions = startNavigationInteractions();

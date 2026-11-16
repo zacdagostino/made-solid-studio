@@ -11,6 +11,7 @@ import type {
   ResearchArtifact,
 } from './domain';
 import { groupVisualAssets } from './visual-asset-groups';
+import { isPublicWebsitePageUrl, normaliseWebsitePageUrl } from './public-page-url';
 
 export const buildManifestSchemaVersion = 7;
 export const codexBuilderContractVersion = 'made-solid-studio-codex-builder-v11';
@@ -281,7 +282,17 @@ export function createBuildManifestData(
   workspace: ProspectWorkspace,
   brief: RedesignBrief,
 ): BuildManifestData {
-  const selectedPageUrls = new Set(brief.sourceSelections.pageUrls);
+  const selectedPageUrls = new Set(
+    brief.sourceSelections.pageUrls.filter(isPublicWebsitePageUrl).map(normaliseWebsitePageUrl),
+  );
+  const pagePlansBySourceUrl = new Map(
+    brief.draft.pagePlans
+      .filter(
+        (plan): plan is typeof plan & { sourceUrl: string } =>
+          typeof plan.sourceUrl === 'string' && isPublicWebsitePageUrl(plan.sourceUrl),
+      )
+      .map((plan) => [normaliseWebsitePageUrl(plan.sourceUrl), plan]),
+  );
   const selectedAssetIds = new Set(brief.sourceSelections.assetIds);
   const canonicalAssetIds = new Map<string, string>();
   for (const group of groupVisualAssets(
@@ -300,11 +311,16 @@ export function createBuildManifestData(
   );
   const selectedPages = buildPageRoutes(
     workspace.capturedPages
-      .filter((page) => selectedPageUrls.has(page.url))
+      .filter(
+        (page) =>
+          isPublicWebsitePageUrl(page.url) &&
+          selectedPageUrls.has(normaliseWebsitePageUrl(page.url)),
+      )
       .map((page) => {
-        const plan = brief.draft.pagePlans.find((candidate) => candidate.sourceUrl === page.url);
+        const url = normaliseWebsitePageUrl(page.url);
+        const plan = pagePlansBySourceUrl.get(url);
         return {
-          url: page.url,
+          url,
           title: page.title,
           pageType: page.pageType,
           canonicalUrl: page.canonicalUrl,
@@ -325,14 +341,18 @@ export function createBuildManifestData(
       ),
   );
   const pageCoverage = workspace.capturedPages
-    .filter((page) => selectedPageUrls.has(page.url))
+    .filter(
+      (page) =>
+        isPublicWebsitePageUrl(page.url) && selectedPageUrls.has(normaliseWebsitePageUrl(page.url)),
+    )
     .map((page) => {
-      const plan = brief.draft.pagePlans.find((candidate) => candidate.sourceUrl === page.url);
+      const url = normaliseWebsitePageUrl(page.url);
+      const plan = pagePlansBySourceUrl.get(url);
       if (!plan || plan.disposition === 'needs_review') {
-        throw new Error(`Review the page disposition for ${page.url} before building.`);
+        throw new Error(`Review the page disposition for ${url} before building.`);
       }
       return {
-        url: page.url,
+        url,
         title: page.title,
         pageType: page.pageType,
         canonicalUrl: page.canonicalUrl,

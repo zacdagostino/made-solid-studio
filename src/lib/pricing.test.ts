@@ -4,7 +4,9 @@ import {
   approvePricingCalculation,
   calculateBuildPricing,
   defaultPricingOptions,
+  pricingQuoteExpired,
   pricingQuoteMatches,
+  pricingQuoteTermsMatch,
 } from './pricing';
 
 function manifest(
@@ -93,6 +95,10 @@ describe('build pricing', () => {
       pricingQuoteMatches({ ...approved, validUntil: '2000-01-01T00:00:00Z' }, calculated),
     ).toBe(false);
     expect(
+      pricingQuoteTermsMatch({ ...approved, validUntil: '2000-01-01T00:00:00Z' }, calculated),
+    ).toBe(true);
+    expect(pricingQuoteExpired({ ...approved, validUntil: '2000-01-01T00:00:00Z' })).toBe(true);
+    expect(
       pricingQuoteMatches(approved, {
         ...calculated,
         sourceScope: { ...calculated.sourceScope, sourceCommit: 'changed' },
@@ -116,6 +122,22 @@ describe('build pricing', () => {
       setupCents: 99_000,
       recurringMonths: 24,
     });
+    expect(result.paymentSchedule).toMatchObject([
+      {
+        label: 'Proposal acceptance',
+        dueTrigger: 'Due when the proposal is accepted and the project is activated.',
+      },
+      {
+        label: 'Content and refinement approval',
+        dueTrigger:
+          'Due when the client content, requested refinements and final design are approved.',
+      },
+      {
+        label: 'Launch and handover',
+        dueTrigger:
+          'Due after final checks and before the website goes live or source files are transferred.',
+      },
+    ]);
     expect(result.reviewRequired).toBe(false);
   });
 

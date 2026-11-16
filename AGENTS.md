@@ -6,6 +6,14 @@
 - Do not edit `dist/` directly. Treat it as build output; make changes in source files and rebuild.
 - Ask before adding dependencies, changing build tooling, changing deployment configuration, or making a visual redesign outside the requested scope.
 
+## Synchronized development runtime releases
+
+- The owner has authorised verified development deployments without an additional permission prompt when an implementation adds or changes a private Studio runtime endpoint, worker endpoint, or matching Clientspace receiver. This standing authorization does not include sending client communications, charging or changing payment configuration, publishing a prospect website, assigning a domain, or launching production client work.
+- Railway is the sole deployment platform for Made Solid Studio and the Made Solid website/Clientspace. Do not use Vercel for either runtime, do not add Vercel deployment credentials or commands, and do not describe either product as Vercel-hosted. Historical Vercel references may remain only in dated release records that clearly describe past state.
+- Never expose backend-dependent UI ahead of its matching service. For a cross-product contract, verify and deploy the receiving service first, prove its protected endpoint exists, then deploy Studio and prove the exact runtime capability from `/health`.
+- Use `npm run deploy:synchronized-runtime` for the Studio-and-Clientspace rehearsal contract. It deploys the Made Solid website/Clientspace Railway service first and must stop before the Studio Railway deployment if Clientspace verification, deployment, or endpoint checks fail.
+- A source-only hot update is not completion for a backend-dependent feature. Do not tell the owner to retry until the synchronized runtime health check passes.
+
 ## Codespace repository layout
 
 - This Codespace intentionally contains two sibling Git repositories that are developed together when a task spans the Studio and Clientspace:

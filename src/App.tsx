@@ -57,7 +57,9 @@ import {
 } from 'lucide-react';
 import {
   Component,
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useId,
   useMemo,
@@ -92,7 +94,9 @@ import { AgentArchitectureOverview } from './components/AgentArchitectureOvervie
 import { MarkdownContent } from './components/MarkdownContent';
 import { TaxExpensesPage } from './components/TaxExpensesPage';
 import { PricingCalculator } from './components/PricingCalculator';
+import { WebsiteBuilderSettings } from './components/WebsiteBuilderSettings';
 import { useProposalDraft } from './components/useProposalDraft';
+import { CreateRehearsal, RehearsalWorkspace } from './components/RehearsalWorkspace';
 import { OutreachReadinessPanel } from './components/OutreachReadinessPanel';
 import { ClientEmailDesk } from './components/ClientEmailDesk';
 import {
@@ -119,7 +123,7 @@ import {
   ToastRegion,
   type ToastNotice,
 } from './components/ui';
-import type { PricingQuoteSnapshot, PricingSourceScope } from './lib/pricing';
+import { formatAud, type PricingQuoteSnapshot, type PricingSourceScope } from './lib/pricing';
 import { confirmOpenAiApiUsage, openAiApiFeaturesEnabled } from './lib/ai-billing';
 import {
   isOpenTask,
@@ -145,6 +149,8 @@ import {
   type BuilderRunMode,
   type BuilderRun,
   type BuilderEvent,
+  type BuilderPreferences,
+  type BuilderProfileId,
   type ClientPreviewPublicationInput,
   type MadeSolidHandoffInput,
   type OutreachComplianceInput,
@@ -162,6 +168,12 @@ import {
   type StructuredVisualContent,
   type VisualContentCandidate,
 } from './lib/domain';
+import {
+  builderPreferencesChangedEvent,
+  defaultBuilderPreferences,
+  effectiveBuilderProfile,
+  normalizeBuilderPreferences,
+} from './lib/builder-preferences';
 import { groupVisualAssets } from './lib/visual-asset-groups';
 import { resolveClientHandoffEmail, type HandoffEmailSelection } from './lib/handoff-contact';
 import { SupabaseWorkspaceRepository } from './lib/cloud-repository';
@@ -171,10 +183,13 @@ import { detectCapabilities } from './lib/capability-inventory';
 import { siteforgeRepository, type WorkspaceRepository } from './lib/repository';
 import { getSupabaseClient, isSupabaseConfigured, usesLocalStorage } from './lib/supabase';
 import { studioRuntimeFetch } from './lib/studio-runtime';
+import { devicePreviewUrl } from './lib/device-preview';
+import { openPreviewTab } from './lib/preview-launch';
 import { openCodexPanel } from './lib/codex-panel-events';
 import { developmentStudioUrl, isDevelopmentStudio, studioSurface } from './lib/studio-surface';
 import {
   clearWorkspaceCache,
+  hasWorkspaceCache,
   readWorkspaceCache,
   writeWorkspaceCache,
 } from './lib/workspace-cache';
@@ -194,12 +209,13 @@ type WorkspaceTab =
   | 'report-preview'
   | 'activity';
 type AgentStudioSection = 'refine' | 'learning' | 'agent' | 'versions';
+const WorkspaceRepositoryContext = createContext<WorkspaceRepository | undefined>(undefined);
 type Route =
   | { page: 'today' }
   | { page: 'data' }
   | { page: 'usage'; builderRunId?: string }
   | { page: 'tax' }
-  | { page: 'settings' }
+  | { page: 'settings'; section?: 'codex-updates' }
   | { page: 'development' }
   | { page: 'codex' }
   | { page: 'website-editor'; businessId: string }
@@ -213,7 +229,27 @@ function studioPreviewUrl(
   source: string,
   returnRoute = window.location.hash,
   workspaceDirectory?: string,
+  label?: string,
 ) {
+  const configuredPreviewOrigin = import.meta.env.VITE_SITEFORGE_PREVIEW_ORIGIN?.trim();
+  if (
+    configuredPreviewOrigin &&
+    new URL(source).origin === new URL(configuredPreviewOrigin).origin
+  ) {
+    const returnUrl = new URL(window.location.href);
+    if (returnRoute.startsWith('#/') && !returnRoute.startsWith('#//')) {
+      returnUrl.hash = returnRoute;
+    }
+    return devicePreviewUrl(source, {
+      device: 'desktop',
+      label:
+        label ??
+        (workspaceDirectory
+          ? `${workspaceDirectory.replaceAll('-', ' ')} live website`
+          : 'Generated website'),
+      returnUrl: returnUrl.href,
+    });
+  }
   const shell = new URL(window.location.href);
   const query = new URLSearchParams({ source });
   if (returnRoute.startsWith('#/') && !returnRoute.startsWith('#//')) {
@@ -243,6 +279,7 @@ const workspaceTabs = [
   { id: 'report-preview' as const, label: 'Client report preview', icon: FileSearch },
   { id: 'activity' as const, label: 'Activity', icon: Clock3 },
 ];
+const rehearsalWorkspaceTabs = workspaceTabs.filter((item) => item.id === 'handoff');
 
 function isWorkspaceTab(value: string | undefined): value is WorkspaceTab {
   return workspaceTabs.some((tab) => tab.id === value);
@@ -271,7 +308,12 @@ function routeFromHash(hash: string): Route {
       tab: isWorkspaceTab(parts[2]) ? parts[2] : isWorkspaceTab(parts[4]) ? parts[4] : undefined,
     };
   }
-  if (parts[0] === 'settings') return { page: 'settings' };
+  if (parts[0] === 'settings') {
+    return {
+      page: 'settings',
+      section: parts[1] === 'codex-updates' ? 'codex-updates' : undefined,
+    };
+  }
   if (parts[0] === 'development') return { page: 'development' };
   if (parts[0] === 'codex') return { page: 'codex' };
   if (parts[0] === 'usage') return { page: 'usage', builderRunId: parts[1] };
@@ -293,7 +335,9 @@ function routeFromHash(hash: string): Route {
 
 function hrefForRoute(route: Route) {
   if (route.page === 'today') return '#/today';
-  if (route.page === 'settings') return '#/settings';
+  if (route.page === 'settings') {
+    return route.section === 'codex-updates' ? '#/settings/codex-updates' : '#/settings';
+  }
   if (route.page === 'development') return '#/development';
   if (route.page === 'codex') return '#/codex';
   if (route.page === 'website-editor') return `#/website-editor/${route.businessId}`;
@@ -940,10 +984,14 @@ function TodayPage({
   workspaces: ProspectWorkspace[];
   openWorkspace: (businessId: string) => void;
 }) {
-  const openTasks = workspaces.flatMap((workspace) =>
+  const pipelineBusinesses = businesses.filter((business) => !business.isRehearsal);
+  const pipelineWorkspaces = workspaces.filter((workspace) => !workspace.business.isRehearsal);
+  const openTasks = pipelineWorkspaces.flatMap((workspace) =>
     workspace.tasks.filter(isOpenTask).map((task) => ({ task, business: workspace.business })),
   );
-  const waitingReview = businesses.filter((business) => business.reviewState === 'needs_review');
+  const waitingReview = pipelineBusinesses.filter(
+    (business) => business.reviewState === 'needs_review',
+  );
   const nextActions = [...openTasks]
     .sort((left, right) => right.business.updatedAt.localeCompare(left.business.updatedAt))
     .slice(0, 5);
@@ -957,16 +1005,18 @@ function TodayPage({
       />
 
       <section aria-label="Today metrics" className="metric-grid metric-grid--operational">
-        <Metric detail="potential clients" label="Prospects" value={businesses.length} />
+        <Metric detail="potential clients" label="Prospects" value={pipelineBusinesses.length} />
         <Metric detail="need human review" label="Review queue" value={waitingReview.length} />
         <Metric detail="across all records" label="Open tasks" value={openTasks.length} />
         <Metric
           detail="ready for outreach"
           label="Approved"
-          value={businesses.filter((business) => business.stage === 'outreach_pending').length}
+          value={
+            pipelineBusinesses.filter((business) => business.stage === 'outreach_pending').length
+          }
         />
       </section>
-      <PipelineFunnel businesses={businesses} />
+      <PipelineFunnel businesses={pipelineBusinesses} />
 
       <div className="today-grid">
         <section aria-labelledby="next-actions-title" className="work-panel">
@@ -1017,7 +1067,7 @@ function TodayPage({
             <Clock3 aria-hidden="true" size={19} />
           </div>
           <div className="activity-list activity-list--compact">
-            {workspaces
+            {pipelineWorkspaces
               .flatMap((workspace) =>
                 workspace.activity
                   .slice(0, 1)
@@ -1139,7 +1189,8 @@ function ProspectsPage({
   openWorkspace: (businessId: string) => void;
 }) {
   const [filter, setFilter] = useState<'all' | 'active' | 'outreach'>('all');
-  const visibleBusinesses = businesses.filter((business) => {
+  const pipelineBusinesses = businesses.filter((business) => !business.isRehearsal);
+  const visibleBusinesses = pipelineBusinesses.filter((business) => {
     if (filter === 'active')
       return !['outreach_pending', 'lost', 'paused'].includes(business.stage);
     if (filter === 'outreach') return business.stage === 'outreach_pending';
@@ -1154,7 +1205,7 @@ function ProspectsPage({
         title="Prospects"
       />
       <IntakeForm createProspect={createProspect} onCreated={createWorkspace} />
-      <PipelineFunnel businesses={businesses} />
+      <PipelineFunnel businesses={pipelineBusinesses} />
 
       <section aria-labelledby="prospect-list-title" className="prospect-section">
         <div className="section-heading section-heading--controls">
@@ -1174,6 +1225,11 @@ function ProspectsPage({
             </select>
           </label>
         </div>
+
+        <p className="prospect-section__test-note">
+          Safe Clientspace tests stay attached to their original prospect and are hidden from this
+          pipeline.
+        </p>
 
         {visibleBusinesses.length ? (
           <div className="prospect-table">
@@ -3071,7 +3127,7 @@ function BuilderFileExplorer({
               variant="primary"
             >
               <ArrowUpRight aria-hidden="true" size={16} />
-              {isOpeningWebsite ? 'Opening preview' : 'Preview website'}
+              {isOpeningWebsite ? 'Opening device preview' : 'Preview devices'}
             </Button>
           ) : null}
           {sourceBundle && urls[sourceBundle.id] ? (
@@ -7510,11 +7566,42 @@ function builderProgressPhaseLabel(phase: string) {
     building_website: 'Codex is building the website',
     building_output: 'Compiling the private preview',
     quality_checks: 'Running browser quality checks',
+    repairing_quality: 'Codex is repairing quality findings',
     capturing_preview: 'Checking responsive viewports',
     saving_outputs: 'Saving private build outputs',
     retry_wait: 'Waiting to retry',
   };
   return labels[phase] ?? phase.replaceAll('_', ' ');
+}
+
+type AutomaticQualityRepair = {
+  attempt: number;
+  initialFindingIds: string[];
+  remainingFindingIds: string[];
+  result: 'running' | 'passed' | 'review_required' | 'repair_failed';
+};
+
+function automaticQualityRepairForRun(run: BuilderRun): AutomaticQualityRepair | undefined {
+  const candidate = run.failureContext.automaticQualityRepair;
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return undefined;
+  const value = candidate as Record<string, unknown>;
+  const result = value.result;
+  if (
+    result !== 'running' &&
+    result !== 'passed' &&
+    result !== 'review_required' &&
+    result !== 'repair_failed'
+  ) {
+    return undefined;
+  }
+  const stringList = (items: unknown) =>
+    Array.isArray(items) ? items.filter((item): item is string => typeof item === 'string') : [];
+  return {
+    attempt: typeof value.attempt === 'number' ? value.attempt : 1,
+    initialFindingIds: stringList(value.initialFindingIds),
+    remainingFindingIds: stringList(value.remainingFindingIds),
+    result,
+  };
 }
 
 function testBuildChangeSummary(run: BuilderRun, previousRun?: BuilderRun) {
@@ -8623,6 +8710,7 @@ function BuilderHistoryEntry({
         <span>
           <strong>{builderRunModeLabel(run.buildMode)}</strong>
           <small>{formatDateTime(run.createdAt)}</small>
+          <BuilderRunModel run={run} />
         </span>
         <StatusBadge tone={builderRunTone(run.status)}>{builderRunLabel(run.status)}</StatusBadge>
       </summary>
@@ -8780,6 +8868,156 @@ function WebsiteToneControl({
   );
 }
 
+function builderCodexExecutionLabel(run: BuilderRun | undefined, isTestBuild: boolean) {
+  if (!run) return isTestBuild ? 'Next Agent Studio test' : 'Next full website build';
+  if (run.status === 'queued') return 'Queued build';
+  if (run.status === 'running') return 'Build in progress';
+  if (run.status === 'paused') return 'Build paused';
+  if (run.status === 'ready' || run.status === 'review_required') return 'Completed build';
+  return 'Stopped build';
+}
+
+function BuilderRunModel({ run }: { run: BuilderRun }) {
+  const model =
+    run.model ||
+    (run.status === 'queued' ? 'Awaiting worker assignment' : 'Not recorded for this run');
+
+  return (
+    <span className="builder-run-model">
+      <Bot aria-hidden="true" size={16} />
+      <span>
+        <small>Codex model</small>
+        <strong>
+          {model}
+          {run.reasoningEffort ? ` · ${run.reasoningEffort} reasoning` : ''}
+        </strong>
+      </span>
+    </span>
+  );
+}
+
+function BuilderCodexExecutionSummary({
+  isTestBuild,
+  profileId,
+  run,
+}: {
+  isTestBuild: boolean;
+  profileId: BuilderProfileId;
+  run?: BuilderRun;
+}) {
+  const repository = useContext(WorkspaceRepositoryContext);
+  const [preferences, setPreferences] = useState<BuilderPreferences>(defaultBuilderPreferences);
+  const [runtimeVersion, setRuntimeVersion] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [profileUnavailable, setProfileUnavailable] = useState(false);
+  const [runtimeUnavailable, setRuntimeUnavailable] = useState(false);
+
+  const loadPlan = useCallback(async () => {
+    if (!repository || run) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setProfileUnavailable(false);
+    setRuntimeUnavailable(false);
+    const runtimeStatus = import('./lib/codex-runtime-updates').then(({ readCodexUpdateStatus }) =>
+      readCodexUpdateStatus(),
+    );
+    const [preferencesResult, runtimeResult] = await Promise.allSettled([
+      repository.getBuilderPreferences(),
+      runtimeStatus,
+    ]);
+    if (preferencesResult.status === 'fulfilled') {
+      setPreferences(normalizeBuilderPreferences(preferencesResult.value));
+    } else {
+      setProfileUnavailable(true);
+    }
+    if (runtimeResult.status === 'fulfilled') {
+      setRuntimeVersion(runtimeResult.value.currentVersion);
+    } else {
+      setRuntimeUnavailable(true);
+    }
+    setLoading(false);
+  }, [repository, run]);
+
+  useEffect(() => {
+    void loadPlan();
+    if (run) return;
+    const reloadPlan = () => void loadPlan();
+    window.addEventListener(builderPreferencesChangedEvent, reloadPlan);
+    return () => window.removeEventListener(builderPreferencesChangedEvent, reloadPlan);
+  }, [loadPlan, run]);
+
+  const plannedProfile = effectiveBuilderProfile(preferences, profileId);
+  const missingRunValue =
+    run?.status === 'queued' ? 'Awaiting worker assignment' : 'Not recorded for this run';
+  const plannedModel = loading
+    ? 'Checking saved profile…'
+    : profileUnavailable
+      ? 'Saved profile unavailable'
+      : plannedProfile.model;
+  const plannedReasoning = loading
+    ? 'Checking saved profile…'
+    : profileUnavailable
+      ? 'Saved profile unavailable'
+      : plannedProfile.reasoningEffort;
+  const model = run?.model || (run ? missingRunValue : plannedModel);
+  const reasoning = run?.reasoningEffort || (run ? missingRunValue : plannedReasoning);
+  const runtime = run?.codexRuntimeVersion
+    ? `v${run.codexRuntimeVersion}`
+    : run
+      ? run.status === 'queued'
+        ? 'Records when the worker starts'
+        : run.status === 'running' || run.status === 'paused'
+          ? 'Runtime snapshot pending'
+          : 'Not recorded for this run'
+      : loading
+        ? 'Checking current runtime…'
+        : runtimeVersion
+          ? `Current v${runtimeVersion} · exact version records at worker start`
+          : runtimeUnavailable
+            ? 'Current runtime unavailable · exact version records at worker start'
+            : 'Exact version records at worker start';
+  const source = run?.executionProfileSource
+    ? `${run.executionProfileSource} snapshot`
+    : run
+      ? 'Immutable run snapshot'
+      : loading
+        ? 'Loading saved profile…'
+        : profileUnavailable
+          ? 'Saved profile unavailable'
+          : `${plannedProfile.source} profile`;
+
+  return (
+    <section
+      aria-busy={!run && loading}
+      aria-label="Codex build execution"
+      aria-live="polite"
+      className="builder-codex-execution"
+    >
+      <div className="builder-codex-execution__status">
+        <Eyebrow>Codex version</Eyebrow>
+        <strong>{builderCodexExecutionLabel(run, isTestBuild)}</strong>
+        <span>{source}</span>
+      </div>
+      <dl>
+        <div>
+          <dt>Model</dt>
+          <dd>{model}</dd>
+        </div>
+        <div>
+          <dt>Reasoning</dt>
+          <dd>{reasoning}</dd>
+        </div>
+        <div>
+          <dt>Runtime</dt>
+          <dd>{runtime}</dd>
+        </div>
+      </dl>
+    </section>
+  );
+}
+
 function BuilderRunPanel({
   workspace,
   editedWebsite,
@@ -8920,9 +9158,9 @@ function BuilderRunPanel({
                 : 'package-behaviour',
             title: `Package ${agentPackageVersionLabel(selectedAgentPackage.version)} testing behaviour`,
             detail: selectedAgentPackage.capabilityProposal || selectedAgentPackage.summary,
-            revision: `v${selectedAgentPackage.version}.0.22`,
+            revision: `v${selectedAgentPackage.version}.0.32`,
             change:
-              'Latest edit: complete builds now offer Light, Dark, and Agent decides tonal direction without equating light with white or dark with black.',
+              'Latest edit: homepage tests now begin with an evidence-grounded company summary and reject decorative fallback hero media when no approved photography or verified content supports it.',
           },
           {
             id: 'website-tone-direction',
@@ -8937,46 +9175,55 @@ function BuilderRunPanel({
             id: 'client-url-release-contract',
             title: 'Client URL and release contract',
             detail:
-              'Generated tests use private /test links, complete builds use private /build links, and approved Clientspace review uses an expiring /review capability. A generated full-site build remains an immutable baseline after editing begins. Live website editing stays in the selected client route on dev.studio.madesolid.com.au, and the current edited website is bound to its exact Git revision. Website editing compares the working files with the latest committed checkpoint and states whether they match, contain uncommitted changes, need sync, or have a newer clean commit. Made Solid handoff requires a matching exact-commit release attestation and creates review material only: it never deploys production or attaches a client domain. Production remains a separate confirmed release action.',
-            revision: `v${selectedAgentPackage.version}.8`,
+              'Generated tests use private /test links, complete builds use private /build links, and approved Clientspace review uses an expiring /review capability. A generated full-site build remains an immutable baseline after editing begins. Live website editing stays in the selected client route on dev.studio.madesolid.com.au, and the current edited website is bound to its exact Git revision. Website editing compares the working files with the latest committed checkpoint and states whether they match, contain uncommitted changes, need sync, or have a newer clean commit. Made Solid handoff requires a matching exact-commit release attestation and may attach only a dedicated preview.<project>.madesolid.com.au review hostname pinned to that exact deployment. Generated websites expose a trusted-parent review bridge so Clientspace can capture the settled exact homepage for the introduction email. The client live domain and production release remain separate confirmed actions.',
+            revision: `v${selectedAgentPackage.version}.29`,
             change:
-              'Latest edit: Website editing now shows whether the current working website exactly matches the latest committed version or contains newer work that still needs committing or syncing.',
+              'Latest edit: Inspect gives the website more room on phones with a two-row toolbar, accessible device icons, a compact zoom footer and a quieter canvas while retaining signed email replies and full-screen viewing.',
           },
           {
             id: 'visual-codex-feedback',
             title: 'Codex Workspace Agent and visual feedback',
             detail:
-              'The Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy, available as both a persistent popup and a dedicated Studio page. The hello@madesolid.com.au website gate keeps the launcher and embedded panel available only to that exact authenticated Studio owner. Every conversation in the selector shows when it is working, and a finished conversation shows an unread notification until the reviewer opens it. It defaults to included ChatGPT subscription access and gives only the authenticated Studio owner a disclosed, reversible switch to separately billed OpenAI API credits for all Studio AI work when subscription allowance is exhausted. Production Studio stays on its exact reviewed release, while an authenticated dev.studio.madesolid.com.au visit opens the full Studio UI from the persistent editable checkout with immediate source updates; workspace.madesolid.com.au remains a compatibility entry during the staged migration. The owner-only live-update connection stays active while Chrome is backgrounded, and privately cached development modules make an unavoidable reload restore the saved route and workspace before live hydration. Each prospect has one client-named website editor that combines the current preview with client-scoped Codex; the private source repository and local preview runtime are separately labelled supporting controls, not a second editor. Reviewers can send text, images, or both, choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. While Codex is working and the composer is empty, the primary Send control becomes a Stop Codex control that interrupts the selected supervisor and active attached agents. Typing text or attaching an image immediately restores Send so another message can be queued; clearing the draft restores Stop. Stop follows the exact selected turn, disappears promptly on completion, and is a separate control from Send so a completion or server-version race cannot submit a stop click as a message. Model, Reasoning, and Agent team stay together in compact Run setup, while usage, billing, Fast, and voice preferences sit behind a separate Chat settings cog. A completed final Codex reply can branch into a separately selected conversation that preserves native context, clean prompts, image evidence, and the same client or universal workspace boundary while leaving the original chat unchanged. Voice reading offers saved Natural or Literal interpretation and three speeds, explicit preview and manual Read, opt-in chat-scoped auto-read, progressive private Google audio with device fallback, and a persistent read-along dock with active-word restart, exact seeking where available, five-second skipping, pause, resume, and stop. Natural reading says “then” for right-arrow icons and keeps a verification introduction while it skips its long technical results list. Selecting text inside one completed Codex reply offers a temporary read-only quick question that inherits the whole selected conversation, follows the saved auto-read preference, and never changes the original chat or workspace; the same excerpt can instead be appended to the draft, sent immediately without replacing that draft, or dismissed on both popup and page chat. An explicit per-phone Web Push opt-in sends generic private alerts after a tracked Studio Codex supervisor turn completes successfully and after a stable Codex runtime update passes its health check, including while Studio is closed. The runtime checks official releases daily, waits for all Codex work to finish, shares one activated executable with chat and builder jobs, restores the previous version after a failed startup, and shows the exact version, lifecycle, and official release highlights in Settings. Studio source edits apply in place without restarting the workspace, and a compact top status announces the brief update while the current route, popup, draft, and conversation remain mounted. The launcher is present during startup checks, and a refresh restores the open selected conversation and its exact transcript reading position without changing the active prospect route. Exact-client preview capabilities stay private and out of the clean development URL. Observable activity and queue state appears without invented progress.',
-            revision: `v${selectedAgentPackage.version}.116`,
+              'The Codex Workspace Agent handles Studio and website-editing requests in one compact chat with an IDE-style conversation hierarchy, available as both a persistent popup and a dedicated Studio page. The popup also includes Feature Releases: a protected registry that records material Codex file changes against their exact conversation and completed turn, preserves follow-up lineage, and separates committed source from verified development and production deployment. Its protected runtime continuously reconciles completed Codex turns, while an open Features view refreshes automatically without replacing current evidence with loading placeholders. Its release overview separates Made Solid Studio, the public website, Clientspace and Clientspace admin, compares development with production for each surface, lists the features affecting it and excludes internal research from product counts. A verified older deployment is labelled as an earlier live revision whenever newer work exists. Feature cards use short semantic product names and one-sentence owner-facing descriptions rather than raw implementation prompts or Codex output; their wording can be edited, improved or safely merged while retaining every source turn and resetting incompatible deployment evidence. The hello@madesolid.com.au website gate keeps the launcher and embedded panel available only to that exact authenticated Studio owner, and the website control is excluded from Clientspace thumbnails and interactive client preview frames. Every conversation title is privately interpreted by AI from its newest task and bounded recent context, with a compact selected-chat label and a fuller dropdown title. The selector permanently distinguishes Running from Completed, while an unread completion is an additional notification cleared when the reviewer opens it. It uses the signed-in ChatGPT plan first, visibly reports when exhausted included usage has moved onto purchased ChatGPT credits, shows the verified remaining credit balance in Chat settings, and keeps the optional server API-key billing switch clearly separate. Production Studio stays on its exact reviewed release, while an authenticated dev.studio.madesolid.com.au visit opens the full Studio UI from the persistent editable checkout with immediate source updates; workspace.madesolid.com.au remains a compatibility entry during the staged migration. The owner-only live-update connection stays active while Chrome is backgrounded, and privately cached development modules make an unavoidable reload restore the saved route and workspace before live hydration. Each prospect has one client-named website editor that combines the current preview with client-scoped Codex; the private source repository and local preview runtime are separately labelled supporting controls, not a second editor. Reviewers can dictate into the message draft with browser speech recognition, see interim words, stop and edit the transcript, and explicitly send only the reviewed text. They can also send text, images, or both; attached-image previews stay in a compact horizontal strip without forcing the draft field open or pushing its inline actions away. Reviewers can choose direct work or Agent team delegation, then inspect the current team assignment, truthful lifecycle state, timing, and child-owned results without exposing inherited supervisor history. While Codex is working and the composer is empty, the primary Send control becomes a Stop Codex control that interrupts the selected supervisor and active attached agents. Typing text or attaching an image immediately restores Send so another message can be queued; clearing the draft restores Stop. Stop follows the exact selected turn, disappears promptly on completion, and is a separate control from Send so a completion or server-version race cannot submit a stop click as a message. Model, Reasoning, and Agent team stay together in compact Run setup, while usage, billing, Fast, and voice preferences sit behind a separate Chat settings cog that links to the route-persistent Codex updates page. A failed or rolled-back runtime update can be retried from that page or directly from its chat notice with a visible loading and error state. Dismissing one exact update lifecycle notice persists across reloads, while a later state can still appear. A completed final Codex reply can branch into a separately selected conversation that preserves native context, clean prompts, image evidence, and the same client or universal workspace boundary. An intentional branch keeps its source chat visible, while recovery from a broken chat privately retains but hides the unusable source from the chooser. Voice reading offers saved Natural or Literal interpretation and three speeds, explicit preview and manual Read, opt-in chat-scoped auto-read, progressive private Google audio with device fallback, and a persistent read-along dock with active-word restart, exact seeking where available, five-second skipping, pause, resume, and stop. Natural reading says “then” for right-arrow icons and reads every numbered item, bullet, and technical handoff detail in sequence. Selecting text inside one completed Codex reply offers a temporary read-only quick question that inherits the whole selected conversation, follows the saved auto-read preference, and never changes the original chat or workspace; the same excerpt can instead be appended to the draft, sent immediately without replacing that draft, or dismissed on both popup and page chat. An explicit per-phone Web Push opt-in sends generic private alerts after a tracked Studio Codex supervisor turn completes successfully and after a stable Codex runtime update passes its health check, including while Studio is closed. The runtime checks official releases daily, waits for all Codex work to finish, shares one activated executable with chat and builder jobs, restores the previous version after a failed startup, and shows the exact version, lifecycle and official release highlights in Settings. Studio source edits apply in place without restarting the workspace, and a compact top status announces the brief update while the current route, popup, draft and conversation remain mounted. The launcher is present and immediately operable during startup checks. A bounded private cache restores the latest selected transcript while its header remains visibly Waiting until live status succeeds; a refresh also restores the open conversation and exact transcript reading position without changing the active prospect route. The authenticated website host remembers an open panel for the current tab but keeps every unready Studio document hidden behind a Clientspace-owned connecting surface until the exact trusted iframe reports ready. Offline, browser and hosting failures become an actionable retry surface instead of exposing raw provider pages. Exact-client preview capabilities stay private and out of the clean development URL. Observable activity and queue state appears without invented progress.',
+            revision: `v${selectedAgentPackage.version}.169`,
             change:
-              'Latest edit: stalled Codex connections time out and reconnect so new chats and Interrupt cannot wait forever; busy sends stay queued and unacknowledged sends are not automatically replayed.',
+              'Latest edit: Studio verifies a completed Codex turn before holding later messages, so stale active summaries cannot leave chat requests queued and Interrupt advances the selected request.',
           },
           {
             id: 'inbound-client-email-review',
             title: 'Context-aware inbound client email review',
             detail:
-              'Each prospect has an email desk where inbound messages produce a review-only reply grounded in the saved client stage, matched contact, website research, current work and outreach safeguards. The reviewer is alerted, can ask AI for a targeted revision, can edit the subject and body directly, and can exercise the complete flow with visibly isolated dummy-account emails. No reply sends automatically.',
-            revision: `v${selectedAgentPackage.version}.2`,
+              'Each prospect has an email desk where inbound messages produce a review-only reply grounded in the saved client stage, matched contact, website research, current work and outreach safeguards. Clientspace continuously checks the mailbox for exact project email matches, prepares private drafts, and shows unread mail in the project overview and Messages tab while an open admin session announces new arrivals. The reviewer can revise or edit a draft directly. No reply sends automatically.',
+            revision: `v${selectedAgentPackage.version}.4`,
             change:
-              'Latest edit: the same review inbox now appears in each Clientspace Admin Emails section, grounded in the selected project’s client, commercial, release, message, document, and assistant state while retaining review alerts, prompted and direct edits, dummy testing, and no automatic sending.',
+              'Latest edit: Clientspace now checks the inbox in the background, identifies each matching client’s new email in Overview and Messages, and shows a toast in open admin sessions. Opening an email clears its unread marker; AI replies remain review-only.',
+          },
+          {
+            id: 'client-introduction-outreach',
+            title: 'Introduction and Clientspace access',
+            detail:
+              'The first cold introduction offers a normal email reply without mentioning Clientspace or creating access. After the prospect is interested, Clientspace Admin can send a short passwordless access email whose primary action follows one concise workspace summary. The scanner-safe confirmation opens the responsive welcome, and the public FAQ explains the real login route, future email-link sign-in, expired links and new devices. No follow-up sends automatically, and protected test rehearsals keep separate resets for introduction and access state.',
+            revision: `v${selectedAgentPackage.version}.19`,
+            change:
+              'Latest edit: the email homepage screenshot waits for the real website intro, loaded media and completed reveal animations; unfinished or broken pages fail capture. Private website frames now allow the configured Clientspace Admin origin, with loading feedback and retry for blank or delayed previews.',
           },
           {
             id: 'commercial-offer-strategy',
             title: 'Automatic cold-prospect offer strategy',
             detail:
               'The newest working source produces a scale-aware fixed offer menu for Clientspace. Repeated routes receive capped volume pricing; page systems and approved capabilities drive value; the reviewer sees the full-scope value and automatic ceiling; and clients can choose milestones, outright payment, a fixed-term managed plan, or a clearly reduced essentials launch.',
-            revision: `v${selectedAgentPackage.version}.1`,
+            revision: `v${selectedAgentPackage.version}.7`,
             change:
-              'Latest edit: the selected offer and its full commitment now remain immutable through legal acceptance, Stripe checkout, managed billing and funnel reporting, while outreach approval requires a reviewed contact basis and channel safeguards.',
+              'Latest edit: protected development rehearsals now reconfirm an expired unchanged quote directly inside Clientspace Admin, without redirecting to Studio or exposing production credentials.',
           },
           {
             id: 'hero-handoff',
             title: 'Visible hero entrance after the logo handoff',
             detail:
               'After the logo has reached the real navigation mark, the hero heading, supporting copy, and visual media reveal separately. The entrance no longer plays behind the loading overlay, so visitors can see it happen.',
-            revision: `v${selectedAgentPackage.version}.41`,
+            revision: `v${selectedAgentPackage.version}.43`,
             change:
-              'Latest edit: explicit hero hooks now let browser checks verify that the complete heading and primary action fit the first compact viewport before optional media.',
+              'Latest edit: hero motion now follows the evidence-led composition instead of requiring sequence, stagger, scroll-depth, or multiple effect families on every homepage.',
           },
           {
             id: 'responsive-sidebar',
@@ -9010,18 +9257,18 @@ function BuilderRunPanel({
             title: 'Multi-page navigation architecture',
             detail:
               'Every selected output remains a real page. Primary destinations stay consistent while deeper pages are organised through meaningful parent pages, nested navigation, breadcrumbs, cards, or contextual links, and every page remains reachable from the homepage.',
-            revision: `v${selectedAgentPackage.version}.36`,
+            revision: `v${selectedAgentPackage.version}.37`,
             change:
-              'Latest edit: every selected source now receives a reviewed build, merge, redirect, workflow-state, contextual, or exclusion outcome; legacy aliases and hidden states are no longer forced into navigation.',
+              'Latest edit: temporary authentication and session redirects are now excluded before page planning and manifest generation, while every legitimate public source keeps its reviewed coverage outcome.',
           },
           {
             id: 'next-component-architecture',
             title: 'Next.js generated component architecture',
             detail:
               'The agent creates each business’s visual tokens, UI primitives, patterns, sections, site components, layouts, and pages on a pinned strict TypeScript, Tailwind, Base UI, and Lucide foundation.',
-            revision: `v${selectedAgentPackage.version}.43`,
+            revision: `v${selectedAgentPackage.version}.44`,
             change:
-              'Latest edit: generated heroes now expose reusable section, heading, primary-action, and media hooks, with mobile-first composition that puts the proposition before supporting media.',
+              'Latest edit: the agent now records what the company does, its audience, visitor action and source evidence before choosing a hero, and permits a deliberate typographic hero when no photography is approved.',
           },
           {
             id: 'runtime-profiles',
@@ -9037,9 +9284,9 @@ function BuilderRunPanel({
             title: 'Framework and responsive quality gates',
             detail:
               'Generated source must pass formatting, lint, strict typing, production build, route and provenance checks, browser interactions, accessibility, and exact responsive evidence.',
-            revision: `v${selectedAgentPackage.version}.93`,
+            revision: `v${selectedAgentPackage.version}.96`,
             change:
-              'Latest edit: one saved client proposal replaces duplicate handoff forms and quotes, preserves editable captured details, checks quote freshness and leads into the existing Clientspace with explicit invitation, payment and launch steps.',
+              'Latest edit: homepage quality checks now validate company context and media provenance, reject fake hero-media slots, and flag the repeated dark split serif-and-italic formula unless specific evidence justifies it.',
           },
         ]
       : [];
@@ -9321,6 +9568,8 @@ function BuilderRunPanel({
   const passedQualityChecks =
     run?.qualitySummary.checks.filter((check) => check.status === 'passed') ?? [];
   const qualityNeedsAttention = failedQualityChecks.length > 0 || reviewQualityChecks.length > 0;
+  const automaticQualityRepair = run ? automaticQualityRepairForRun(run) : undefined;
+  const automaticQualityRepairActive = run?.progressPhase === 'repairing_quality';
   const qualityDisclosureId = `builder-quality-${buildKind}`;
   const runId = run?.id;
   useEffect(() => {
@@ -9631,22 +9880,41 @@ function BuilderRunPanel({
   }
 
   async function openPreview(builderRunId: string, mode: BuilderPreviewMode) {
-    const previewTab = window.open('about:blank', '_blank');
-    if (previewTab) previewTab.opener = null;
+    const { previewTab, release: releasePreviewTab } = openPreviewTab(
+      `${workspace.business.name} website`,
+    );
     setIsOpeningPreview(true);
     setMessage('');
     try {
       const previewUrl = await onOpenPreview(builderRunId, mode);
       if (previewTab && !previewTab.closed) {
-        previewTab.location.replace(studioPreviewUrl(previewUrl));
+        releasePreviewTab();
+        previewTab.opener = null;
+        previewTab.location.replace(
+          studioPreviewUrl(
+            previewUrl,
+            window.location.hash,
+            undefined,
+            `${workspace.business.name} website`,
+          ),
+        );
       } else {
         // A popup can be blocked in browser-hosted environments such as
         // Codespaces. This runs after the asynchronous access-token request,
         // so attempting a second popup would be blocked as well. Navigating
         // the current tab keeps the private preview accessible.
-        window.location.assign(studioPreviewUrl(previewUrl));
+        releasePreviewTab();
+        window.location.assign(
+          studioPreviewUrl(
+            previewUrl,
+            window.location.hash,
+            undefined,
+            `${workspace.business.name} website`,
+          ),
+        );
       }
     } catch (error) {
+      releasePreviewTab();
       previewTab?.close();
       setMessage(
         error instanceof Error ? error.message : 'The private preview could not be opened.',
@@ -9700,14 +9968,14 @@ function BuilderRunPanel({
           <ChevronDown aria-hidden="true" size={18} />
         </span>
       </summary>
-      {isTestBuild &&
-      onQualityRecheck &&
-      run.sourceCheckpointAvailable &&
-      (run.status === 'ready' || run.status === 'review_required') ? (
+      {onQualityRecheck &&
+      (run.status === 'ready' || run.status === 'review_required') &&
+      (failedQualityChecks.length || reviewQualityChecks.length) ? (
         <div className="builder-quality__recheck">
           <p>
-            Reapply the selected package’s protected navigation and Brand Kit rules to this saved
-            source, then compile, capture, and test it again without a Codex page generation pass.
+            Run Codex against these recorded findings, then compile and browser-test the result
+            again. If this build has no validated source checkpoint, Studio rebuilds the same
+            selected scope from its immutable manifest and approved assets.
           </p>
           <Button
             disabled={isRechecking || !selectedAgentPackageId}
@@ -9716,7 +9984,7 @@ function BuilderRunPanel({
             variant="secondary"
           >
             <RotateCcw aria-hidden="true" size={16} />
-            {isRechecking ? 'Queueing recheck' : 'Recheck saved source'}
+            {isRechecking ? 'Queueing repair' : 'Fix quality issues'}
           </Button>
         </div>
       ) : null}
@@ -9734,6 +10002,39 @@ function BuilderRunPanel({
         </details>
       ) : null}
     </details>
+  ) : null;
+
+  const runIdentity = run ? (
+    <section
+      className="builder-run-identity"
+      aria-label={isTestBuild ? 'Latest test build identity' : 'Generated baseline identity'}
+    >
+      <div className="builder-run-identity__primary">
+        <Eyebrow>{isTestBuild ? 'Latest test build' : 'Immutable baseline build'}</Eyebrow>
+        <strong>
+          {isTestBuild ? 'Build' : 'Baseline'} {run.id.slice(0, 8)}
+        </strong>
+        <code title={run.id}>{run.id}</code>
+      </div>
+      <dl>
+        <div>
+          <dt>Build type</dt>
+          <dd>{builderRunModeLabel(run.buildMode)}</dd>
+        </div>
+        <div>
+          <dt>Manifest</dt>
+          <dd title={run.buildManifestId}>{run.buildManifestId.slice(0, 8)}</dd>
+        </div>
+        <div>
+          <dt>Package</dt>
+          <dd>{agentPackageVersionLabel(run.agentPackageVersion)}</dd>
+        </div>
+        <div>
+          <dt>{run.completedAt ? 'Completed' : 'Created'}</dt>
+          <dd>{formatDateTime(run.completedAt ?? run.createdAt)}</dd>
+        </div>
+      </dl>
+    </section>
   ) : null;
 
   return (
@@ -9762,984 +10063,1094 @@ function BuilderRunPanel({
                 : 'Create this prospect’s complete private website from its approved build inputs, then review the generated source and browser checks.'}
           </p>
         </div>
-        {run ? (
-          <StatusBadge tone={builderRunTone(run.status)}>
-            {run.status === 'review_required' && failedQualityChecks.length
-              ? isEditedWebsiteDescendant
-                ? 'Baseline checks failed'
-                : 'Build checks failed'
-              : builderRunLabel(run.status)}
-          </StatusBadge>
-        ) : null}
+        <div className="builder-run__header-actions">
+          <BuilderSettingsControl compact />
+          {run ? (
+            <StatusBadge tone={builderRunTone(run.status)}>
+              {run.status === 'review_required' && failedQualityChecks.length
+                ? isEditedWebsiteDescendant
+                  ? 'Baseline checks failed'
+                  : 'Build checks failed'
+                : builderRunLabel(run.status)}
+            </StatusBadge>
+          ) : null}
+        </div>
       </div>
 
-      {run ? (
-        <section className="builder-run-identity" aria-label="Generated baseline identity">
-          <div className="builder-run-identity__primary">
-            <Eyebrow>{isTestBuild ? 'Latest test build' : 'Immutable baseline build'}</Eyebrow>
-            <strong>
-              {isTestBuild ? 'Build' : 'Baseline'} {run.id.slice(0, 8)}
-            </strong>
-            <code title={run.id}>{run.id}</code>
-          </div>
-          <dl>
-            <div>
-              <dt>Build type</dt>
-              <dd>{builderRunModeLabel(run.buildMode)}</dd>
-            </div>
-            <div>
-              <dt>Manifest</dt>
-              <dd title={run.buildManifestId}>{run.buildManifestId.slice(0, 8)}</dd>
-            </div>
-            <div>
-              <dt>Package</dt>
-              <dd>{agentPackageVersionLabel(run.agentPackageVersion)}</dd>
-            </div>
-            <div>
-              <dt>{run.completedAt ? 'Completed' : 'Created'}</dt>
-              <dd>{formatDateTime(run.completedAt ?? run.createdAt)}</dd>
-            </div>
-          </dl>
-        </section>
-      ) : null}
+      {(() => {
+        const buildInformation = (
+          <>
+            <BuilderCodexExecutionSummary
+              isTestBuild={isTestBuild}
+              profileId={
+                !isTestBuild
+                  ? 'full_site'
+                  : testPageAction === 'website'
+                    ? 'site_test'
+                    : 'page_test'
+              }
+              run={run}
+            />
 
-      {run && !active && qualityNeedsAttention ? (
-        <section
-          aria-labelledby={`builder-attention-${buildKind}-title`}
-          className="builder-run-attention"
-          role={isEditedWebsiteDescendant ? 'region' : 'alert'}
-        >
-          <header>
-            <span className="builder-run-attention__icon">
-              <ShieldAlert aria-hidden="true" size={22} />
-            </span>
-            <div>
-              <Eyebrow>
-                {isEditedWebsiteDescendant ? 'Historical baseline evidence' : 'Action required'} ·
-                Build {run.id.slice(0, 8)}
-              </Eyebrow>
-              {isTestBuild ? (
-                <h4 id={`builder-attention-${buildKind}-title`}>
-                  {failedQualityChecks.length
-                    ? `${failedQualityChecks.length} quality check${failedQualityChecks.length === 1 ? '' : 's'} failed`
-                    : `${reviewQualityChecks.length} quality check${reviewQualityChecks.length === 1 ? '' : 's'} need review`}
-                </h4>
-              ) : (
-                <h3 id={`builder-attention-${buildKind}-title`}>
-                  {failedQualityChecks.length
-                    ? `${failedQualityChecks.length} quality check${failedQualityChecks.length === 1 ? '' : 's'} failed`
-                    : `${reviewQualityChecks.length} quality check${reviewQualityChecks.length === 1 ? '' : 's'} need review`}
-                </h3>
-              )}
-              <p>
-                {isEditedWebsiteDescendant
-                  ? `These checks failed on the generated baseline. They do not describe the current edited commit ${editedWebsite?.commit?.slice(0, 8) ?? ''}; that website has its own release verification below.`
-                  : 'This build remains private and is not ready for client handoff. Repair these findings in a linked run, then verify the replacement.'}
-              </p>
-            </div>
-            <StatusBadge tone={isEditedWebsiteDescendant ? 'neutral' : 'danger'}>
-              {isEditedWebsiteDescendant ? 'Superseded baseline' : 'Not client-ready'}
-            </StatusBadge>
-          </header>
-          <ul aria-label="Quality findings that need attention">
-            {[...failedQualityChecks, ...reviewQualityChecks].map((check) => (
-              <li key={check.id}>
-                <CircleAlert aria-hidden="true" size={18} />
-                <div>
-                  <strong>{check.label}</strong>
-                  <p>{qualityCheckDetailPreview(check.detail)}</p>
-                </div>
-              </li>
-            ))}
-          </ul>
-          <ButtonGroup className="builder-run-attention__actions">
-            {isEditedWebsiteDescendant ? (
-              <ButtonLink
-                href={hrefForRoute({
-                  page: 'prospects',
-                  businessId: workspace.business.id,
-                  tab: 'editing',
-                })}
-                variant="primary"
+            {run && (automaticQualityRepairActive || automaticQualityRepair) ? (
+              <section
+                aria-live={automaticQualityRepairActive ? 'polite' : undefined}
+                className={`builder-quality-repair-status${automaticQualityRepairActive ? ' is-active' : ''}`}
+                role="status"
               >
-                <Laptop aria-hidden="true" size={16} />
-                Open current edited website
-              </ButtonLink>
-            ) : null}
-            {!isEditedWebsiteDescendant && onMoveToAgentStudio ? (
-              run.agentStudioSourceAt ? (
-                <ButtonLink
-                  href={`#/agent-studio/refine/${workspace.business.id}`}
-                  variant="primary"
-                >
-                  <FolderTree aria-hidden="true" size={16} />
-                  Continue repair in Agent Studio
-                </ButtonLink>
-              ) : (
-                <Button
-                  disabled={movingRunId === run.id}
-                  onClick={() => void moveToAgentStudio(run.id)}
-                  type="button"
-                >
-                  <Wrench aria-hidden="true" size={16} />
-                  {movingRunId === run.id
-                    ? 'Opening repair workspace'
-                    : failedQualityChecks.length
-                      ? `Repair ${failedQualityChecks.length} failed check${failedQualityChecks.length === 1 ? '' : 's'}`
-                      : 'Resolve quality review'}
-                </Button>
-              )
-            ) : null}
-            <Button
-              disabled={isOpeningPreview}
-              onClick={() => void openPreview(run.id, 'ready')}
-              type="button"
-              variant="secondary"
-            >
-              <ArrowUpRight aria-hidden="true" size={16} />
-              {isOpeningPreview ? 'Opening preview' : 'Inspect failed private preview'}
-            </Button>
-            <Button
-              onClick={() => {
-                const qualityDisclosure = document.getElementById(qualityDisclosureId);
-                if (qualityDisclosure instanceof HTMLDetailsElement) qualityDisclosure.open = true;
-                qualityDisclosure?.scrollIntoView({
-                  behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
-                    ? 'auto'
-                    : 'smooth',
-                  block: 'start',
-                });
-              }}
-              type="button"
-              variant="secondary"
-            >
-              <ListChecks aria-hidden="true" size={16} />
-              View quality evidence
-            </Button>
-          </ButtonGroup>
-        </section>
-      ) : null}
-
-      <div
-        className={`builder-run__actions${isTestBuild ? '' : ' builder-run__actions--prospect'}`}
-      >
-        {isTestBuild && (active || retainedTestContext) ? (
-          <section className="builder-active-test" aria-labelledby="builder-active-test-title">
-            <div className="builder-active-test__header">
-              <div>
-                <Eyebrow>Current private test</Eyebrow>
-                <h4 id="builder-active-test-title">
-                  {active
-                    ? `${run ? usageBuildLabel({ builderRunId: run.id }, workspace).split(' · ')[0] : 'Test'} is building`
-                    : `${run ? usageBuildLabel({ builderRunId: run.id }, workspace).split(' · ')[0] : 'Test'} needs attention`}
-                </h4>
-              </div>
-              <StatusBadge tone={active ? 'warning' : 'danger'}>
-                {active ? 'Live' : 'Paused on this test'}
-              </StatusBadge>
-            </div>
-            <dl className="builder-active-test__context">
-              <div>
-                <dt>Test package</dt>
-                <dd>
-                  {run ? (
-                    <AgentPackageDetailsDialog agentPackages={agentPackages} run={run} />
-                  ) : (
-                    'Not assigned'
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>Test approach</dt>
-                <dd>
-                  {run?.buildMode === 'site_test'
-                    ? 'Whole-site feature revision'
-                    : run?.targetSourceUrls?.length
-                      ? `Create ${run.targetSourceUrls.length} pages from scratch`
-                      : run?.parentBuilderRunId
-                        ? 'Revise previous page (scoped)'
-                        : 'Create page from scratch'}
-                </dd>
-              </div>
-            </dl>
-            {run ? <BuilderRunUsage records={workspace.aiUsageRecords} run={run} /> : null}
-            {active ? (
-              <>
-                <BuilderActivityWaiting
-                  detail={
-                    run?.progressDetail ||
-                    'Waiting for the worker to save the first activity update.'
-                  }
-                  label={builderProgressPhaseLabel(run?.progressPhase || 'queued')}
-                />
-                <div aria-hidden="true" className="builder-active-test__skeleton">
-                  <span className="evidence-skeleton evidence-skeleton--value" />
-                  <span className="evidence-skeleton evidence-skeleton--detail" />
+                <span className="builder-quality-repair-status__icon">
+                  <RotateCcw
+                    aria-hidden="true"
+                    className={automaticQualityRepairActive ? 'spin' : ''}
+                  />
+                </span>
+                <div>
+                  <Eyebrow>Automatic quality repair</Eyebrow>
+                  <strong>
+                    {automaticQualityRepairActive
+                      ? 'Fixing quality findings before final review'
+                      : automaticQualityRepair?.result === 'passed'
+                        ? 'Quality findings fixed automatically'
+                        : automaticQualityRepair?.result === 'repair_failed'
+                          ? 'Original private preview preserved'
+                          : 'Automatic repair completed'}
+                  </strong>
+                  <p>
+                    {automaticQualityRepairActive
+                      ? 'Codex is applying one focused repair pass, then Studio will compile and run the complete browser quality suite again.'
+                      : automaticQualityRepair?.result === 'passed'
+                        ? `${automaticQualityRepair.initialFindingIds.length} initial finding${automaticQualityRepair.initialFindingIds.length === 1 ? '' : 's'} repaired. The replacement passed every automated check.`
+                        : automaticQualityRepair?.result === 'repair_failed'
+                          ? 'The bounded repair pass could not finish, so Studio retained the original working preview and its evidence for review.'
+                          : `${automaticQualityRepair?.remainingFindingIds.length ?? 0} finding${automaticQualityRepair?.remainingFindingIds.length === 1 ? '' : 's'} remain after the automatic pass. The build stays private for focused review.`}
+                  </p>
                 </div>
-              </>
-            ) : (
-              <>
-                <p className="muted-copy">
-                  This failed test remains selected with its original package and test approach.
-                  Continue it from the saved private source, open its frozen draft below, or keep
-                  testing with a different package or page.
-                </p>
-                <ButtonGroup>
-                  {onResumeBuild && savedSourceAvailable ? (
-                    <Button
-                      disabled={isResuming}
-                      onClick={() => run && void resumeBuild(run.id)}
-                      type="button"
-                      variant="secondary"
+                <StatusBadge
+                  tone={
+                    automaticQualityRepairActive
+                      ? 'warning'
+                      : automaticQualityRepair?.result === 'passed'
+                        ? 'success'
+                        : 'danger'
+                  }
+                >
+                  {automaticQualityRepairActive
+                    ? 'Repairing'
+                    : automaticQualityRepair?.result === 'passed'
+                      ? 'Passed'
+                      : 'Review needed'}
+                </StatusBadge>
+              </section>
+            ) : null}
+
+            {!isTestBuild ? runIdentity : null}
+
+            {run && !active && qualityNeedsAttention ? (
+              <section
+                aria-labelledby={`builder-attention-${buildKind}-title`}
+                className="builder-run-attention"
+                role={isEditedWebsiteDescendant ? 'region' : 'alert'}
+              >
+                <header>
+                  <span className="builder-run-attention__icon">
+                    <ShieldAlert aria-hidden="true" size={22} />
+                  </span>
+                  <div>
+                    <Eyebrow>
+                      {isEditedWebsiteDescendant
+                        ? 'Historical baseline evidence'
+                        : 'Action required'}{' '}
+                      · Build {run.id.slice(0, 8)}
+                    </Eyebrow>
+                    {isTestBuild ? (
+                      <h4 id={`builder-attention-${buildKind}-title`}>
+                        {failedQualityChecks.length
+                          ? `${failedQualityChecks.length} quality check${failedQualityChecks.length === 1 ? '' : 's'} failed`
+                          : `${reviewQualityChecks.length} quality check${reviewQualityChecks.length === 1 ? '' : 's'} need review`}
+                      </h4>
+                    ) : (
+                      <h3 id={`builder-attention-${buildKind}-title`}>
+                        {failedQualityChecks.length
+                          ? `${failedQualityChecks.length} quality check${failedQualityChecks.length === 1 ? '' : 's'} failed`
+                          : `${reviewQualityChecks.length} quality check${reviewQualityChecks.length === 1 ? '' : 's'} need review`}
+                      </h3>
+                    )}
+                    <p>
+                      {isEditedWebsiteDescendant
+                        ? `These checks failed on the generated baseline. They do not describe the current edited commit ${editedWebsite?.commit?.slice(0, 8) ?? ''}; that website has its own release verification below.`
+                        : automaticQualityRepair
+                          ? 'Studio already ran one automatic repair pass. This build remains private until the remaining findings are resolved and the replacement passes.'
+                          : 'This build remains private and is not ready for client handoff. Repair these findings in a linked run, then verify the replacement.'}
+                    </p>
+                  </div>
+                  <StatusBadge tone={isEditedWebsiteDescendant ? 'neutral' : 'danger'}>
+                    {isEditedWebsiteDescendant ? 'Superseded baseline' : 'Not client-ready'}
+                  </StatusBadge>
+                </header>
+                <ul aria-label="Quality findings that need attention">
+                  {[...failedQualityChecks, ...reviewQualityChecks].map((check) => (
+                    <li key={check.id}>
+                      <CircleAlert aria-hidden="true" size={18} />
+                      <div>
+                        <strong>{check.label}</strong>
+                        <p>{qualityCheckDetailPreview(check.detail)}</p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                <ButtonGroup className="builder-run-attention__actions">
+                  {isEditedWebsiteDescendant ? (
+                    <ButtonLink
+                      href={hrefForRoute({
+                        page: 'prospects',
+                        businessId: workspace.business.id,
+                        tab: 'editing',
+                      })}
+                      variant="primary"
                     >
-                      <RotateCcw aria-hidden="true" size={16} />
-                      {isResuming ? 'Continuing test' : 'Continue this test'}
-                    </Button>
+                      <Laptop aria-hidden="true" size={16} />
+                      Open current edited website
+                    </ButtonLink>
+                  ) : null}
+                  {!isEditedWebsiteDescendant && onMoveToAgentStudio ? (
+                    run.agentStudioSourceAt ? (
+                      <ButtonLink
+                        href={`#/agent-studio/refine/${workspace.business.id}`}
+                        variant="primary"
+                      >
+                        <FolderTree aria-hidden="true" size={16} />
+                        Continue repair in Agent Studio
+                      </ButtonLink>
+                    ) : (
+                      <Button
+                        disabled={movingRunId === run.id}
+                        onClick={() => void moveToAgentStudio(run.id)}
+                        type="button"
+                      >
+                        <Wrench aria-hidden="true" size={16} />
+                        {movingRunId === run.id
+                          ? 'Opening repair workspace'
+                          : failedQualityChecks.length
+                            ? `Repair ${failedQualityChecks.length} failed check${failedQualityChecks.length === 1 ? '' : 's'}`
+                            : 'Resolve quality review'}
+                      </Button>
+                    )
                   ) : null}
                   <Button
-                    disabled={isResuming}
-                    onClick={startAlternativeTest}
+                    disabled={isOpeningPreview}
+                    onClick={() => void openPreview(run.id, 'ready')}
                     type="button"
-                    variant="quiet"
+                    variant="secondary"
                   >
-                    <Play aria-hidden="true" size={16} />
-                    Test something else
+                    <ArrowUpRight aria-hidden="true" size={16} />
+                    {isOpeningPreview ? 'Opening device preview' : 'Preview devices'}
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      const qualityDisclosure = document.getElementById(qualityDisclosureId);
+                      if (qualityDisclosure instanceof HTMLDetailsElement)
+                        qualityDisclosure.open = true;
+                      qualityDisclosure?.scrollIntoView({
+                        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+                          ? 'auto'
+                          : 'smooth',
+                        block: 'start',
+                      });
+                    }}
+                    type="button"
+                    variant="secondary"
+                  >
+                    <ListChecks aria-hidden="true" size={16} />
+                    View quality evidence
                   </Button>
                 </ButtonGroup>
-              </>
-            )}
-          </section>
-        ) : null}
-        {isTestBuild && !active && !retainedTestContext ? (
-          <div className="builder-run__tests">
-            <label className="builder-run__package-picker">
-              <span className="agent-production-version-label">
-                Test package
-                <AgentProductionNotification count={pendingProductionFeatureCount} />
-              </span>
-              <select
-                aria-label="Test agent package"
-                disabled={isRequesting || isRequestingSiteTest || !testPackages.length}
-                onChange={(event) => setSelectedAgentPackageId(event.target.value)}
-                value={selectedAgentPackageId ?? ''}
-              >
-                {testPackages.map((agentPackage) => (
-                  <option key={agentPackage.id} value={agentPackage.id}>
-                    {agentPackageVersionLabel(agentPackage.version)} ·{' '}
-                    {agentPackage.status === 'published' ? 'Current production' : 'Approved test'}
-                  </option>
-                ))}
-              </select>
-              <small>
-                {selectedAgentPackageId === publishedPackage?.id
-                  ? 'This test uses the current production package.'
-                  : 'This test is pinned to a derived package and cannot change the production package.'}
-              </small>
-            </label>
-            <p className="builder-run__action-label">Test</p>
-            <div className="builder-page-test">
-              <fieldset className="builder-page-test__actions">
-                <legend>Test approach</legend>
-                <label>
-                  <input
-                    checked={testPageAction === 'create'}
-                    disabled={isRequesting || isRequestingSiteTest}
-                    name="test-page-action"
-                    onChange={() => setTestPageAction('create')}
-                    type="radio"
-                  />
-                  <span>Create page from scratch</span>
-                </label>
-                <label>
-                  <input
-                    checked={testPageAction === 'revise'}
-                    disabled={isRequesting || isRequestingSiteTest}
-                    name="test-page-action"
-                    onChange={() => setTestPageAction('revise')}
-                    type="radio"
-                  />
-                  <span>Revise previous page</span>
-                </label>
-                <label>
-                  <input
-                    checked={testPageAction === 'website'}
-                    disabled={isRequesting || isRequestingSiteTest}
-                    name="test-page-action"
-                    onChange={() => setTestPageAction('website')}
-                    type="radio"
-                  />
-                  <span>Revise a website</span>
-                </label>
-              </fieldset>
-              {testPageAction === 'create' ? (
-                <fieldset aria-describedby="builder-page-set-help" className="builder-page-set">
-                  <legend>
-                    <span>Approved pages</span>
-                    <strong aria-live="polite">{targetSourceUrls.length} selected</strong>
-                  </legend>
-                  <div className="builder-page-set__toolbar">
-                    <p>Select any combination to build together from a clean foundation.</p>
-                    <ButtonGroup>
-                      <Button
-                        disabled={
-                          isRequesting ||
-                          isRequestingSiteTest ||
-                          targetSourceUrls.length === allPageTestOptions.length
-                        }
-                        onClick={() =>
-                          setTargetSourceUrls(allPageTestOptions.map((page) => page.url))
-                        }
-                        type="button"
-                        variant="quiet"
-                      >
-                        Select all
-                      </Button>
-                      <Button
-                        disabled={isRequesting || isRequestingSiteTest || !targetSourceUrls.length}
-                        onClick={() => setTargetSourceUrls([])}
-                        type="button"
-                        variant="quiet"
-                      >
-                        Clear
-                      </Button>
-                    </ButtonGroup>
+              </section>
+            ) : null}
+          </>
+        );
+        const builderActions = (
+          <div
+            className={`builder-run__actions${isTestBuild ? ' builder-run__actions--test' : ' builder-run__actions--prospect'}`}
+          >
+            {isTestBuild && (active || retainedTestContext) ? (
+              <section className="builder-active-test" aria-labelledby="builder-active-test-title">
+                <div className="builder-active-test__header">
+                  <div>
+                    <Eyebrow>Current private test</Eyebrow>
+                    <h4 id="builder-active-test-title">
+                      {active
+                        ? `${run ? usageBuildLabel({ builderRunId: run.id }, workspace).split(' · ')[0] : 'Test'} is building`
+                        : `${run ? usageBuildLabel({ builderRunId: run.id }, workspace).split(' · ')[0] : 'Test'} needs attention`}
+                    </h4>
                   </div>
-                  <label className="builder-page-set__search">
-                    <span>Search approved pages</span>
-                    <span className="builder-page-set__search-control">
-                      <Search aria-hidden="true" size={18} />
-                      <input
-                        autoComplete="off"
-                        disabled={isRequesting || isRequestingSiteTest}
-                        onChange={(event) => setPageSearchQuery(event.target.value)}
-                        placeholder="Search name, path, or URL"
-                        type="search"
-                        value={pageSearchQuery}
-                      />
-                      {pageSearchQuery ? (
-                        <IconButton
-                          disabled={isRequesting || isRequestingSiteTest}
-                          label="Clear page search"
-                          onClick={() => setPageSearchQuery('')}
-                          type="button"
-                          variant="quiet"
-                        >
-                          <X aria-hidden="true" size={16} />
-                        </IconButton>
-                      ) : null}
-                    </span>
-                  </label>
-                  <div className="builder-page-set__options">
-                    {selectedPageTestOptions.length ? (
-                      <section
-                        aria-labelledby="builder-page-set-selected-title"
-                        className="builder-page-set__group builder-page-set__group--selected"
-                      >
-                        <div className="builder-page-set__group-heading">
-                          <strong id="builder-page-set-selected-title">Selected pages</strong>
-                          <span>Pinned at top</span>
-                        </div>
-                        <div className="builder-page-set__grid">
-                          {selectedPageTestOptions.map(renderPageSetOption)}
-                        </div>
-                      </section>
-                    ) : null}
-                    <section
-                      aria-labelledby="builder-page-set-results-title"
-                      className="builder-page-set__group"
-                    >
-                      <div className="builder-page-set__group-heading">
-                        <strong id="builder-page-set-results-title">
-                          {normalizedPageSearchQuery ? 'Search results' : 'Available pages'}
-                        </strong>
-                        <span>
-                          {availablePageTestOptions.length}{' '}
-                          {availablePageTestOptions.length === 1 ? 'page' : 'pages'}
-                        </span>
-                      </div>
-                      {availablePageTestOptions.length ? (
-                        <div className="builder-page-set__grid">
-                          {availablePageTestOptions.map(renderPageSetOption)}
-                        </div>
+                  <StatusBadge tone={active ? 'warning' : 'danger'}>
+                    {active ? 'Live' : 'Paused on this test'}
+                  </StatusBadge>
+                </div>
+                <dl className="builder-active-test__context">
+                  <div>
+                    <dt>Test package</dt>
+                    <dd>
+                      {run ? (
+                        <AgentPackageDetailsDialog agentPackages={agentPackages} run={run} />
                       ) : (
-                        <p className="builder-page-set__empty" role="status">
-                          {normalizedPageSearchQuery
-                            ? 'No unselected pages match this search. Selected pages remain pinned above.'
-                            : 'Every approved page is selected and pinned above.'}
-                        </p>
+                        'Not assigned'
                       )}
-                    </section>
+                    </dd>
                   </div>
-                </fieldset>
-              ) : testPageAction === 'revise' ? (
-                <>
-                  <label>
-                    <span>Previous private page</span>
-                    <select
-                      aria-describedby="builder-revision-help"
-                      aria-label="Previous built page"
-                      disabled={isRequesting || isRequestingSiteTest || !previousTestPages.length}
-                      onChange={(event) => setSourceBuilderRunId(event.target.value)}
-                      value={sourceBuilderRunId}
-                    >
-                      <option value="">
-                        {previousTestPages.length
-                          ? 'Choose a private test page'
-                          : 'No private test page is available'}
-                      </option>
-                      {completedTestPages.map((candidate, index) => {
-                        const sourcePage = pageTestOptions.find(
-                          (page) => page.url === candidate.targetSourceUrl,
-                        );
-                        const usesPriorManifest =
-                          candidate.buildManifestId !== workspace.buildManifest?.id;
-                        const sourceUnavailable = unavailableTestPageIds.has(candidate.id);
-                        return (
-                          <option
-                            disabled={sourceUnavailable}
-                            key={candidate.id}
-                            value={candidate.id}
-                          >
-                            Test {index + 1} —{' '}
-                            {sourcePage?.title ??
-                              (candidate.targetSourceUrl ? 'Selected page' : 'Homepage')}{' '}
-                            · package {agentPackageVersionLabel(candidate.agentPackageVersion ?? 4)}
-                            {usesPriorManifest ? ' · apply current assets' : ''}
-                            {sourceUnavailable ? ' · source checkpoint unavailable' : ''}
-                          </option>
-                        );
-                      })}
-                    </select>
-                  </label>
-                  {!previousTestPages.length ? (
-                    <p
-                      className="form-message form-message--error"
-                      id="builder-revision-help"
-                      role="alert"
-                    >
-                      {completedTestPages.length
-                        ? 'The completed tests shown here do not have a saved source checkpoint, so they cannot be revised safely. Create a new test from scratch; completed new tests preserve revisable source.'
-                        : 'There are no completed private tests to revise yet. Create a test page from scratch first, then return here to select it.'}
-                    </p>
-                  ) : !selectedSourceRun ? (
-                    <p
-                      className="form-message form-message--error"
-                      id="builder-revision-help"
-                      role="alert"
-                    >
-                      Select a test version before starting a revision.
-                    </p>
-                  ) : selectedSourceRun.buildManifestId !== workspace.buildManifest?.id ? (
-                    <p className="muted-copy" id="builder-revision-help">
-                      This completed page uses the same captured research as the current manifest.
-                      The revision will keep its design baseline while replacing its prior asset set
-                      with the current approved Brand Kit and logo versions.
-                    </p>
-                  ) : (
-                    <p className="muted-copy" id="builder-revision-help">
-                      The revision will restore this completed page and use the current approved
-                      assets.
-                    </p>
-                  )}
-                </>
-              ) : (
-                <section
-                  aria-labelledby="agent-studio-site-test-title"
-                  className="builder-page-test__website"
-                >
-                  <div className="agent-studio-site-test__header">
-                    <div>
-                      <Eyebrow>Whole-site source</Eyebrow>
-                      <h4 id="agent-studio-site-test-title">Revise a website</h4>
-                      <p>
-                        Keep the complete generated website intact, change one agent feature, and
-                        save the result as the newest linked test version.
-                      </p>
-                    </div>
-                    {selectedStudioSource ? (
-                      <StatusBadge tone="success">
-                        {builderRunPageCount(workspace, selectedStudioSource)} pages
-                      </StatusBadge>
-                    ) : null}
+                  <div>
+                    <dt>Test approach</dt>
+                    <dd>
+                      {run?.buildMode === 'site_test'
+                        ? 'Whole-site feature revision'
+                        : run?.targetSourceUrls?.length
+                          ? `Create ${run.targetSourceUrls.length} pages from scratch`
+                          : run?.parentBuilderRunId
+                            ? 'Revise previous page (scoped)'
+                            : 'Create page from scratch'}
+                    </dd>
                   </div>
-                  {studioMultiPageSourceRuns.length ? (
-                    <div className="agent-studio-site-test__controls">
-                      <label>
-                        <span>Website version to revise</span>
-                        <select
-                          disabled={isRequestingSiteTest}
-                          onChange={(event) => setStudioSourceBuilderRunId(event.target.value)}
-                          value={studioSourceBuilderRunId}
-                        >
-                          {studioMultiPageSourceRuns.map((sourceRun, index) => (
-                            <option key={sourceRun.id} value={sourceRun.id}>
-                              {index === 0
-                                ? 'Newest'
-                                : `Earlier version ${studioMultiPageSourceRuns.length - index}`}
-                              {' · '}
-                              {builderRunPageCount(workspace, sourceRun)} page
-                              {builderRunPageCount(workspace, sourceRun) === 1 ? '' : 's'}
-                              {' · '}
-                              {agentPackageVersionLabel(sourceRun.agentPackageVersion)}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <article className="agent-studio-site-test__feature">
-                        <FolderTree aria-hidden="true" size={20} />
-                        <span>
-                          <strong>Multi-page navigation architecture</strong>
-                          <small>
-                            Exact routes, consistent primary links, nested child pages, and
-                            reachability from the homepage.
-                          </small>
-                        </span>
-                      </article>
-                      <label className="agent-studio-site-test__direction">
-                        <span>Feature direction</span>
-                        <textarea
-                          disabled={isRequestingSiteTest}
-                          maxLength={4000}
-                          onChange={(event) => setSiteFeatureDirection(event.target.value)}
-                          rows={4}
-                          value={siteFeatureDirection}
-                        />
-                      </label>
-                    </div>
-                  ) : (
-                    <p className="form-message form-message--error" role="alert">
-                      No whole-site source is available yet. Move a completed multi-page prospect
-                      build into Agent Studio, then return here to revise it.
-                    </p>
-                  )}
-                </section>
-              )}
-              <WebsiteToneControl
-                disabled={isRequesting || isRequestingSiteTest}
-                helpId="agent-studio-website-tone-help"
-                name="agent-studio-website-tone"
-                onChange={setWebsiteTone}
-                tone={websiteTone}
-              />
-              {testPageAction !== 'website' ? (
-                <>
-                  <Button
-                    disabled={
-                      isRequesting ||
-                      !selectedAgentPackageId ||
-                      (testPageAction === 'create' ? !selectedPageCanBuild : !selectedSourceRun)
-                    }
-                    onClick={() =>
-                      void requestBuild(
-                        testPageAction === 'revise'
-                          ? selectedSourceRun?.targetSourceUrl
-                            ? 'page_test'
-                            : 'homepage_test'
-                          : homepageSelected
-                            ? 'homepage_test'
-                            : 'page_test',
-                        testPageAction === 'revise'
-                          ? selectedSourceRun?.targetSourceUrl
-                          : undefined,
-                        testPageAction === 'revise' ? selectedSourceRun?.id : undefined,
-                        testPageAction === 'create' && !homepageSelected
-                          ? targetSourceUrls
-                          : undefined,
-                      )
-                    }
-                    type="button"
-                    variant="primary"
-                  >
-                    <Play aria-hidden="true" size={16} />
-                    {isRequesting
-                      ? 'Queueing builder'
-                      : testPageAction === 'revise'
-                        ? 'Revise private page'
-                        : 'Build test page'}
-                  </Button>
-                  <small id="builder-page-set-help">
-                    {testPageAction === 'revise'
-                      ? previousTestPages.length
-                        ? 'Test numbers match the private previews in Test versions. The selected test becomes this revision’s private source; it never reads or changes the prospect’s public website.'
-                        : completedTestPages.length
-                          ? 'These completed tests predate a usable saved source checkpoint. Create a fresh test to establish a revisable private source.'
-                          : 'Complete a private homepage or page test first. Only completed private previews can be revised.'
-                      : homepageSelected
-                        ? 'Creates a new private homepage test from the approved manifest. It does not read, continue, or change an earlier private draft or the prospect’s public website.'
-                        : `Creates ${targetSourceUrls.length} selected page${
-                            targetSourceUrls.length === 1 ? '' : 's'
-                          } together from the clean locked foundation. It does not inherit an earlier test or change the prospect’s public website.`}
-                  </small>
-                </>
-              ) : (
-                <Button
-                  disabled={
-                    isRequestingSiteTest ||
-                    !selectedStudioSource ||
-                    !selectedAgentPackageId ||
-                    !siteFeatureDirection.trim()
-                  }
-                  onClick={() => void requestSiteTest()}
-                  type="button"
-                >
-                  <Play aria-hidden="true" size={16} />
-                  {isRequestingSiteTest ? 'Creating linked version' : 'Revise website'}
-                </Button>
-              )}
-              {message ? (
-                <p className="form-message form-message--error" role="alert">
-                  {message}
-                </p>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-
-        {isTestBuild && !active && !retainedTestContext ? (
-          <section className="builder-workflow" aria-labelledby="builder-workflow-title">
-            <div className="builder-workflow__header">
-              <Eyebrow>Test-only refinement</Eyebrow>
-              <h4 id="builder-workflow-title">Package capabilities &amp; test directions</h4>
-              <p>
-                Built-in capabilities come from the selected builder agent package. Directions below
-                are saved with this test run and passed to Codex as scoped refinement guidance; they
-                do not change the package.
-              </p>
-            </div>
-            <details className="builder-workflow__motion">
-              <summary>
-                <Sparkles aria-hidden="true" size={18} />
-                <span>
-                  <strong>Inherited package behaviour</strong>
-                  <small>
-                    {inheritedPackageLabel} · 1 built-in capability already in this package
-                  </small>
-                </span>
-                <ChevronDown aria-hidden="true" size={18} />
-              </summary>
-              <div className="builder-workflow__capability">
-                <strong>Built-in capability · motion runtime</strong>
-                <p>
-                  A tested builder-foundation capability: the local runtime reveals headings and
-                  content containers as they enter view, and uses counters only for genuine metrics.
-                  It respects reduced motion on every generated preview. A direction can request a
-                  different use of it, but cannot alter or create a shared capability.
-                </p>
-              </div>
-            </details>
-            {testingBehaviours.length ? (
-              <section
-                className="builder-workflow__testing-behaviour"
-                aria-labelledby="builder-testing-behaviour-title"
-              >
-                <Eyebrow>Testing behaviour</Eyebrow>
-                <h5 id="builder-testing-behaviour-title">
-                  Select behaviours to stage for the next production draft
-                </h5>
-                <p>
-                  Staged behaviours stay recorded with this package but are removed from the next
-                  private test’s behaviour list. Only the behaviours left below remain under test.
-                </p>
-                <div className="builder-workflow__testing-behaviour-list">
-                  {pendingTestingBehaviours.map((behaviour) => (
-                    <article
-                      className={
-                        leavingBehaviourIds.includes(behaviour.id) ? 'is-staging-out' : undefined
+                </dl>
+                {run ? <BuilderRunUsage records={workspace.aiUsageRecords} run={run} /> : null}
+                {active ? (
+                  <>
+                    <BuilderActivityWaiting
+                      detail={
+                        run?.progressDetail ||
+                        'Waiting for the worker to save the first activity update.'
                       }
-                      key={behaviour.id}
-                    >
-                      <label>
-                        <input
-                          checked={selectedBehaviourIds.includes(behaviour.id)}
-                          disabled={
-                            isStagingBehaviours || leavingBehaviourIds.includes(behaviour.id)
-                          }
-                          onChange={(event) =>
-                            setSelectedBehaviourIds((current) =>
-                              event.target.checked
-                                ? [...new Set([...current, behaviour.id])]
-                                : current.filter((id) => id !== behaviour.id),
-                            )
-                          }
-                          type="checkbox"
-                        />
-                        <strong>{behaviour.title}</strong>
-                      </label>
-                      <span className="builder-workflow__behaviour-revision">
-                        Behaviour revision · {behaviour.revision}
-                      </span>
-                      <p className="builder-workflow__behaviour-change">{behaviour.change}</p>
-                      <p>{behaviour.detail}</p>
-                      {onRequestProposal &&
-                      featureHasWorkshopSource(workshopFeatureForBehaviour(behaviour.id)) ? (
+                      label={builderProgressPhaseLabel(run?.progressPhase || 'queued')}
+                    />
+                    <div aria-hidden="true" className="builder-active-test__skeleton">
+                      <span className="evidence-skeleton evidence-skeleton--value" />
+                      <span className="evidence-skeleton evidence-skeleton--detail" />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="muted-copy">
+                      This failed test remains selected with its original package and test approach.
+                      Continue it from the saved private source, open its frozen draft below, or
+                      keep testing with a different package or page.
+                    </p>
+                    <ButtonGroup>
+                      {onResumeBuild && savedSourceAvailable ? (
                         <Button
-                          className="builder-workflow__workshop"
-                          onClick={() =>
-                            setWorkshopFeature(workshopFeatureForBehaviour(behaviour.id))
-                          }
-                          size="small"
+                          disabled={isResuming}
+                          onClick={() => run && void resumeBuild(run.id)}
                           type="button"
                           variant="secondary"
                         >
-                          <Wrench aria-hidden="true" size={15} />
-                          Workshop behaviour
+                          <RotateCcw aria-hidden="true" size={16} />
+                          {isResuming ? 'Continuing test' : 'Continue this test'}
                         </Button>
                       ) : null}
-                    </article>
-                  ))}
-                </div>
-                {stagedBehaviourIds.length ? (
-                  <p className="builder-workflow__staged-behaviours">
-                    <strong>Already staged:</strong>{' '}
-                    {testingBehaviours
-                      .filter((behaviour) => visibleStagedBehaviourIds.includes(behaviour.id))
-                      .map((behaviour) => behaviour.title)
-                      .join(', ')}
-                  </p>
-                ) : null}
-                {pendingTestingBehaviours.length ? (
-                  <Button
-                    disabled={
-                      !onStageBehaviours ||
-                      isStagingBehaviours ||
-                      !selectedBehaviourIds.some((id) => !stagedBehaviourIds.includes(id))
-                    }
-                    onClick={() => void stageSelectedBehaviours()}
-                    type="button"
-                    variant="secondary"
-                  >
-                    <CheckCheck aria-hidden="true" size={16} />
-                    {isStagingBehaviours
-                      ? 'Staging behaviours'
-                      : 'Stage selected for production draft'}
-                  </Button>
-                ) : (
-                  <p className="muted-copy">
-                    Every behaviour in this package is staged for production.
-                  </p>
+                      <Button
+                        disabled={isResuming}
+                        onClick={startAlternativeTest}
+                        type="button"
+                        variant="quiet"
+                      >
+                        <Play aria-hidden="true" size={16} />
+                        Test something else
+                      </Button>
+                    </ButtonGroup>
+                  </>
                 )}
-                {leavingBehaviourIds.length ? (
-                  <p aria-live="polite" className="builder-workflow__staging-status" role="status">
-                    Moving selected behaviours into the production draft…
-                  </p>
-                ) : null}
               </section>
             ) : null}
-            <FeatureImplementationFiles
-              collapsible
-              compact
-              detail="Open a file to see the exact lines that enable each behaviour for this private test."
-              features={testOnlyFeatures}
-              heading="Files behind this test"
-              onOpenWorkshop={onRequestProposal ? setWorkshopFeature : undefined}
-            />
-            <Dialog.Root
-              onOpenChange={(open) => {
-                if (!open) {
-                  setWorkshopFeature(undefined);
-                  setWorkshopDirection('');
-                }
-              }}
-              open={Boolean(workshopFeature)}
-            >
-              <Dialog.Portal>
-                <Dialog.Overlay className="builder-file-preview-overlay" />
-                <Dialog.Content className="foundation-workshop-dialog">
-                  <div className="foundation-workshop-dialog__header">
-                    <div>
-                      <Eyebrow>Foundation workshop</Eyebrow>
-                      <Dialog.Title>{workshopFeature?.title}</Dialog.Title>
-                      <p>
-                        Workshop revision v
-                        {selectedAgentPackage?.version ?? publishedPackage?.version ?? 4}.2
-                      </p>
-                    </div>
-                    <StatusBadge tone="success">
-                      <Wrench aria-hidden="true" size={14} /> Workshoped
-                    </StatusBadge>
-                    <Dialog.Close asChild>
-                      <IconButton label="Close foundation workshop" variant="quiet">
-                        <X aria-hidden="true" size={18} />
-                      </IconButton>
-                    </Dialog.Close>
-                  </div>
-                  <p className="muted-copy">
-                    Refine this hard-coded JavaScript feature with Codex, then send only the agreed
-                    behaviour to a private test package. The page-building agent does not recreate
-                    it.
+            {isTestBuild && !active && !retainedTestContext ? (
+              <div className="builder-run__tests">
+                <header className="builder-creation__header">
+                  <Eyebrow>Website creation</Eyebrow>
+                  <h4>Set up the next private website test</h4>
+                  <p>
+                    Choose the package and test approach, then select the website content to build.
+                    Advanced package refinement stays in its own group below.
                   </p>
-                  <label className="foundation-workshop-dialog__direction">
-                    <span>Workshop change for the next test behaviour</span>
-                    <textarea
-                      maxLength={4000}
-                      onChange={(event) => setWorkshopDirection(event.target.value)}
-                      placeholder="Describe the agreed change for this feature."
-                      rows={5}
-                      value={workshopDirection}
-                    />
-                  </label>
-                  <ButtonGroup className="foundation-workshop-dialog__actions">
+                </header>
+                <label className="builder-run__package-picker">
+                  <span className="agent-production-version-label">
+                    Test package
+                    <AgentProductionNotification count={pendingProductionFeatureCount} />
+                  </span>
+                  <select
+                    aria-label="Test agent package"
+                    disabled={isRequesting || isRequestingSiteTest || !testPackages.length}
+                    onChange={(event) => setSelectedAgentPackageId(event.target.value)}
+                    value={selectedAgentPackageId ?? ''}
+                  >
+                    {testPackages.map((agentPackage) => (
+                      <option key={agentPackage.id} value={agentPackage.id}>
+                        {agentPackageVersionLabel(agentPackage.version)} ·{' '}
+                        {agentPackage.status === 'published'
+                          ? 'Current production'
+                          : 'Approved test'}
+                      </option>
+                    ))}
+                  </select>
+                  <small>
+                    {selectedAgentPackageId === publishedPackage?.id
+                      ? 'This test uses the current production package.'
+                      : 'This test is pinned to a derived package and cannot change the production package.'}
+                  </small>
+                </label>
+                <p className="builder-run__action-label">Test</p>
+                <div className="builder-page-test">
+                  <fieldset className="builder-page-test__actions">
+                    <legend>Test approach</legend>
+                    <label>
+                      <input
+                        checked={testPageAction === 'create'}
+                        disabled={isRequesting || isRequestingSiteTest}
+                        name="test-page-action"
+                        onChange={() => setTestPageAction('create')}
+                        type="radio"
+                      />
+                      <span>Create page from scratch</span>
+                    </label>
+                    <label>
+                      <input
+                        checked={testPageAction === 'revise'}
+                        disabled={isRequesting || isRequestingSiteTest}
+                        name="test-page-action"
+                        onChange={() => setTestPageAction('revise')}
+                        type="radio"
+                      />
+                      <span>Revise previous page</span>
+                    </label>
+                    <label>
+                      <input
+                        checked={testPageAction === 'website'}
+                        disabled={isRequesting || isRequestingSiteTest}
+                        name="test-page-action"
+                        onChange={() => setTestPageAction('website')}
+                        type="radio"
+                      />
+                      <span>Revise a website</span>
+                    </label>
+                  </fieldset>
+                  {testPageAction === 'create' ? (
+                    <fieldset aria-describedby="builder-page-set-help" className="builder-page-set">
+                      <legend>
+                        <span>Approved pages</span>
+                        <strong aria-live="polite">{targetSourceUrls.length} selected</strong>
+                      </legend>
+                      <div className="builder-page-set__toolbar">
+                        <p>Select any combination to build together from a clean foundation.</p>
+                        <ButtonGroup>
+                          <Button
+                            disabled={
+                              isRequesting ||
+                              isRequestingSiteTest ||
+                              targetSourceUrls.length === allPageTestOptions.length
+                            }
+                            onClick={() =>
+                              setTargetSourceUrls(allPageTestOptions.map((page) => page.url))
+                            }
+                            type="button"
+                            variant="quiet"
+                          >
+                            Select all
+                          </Button>
+                          <Button
+                            disabled={
+                              isRequesting || isRequestingSiteTest || !targetSourceUrls.length
+                            }
+                            onClick={() => setTargetSourceUrls([])}
+                            type="button"
+                            variant="quiet"
+                          >
+                            Clear
+                          </Button>
+                        </ButtonGroup>
+                      </div>
+                      <label className="builder-page-set__search">
+                        <span>Search approved pages</span>
+                        <span className="builder-page-set__search-control">
+                          <Search aria-hidden="true" size={18} />
+                          <input
+                            autoComplete="off"
+                            disabled={isRequesting || isRequestingSiteTest}
+                            onChange={(event) => setPageSearchQuery(event.target.value)}
+                            placeholder="Search name, path, or URL"
+                            type="search"
+                            value={pageSearchQuery}
+                          />
+                          {pageSearchQuery ? (
+                            <IconButton
+                              disabled={isRequesting || isRequestingSiteTest}
+                              label="Clear page search"
+                              onClick={() => setPageSearchQuery('')}
+                              type="button"
+                              variant="quiet"
+                            >
+                              <X aria-hidden="true" size={16} />
+                            </IconButton>
+                          ) : null}
+                        </span>
+                      </label>
+                      <div className="builder-page-set__options">
+                        {selectedPageTestOptions.length ? (
+                          <section
+                            aria-labelledby="builder-page-set-selected-title"
+                            className="builder-page-set__group builder-page-set__group--selected"
+                          >
+                            <div className="builder-page-set__group-heading">
+                              <strong id="builder-page-set-selected-title">Selected pages</strong>
+                              <span>Pinned at top</span>
+                            </div>
+                            <div className="builder-page-set__grid">
+                              {selectedPageTestOptions.map(renderPageSetOption)}
+                            </div>
+                          </section>
+                        ) : null}
+                        <section
+                          aria-labelledby="builder-page-set-results-title"
+                          className="builder-page-set__group"
+                        >
+                          <div className="builder-page-set__group-heading">
+                            <strong id="builder-page-set-results-title">
+                              {normalizedPageSearchQuery ? 'Search results' : 'Available pages'}
+                            </strong>
+                            <span>
+                              {availablePageTestOptions.length}{' '}
+                              {availablePageTestOptions.length === 1 ? 'page' : 'pages'}
+                            </span>
+                          </div>
+                          {availablePageTestOptions.length ? (
+                            <div className="builder-page-set__grid">
+                              {availablePageTestOptions.map(renderPageSetOption)}
+                            </div>
+                          ) : (
+                            <p className="builder-page-set__empty" role="status">
+                              {normalizedPageSearchQuery
+                                ? 'No unselected pages match this search. Selected pages remain pinned above.'
+                                : 'Every approved page is selected and pinned above.'}
+                            </p>
+                          )}
+                        </section>
+                      </div>
+                    </fieldset>
+                  ) : testPageAction === 'revise' ? (
+                    <>
+                      <label>
+                        <span>Previous private page</span>
+                        <select
+                          aria-describedby="builder-revision-help"
+                          aria-label="Previous built page"
+                          disabled={
+                            isRequesting || isRequestingSiteTest || !previousTestPages.length
+                          }
+                          onChange={(event) => setSourceBuilderRunId(event.target.value)}
+                          value={sourceBuilderRunId}
+                        >
+                          <option value="">
+                            {previousTestPages.length
+                              ? 'Choose a private test page'
+                              : 'No private test page is available'}
+                          </option>
+                          {completedTestPages.map((candidate, index) => {
+                            const sourcePage = pageTestOptions.find(
+                              (page) => page.url === candidate.targetSourceUrl,
+                            );
+                            const usesPriorManifest =
+                              candidate.buildManifestId !== workspace.buildManifest?.id;
+                            const sourceUnavailable = unavailableTestPageIds.has(candidate.id);
+                            return (
+                              <option
+                                disabled={sourceUnavailable}
+                                key={candidate.id}
+                                value={candidate.id}
+                              >
+                                Test {index + 1} —{' '}
+                                {sourcePage?.title ??
+                                  (candidate.targetSourceUrl ? 'Selected page' : 'Homepage')}{' '}
+                                · package{' '}
+                                {agentPackageVersionLabel(candidate.agentPackageVersion ?? 4)}
+                                {usesPriorManifest ? ' · apply current assets' : ''}
+                                {sourceUnavailable ? ' · source checkpoint unavailable' : ''}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </label>
+                      {!previousTestPages.length ? (
+                        <p
+                          className="form-message form-message--error"
+                          id="builder-revision-help"
+                          role="alert"
+                        >
+                          {completedTestPages.length
+                            ? 'The completed tests shown here do not have a saved source checkpoint, so they cannot be revised safely. Create a new test from scratch; completed new tests preserve revisable source.'
+                            : 'There are no completed private tests to revise yet. Create a test page from scratch first, then return here to select it.'}
+                        </p>
+                      ) : !selectedSourceRun ? (
+                        <p
+                          className="form-message form-message--error"
+                          id="builder-revision-help"
+                          role="alert"
+                        >
+                          Select a test version before starting a revision.
+                        </p>
+                      ) : selectedSourceRun.buildManifestId !== workspace.buildManifest?.id ? (
+                        <p className="muted-copy" id="builder-revision-help">
+                          This completed page uses the same captured research as the current
+                          manifest. The revision will keep its design baseline while replacing its
+                          prior asset set with the current approved Brand Kit and logo versions.
+                        </p>
+                      ) : (
+                        <p className="muted-copy" id="builder-revision-help">
+                          The revision will restore this completed page and use the current approved
+                          assets.
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <section
+                      aria-labelledby="agent-studio-site-test-title"
+                      className="builder-page-test__website"
+                    >
+                      <div className="agent-studio-site-test__header">
+                        <div>
+                          <Eyebrow>Whole-site source</Eyebrow>
+                          <h4 id="agent-studio-site-test-title">Revise a website</h4>
+                          <p>
+                            Keep the complete generated website intact, change one agent feature,
+                            and save the result as the newest linked test version.
+                          </p>
+                        </div>
+                        {selectedStudioSource ? (
+                          <StatusBadge tone="success">
+                            {builderRunPageCount(workspace, selectedStudioSource)} pages
+                          </StatusBadge>
+                        ) : null}
+                      </div>
+                      {studioMultiPageSourceRuns.length ? (
+                        <div className="agent-studio-site-test__controls">
+                          <label>
+                            <span>Website version to revise</span>
+                            <select
+                              disabled={isRequestingSiteTest}
+                              onChange={(event) => setStudioSourceBuilderRunId(event.target.value)}
+                              value={studioSourceBuilderRunId}
+                            >
+                              {studioMultiPageSourceRuns.map((sourceRun, index) => (
+                                <option key={sourceRun.id} value={sourceRun.id}>
+                                  {index === 0
+                                    ? 'Newest'
+                                    : `Earlier version ${studioMultiPageSourceRuns.length - index}`}
+                                  {' · '}
+                                  {builderRunPageCount(workspace, sourceRun)} page
+                                  {builderRunPageCount(workspace, sourceRun) === 1 ? '' : 's'}
+                                  {' · '}
+                                  {agentPackageVersionLabel(sourceRun.agentPackageVersion)}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <article className="agent-studio-site-test__feature">
+                            <FolderTree aria-hidden="true" size={20} />
+                            <span>
+                              <strong>Multi-page navigation architecture</strong>
+                              <small>
+                                Exact routes, consistent primary links, nested child pages, and
+                                reachability from the homepage.
+                              </small>
+                            </span>
+                          </article>
+                          <label className="agent-studio-site-test__direction">
+                            <span>Feature direction</span>
+                            <textarea
+                              disabled={isRequestingSiteTest}
+                              maxLength={4000}
+                              onChange={(event) => setSiteFeatureDirection(event.target.value)}
+                              rows={4}
+                              value={siteFeatureDirection}
+                            />
+                          </label>
+                        </div>
+                      ) : (
+                        <p className="form-message form-message--error" role="alert">
+                          No whole-site source is available yet. Move a completed multi-page
+                          prospect build into Agent Studio, then return here to revise it.
+                        </p>
+                      )}
+                    </section>
+                  )}
+                  <WebsiteToneControl
+                    disabled={isRequesting || isRequestingSiteTest}
+                    helpId="agent-studio-website-tone-help"
+                    name="agent-studio-website-tone"
+                    onChange={setWebsiteTone}
+                    tone={websiteTone}
+                  />
+                  {testPageAction !== 'website' ? (
+                    <>
+                      <Button
+                        disabled={
+                          isRequesting ||
+                          !selectedAgentPackageId ||
+                          (testPageAction === 'create' ? !selectedPageCanBuild : !selectedSourceRun)
+                        }
+                        onClick={() =>
+                          void requestBuild(
+                            testPageAction === 'revise'
+                              ? selectedSourceRun?.targetSourceUrl
+                                ? 'page_test'
+                                : 'homepage_test'
+                              : homepageSelected
+                                ? 'homepage_test'
+                                : 'page_test',
+                            testPageAction === 'revise'
+                              ? selectedSourceRun?.targetSourceUrl
+                              : undefined,
+                            testPageAction === 'revise' ? selectedSourceRun?.id : undefined,
+                            testPageAction === 'create' && !homepageSelected
+                              ? targetSourceUrls
+                              : undefined,
+                          )
+                        }
+                        type="button"
+                        variant="primary"
+                      >
+                        <Play aria-hidden="true" size={16} />
+                        {isRequesting
+                          ? 'Queueing builder'
+                          : testPageAction === 'revise'
+                            ? 'Revise private page'
+                            : 'Build test page'}
+                      </Button>
+                      <small id="builder-page-set-help">
+                        {testPageAction === 'revise'
+                          ? previousTestPages.length
+                            ? 'Test numbers match the private previews in Test versions. The selected test becomes this revision’s private source; it never reads or changes the prospect’s public website.'
+                            : completedTestPages.length
+                              ? 'These completed tests predate a usable saved source checkpoint. Create a fresh test to establish a revisable private source.'
+                              : 'Complete a private homepage or page test first. Only completed private previews can be revised.'
+                          : homepageSelected
+                            ? 'Creates a new private homepage test from the approved manifest. It does not read, continue, or change an earlier private draft or the prospect’s public website.'
+                            : `Creates ${targetSourceUrls.length} selected page${
+                                targetSourceUrls.length === 1 ? '' : 's'
+                              } together from the clean locked foundation. It does not inherit an earlier test or change the prospect’s public website.`}
+                      </small>
+                    </>
+                  ) : (
                     <Button
-                      disabled={!workshopDirection.trim() || isSendingWorkshop}
-                      onClick={() => void sendWorkshopToTesting()}
+                      disabled={
+                        isRequestingSiteTest ||
+                        !selectedStudioSource ||
+                        !selectedAgentPackageId ||
+                        !siteFeatureDirection.trim()
+                      }
+                      onClick={() => void requestSiteTest()}
                       type="button"
                     >
-                      <CheckCheck aria-hidden="true" size={16} />
-                      {isSendingWorkshop ? 'Sending to test' : 'Approve & send to test feature'}
+                      <Play aria-hidden="true" size={16} />
+                      {isRequestingSiteTest ? 'Creating linked version' : 'Revise website'}
                     </Button>
-                  </ButtonGroup>
-                </Dialog.Content>
-              </Dialog.Portal>
-            </Dialog.Root>
-            <details className="builder-workflow__directions">
-              <summary>
-                <span>
-                  <strong>Advanced · saved test directions</strong>
-                  <small>Prefer a conversation with Codex for agent refinements.</small>
-                </span>
-                <ChevronDown aria-hidden="true" size={18} />
-              </summary>
-              <div className="builder-workflow__directions-content">
-                <div className="builder-workflow__directions-header">
-                  <div>
-                    <h5 id="builder-directions-title">Add a direction to this test run</h5>
-                    <p>
-                      Optional guidance stored on this one build run and sent to Codex. It can
-                      refine hierarchy, visuals, or interactions, and can identify a capability
-                      worth proposing, but it never overrides approved facts, scope, assets, or the
-                      locked builder rules.
+                  )}
+                  {message ? (
+                    <p className="form-message form-message--error" role="alert">
+                      {message}
                     </p>
-                  </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+            {isTestBuild && !active && !retainedTestContext ? (
+              <details className="builder-workflow">
+                <summary className="builder-workflow__header builder-workflow__header--disclosure">
+                  <span>
+                    <span className="eyebrow">Test-only refinement</span>
+                    <strong>Package capabilities &amp; advanced directions</strong>
+                    <small>
+                      Inspect package behaviour, stage tested capabilities, or add optional build
+                      directions.
+                    </small>
+                  </span>
+                  <ChevronDown aria-hidden="true" size={18} />
+                </summary>
+                <div className="builder-workflow__content">
+                  <details className="builder-workflow__motion">
+                    <summary>
+                      <Sparkles aria-hidden="true" size={18} />
+                      <span>
+                        <strong>Inherited package behaviour</strong>
+                        <small>
+                          {inheritedPackageLabel} · 1 built-in capability already in this package
+                        </small>
+                      </span>
+                      <ChevronDown aria-hidden="true" size={18} />
+                    </summary>
+                    <div className="builder-workflow__capability">
+                      <strong>Built-in capability · motion runtime</strong>
+                      <p>
+                        A tested builder-foundation capability: the local runtime reveals headings
+                        and content containers as they enter view, and uses counters only for
+                        genuine metrics. It respects reduced motion on every generated preview. A
+                        direction can request a different use of it, but cannot alter or create a
+                        shared capability.
+                      </p>
+                    </div>
+                  </details>
+                  {testingBehaviours.length ? (
+                    <details className="builder-workflow__testing-behaviour">
+                      <summary>
+                        <span>
+                          <strong>Testing behaviour</strong>
+                          <small>
+                            {pendingTestingBehaviours.length} behaviour
+                            {pendingTestingBehaviours.length === 1 ? '' : 's'} remain under test
+                          </small>
+                        </span>
+                        <ChevronDown aria-hidden="true" size={18} />
+                      </summary>
+                      <div className="builder-workflow__testing-behaviour-content">
+                        <h5>Select behaviours to stage for the next production draft</h5>
+                        <p>
+                          Staged behaviours stay recorded with this package but are removed from the
+                          next private test’s behaviour list. Only the behaviours left below remain
+                          under test.
+                        </p>
+                        <div className="builder-workflow__testing-behaviour-list">
+                          {pendingTestingBehaviours.map((behaviour) => (
+                            <article
+                              className={
+                                leavingBehaviourIds.includes(behaviour.id)
+                                  ? 'is-staging-out'
+                                  : undefined
+                              }
+                              key={behaviour.id}
+                            >
+                              <label>
+                                <input
+                                  checked={selectedBehaviourIds.includes(behaviour.id)}
+                                  disabled={
+                                    isStagingBehaviours ||
+                                    leavingBehaviourIds.includes(behaviour.id)
+                                  }
+                                  onChange={(event) =>
+                                    setSelectedBehaviourIds((current) =>
+                                      event.target.checked
+                                        ? [...new Set([...current, behaviour.id])]
+                                        : current.filter((id) => id !== behaviour.id),
+                                    )
+                                  }
+                                  type="checkbox"
+                                />
+                                <strong>{behaviour.title}</strong>
+                              </label>
+                              <span className="builder-workflow__behaviour-revision">
+                                Behaviour revision · {behaviour.revision}
+                              </span>
+                              <p className="builder-workflow__behaviour-change">
+                                {behaviour.change}
+                              </p>
+                              <p>{behaviour.detail}</p>
+                              {onRequestProposal &&
+                              featureHasWorkshopSource(
+                                workshopFeatureForBehaviour(behaviour.id),
+                              ) ? (
+                                <Button
+                                  className="builder-workflow__workshop"
+                                  onClick={() =>
+                                    setWorkshopFeature(workshopFeatureForBehaviour(behaviour.id))
+                                  }
+                                  size="small"
+                                  type="button"
+                                  variant="secondary"
+                                >
+                                  <Wrench aria-hidden="true" size={15} />
+                                  Workshop behaviour
+                                </Button>
+                              ) : null}
+                            </article>
+                          ))}
+                        </div>
+                        {stagedBehaviourIds.length ? (
+                          <p className="builder-workflow__staged-behaviours">
+                            <strong>Already staged:</strong>{' '}
+                            {testingBehaviours
+                              .filter((behaviour) =>
+                                visibleStagedBehaviourIds.includes(behaviour.id),
+                              )
+                              .map((behaviour) => behaviour.title)
+                              .join(', ')}
+                          </p>
+                        ) : null}
+                        {pendingTestingBehaviours.length ? (
+                          <Button
+                            disabled={
+                              !onStageBehaviours ||
+                              isStagingBehaviours ||
+                              !selectedBehaviourIds.some((id) => !stagedBehaviourIds.includes(id))
+                            }
+                            onClick={() => void stageSelectedBehaviours()}
+                            type="button"
+                            variant="secondary"
+                          >
+                            <CheckCheck aria-hidden="true" size={16} />
+                            {isStagingBehaviours
+                              ? 'Staging behaviours'
+                              : 'Stage selected for production draft'}
+                          </Button>
+                        ) : (
+                          <p className="muted-copy">
+                            Every behaviour in this package is staged for production.
+                          </p>
+                        )}
+                        {leavingBehaviourIds.length ? (
+                          <p
+                            aria-live="polite"
+                            className="builder-workflow__staging-status"
+                            role="status"
+                          >
+                            Moving selected behaviours into the production draft…
+                          </p>
+                        ) : null}
+                      </div>
+                    </details>
+                  ) : null}
+                  <FeatureImplementationFiles
+                    collapsible
+                    compact
+                    detail="Open a file to see the exact lines that enable each behaviour for this private test."
+                    features={testOnlyFeatures}
+                    heading="Files behind this test"
+                    onOpenWorkshop={onRequestProposal ? setWorkshopFeature : undefined}
+                  />
+                  <Dialog.Root
+                    onOpenChange={(open) => {
+                      if (!open) {
+                        setWorkshopFeature(undefined);
+                        setWorkshopDirection('');
+                      }
+                    }}
+                    open={Boolean(workshopFeature)}
+                  >
+                    <Dialog.Portal>
+                      <Dialog.Overlay className="builder-file-preview-overlay" />
+                      <Dialog.Content className="foundation-workshop-dialog">
+                        <div className="foundation-workshop-dialog__header">
+                          <div>
+                            <Eyebrow>Foundation workshop</Eyebrow>
+                            <Dialog.Title>{workshopFeature?.title}</Dialog.Title>
+                            <p>
+                              Workshop revision v
+                              {selectedAgentPackage?.version ?? publishedPackage?.version ?? 4}.2
+                            </p>
+                          </div>
+                          <StatusBadge tone="success">
+                            <Wrench aria-hidden="true" size={14} /> Workshoped
+                          </StatusBadge>
+                          <Dialog.Close asChild>
+                            <IconButton label="Close foundation workshop" variant="quiet">
+                              <X aria-hidden="true" size={18} />
+                            </IconButton>
+                          </Dialog.Close>
+                        </div>
+                        <p className="muted-copy">
+                          Refine this hard-coded JavaScript feature with Codex, then send only the
+                          agreed behaviour to a private test package. The page-building agent does
+                          not recreate it.
+                        </p>
+                        <label className="foundation-workshop-dialog__direction">
+                          <span>Workshop change for the next test behaviour</span>
+                          <textarea
+                            maxLength={4000}
+                            onChange={(event) => setWorkshopDirection(event.target.value)}
+                            placeholder="Describe the agreed change for this feature."
+                            rows={5}
+                            value={workshopDirection}
+                          />
+                        </label>
+                        <ButtonGroup className="foundation-workshop-dialog__actions">
+                          <Button
+                            disabled={!workshopDirection.trim() || isSendingWorkshop}
+                            onClick={() => void sendWorkshopToTesting()}
+                            type="button"
+                          >
+                            <CheckCheck aria-hidden="true" size={16} />
+                            {isSendingWorkshop
+                              ? 'Sending to test'
+                              : 'Approve & send to test feature'}
+                          </Button>
+                        </ButtonGroup>
+                      </Dialog.Content>
+                    </Dialog.Portal>
+                  </Dialog.Root>
+                  <details className="builder-workflow__directions">
+                    <summary>
+                      <span>
+                        <strong>Advanced · saved test directions</strong>
+                        <small>Prefer a conversation with Codex for agent refinements.</small>
+                      </span>
+                      <ChevronDown aria-hidden="true" size={18} />
+                    </summary>
+                    <div className="builder-workflow__directions-content">
+                      <div className="builder-workflow__directions-header">
+                        <div>
+                          <h5 id="builder-directions-title">Add a direction to this test run</h5>
+                          <p>
+                            Optional guidance stored on this one build run and sent to Codex. It can
+                            refine hierarchy, visuals, or interactions, and can identify a
+                            capability worth proposing, but it never overrides approved facts,
+                            scope, assets, or the locked builder rules.
+                          </p>
+                        </div>
+                        <Button
+                          disabled={isRequesting}
+                          onClick={() => setBuildDirections((current) => [...current, ''])}
+                          type="button"
+                          variant="secondary"
+                        >
+                          <Plus aria-hidden="true" size={16} />
+                          {buildDirections.length ? 'Add another' : 'Add direction'}
+                        </Button>
+                      </div>
+                      {buildDirections.length ? (
+                        <div className="builder-workflow__direction-list">
+                          {buildDirections.map((direction, index) => (
+                            <div className="builder-workflow__direction" key={index}>
+                              <label htmlFor={`builder-direction-${index}`}>
+                                Direction {index + 1}
+                              </label>
+                              <span className="builder-workflow__direction-input">
+                                <textarea
+                                  aria-label={`Build direction ${index + 1}`}
+                                  disabled={isRequesting}
+                                  id={`builder-direction-${index}`}
+                                  maxLength={4000}
+                                  onChange={(event) =>
+                                    setBuildDirections((current) =>
+                                      current.map((item, itemIndex) =>
+                                        itemIndex === index ? event.target.value : item,
+                                      ),
+                                    )
+                                  }
+                                  placeholder="For example: make the hero calmer and foreground the booking flow."
+                                  rows={2}
+                                  value={direction}
+                                />
+                                <IconButton
+                                  disabled={isRequesting}
+                                  label={`Remove direction ${index + 1}`}
+                                  onClick={() =>
+                                    setBuildDirections((current) =>
+                                      current.filter((_, itemIndex) => itemIndex !== index),
+                                    )
+                                  }
+                                  variant="quiet"
+                                >
+                                  <X aria-hidden="true" size={16} />
+                                </IconButton>
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  </details>
+                </div>
+              </details>
+            ) : null}
+
+            <div className="builder-run__primary-actions">
+              {!isTestBuild && run?.status === 'failed' && savedSourceAvailable && onResumeBuild ? (
+                <Button
+                  disabled={isResuming}
+                  onClick={() => void resumeBuild(run.id)}
+                  type="button"
+                >
+                  <RotateCcw aria-hidden="true" size={16} />
+                  {isResuming ? 'Resuming saved website' : 'Resume saved website build'}
+                </Button>
+              ) : null}
+              {!isTestBuild && run?.status === 'ready' ? (
+                <Button
+                  disabled={isOpeningPreview}
+                  onClick={() => run && void openPreview(run.id, 'ready')}
+                  type="button"
+                >
+                  <ArrowUpRight aria-hidden="true" size={16} />
+                  {isOpeningPreview ? 'Opening device preview' : 'Preview devices'}
+                </Button>
+              ) : null}
+              {!isTestBuild && run && run.status === 'ready' && onMoveToAgentStudio ? (
+                run.agentStudioSourceAt ? (
+                  <Button disabled type="button" variant="secondary">
+                    <Check aria-hidden="true" size={16} />
+                    Available in Agent Studio
+                  </Button>
+                ) : (
                   <Button
-                    disabled={isRequesting}
-                    onClick={() => setBuildDirections((current) => [...current, ''])}
+                    disabled={movingRunId === run.id}
+                    onClick={() => void moveToAgentStudio(run.id)}
                     type="button"
                     variant="secondary"
                   >
-                    <Plus aria-hidden="true" size={16} />
-                    {buildDirections.length ? 'Add another' : 'Add direction'}
+                    <FolderTree aria-hidden="true" size={16} />
+                    {movingRunId === run.id ? 'Moving into Agent Studio' : 'Move to Agent Studio'}
                   </Button>
-                </div>
-                {buildDirections.length ? (
-                  <div className="builder-workflow__direction-list">
-                    {buildDirections.map((direction, index) => (
-                      <div className="builder-workflow__direction" key={index}>
-                        <label htmlFor={`builder-direction-${index}`}>Direction {index + 1}</label>
-                        <span className="builder-workflow__direction-input">
-                          <textarea
-                            aria-label={`Build direction ${index + 1}`}
-                            disabled={isRequesting}
-                            id={`builder-direction-${index}`}
-                            maxLength={4000}
-                            onChange={(event) =>
-                              setBuildDirections((current) =>
-                                current.map((item, itemIndex) =>
-                                  itemIndex === index ? event.target.value : item,
-                                ),
-                              )
-                            }
-                            placeholder="For example: make the hero calmer and foreground the booking flow."
-                            rows={2}
-                            value={direction}
-                          />
-                          <IconButton
-                            disabled={isRequesting}
-                            label={`Remove direction ${index + 1}`}
-                            onClick={() =>
-                              setBuildDirections((current) =>
-                                current.filter((_, itemIndex) => itemIndex !== index),
-                              )
-                            }
-                            variant="quiet"
-                          >
-                            <X aria-hidden="true" size={16} />
-                          </IconButton>
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+                )
+              ) : null}
+              {active ? (
+                <Button
+                  disabled={isCancelling || Boolean(run?.cancelRequestedAt)}
+                  onClick={() => void cancelBuild()}
+                  type="button"
+                  variant="secondary"
+                >
+                  <Ban aria-hidden="true" size={16} />
+                  {isCancelling ? 'Cancelling build' : 'Cancel build'}
+                </Button>
+              ) : null}
+            </div>
+
+            {((run?.status === 'running' || frozenDraft) && draftAvailable) ||
+            (run && !active) ||
+            (run && runHasUsage && onOpenUsageAnalysis) ? (
+              <div className="builder-run__utility-actions">
+                {(run?.status === 'running' || frozenDraft) && draftAvailable ? (
+                  <Button
+                    disabled={isOpeningPreview}
+                    onClick={() => run && void openPreview(run.id, 'draft')}
+                    type="button"
+                    variant="quiet"
+                  >
+                    <ClipboardCheck aria-hidden="true" size={18} />
+                    {isOpeningPreview
+                      ? 'Opening device preview'
+                      : frozenDraft
+                        ? 'Preview frozen draft devices'
+                        : 'Preview working draft devices'}
+                  </Button>
+                ) : null}
+                {run && runHasUsage && onOpenUsageAnalysis ? (
+                  <Button onClick={() => onOpenUsageAnalysis(run.id)} type="button" variant="quiet">
+                    <WalletCards aria-hidden="true" size={16} />
+                    Open usage analysis
+                  </Button>
                 ) : null}
               </div>
-            </details>
-          </section>
-        ) : null}
-
-        <div className="builder-run__primary-actions">
-          {!isTestBuild && run?.status === 'failed' && savedSourceAvailable && onResumeBuild ? (
-            <Button disabled={isResuming} onClick={() => void resumeBuild(run.id)} type="button">
-              <RotateCcw aria-hidden="true" size={16} />
-              {isResuming ? 'Resuming saved website' : 'Resume saved website build'}
-            </Button>
-          ) : null}
-          {!isTestBuild && run?.status === 'ready' ? (
-            <Button
-              disabled={isOpeningPreview}
-              onClick={() => run && void openPreview(run.id, 'ready')}
-              type="button"
-            >
-              <ArrowUpRight aria-hidden="true" size={16} />
-              {isOpeningPreview ? 'Opening preview' : 'Open private prospect preview'}
-            </Button>
-          ) : null}
-          {!isTestBuild && run && run.status === 'ready' && onMoveToAgentStudio ? (
-            run.agentStudioSourceAt ? (
-              <Button disabled type="button" variant="secondary">
-                <Check aria-hidden="true" size={16} />
-                Available in Agent Studio
-              </Button>
-            ) : (
-              <Button
-                disabled={movingRunId === run.id}
-                onClick={() => void moveToAgentStudio(run.id)}
-                type="button"
-                variant="secondary"
-              >
-                <FolderTree aria-hidden="true" size={16} />
-                {movingRunId === run.id ? 'Moving into Agent Studio' : 'Move to Agent Studio'}
-              </Button>
-            )
-          ) : null}
-          {active ? (
-            <Button
-              disabled={isCancelling || Boolean(run?.cancelRequestedAt)}
-              onClick={() => void cancelBuild()}
-              type="button"
-              variant="secondary"
-            >
-              <Ban aria-hidden="true" size={16} />
-              {isCancelling ? 'Cancelling build' : 'Cancel build'}
-            </Button>
-          ) : null}
-        </div>
-
-        {((run?.status === 'running' || frozenDraft) && draftAvailable) ||
-        (run && !active) ||
-        (run && runHasUsage && onOpenUsageAnalysis) ? (
-          <div className="builder-run__utility-actions">
-            {(run?.status === 'running' || frozenDraft) && draftAvailable ? (
-              <Button
-                disabled={isOpeningPreview}
-                onClick={() => run && void openPreview(run.id, 'draft')}
-                type="button"
-                variant="quiet"
-              >
-                <ClipboardCheck aria-hidden="true" size={18} />
-                {isOpeningPreview
-                  ? 'Opening draft'
-                  : frozenDraft
-                    ? 'Open frozen draft'
-                    : 'View working draft'}
-              </Button>
-            ) : null}
-            {run && runHasUsage && onOpenUsageAnalysis ? (
-              <Button onClick={() => onOpenUsageAnalysis(run.id)} type="button" variant="quiet">
-                <WalletCards aria-hidden="true" size={16} />
-                Open usage analysis
-              </Button>
             ) : null}
           </div>
-        ) : null}
-      </div>
+        );
+        return isTestBuild ? (
+          <>
+            {buildInformation}
+            {runIdentity}
+            {builderActions}
+          </>
+        ) : (
+          <>
+            {buildInformation}
+            {builderActions}
+          </>
+        );
+      })()}
 
       {!isTestBuild ? qualityEvidence : null}
 
@@ -10867,6 +11278,7 @@ function BuilderRunPanel({
                         {builderRunModeLabel(sourceRun.buildMode)} ·{' '}
                         {formatDateTime(sourceRun.createdAt)}
                       </small>
+                      <BuilderRunModel run={sourceRun} />
                       <AgentPackageDetailsDialog agentPackages={agentPackages} run={sourceRun} />
                       <BuilderRunPageDisclosure
                         artifacts={artifactsForCompletedRun(sourceRun)}
@@ -10890,7 +11302,7 @@ function BuilderRunPanel({
                         variant="primary"
                       >
                         <ArrowUpRight aria-hidden="true" size={16} />
-                        Preview website
+                        Preview devices
                       </Button>
                       <BuilderRunFileExplorerDialog
                         artifacts={artifactsForCompletedRun(sourceRun)}
@@ -10969,6 +11381,7 @@ function BuilderRunPanel({
                         {builderRunModeLabel(testRun.buildMode)} ·{' '}
                         {formatDateTime(testRun.createdAt)}
                       </small>
+                      <BuilderRunModel run={testRun} />
                       <AgentPackageDetailsDialog agentPackages={agentPackages} run={testRun} />
                       <BuilderRunPageDisclosure
                         artifacts={artifactsForCompletedRun(testRun)}
@@ -10988,7 +11401,7 @@ function BuilderRunPanel({
                         variant="primary"
                       >
                         <ArrowUpRight aria-hidden="true" size={16} />
-                        {isOpeningPreview ? 'Opening preview' : 'Preview website'}
+                        {isOpeningPreview ? 'Opening device preview' : 'Preview devices'}
                       </Button>
                       <BuilderRunFileExplorerDialog
                         artifacts={artifactsForCompletedRun(testRun)}
@@ -11557,133 +11970,36 @@ function BuilderRunPanel({
   );
 }
 
-function BuilderSettingsControl({
-  compact = false,
-  iconOnly = false,
-}: {
-  compact?: boolean;
-  iconOnly?: boolean;
-}) {
+function BuilderSettingsControl({ compact = false }: { compact?: boolean }) {
+  const repository = useContext(WorkspaceRepositoryContext);
+  if (!repository) return null;
+
   return (
     <Dialog.Root>
       <Dialog.Trigger asChild>
-        {iconOnly ? (
-          <IconButton label="Builder settings" variant="secondary">
-            <Settings aria-hidden="true" size={18} />
-          </IconButton>
-        ) : (
-          <Button size={compact ? 'small' : 'default'} variant="secondary">
-            <SlidersHorizontal aria-hidden="true" size={16} /> Builder settings
-          </Button>
-        )}
+        <Button size={compact ? 'small' : 'default'} variant="secondary">
+          <SlidersHorizontal aria-hidden="true" size={16} /> Codex versions
+        </Button>
       </Dialog.Trigger>
       <Dialog.Portal>
-        <Dialog.Overlay className="builder-settings-overlay" />
-        <Dialog.Content
-          aria-describedby="builder-settings-description"
-          className="builder-settings-panel"
-        >
-          <div className="builder-settings-panel__header">
+        <Dialog.Overlay className="builder-settings-overlay builder-model-settings-overlay" />
+        <Dialog.Content className="builder-model-settings-dialog">
+          <div className="builder-model-settings-dialog__header">
             <div>
-              <Eyebrow>Protected runtime</Eyebrow>
-              <Dialog.Title>Builder settings</Dialog.Title>
+              <Eyebrow>Website builder</Eyebrow>
+              <Dialog.Title>Codex versions used for builds</Dialog.Title>
             </div>
             <Dialog.Close asChild>
-              <IconButton label="Close builder settings" variant="quiet">
+              <IconButton label="Close Codex versions" variant="quiet">
                 <X aria-hidden="true" size={20} />
               </IconButton>
             </Dialog.Close>
           </div>
-          <Dialog.Description className="muted-copy" id="builder-settings-description">
-            These settings describe the protected environment used for every private website build.
-            They are managed on the worker, not in the browser.
+          <Dialog.Description className="muted-copy">
+            Review or change the shared model and reasoning profiles for Agent Studio tests and
+            complete website builds. Existing runs keep the exact versions they started with.
           </Dialog.Description>
-          <dl className="builder-settings-list">
-            <div>
-              <dt>Codex model</dt>
-              <dd>gpt-5.6</dd>
-            </div>
-            <div>
-              <dt>Codex billing</dt>
-              <dd>ChatGPT subscription only</dd>
-            </div>
-            <div>
-              <dt>API-key fallback</dt>
-              <dd>Blocked</dd>
-            </div>
-            <div>
-              <dt>Workspace access</dt>
-              <dd>Workspace write only</dd>
-            </div>
-            <div>
-              <dt>Preview access</dt>
-              <dd>Private, expiring links</dd>
-            </div>
-            <div>
-              <dt>Quality checks</dt>
-              <dd>Build, responsive capture, and axe</dd>
-            </div>
-          </dl>
-          <section
-            className="builder-settings-package"
-            aria-labelledby="builder-settings-package-title"
-          >
-            <div>
-              <Eyebrow>Shared builder package</Eyebrow>
-              <h3 id="builder-settings-package-title">What every build receives</h3>
-              <p className="muted-copy">
-                These source-controlled foundation files are locked during a build. Codex creates
-                each prospect’s visual system and site components inside that boundary.
-              </p>
-            </div>
-            <dl>
-              <div>
-                <dt>Builder contract</dt>
-                <dd>
-                  <code>worker/codex-builder-contract.md</code>
-                  <span>Evidence, brand, page coverage, accessibility, and motion boundaries.</span>
-                </dd>
-              </div>
-              <div>
-                <dt>Template guidance</dt>
-                <dd>
-                  <code>worker/builder-template/AGENTS.md</code>
-                  <span>
-                    Mobile-first Next.js architecture and site-specific component-system rules.
-                  </span>
-                </dd>
-              </div>
-              <div>
-                <dt>Built-in motion</dt>
-                <dd>
-                  <code>worker/builder-template/src/components/foundation/site-runtime.tsx</code>
-                  <span>Viewport reveals, factual counters, and reduced-motion support.</span>
-                </dd>
-              </div>
-              <div>
-                <dt>Quality gate</dt>
-                <dd>
-                  <code>worker/builder-worker.mjs</code>
-                  <span>
-                    Framework verification, route coverage, responsive interactions, captures, and
-                    axe.
-                  </span>
-                </dd>
-              </div>
-            </dl>
-          </section>
-          <section
-            className="builder-settings-panel__notice"
-            aria-label="Runtime configuration notice"
-          >
-            <ShieldAlert aria-hidden="true" size={18} />
-            <p>
-              Codex Website Builder and Codex Test Builder stop unless the trusted worker is signed
-              in with ChatGPT. Separately billed OpenAI Analysis Workers are{' '}
-              {openAiApiFeaturesEnabled ? 'explicitly enabled' : 'off'} and never act as a builder
-              fallback.
-            </p>
-          </section>
+          <WebsiteBuilderSettings repository={repository} />
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
@@ -13286,7 +13602,7 @@ function UsagePage({
   );
 }
 
-function BuilderSettingsPage() {
+function BuilderSettingsPage({ repository }: { repository: WorkspaceRepository }) {
   return (
     <section className="settings-page" aria-labelledby="settings-page-title">
       <Eyebrow>Workspace settings</Eyebrow>
@@ -13312,15 +13628,8 @@ function BuilderSettingsPage() {
       </Card>
       <CodexRuntimeUpdateSettings />
       <CodexPhoneNotificationSettings />
-      <Card className="workspace-panel settings-page__card">
-        <div>
-          <Eyebrow>Website builder</Eyebrow>
-          <h2>Protected builder runtime</h2>
-          <p className="muted-copy">
-            Review the Codex model, access boundary, and checks used for private website previews.
-          </p>
-        </div>
-        <BuilderSettingsControl />
+      <Card className="workspace-panel settings-page__card settings-page__card--builder">
+        <WebsiteBuilderSettings repository={repository} />
       </Card>
       <Card className="workspace-panel settings-page__card">
         <div>
@@ -13335,6 +13644,25 @@ function BuilderSettingsPage() {
           {openAiApiFeaturesEnabled ? 'API charges apply' : 'API calls blocked'}
         </StatusBadge>
       </Card>
+    </section>
+  );
+}
+
+function CodexUpdatePage() {
+  return (
+    <section className="settings-page" aria-labelledby="codex-update-page-title">
+      <ButtonLink href="#/settings" variant="quiet">
+        <ArrowLeft aria-hidden="true" size={16} /> Back to settings
+      </ButtonLink>
+      <div>
+        <Eyebrow>Workspace Agent</Eyebrow>
+        <h1 id="codex-update-page-title">Codex updates</h1>
+        <p className="muted-copy">
+          Check the installed runtime, retry a stopped update, and follow each verified activation
+          stage.
+        </p>
+      </div>
+      <CodexRuntimeUpdateSettings />
     </section>
   );
 }
@@ -13365,7 +13693,7 @@ function CodexRuntimeUpdateSettings() {
       await readStatus();
     };
     void refresh();
-    const interval = window.setInterval(() => void refresh(), 30_000);
+    const interval = window.setInterval(() => void refresh(), 3_000);
     return () => {
       active = false;
       window.clearInterval(interval);
@@ -13387,6 +13715,21 @@ function CodexRuntimeUpdateSettings() {
     }
   };
 
+  const retryUpdate = async () => {
+    setCheckingNow(true);
+    setUpdateError('');
+    try {
+      const { retryCodexUpdate } = await import('./lib/codex-runtime-updates');
+      setUpdateStatus(await retryCodexUpdate());
+    } catch (error) {
+      setUpdateError(
+        error instanceof Error ? error.message : 'Codex could not retry the update. Try again.',
+      );
+    } finally {
+      setCheckingNow(false);
+    }
+  };
+
   const state = updateStatus?.status;
   const statusBadge = !updateStatus
     ? { label: updateError ? 'Needs attention' : 'Checking', tone: 'warning' as const }
@@ -13398,26 +13741,36 @@ function CodexRuntimeUpdateSettings() {
             tone: 'danger' as const,
           }
         : state &&
-            ['downloading', 'restart_pending', 'restarting', 'waiting_for_idle'].includes(state)
+            [
+              'checking',
+              'downloading',
+              'restart_pending',
+              'restarting',
+              'waiting_for_idle',
+            ].includes(state)
           ? { label: 'Update in progress', tone: 'warning' as const }
           : { label: `v${updateStatus.currentVersion} is current`, tone: 'success' as const };
   const detail = updateError
     ? updateError
     : !updateStatus
       ? 'Checking the protected Codex runtime…'
-      : state === 'downloading'
-        ? `Downloading and verifying Codex v${updateStatus.latestVersion}. The current version stays available while this finishes.`
-        : state === 'waiting_for_idle' || state === 'restart_pending'
-          ? `Codex v${updateStatus.latestVersion} is verified and will activate after active and queued Codex work finishes.`
-          : state === 'restarting'
-            ? `Codex v${updateStatus.currentVersion} is completing its startup health check.`
-            : state === 'rollback'
-              ? `${updateStatus.failureSummary || 'The new release did not pass its startup check.'} Studio restored v${updateStatus.currentVersion} automatically.`
-              : state === 'failed'
-                ? `${updateStatus.failureSummary || 'The automatic update check failed.'} Codex v${updateStatus.currentVersion} remains available.`
-                : state === 'updated'
-                  ? `Studio automatically installed and verified Codex v${updateStatus.currentVersion}${updateStatus.updatedAt ? ` on ${formatDateTime(updateStatus.updatedAt)}` : ''}.`
-                  : `Studio checks official stable Codex releases daily. Active work finishes before an update restarts the Workspace Agent.`;
+      : state === 'checking'
+        ? `Checking the official stable release. Codex v${updateStatus.currentVersion} and chat remain available.`
+        : state === 'downloading'
+          ? `Downloading and verifying Codex v${updateStatus.latestVersion}. The current version stays available while this finishes.`
+          : state === 'waiting_for_idle'
+            ? `Codex v${updateStatus.latestVersion} is verified and will activate after active and queued Codex work finishes. Chat remains available.`
+            : state === 'restart_pending'
+              ? `Codex v${updateStatus.latestVersion} is starting its handover. New chat messages are saved and will send after reconnection.`
+              : state === 'restarting'
+                ? `Codex v${updateStatus.currentVersion} is completing its startup health check. New chat messages are saved and will send after reconnection.`
+                : state === 'rollback'
+                  ? `${updateStatus.failureSummary || 'The new release did not pass its startup check.'} Studio restored v${updateStatus.currentVersion} automatically.`
+                  : state === 'failed'
+                    ? `${updateStatus.failureSummary || 'The automatic update check failed.'} Codex v${updateStatus.currentVersion} remains available.`
+                    : state === 'updated'
+                      ? `Studio automatically installed and verified Codex v${updateStatus.currentVersion}${updateStatus.updatedAt ? ` on ${formatDateTime(updateStatus.updatedAt)}` : ''}.`
+                      : `Studio checks official stable Codex releases daily. Active work finishes before an update restarts the Workspace Agent.`;
   const releases = updateStatus?.releases ?? [];
   const updateInProgress = Boolean(
     state &&
@@ -13425,6 +13778,28 @@ function CodexRuntimeUpdateSettings() {
       state,
     ),
   );
+  const canRetryUpdate = state === 'failed' || state === 'rollback';
+  const updateStage =
+    state === 'checking'
+      ? 0
+      : state === 'downloading'
+        ? 1
+        : state === 'waiting_for_idle'
+          ? 2
+          : state === 'restart_pending'
+            ? 3
+            : state === 'restarting'
+              ? 4
+              : state === 'updated'
+                ? 5
+                : -1;
+  const updateStages = [
+    'Check official release',
+    'Download and verify',
+    'Wait for active work',
+    'Restart Workspace Agent',
+    'Confirm health',
+  ];
   const astraModel = updateStatus?.availableModels?.find((model) => model.id === 'gpt-6-astra');
   const modelCatalogReady = updateStatus?.modelCatalogStatus === 'ready';
   const astraEfforts = astraModel?.efforts.map((effort) => effort.id).join(', ');
@@ -13442,11 +13817,53 @@ function CodexRuntimeUpdateSettings() {
               <Eyebrow>Automatic updates</Eyebrow>
               <h2>Codex runtime</h2>
             </div>
-            <StatusBadge tone={statusBadge.tone}>{statusBadge.label}</StatusBadge>
+            <StatusBadge tone={statusBadge.tone}>
+              {!updateStatus && !updateError ? (
+                <LoaderCircle aria-hidden="true" className="spin" size={14} />
+              ) : null}
+              {statusBadge.label}
+            </StatusBadge>
           </div>
           <p aria-live="polite" className="muted-copy" role="status">
             {detail}
           </p>
+          {updateInProgress ? (
+            <section
+              aria-labelledby="settings-codex-update-progress-title"
+              className="settings-codex-updates__progress"
+            >
+              <div>
+                <h3 id="settings-codex-update-progress-title">Update progress</h3>
+                <small>
+                  {updateStatus?.statusChangedAt
+                    ? `Current phase started ${formatDateTime(updateStatus.statusChangedAt)}`
+                    : 'Current phase time is not available'}
+                </small>
+              </div>
+              <ol>
+                {updateStages.map((label, index) => (
+                  <li
+                    className={
+                      index < updateStage
+                        ? 'is-complete'
+                        : index === updateStage
+                          ? 'is-current'
+                          : undefined
+                    }
+                    key={label}
+                  >
+                    <span aria-hidden="true">{index < updateStage ? '✓' : index + 1}</span>
+                    <strong>{label}</strong>
+                    {index === updateStage ? <small>In progress</small> : null}
+                  </li>
+                ))}
+              </ol>
+              <p>
+                If checking, downloading, restart, or verification cannot finish within 10 minutes,
+                Studio stops the attempt and keeps or restores the previous working version.
+              </p>
+            </section>
+          ) : null}
           <div className="settings-codex-updates__checker">
             <dl aria-label="Codex version details">
               <div>
@@ -13467,8 +13884,8 @@ function CodexRuntimeUpdateSettings() {
               </div>
             </dl>
             <Button
-              disabled={checkingNow || updateInProgress}
-              onClick={() => void checkForUpdates()}
+              disabled={checkingNow || updateInProgress || (!updateStatus && !updateError)}
+              onClick={() => void (canRetryUpdate ? retryUpdate() : checkForUpdates())}
               variant="secondary"
             >
               {checkingNow ? (
@@ -13476,7 +13893,13 @@ function CodexRuntimeUpdateSettings() {
               ) : (
                 <SearchCheck aria-hidden="true" size={16} />
               )}
-              {checkingNow ? 'Checking for updates…' : 'Check for updates'}
+              {checkingNow
+                ? canRetryUpdate
+                  ? 'Retrying update…'
+                  : 'Checking for updates…'
+                : canRetryUpdate
+                  ? 'Retry update'
+                  : 'Check for updates'}
             </Button>
           </div>
           {releases.length ? (
@@ -13845,7 +14268,7 @@ const agentPackageFeatures: AgentFeature[] = [
     id: 'next-component-architecture',
     title: 'Next.js generated component architecture',
     detail:
-      'Builds strict TypeScript App Router sites from clean routes while letting Codex turn short outcome-level prompts into a decisive page-specific concept spanning expressive typography, spacing rhythm, tokens, primitives, patterns, distinctive responsive composition, custom effects, site components, layouts, and pages.',
+      'Builds strict TypeScript App Router sites from clean routes while making Codex ground each page-specific concept in the company dossier, approved identity, real visitor task, and explicit media availability before it chooses typography, composition, effects, site components, layouts, and pages.',
     files: [
       {
         label: 'Component architecture contract',
@@ -13854,6 +14277,7 @@ const agentPackageFeatures: AgentFeature[] = [
         terms: [
           'The foundation locks dependencies',
           'Creative ownership',
+          'Company context and non-generic heroes',
           'Creative autonomy from short directions',
           'Content-led composition',
           'Mobile is a distinct composition opportunity',
@@ -13915,7 +14339,7 @@ const agentPackageFeatures: AgentFeature[] = [
     id: 'framework-quality-gates',
     title: 'Framework, interaction & responsive quality gates',
     detail:
-      'Runs deterministic framework and responsive verification, and keeps committed prospect lessons behind human selection, protected distillation, clean-manifest testing, and explicit package release gates.',
+      'Runs deterministic framework, evidence-led hero, and responsive verification, and keeps committed prospect lessons behind human selection, protected distillation, clean-manifest testing, and explicit package release gates.',
     files: [
       {
         label: 'Template packages',
@@ -13941,6 +14365,7 @@ const agentPackageFeatures: AgentFeature[] = [
           'builderExecutionProfile',
           'efficientExecutionInstruction',
           'creativeAutonomyProblems',
+          'heroArtDirectionProblems',
           'assertRequiredCompiledOutputs',
         ],
       },
@@ -14017,7 +14442,7 @@ const agentPackageFeatures: AgentFeature[] = [
     id: 'motion-runtime',
     title: 'Entrance motion & factual counters',
     detail:
-      'Prepares reveal states behind the loading cover, then treats those hooks as a baseline for the agent’s page-owned parallax, sticky narrative, pointer-responsive atmosphere, masking, layering, and other art-directed motion after the route logo handoff, while animating only explicitly marked factual metrics.',
+      'Prepares reveal states behind the loading cover, then lets the evidence-led page composition choose only the motion that helps its hierarchy instead of imposing effect-family, sequence, stagger, or scroll-depth quotas, while animating only explicitly marked factual metrics.',
     files: [
       {
         label: 'Motion runtime',
@@ -14040,7 +14465,7 @@ const agentPackageFeatures: AgentFeature[] = [
           'Use motion to support hierarchy',
           'outcome-level creative brief',
           'data-counter',
-          'at least two fitting treatments',
+          'optional tools, not per-route quotas',
         ],
       },
     ],
@@ -16099,7 +16524,7 @@ function AgentStudioPage({
         </div>
         <div className="agent-studio__header-actions">
           <AgentStudioSectionNavigation onSelectSection={onSelectSection} section={section} />
-          <BuilderSettingsControl iconOnly />
+          <BuilderSettingsControl compact />
           {isArchitecturePage ? (
             <IconButton
               className="agent-studio__architecture-map-trigger"
@@ -18325,6 +18750,8 @@ function FocusedWebsiteEditor({ workspace }: { workspace: ProspectWorkspace }) {
   const [mobileSurface, setMobileSurface] = useState<'preview' | 'codex'>('preview');
   const [viewportMode, setViewportMode] = useState<PreviewViewportMode>('fit');
   const [fullPreview, setFullPreview] = useState(false);
+  const [openingDevicePreview, setOpeningDevicePreview] = useState(false);
+  const [devicePreviewError, setDevicePreviewError] = useState('');
   const [codexContainer, setCodexContainer] = useState<HTMLElement | null>(null);
   const editorRef = useRef<HTMLElement>(null);
   const viewportBeforeFullPreviewRef = useRef<PreviewViewportMode>('fit');
@@ -18403,6 +18830,45 @@ function FocusedWebsiteEditor({ workspace }: { workspace: ProspectWorkspace }) {
     setFullPreview(false);
   }
 
+  async function openDevicePreview() {
+    const previewTab = window.open('about:blank', '_blank');
+    if (previewTab) previewTab.opener = null;
+    setOpeningDevicePreview(true);
+    setDevicePreviewError('');
+    try {
+      const access = new URL('/__made-solid/workspace-preview-access', window.location.origin);
+      access.searchParams.set('directory', directory);
+      const response = await studioRuntimeFetch(`${access.pathname}${access.search}`, {
+        cache: 'no-store',
+      });
+      const payload = (await response.json().catch(() => undefined)) as
+        ClientDevelopmentAccessResponse | undefined;
+      if (!response.ok || payload?.directory !== directory) {
+        throw new Error(
+          typeof payload?.detail === 'string'
+            ? payload.detail
+            : 'The live client preview is not available yet.',
+        );
+      }
+      const source = validClientPreviewUrl(payload.clientPreviewUrl, directory);
+      if (!source) throw new Error('The runtime did not return a secure client preview.');
+      const destination = devicePreviewUrl(source, {
+        device: 'desktop',
+        label: `${workspace.business.name} live website`,
+        returnUrl: window.location.href,
+      });
+      if (previewTab && !previewTab.closed) previewTab.location.replace(destination);
+      else window.location.assign(destination);
+    } catch (error) {
+      previewTab?.close();
+      setDevicePreviewError(
+        error instanceof Error ? error.message : 'The device preview could not be opened.',
+      );
+    } finally {
+      setOpeningDevicePreview(false);
+    }
+  }
+
   return (
     <main
       className={`focused-website-editor${fullPreview ? ' is-full-preview' : ''}`}
@@ -18462,6 +18928,18 @@ function FocusedWebsiteEditor({ workspace }: { workspace: ProspectWorkspace }) {
               <Maximize2 aria-hidden="true" size={17} />
             )}
           </IconButton>
+          <IconButton
+            disabled={openingDevicePreview}
+            label="Open device preview"
+            onClick={() => void openDevicePreview()}
+            variant="secondary"
+          >
+            {openingDevicePreview ? (
+              <LoaderCircle aria-hidden="true" className="spin" size={17} />
+            ) : (
+              <ArrowUpRight aria-hidden="true" size={17} />
+            )}
+          </IconButton>
           <ButtonGroup
             aria-label="Choose editor surface"
             className="focused-website-editor__switcher"
@@ -18493,6 +18971,11 @@ function FocusedWebsiteEditor({ workspace }: { workspace: ProspectWorkspace }) {
           </ButtonGroup>
         </div>
       </header>
+      {devicePreviewError ? (
+        <p className="focused-website-editor__preview-error" role="alert">
+          {devicePreviewError}
+        </p>
+      ) : null}
       {fullPreview ? (
         <div className="focused-website-editor__full-preview-exit">
           <IconButton
@@ -19492,6 +19975,7 @@ function MadeSolidHandoffPage({
     proposal.draft.clientEmail ?? (savedHandoff?.clientEmail || handoffEmail.email);
   const handoffNotes = proposal.draft.handoffNotes ?? savedHandoff?.handoffNotes ?? '';
   const { update: updateProposal } = proposal;
+  const clientspaceBalanceRevision = proposal.draft.clientspaceBalanceRevision;
   const [approvedQuote, setApprovedQuote] = useState<PricingQuoteSnapshot>();
   const acceptQuote = useCallback(
     (quote?: PricingQuoteSnapshot) => {
@@ -19580,75 +20064,127 @@ function MadeSolidHandoffPage({
   }
   return (
     <div className="workspace-content-stack handoff-workflow" data-testid="made-solid-handoff-page">
-      <section className="workflow-overview" aria-labelledby="handoff-workflow-title">
+      <section className="workflow-overview handoff-intro" aria-labelledby="handoff-workflow-title">
         <div className="workflow-overview__heading">
           <div>
-            <Eyebrow>Client proposal</Eyebrow>
-            <h2 id="handoff-workflow-title">Prepare {workspace.business.name} for Clientspace</h2>
+            <Eyebrow>{workspace.business.name} · Client proposal</Eyebrow>
+            <h2 id="handoff-workflow-title">Client handoff</h2>
             <p>
-              Confirm the website, client details and one offer. Prepare the private Clientspace
-              handoff here, then review the invitation before sending it.
+              Get the website, client details and offer ready in one place. Your progress is saved
+              as you work. You’ll review the invitation in Clientspace before sending it.
             </p>
           </div>
           <StatusBadge tone={finalised && releaseVerified ? 'success' : 'warning'}>
             {finalised && releaseVerified ? 'Release verified' : 'Release verification required'}
           </StatusBadge>
         </div>
-        {workspace.report?.status === 'approved' &&
-        workspace.report.auditId === workspace.audit?.id &&
-        workspace.report.crawlRunId === workspace.latestCapture?.id ? (
-          <div className="audit-report-ready">
-            <div>
-              <Eyebrow>Supporting report</Eyebrow>
-              <h3>Client report version {workspace.report.version}</h3>
-              <p>
-                This opens a private Studio preview only. It does not create or change a client
-                project.
-              </p>
-            </div>
-            <ButtonLink
-              href={`#/prospects/${workspace.business.id}/report-preview`}
-              variant="primary"
-            >
-              Preview client report
-              <FileSearch aria-hidden="true" size={16} />
-            </ButtonLink>
+        <ol className="handoff-map" aria-label="Handoff overview">
+          {[
+            {
+              title: 'Website & report',
+              detail: canPush ? 'Ready to prepare' : 'Check readiness below',
+              done: canPush,
+            },
+            {
+              title: 'Client & offer',
+              detail:
+                handoff?.status === 'ready'
+                  ? 'Saved in handoff'
+                  : approvedQuote
+                    ? 'Quote approved · confirm details'
+                    : 'Review details and approve a quote',
+              done: handoff?.status === 'ready' || Boolean(approvedQuote),
+            },
+            {
+              title: 'Prepare & review',
+              detail:
+                handoff?.status === 'ready'
+                  ? 'Continue in Clientspace'
+                  : active
+                    ? 'Preparing your handoff'
+                    : 'Private until you choose to invite',
+              done: handoff?.status === 'ready',
+            },
+          ].map((step, index) => (
+            <li key={step.title} data-complete={step.done}>
+              <span className="handoff-map__number" aria-hidden="true">
+                {step.done ? <CheckCircle2 size={20} /> : index + 1}
+              </span>
+              <div>
+                <strong>{step.title}</strong>
+                <small>{step.detail}</small>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </section>
+      <div className="handoff-source-grid">
+        <section className="proposal-website" aria-labelledby="proposal-website-title">
+          <div className="handoff-section-heading">
+            <span className="handoff-section-icon">
+              <Globe2 aria-hidden="true" size={20} />
+            </span>
+            <Eyebrow>Website</Eyebrow>
           </div>
-        ) : null}
-      </section>
-      <section className="proposal-website" aria-labelledby="proposal-website-title">
-        <Eyebrow>1 · Website</Eyebrow>
-        <h3 id="proposal-website-title">
-          {state.committedVersion
-            ? `Committed website v${state.committedVersion.version}`
-            : 'Choose a committed website'}
-        </h3>
-        <p>
-          {finalised && releaseVerified
-            ? 'The current committed website passed release verification.'
-            : 'Finish and verify the current website before preparing its Clientspace handoff.'}
-        </p>
-        {priorHandoff?.websiteAdminUrl ? (
+          <h3 id="proposal-website-title">
+            {state.committedVersion
+              ? `Committed website v${state.committedVersion.version}`
+              : 'Choose a committed website'}
+          </h3>
           <p>
-            There is already a Made Solid handoff for edit v{priorHandoff.sourceEditVersion}.
-            Continue with that record to avoid creating another project.
-          </p>
-        ) : null}
-        <ButtonGroup>
-          <ButtonLink href={`#/prospects/${workspace.business.id}/editing`} variant="secondary">
             {finalised && releaseVerified
-              ? 'View website and edits'
-              : 'Finish website verification'}
-            <ArrowRight size={16} aria-hidden="true" />
-          </ButtonLink>
+              ? 'The current committed website passed release verification.'
+              : 'Finish and verify the current website before preparing its Clientspace handoff.'}
+          </p>
           {priorHandoff?.websiteAdminUrl ? (
-            <ButtonLink href={priorHandoff.websiteAdminUrl} target="_blank" variant="secondary">
-              Open existing Clientspace handoff
-              <ExternalLink size={16} aria-hidden="true" />
-            </ButtonLink>
+            <p>
+              There is already a Made Solid handoff for edit v{priorHandoff.sourceEditVersion}.
+              Continue with that record to avoid creating another project.
+            </p>
           ) : null}
-        </ButtonGroup>
-      </section>
+          <ButtonGroup>
+            <ButtonLink href={`#/prospects/${workspace.business.id}/editing`} variant="secondary">
+              {finalised && releaseVerified
+                ? 'View website and edits'
+                : 'Finish website verification'}
+              <ArrowRight size={16} aria-hidden="true" />
+            </ButtonLink>
+            {priorHandoff?.websiteAdminUrl ? (
+              <ButtonLink href={priorHandoff.websiteAdminUrl} target="_blank" variant="secondary">
+                Open existing Clientspace handoff
+                <ExternalLink size={16} aria-hidden="true" />
+              </ButtonLink>
+            ) : null}
+          </ButtonGroup>
+        </section>
+        <section className="proposal-website" aria-labelledby="handoff-report-title">
+          <div className="handoff-section-heading">
+            <span className="handoff-section-icon">
+              <FileSearch aria-hidden="true" size={20} />
+            </span>
+            <Eyebrow>Supporting report</Eyebrow>
+          </div>
+          <h3 id="handoff-report-title">
+            {reportReady
+              ? `Client report v${workspace.report?.version} is ready`
+              : 'Prepare the current client report'}
+          </h3>
+          <p>
+            {reportReady
+              ? 'The approved report matches this website version and is ready to support your proposal.'
+              : 'Approve a report for this website version before preparing the handoff.'}
+          </p>
+          <ButtonGroup>
+            <ButtonLink
+              href={`#/prospects/${workspace.business.id}/${reportReady ? 'report-preview' : 'report'}`}
+              variant="secondary"
+            >
+              {reportReady ? 'Preview client report' : 'Prepare current report'}
+              <ArrowRight aria-hidden="true" size={16} />
+            </ButtonLink>
+          </ButtonGroup>
+        </section>
+      </div>
       <details className="proposal-details">
         <summary>Website verification and version history</summary>
         <section className="handoff-readiness">
@@ -19733,7 +20269,15 @@ function MadeSolidHandoffPage({
                     : 'neutral'
             }
           >
-            {handoff?.status.replaceAll('_', ' ') ?? 'Not transferred'}
+            {handoff?.status === 'ready'
+              ? 'Prepared'
+              : active
+                ? 'Preparing'
+                : handoff?.status === 'failed'
+                  ? 'Needs attention'
+                  : handoff?.status === 'cancelled'
+                    ? 'Cancelled'
+                    : 'Draft'}
           </StatusBadge>
         </div>
         <p className="muted-copy">
@@ -19747,6 +20291,17 @@ function MadeSolidHandoffPage({
             <div>
               <h3 id="made-solid-handoff-ready">Next: review Clientspace and the invitation</h3>
               <p>{handoff.progressDetail}</p>
+              {clientspaceBalanceRevision ? (
+                <div className="handoff-submit__clientspace-balance" role="status">
+                  <strong>
+                    Clientspace final balance · {formatAud(clientspaceBalanceRevision.balanceCents)}
+                  </strong>
+                  <span>{clientspaceBalanceRevision.reason}</span>
+                  <small>
+                    Synced {new Date(clientspaceBalanceRevision.syncedAt).toLocaleString('en-AU')}
+                  </small>
+                </div>
+              ) : null}
               <ButtonLink href={handoff.websiteAdminUrl} target="_blank" variant="secondary">
                 Continue in Clientspace <ExternalLink aria-hidden="true" size={16} />
               </ButtonLink>
@@ -19791,7 +20346,7 @@ function MadeSolidHandoffPage({
           </section>
         ) : (
           <form className="handoff-submit__form" onSubmit={pushHandoff}>
-            <p role="status">
+            <p className="handoff-save-status" role="status">
               {proposal.status === 'loading'
                 ? 'Loading your saved proposal…'
                 : proposal.status === 'saving'
@@ -19807,6 +20362,10 @@ function MadeSolidHandoffPage({
             ) : null}
             <fieldset className="proposal-fields" disabled={!proposal.loaded}>
               <legend>Client details</legend>
+              <p className="handoff-section-description">
+                Check who the project is for. You can confirm the contact later; no email is sent
+                here.
+              </p>
               {state.pricingScope?.source === 'working_source' && priorHandoff ? (
                 <p className="handoff-submit__notice" role="status">
                   <CircleDollarSign aria-hidden="true" size={18} />
@@ -19859,79 +20418,113 @@ function MadeSolidHandoffPage({
                 </label>
               </div>
             </fieldset>
-            {proposal.loaded ? (
-              <PricingCalculator
-                manifest={workspace.buildManifest}
-                sourceScope={state.pricingScope}
-                savedQuote={proposal.draft.approvedQuote ?? savedHandoff?.pricingSnapshot}
-                savedOptions={proposal.draft.pricingOptions}
-                onOptionsChange={(options) => updateProposal({ pricingOptions: options })}
-                onApprovedQuoteChange={acceptQuote}
-              />
-            ) : null}
-            {!canPush ? (
-              <p className="handoff-submit__notice" role="alert">
-                <ShieldAlert aria-hidden="true" size={18} />
-                {!finalised
-                  ? 'Commit the final edit on Website editing first.'
-                  : !releaseVerified
-                    ? `Run release verification for commit ${state.commit?.slice(0, 8) ?? 'the current source'} on Website editing first.`
-                    : !reportReady
-                      ? 'The handoff service needs a current report for this website version. Prepare it from Report before continuing.'
-                      : !sourcePricingReady
-                        ? 'Reopen Website editing to refresh pricing from this exact committed version. An original-build estimate cannot be transferred as the current offer.'
-                        : !repository?.repositoryUrl
-                          ? 'Create and sync the private editable source repository first.'
-                          : !workspace.madeSolidHandoffWorkerAvailable
-                            ? 'Made Solid handoff is not connected. Start the protected handoff worker first.'
-                            : 'The exact commit and source lineage must be verified before handoff.'}
+            <section className="handoff-offer" aria-labelledby="handoff-offer-title">
+              <div className="handoff-section-heading">
+                <span className="handoff-section-icon">
+                  <CircleDollarSign aria-hidden="true" size={20} />
+                </span>
+                <div>
+                  <Eyebrow>Your offer</Eyebrow>
+                  <h3 id="handoff-offer-title">Review and approve the quote</h3>
+                </div>
+              </div>
+              {proposal.loaded ? (
+                <PricingCalculator
+                  manifest={workspace.buildManifest}
+                  sourceScope={state.pricingScope}
+                  savedQuote={proposal.draft.approvedQuote ?? savedHandoff?.pricingSnapshot}
+                  savedOptions={proposal.draft.pricingOptions}
+                  onOptionsChange={(options) => updateProposal({ pricingOptions: options })}
+                  onApprovedQuoteChange={acceptQuote}
+                />
+              ) : null}
+            </section>
+            <section className="handoff-review" aria-labelledby="handoff-review-title">
+              <div>
+                <Eyebrow>Final review</Eyebrow>
+                <h3 id="handoff-review-title">Ready to prepare your handoff?</h3>
+                <p>Check the details below, then save the website and offer to Made Solid.</p>
+              </div>
+              <dl className="handoff-review__facts">
+                <div>
+                  <dt>Client</dt>
+                  <dd>{clientName.trim() || 'Add a client name'}</dd>
+                </div>
+                <div>
+                  <dt>Project</dt>
+                  <dd>{projectName.trim() || 'Add a project name'}</dd>
+                </div>
+                <div>
+                  <dt>Contact email</dt>
+                  <dd>{clientEmail.trim() || 'Confirm in Clientspace'}</dd>
+                </div>
+                <div>
+                  <dt>Quote</dt>
+                  <dd>{approvedQuote ? 'Approved for this website' : 'Approval needed above'}</dd>
+                </div>
+              </dl>
+              {!canPush ? (
+                <p className="handoff-submit__notice" role="alert">
+                  <ShieldAlert aria-hidden="true" size={18} />
+                  {!finalised
+                    ? 'Commit the final edit on Website editing first.'
+                    : !releaseVerified
+                      ? `Run release verification for commit ${state.commit?.slice(0, 8) ?? 'the current source'} on Website editing first.`
+                      : !reportReady
+                        ? 'The handoff service needs a current report for this website version. Prepare it from Report before continuing.'
+                        : !sourcePricingReady
+                          ? 'Reopen Website editing to refresh pricing from this exact committed version. An original-build estimate cannot be transferred as the current offer.'
+                          : !repository?.repositoryUrl
+                            ? 'Create and sync the private editable source repository first.'
+                            : !workspace.madeSolidHandoffWorkerAvailable
+                              ? 'Made Solid handoff is not connected. Start the protected handoff worker first.'
+                              : 'The exact commit and source lineage must be verified before handoff.'}
+                </p>
+              ) : null}
+              {handoff?.status === 'failed' && handoff.errorSummary ? (
+                <p className="form-message form-message--error" role="alert">
+                  {handoff.errorSummary}
+                </p>
+              ) : null}
+              {message ? (
+                <p className="form-message form-message--error" role="alert">
+                  {message}
+                </p>
+              ) : null}
+              {!approvedQuote ? (
+                <p className="handoff-submit__notice" role="status">
+                  <CircleDollarSign aria-hidden="true" size={18} />
+                  Review and approve the build-derived quote before transferring this project.
+                </p>
+              ) : null}
+              <Button
+                disabled={!canPush || !approvedQuote || submitting || proposal.status !== 'saved'}
+                type="submit"
+              >
+                <PackageCheck aria-hidden="true" size={16} />
+                {submitting
+                  ? 'Preparing handoff…'
+                  : handoff?.status === 'failed'
+                    ? 'Retry Made Solid handoff'
+                    : priorHandoff
+                      ? 'Prepare updated handoff'
+                      : 'Prepare Clientspace handoff'}
+              </Button>
+              <p className="handoff-review__privacy">
+                <ShieldCheck aria-hidden="true" size={16} />
+                Private preparation only. The client receives nothing until you send an invitation
+                in Clientspace.
               </p>
-            ) : null}
-            {!reportReady ? (
-              <ButtonLink href={`#/prospects/${workspace.business.id}/report`} variant="secondary">
-                Prepare current report
-                <ArrowRight size={16} aria-hidden="true" />
-              </ButtonLink>
-            ) : null}
-            {handoff?.status === 'failed' && handoff.errorSummary ? (
-              <p className="form-message form-message--error" role="alert">
-                {handoff.errorSummary}
-              </p>
-            ) : null}
-            {message ? (
-              <p className="form-message form-message--error" role="alert">
-                {message}
-              </p>
-            ) : null}
-            {!approvedQuote ? (
-              <p className="handoff-submit__notice" role="status">
-                <CircleDollarSign aria-hidden="true" size={18} />
-                Review and approve the build-derived quote before transferring this project.
-              </p>
-            ) : null}
-            <Button
-              disabled={!canPush || !approvedQuote || submitting || proposal.status !== 'saved'}
-              type="submit"
-            >
-              <PackageCheck aria-hidden="true" size={16} />
-              {submitting
-                ? 'Queueing exact edit'
-                : handoff?.status === 'failed'
-                  ? 'Retry Made Solid handoff'
-                  : priorHandoff
-                    ? 'Prepare updated handoff'
-                    : 'Prepare Clientspace handoff'}
-            </Button>
-            <small>
-              Source: {state.commit ? state.commit.slice(0, 12) : 'not committed'} · edit v
-              {state.committedVersion?.version ?? '—'}
-            </small>
+              <small>
+                Source: {state.commit ? state.commit.slice(0, 12) : 'not committed'} · edit v
+                {state.committedVersion?.version ?? '—'}
+              </small>
+            </section>
           </form>
         )}
       </section>
-      <section className="proposal-next" aria-labelledby="proposal-next-title">
-        <Eyebrow>3 · What happens next</Eyebrow>
-        <h3 id="proposal-next-title">From proposal to launch</h3>
+      <details className="proposal-details proposal-next">
+        <summary>What happens after preparation?</summary>
         <ol>
           <li>
             <strong>Review Clientspace.</strong> Open the existing project, or create it from the
@@ -19954,7 +20547,8 @@ function MadeSolidHandoffPage({
             navigation, then record the launch.
           </li>
         </ol>
-      </section>
+      </details>
+      <CreateRehearsal business={workspace.business} />
       <details className="proposal-details">
         <summary>Internal tools · agent learning</summary>
         <AgentLearningHandoff
@@ -21306,6 +21900,9 @@ function WorkspaceContent({
   requestAgentLearningProposal: (basePackageId: string, direction: string) => Promise<void>;
   openAgentLearningInbox: () => void;
 }) {
+  if (workspace.business.isRehearsal) {
+    return <RehearsalWorkspace key={workspace.business.id} businessId={workspace.business.id} />;
+  }
   if (tab === 'overview') {
     return (
       <div className="workspace-content-grid">
@@ -21759,13 +22356,17 @@ function WorkspacePage({
   const workspacePickerRef = useRef<HTMLDivElement>(null);
   const workspacePickerTriggerRef = useRef<HTMLButtonElement>(null);
   const workspacePickerOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const activeWorkspaceTab = workspaceTabs.find((item) => item.id === tab) ?? workspaceTabs[0]!;
+  const availableWorkspaceTabs = workspace.business.isRehearsal
+    ? rehearsalWorkspaceTabs
+    : workspaceTabs;
+  const activeWorkspaceTab =
+    availableWorkspaceTabs.find((item) => item.id === tab) ?? availableWorkspaceTabs[0]!;
 
   useEffect(() => {
     if (!workspacePickerOpen) return;
-    const activeIndex = workspaceTabs.findIndex((item) => item.id === tab);
+    const activeIndex = availableWorkspaceTabs.findIndex((item) => item.id === tab);
     window.requestAnimationFrame(() => workspacePickerOptionRefs.current[activeIndex]?.focus());
-  }, [tab, workspacePickerOpen]);
+  }, [availableWorkspaceTabs, tab, workspacePickerOpen]);
 
   useEffect(() => {
     if (!workspacePickerOpen) return;
@@ -21798,7 +22399,8 @@ function WorkspacePage({
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       const direction = event.key === 'ArrowDown' ? 1 : -1;
-      const nextIndex = (index + direction + workspaceTabs.length) % workspaceTabs.length;
+      const nextIndex =
+        (index + direction + availableWorkspaceTabs.length) % availableWorkspaceTabs.length;
       workspacePickerOptionRefs.current[nextIndex]?.focus();
     }
   }
@@ -21814,7 +22416,7 @@ function WorkspacePage({
         workspace={workspace}
       />
       <div aria-label="Prospect workspace sections" className="workspace-tabs" role="tablist">
-        {workspaceTabs.map((item) => (
+        {availableWorkspaceTabs.map((item) => (
           <button
             aria-controls={`workspace-${item.id}`}
             aria-selected={tab === item.id}
@@ -21867,7 +22469,7 @@ function WorkspacePage({
               id="workspace-tab-picker-options"
               role="menu"
             >
-              {workspaceTabs.map((item, index) => (
+              {availableWorkspaceTabs.map((item, index) => (
                 <Button
                   aria-checked={tab === item.id}
                   className="workspace-tab-picker__option"
@@ -21974,14 +22576,15 @@ function WorkspaceApp({
   onSignOut?: () => Promise<void>;
   workspaceCacheKey?: string;
 }) {
+  const resumesFromCache = Boolean(workspaceCacheKey && hasWorkspaceCache(workspaceCacheKey));
   const [route, setRoute] = useState<Route>(initialRoute);
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [workspaces, setWorkspaces] = useState<ProspectWorkspace[]>([]);
   const [agentPackages, setAgentPackages] = useState<AgentPackage[]>([]);
   const [agentPackageProposals, setAgentPackageProposals] = useState<AgentPackageProposal[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loadingPresentation, setLoadingPresentation] = useState(true);
-  const [isHydrating, setIsHydrating] = useState(false);
+  const [loadingPresentation, setLoadingPresentation] = useState(!resumesFromCache);
+  const [isHydrating, setIsHydrating] = useState(resumesFromCache);
   const [storageError, setStorageError] = useState('');
   const [loadRequest, setLoadRequest] = useState(0);
   const [notice, setNotice] = useState<ToastNotice>();
@@ -21990,7 +22593,7 @@ function WorkspaceApp({
   const lastBackgroundRefreshAtRef = useRef(0);
   const refreshInFlightRef = useRef(false);
   const hydrationTimerRef = useRef<number>();
-  const loadingPresentationRef = useRef(true);
+  const loadingPresentationRef = useRef(!resumesFromCache);
   const assetAnalysisStatusRef = useRef(new Map<string, string>());
   const pendingLogoDeletionsRef = useRef(
     new Map<string, { onUndo: () => void; timeout: ReturnType<typeof setTimeout> }>(),
@@ -23423,13 +24026,13 @@ function WorkspaceApp({
 
   async function requestBuilderQualityRecheck(builderRunId: string, agentPackageId: string) {
     const run = await repository.requestBuilderQualityRecheck(builderRunId, agentPackageId);
-    if (!run) throw new Error('The saved-source quality recheck could not be queued.');
+    if (!run) throw new Error('The quality repair could not be queued.');
     await refreshData();
     setNotice({
       id: crypto.randomUUID(),
-      title: 'Saved-source recheck queued',
+      title: 'Quality repair queued',
       detail:
-        'The protected builder will reapply the selected runtime and reviewed colours, then compile and browser-test the saved page without another Codex generation pass.',
+        'Codex will repair the recorded findings from saved source, or rebuild the same immutable manifest scope when no validated checkpoint exists, before the complete browser suite runs again.',
       tone: 'success',
     });
   }
@@ -23680,229 +24283,239 @@ function WorkspaceApp({
   }
 
   return (
-    <>
-      <AppShell
-        activePage={activePage}
-        contentKey={hrefForRoute(route)}
-        isLoading={loadingPresentation}
-        isHydrating={!loadingPresentation && isHydrating}
-        onNavigate={(page) =>
-          navigate(
-            page === 'today'
-              ? { page: 'today' }
-              : page === 'data'
-                ? { page: 'data' }
-                : page === 'usage'
-                  ? { page: 'usage' }
-                  : page === 'tax'
-                    ? { page: 'tax' }
-                    : page === 'settings'
-                      ? { page: 'settings' }
-                      : page === 'development'
-                        ? { page: 'development' }
-                        : page === 'codex'
-                          ? { page: 'codex' }
-                          : page === 'agent-studio'
-                            ? { page: 'agent-studio', section: 'refine' }
-                            : { page: 'prospects' },
-          )
-        }
-        onSignOut={onSignOut}
-        surface={studioSurface()}
-        userEmail={userEmail}
-      >
-        {loadingPresentation ? null : route.page === 'workspace-development-access' ? (
-          <WorkspaceDevelopmentAccess returnPath={route.returnPath} />
-        ) : route.page === 'today' ? (
-          <TodayPage
-            businesses={businesses}
-            openWorkspace={openWorkspace}
-            workspaces={workspaces}
-          />
-        ) : route.page === 'data' ? (
-          <DataManagementPage
-            onDeletePackage={deleteBuildPackage}
-            onDeleteRecord={deleteManagedRecord}
-            onOpenWorkspace={(targetWorkspace, tab, versionId) =>
-              navigate({
-                page: 'prospects',
-                businessId: targetWorkspace.business.id,
-                versionId,
-                tab,
-              })
-            }
-            workspaces={workspaces}
-          />
-        ) : route.page === 'usage' ? (
-          <UsagePage
-            agentPackages={agentPackages}
-            initialBuildId={route.builderRunId}
-            onOpenWorkspace={openWorkspace}
-            workspaces={workspaces}
-          />
-        ) : route.page === 'tax' ? (
-          <TaxExpensesPage repository={repository} workspaces={workspaces} />
-        ) : route.page === 'settings' ? (
-          <BuilderSettingsPage />
-        ) : route.page === 'development' ? (
-          <DevelopmentPage />
-        ) : route.page === 'website-editor' ? (
-          <WorkspaceDevelopmentAccess returnPath={hrefForRoute(route)} />
-        ) : route.page === 'codex' ? (
-          <section aria-label="Codex chat page" className="codex-chat-page">
-            <CodexFeedbackPanel page />
-          </section>
-        ) : route.page === 'agent-studio' ? (
-          <AgentStudioErrorBoundary
-            onOpenSafeTesting={() => navigate({ page: 'agent-studio', section: 'refine' })}
-            routeKey={`${route.section ?? 'refine'}:${route.businessId ?? ''}`}
-          >
-            <AgentStudioPage
-              agentPackageProposals={agentPackageProposals}
-              agentPackages={agentPackages}
-              onApproveAgentPackageForTesting={approveAgentPackageForTesting}
-              onApproveAgentPackageForProduction={approveAgentPackageForProduction}
-              onStageAgentPackageBehaviours={stageAgentPackageBehaviours}
-              onCancelBuild={cancelWebsiteBuildForBusiness}
-              onDeleteBuild={deleteWebsiteBuild}
-              onLoadBuildEvidence={(builderRunId) => repository.getBuilderRunEvidence(builderRunId)}
-              onMoveToAgentStudio={moveBuilderRunToAgentStudio}
-              onOpenPreview={createBuilderPreviewUrl}
-              onOpenProspect={(businessId) =>
-                navigate({ page: 'prospects', businessId, tab: 'redesign' })
-              }
-              onOpenUsageAnalysis={(builderRunId) => navigate({ page: 'usage', builderRunId })}
-              onRequestBuild={requestWebsiteBuildForBusiness}
-              onQualityRecheck={requestBuilderQualityRecheck}
-              onRequestSiteTest={requestAgentStudioSiteTest}
-              onResumeBuild={resumeWebsiteBuildForBusiness}
-              onRequestAgentPackageProposal={requestAgentPackageProposal}
-              onPromoteAgentPackage={promoteAgentPackage}
-              onSelectSection={(section) =>
-                navigate({
-                  page: 'agent-studio',
-                  section,
-                  businessId: route.businessId,
-                })
-              }
-              onSelectWorkspace={(businessId) =>
-                navigate({
-                  page: 'agent-studio',
-                  section: 'refine',
-                  businessId: businessId || undefined,
-                })
-              }
-              section={route.section ?? 'refine'}
-              selectedBusinessId={route.businessId}
+    <WorkspaceRepositoryContext.Provider value={repository}>
+      <>
+        <AppShell
+          activePage={activePage}
+          contentKey={hrefForRoute(route)}
+          isLoading={loadingPresentation}
+          isHydrating={!loadingPresentation && isHydrating}
+          onNavigate={(page) =>
+            navigate(
+              page === 'today'
+                ? { page: 'today' }
+                : page === 'data'
+                  ? { page: 'data' }
+                  : page === 'usage'
+                    ? { page: 'usage' }
+                    : page === 'tax'
+                      ? { page: 'tax' }
+                      : page === 'settings'
+                        ? { page: 'settings' }
+                        : page === 'development'
+                          ? { page: 'development' }
+                          : page === 'codex'
+                            ? { page: 'codex' }
+                            : page === 'agent-studio'
+                              ? { page: 'agent-studio', section: 'refine' }
+                              : { page: 'prospects' },
+            )
+          }
+          onSignOut={onSignOut}
+          surface={studioSurface()}
+          userEmail={userEmail}
+        >
+          {loadingPresentation ? null : route.page === 'workspace-development-access' ? (
+            <WorkspaceDevelopmentAccess returnPath={route.returnPath} />
+          ) : route.page === 'today' ? (
+            <TodayPage
+              businesses={businesses}
+              openWorkspace={openWorkspace}
               workspaces={workspaces}
             />
-          </AgentStudioErrorBoundary>
-        ) : route.businessId && workspace ? (
-          <WorkspacePage
-            agentPackages={agentPackages}
-            onApprove={approveWorkspace}
-            onBack={() => navigate({ page: 'prospects' })}
-            onDelete={deleteWorkspace}
-            onApproveAllAuditFindings={approveAllAuditFindings}
-            onApproveRedesignBrief={approveRedesignBrief}
-            onCreateBuildManifest={createBuildManifest}
-            onRequestProspectBuild={(mode, targetSourceUrl, buildInstruction, agentPackageId) =>
-              requestWebsiteBuildForBusiness(
-                workspace.business.id,
-                mode,
-                targetSourceUrl,
-                buildInstruction,
-                agentPackageId,
-              )
-            }
-            onResumeProspectBuild={resumeWebsiteBuildForBusiness}
-            onCancelProspectBuild={() => cancelWebsiteBuildForBusiness(workspace.business.id)}
-            onDeleteProspectBuilds={deleteWebsiteBuild}
-            onOpenBuilderPreview={createBuilderPreviewUrl}
-            onPublishGithubWorkspace={publishGithubWorkspace}
-            onCancelGithubWorkspacePublication={cancelGithubWorkspacePublication}
-            onPublishClientReview={publishClientReview}
-            onCancelClientReview={cancelClientReview}
-            onPushMadeSolidHandoff={pushMadeSolidHandoff}
-            onCancelMadeSolidHandoff={cancelMadeSolidHandoff}
-            onLoadBuilderRunEvidence={(builderRunId) =>
-              repository.getBuilderRunEvidence(builderRunId)
-            }
-            onMoveBuilderRunToAgentStudio={moveBuilderRunToAgentStudio}
-            onCreateRedesignBrief={createRedesignBrief}
-            onRefreshRedesignBriefArchitecture={refreshRedesignBriefArchitecture}
-            onRequestAssetAnalysis={requestAssetAnalysis}
-            onRequestBrandColourRefresh={requestBrandColourRefresh}
-            onRequestVisualContentExtraction={requestVisualContentExtraction}
-            onCancelVisualContentExtraction={cancelVisualContentExtraction}
-            onApproveAllVisualContent={approveAllVisualContent}
-            onUpdateVisualContentCandidate={updateVisualContentCandidate}
-            onRequestEditableLogoRetry={requestEditableLogoRetry}
-            onDeleteLogoAsset={deleteLogoAsset}
-            onCancelAssetAnalysis={cancelAssetAnalysis}
-            onSetAssetAnalysisSelected={setAssetAnalysisSelected}
-            onCancelResearchCapture={cancelResearchCapture}
-            onContinueResearchCapture={continueResearchCapture}
-            onRequestResearchCapture={requestResearchCapture}
-            onRequestAssetRefresh={requestAssetRefresh}
-            onRequestWebsiteAudit={requestWebsiteAudit}
-            onRetryAuditSpecialist={retryAuditSpecialist}
-            onCancelWebsiteAudit={cancelWebsiteAudit}
-            onToggleTask={toggleTask}
-            onTabChange={(tab) =>
-              navigate({
-                page: 'prospects',
-                businessId: workspace.business.id,
-                versionId: route.page === 'prospects' ? route.versionId : undefined,
-                tab,
-              })
-            }
-            onVersionChange={(versionId) =>
-              navigate({
-                page: 'prospects',
-                businessId: workspace.business.id,
-                versionId,
-                tab: 'overview',
-              })
-            }
-            tab={route.tab ?? 'overview'}
-            onUpdateAuditFinding={updateAuditFinding}
-            onCreateDecisionReport={createDecisionReport}
-            onCancelDecisionReport={cancelDecisionReport}
-            onRequestReportPreview={requestReportPreview}
-            onRefreshWorkspace={async () => {
-              await refreshData();
-            }}
-            onRequestAgentLearningProposal={requestAgentPackageProposal}
-            onOpenAgentLearningInbox={() => navigate({ page: 'agent-studio', section: 'learning' })}
-            onUpdateAssetAnnotation={updateAssetAnnotation}
-            onSaveBrandKit={saveBrandKit}
-            onPushLogoVersionsToBuilder={pushLogoVersionsToBuilder}
-            onCreateBrandAwareBriefRevision={createBrandAwareBriefRevision}
-            onUpdateRedesignBrief={updateRedesignBrief}
-            workspace={workspace}
+          ) : route.page === 'data' ? (
+            <DataManagementPage
+              onDeletePackage={deleteBuildPackage}
+              onDeleteRecord={deleteManagedRecord}
+              onOpenWorkspace={(targetWorkspace, tab, versionId) =>
+                navigate({
+                  page: 'prospects',
+                  businessId: targetWorkspace.business.id,
+                  versionId,
+                  tab,
+                })
+              }
+              workspaces={workspaces}
+            />
+          ) : route.page === 'usage' ? (
+            <UsagePage
+              agentPackages={agentPackages}
+              initialBuildId={route.builderRunId}
+              onOpenWorkspace={openWorkspace}
+              workspaces={workspaces}
+            />
+          ) : route.page === 'tax' ? (
+            <TaxExpensesPage repository={repository} workspaces={workspaces} />
+          ) : route.page === 'settings' ? (
+            route.section === 'codex-updates' ? (
+              <CodexUpdatePage />
+            ) : (
+              <BuilderSettingsPage repository={repository} />
+            )
+          ) : route.page === 'development' ? (
+            <DevelopmentPage />
+          ) : route.page === 'website-editor' ? (
+            <WorkspaceDevelopmentAccess returnPath={hrefForRoute(route)} />
+          ) : route.page === 'codex' ? (
+            <section aria-label="Codex chat page" className="codex-chat-page">
+              <CodexFeedbackPanel page />
+            </section>
+          ) : route.page === 'agent-studio' ? (
+            <AgentStudioErrorBoundary
+              onOpenSafeTesting={() => navigate({ page: 'agent-studio', section: 'refine' })}
+              routeKey={`${route.section ?? 'refine'}:${route.businessId ?? ''}`}
+            >
+              <AgentStudioPage
+                agentPackageProposals={agentPackageProposals}
+                agentPackages={agentPackages}
+                onApproveAgentPackageForTesting={approveAgentPackageForTesting}
+                onApproveAgentPackageForProduction={approveAgentPackageForProduction}
+                onStageAgentPackageBehaviours={stageAgentPackageBehaviours}
+                onCancelBuild={cancelWebsiteBuildForBusiness}
+                onDeleteBuild={deleteWebsiteBuild}
+                onLoadBuildEvidence={(builderRunId) =>
+                  repository.getBuilderRunEvidence(builderRunId)
+                }
+                onMoveToAgentStudio={moveBuilderRunToAgentStudio}
+                onOpenPreview={createBuilderPreviewUrl}
+                onOpenProspect={(businessId) =>
+                  navigate({ page: 'prospects', businessId, tab: 'redesign' })
+                }
+                onOpenUsageAnalysis={(builderRunId) => navigate({ page: 'usage', builderRunId })}
+                onRequestBuild={requestWebsiteBuildForBusiness}
+                onQualityRecheck={requestBuilderQualityRecheck}
+                onRequestSiteTest={requestAgentStudioSiteTest}
+                onResumeBuild={resumeWebsiteBuildForBusiness}
+                onRequestAgentPackageProposal={requestAgentPackageProposal}
+                onPromoteAgentPackage={promoteAgentPackage}
+                onSelectSection={(section) =>
+                  navigate({
+                    page: 'agent-studio',
+                    section,
+                    businessId: route.businessId,
+                  })
+                }
+                onSelectWorkspace={(businessId) =>
+                  navigate({
+                    page: 'agent-studio',
+                    section: 'refine',
+                    businessId: businessId || undefined,
+                  })
+                }
+                section={route.section ?? 'refine'}
+                selectedBusinessId={route.businessId}
+                workspaces={workspaces}
+              />
+            </AgentStudioErrorBoundary>
+          ) : route.businessId && workspace ? (
+            <WorkspacePage
+              agentPackages={agentPackages}
+              onApprove={approveWorkspace}
+              onBack={() => navigate({ page: 'prospects' })}
+              onDelete={deleteWorkspace}
+              onApproveAllAuditFindings={approveAllAuditFindings}
+              onApproveRedesignBrief={approveRedesignBrief}
+              onCreateBuildManifest={createBuildManifest}
+              onRequestProspectBuild={(mode, targetSourceUrl, buildInstruction, agentPackageId) =>
+                requestWebsiteBuildForBusiness(
+                  workspace.business.id,
+                  mode,
+                  targetSourceUrl,
+                  buildInstruction,
+                  agentPackageId,
+                )
+              }
+              onResumeProspectBuild={resumeWebsiteBuildForBusiness}
+              onCancelProspectBuild={() => cancelWebsiteBuildForBusiness(workspace.business.id)}
+              onDeleteProspectBuilds={deleteWebsiteBuild}
+              onOpenBuilderPreview={createBuilderPreviewUrl}
+              onPublishGithubWorkspace={publishGithubWorkspace}
+              onCancelGithubWorkspacePublication={cancelGithubWorkspacePublication}
+              onPublishClientReview={publishClientReview}
+              onCancelClientReview={cancelClientReview}
+              onPushMadeSolidHandoff={pushMadeSolidHandoff}
+              onCancelMadeSolidHandoff={cancelMadeSolidHandoff}
+              onLoadBuilderRunEvidence={(builderRunId) =>
+                repository.getBuilderRunEvidence(builderRunId)
+              }
+              onMoveBuilderRunToAgentStudio={moveBuilderRunToAgentStudio}
+              onCreateRedesignBrief={createRedesignBrief}
+              onRefreshRedesignBriefArchitecture={refreshRedesignBriefArchitecture}
+              onRequestAssetAnalysis={requestAssetAnalysis}
+              onRequestBrandColourRefresh={requestBrandColourRefresh}
+              onRequestVisualContentExtraction={requestVisualContentExtraction}
+              onCancelVisualContentExtraction={cancelVisualContentExtraction}
+              onApproveAllVisualContent={approveAllVisualContent}
+              onUpdateVisualContentCandidate={updateVisualContentCandidate}
+              onRequestEditableLogoRetry={requestEditableLogoRetry}
+              onDeleteLogoAsset={deleteLogoAsset}
+              onCancelAssetAnalysis={cancelAssetAnalysis}
+              onSetAssetAnalysisSelected={setAssetAnalysisSelected}
+              onCancelResearchCapture={cancelResearchCapture}
+              onContinueResearchCapture={continueResearchCapture}
+              onRequestResearchCapture={requestResearchCapture}
+              onRequestAssetRefresh={requestAssetRefresh}
+              onRequestWebsiteAudit={requestWebsiteAudit}
+              onRetryAuditSpecialist={retryAuditSpecialist}
+              onCancelWebsiteAudit={cancelWebsiteAudit}
+              onToggleTask={toggleTask}
+              onTabChange={(tab) =>
+                navigate({
+                  page: 'prospects',
+                  businessId: workspace.business.id,
+                  versionId: route.page === 'prospects' ? route.versionId : undefined,
+                  tab,
+                })
+              }
+              onVersionChange={(versionId) =>
+                navigate({
+                  page: 'prospects',
+                  businessId: workspace.business.id,
+                  versionId,
+                  tab: 'overview',
+                })
+              }
+              tab={route.tab ?? 'overview'}
+              onUpdateAuditFinding={updateAuditFinding}
+              onCreateDecisionReport={createDecisionReport}
+              onCancelDecisionReport={cancelDecisionReport}
+              onRequestReportPreview={requestReportPreview}
+              onRefreshWorkspace={async () => {
+                await refreshData();
+              }}
+              onRequestAgentLearningProposal={requestAgentPackageProposal}
+              onOpenAgentLearningInbox={() =>
+                navigate({ page: 'agent-studio', section: 'learning' })
+              }
+              onUpdateAssetAnnotation={updateAssetAnnotation}
+              onSaveBrandKit={saveBrandKit}
+              onPushLogoVersionsToBuilder={pushLogoVersionsToBuilder}
+              onCreateBrandAwareBriefRevision={createBrandAwareBriefRevision}
+              onUpdateRedesignBrief={updateRedesignBrief}
+              workspace={workspace}
+            />
+          ) : (
+            <ProspectsPage
+              businesses={businesses}
+              createProspect={(url) => repository.createProspect(url)}
+              createWorkspace={handleWorkspaceCreated}
+              openWorkspace={openWorkspace}
+              workspaces={workspaces}
+            />
+          )}
+        </AppShell>
+        {route.page !== 'codex' && route.page !== 'website-editor' ? (
+          <CodexFeedbackPanel key="universal" />
+        ) : null}
+        {loadingPresentation ? (
+          <WorkspaceLoadingOverlay
+            loading={loading}
+            onComplete={() => setLoadingPresentation(false)}
           />
-        ) : (
-          <ProspectsPage
-            businesses={businesses}
-            createProspect={(url) => repository.createProspect(url)}
-            createWorkspace={handleWorkspaceCreated}
-            openWorkspace={openWorkspace}
-            workspaces={workspaces}
-          />
-        )}
-      </AppShell>
-      {route.page !== 'codex' && route.page !== 'website-editor' ? (
-        <CodexFeedbackPanel key="universal" />
-      ) : null}
-      {loadingPresentation ? (
-        <WorkspaceLoadingOverlay
-          loading={loading}
-          onComplete={() => setLoadingPresentation(false)}
-        />
-      ) : null}
-      <ToastRegion notice={notice} onDismiss={() => setNotice(undefined)} />
-    </>
+        ) : null}
+        <ToastRegion notice={notice} onDismiss={() => setNotice(undefined)} />
+      </>
+    </WorkspaceRepositoryContext.Provider>
   );
 }
 

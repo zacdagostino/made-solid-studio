@@ -9,6 +9,20 @@ export type ProposalDraft = {
   handoffNotes?: string;
   pricingOptions?: PricingOptions;
   approvedQuote?: PricingQuoteSnapshot;
+  clientspaceBalanceRevision?: {
+    schemaVersion: 1;
+    id: string;
+    requestId: string;
+    clientspaceProjectId: string;
+    clientspaceHandoffId: string;
+    previousBalanceCents: number;
+    balanceCents: number;
+    currency: 'AUD';
+    reason: string;
+    quoteReference: string;
+    createdAt: string;
+    syncedAt: string;
+  };
 };
 
 export async function readProposalDraft(businessId: string): Promise<ProposalDraft> {

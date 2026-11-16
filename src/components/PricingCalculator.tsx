@@ -14,7 +14,9 @@ import {
   calculateBuildPricing,
   defaultPricingOptions,
   formatAud,
+  pricingQuoteExpired,
   pricingQuoteMatches,
+  pricingQuoteTermsMatch,
   type PricingOptions,
   type PricingQuoteSnapshot,
   type PricingSourceScope,
@@ -28,20 +30,32 @@ function quoteReference() {
   );
 }
 
+function formatQuoteDate(value: string) {
+  return new Intl.DateTimeFormat('en-AU', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).format(new Date(value));
+}
+
 export function PricingCalculator({
   manifest,
   sourceScope,
   onApprovedQuoteChange,
+  onQuoteValidityChange,
   savedQuote,
   savedOptions,
   onOptionsChange,
+  expiredQuoteActionId,
 }: {
   manifest?: BuildManifest;
   sourceScope?: PricingSourceScope;
   onApprovedQuoteChange: (quote?: PricingQuoteSnapshot) => void;
+  onQuoteValidityChange?: (valid: boolean) => void;
   savedQuote?: PricingQuoteSnapshot;
   savedOptions?: PricingOptions;
   onOptionsChange?: (options: PricingOptions) => void;
+  expiredQuoteActionId?: string;
 }) {
   const configuredDefaults = useMemo(
     () => ({
@@ -53,7 +67,7 @@ export function PricingCalculator({
   const [options, setOptions] = useState<PricingOptions>(
     savedOptions ?? savedQuote?.options ?? configuredDefaults,
   );
-  const [approved, setApproved] = useState<PricingQuoteSnapshot | undefined>(savedQuote);
+  const [quote, setQuote] = useState<PricingQuoteSnapshot | undefined>(savedQuote);
   const sourceScopeKey = JSON.stringify(sourceScope ?? null);
   const manifestKey = JSON.stringify(manifest ?? null);
   const calculation = useMemo(
@@ -63,10 +77,16 @@ export function PricingCalculator({
   );
 
   useEffect(() => {
-    const valid = approved && calculation && pricingQuoteMatches(approved, calculation);
-    if (approved && !valid) setApproved(undefined);
-    onApprovedQuoteChange(valid ? approved : undefined);
-  }, [calculation, approved, onApprovedQuoteChange]);
+    const termsMatch = quote && calculation && pricingQuoteTermsMatch(quote, calculation);
+    const valid = termsMatch && pricingQuoteMatches(quote, calculation);
+    onQuoteValidityChange?.(Boolean(valid));
+    if (quote && !termsMatch) {
+      setQuote(undefined);
+      onApprovedQuoteChange(undefined);
+    } else if (valid) {
+      onApprovedQuoteChange(quote);
+    }
+  }, [calculation, quote, onApprovedQuoteChange, onQuoteValidityChange]);
 
   if (!manifest || !calculation) {
     return (
@@ -80,6 +100,9 @@ export function PricingCalculator({
     );
   }
   const currentCalculation = calculation;
+  const quoteTermsMatch = Boolean(quote && pricingQuoteTermsMatch(quote, currentCalculation));
+  const expiredQuote = quoteTermsMatch && quote && pricingQuoteExpired(quote) ? quote : undefined;
+  const approved = quoteTermsMatch && quote && !expiredQuote ? quote : undefined;
 
   function updateOption<Key extends keyof PricingOptions>(key: Key, value: PricingOptions[Key]) {
     const next = { ...options, [key]: value };
@@ -90,7 +113,7 @@ export function PricingCalculator({
   function approve() {
     if (currentCalculation.reviewRequired) return;
     const snapshot = approvePricingCalculation(currentCalculation, quoteReference());
-    setApproved(snapshot);
+    setQuote(snapshot);
     onApprovedQuoteChange(snapshot);
   }
 
@@ -107,15 +130,28 @@ export function PricingCalculator({
           </div>
         </div>
         <StatusBadge
-          tone={approved ? 'success' : calculation.reviewRequired ? 'warning' : 'neutral'}
+          tone={
+            approved
+              ? 'success'
+              : expiredQuote || calculation.reviewRequired
+                ? 'warning'
+                : 'neutral'
+          }
         >
-          {approved ? 'Approved' : calculation.reviewRequired ? 'Scope review' : 'Draft quote'}
+          {approved
+            ? 'Approved'
+            : expiredQuote
+              ? 'Quote expired'
+              : calculation.reviewRequired
+                ? 'Scope review'
+                : 'Draft quote'}
         </StatusBadge>
       </div>
 
       <p className="muted-copy">
         One quote for this website version. Approving it saves the offer; payment collection is
-        configured separately in Clientspace.
+        configured separately in Clientspace. Before the first client invitation, approval lasts 14
+        days so older pricing must be explicitly reconfirmed.
       </p>
       <details className="proposal-details">
         <summary>Adjust pricing and inspect scope</summary>
@@ -371,10 +407,32 @@ export function PricingCalculator({
           <span>
             <strong>Quote approved for handoff</strong>
             <small>
-              Reference {approved.quoteReference.slice(0, 8)} · changing scope will return it to
-              draft.
+              Valid until {formatQuoteDate(approved.validUntil)} · reference{' '}
+              {approved.quoteReference.slice(0, 8)}. Changing scope will return it to draft.
             </small>
           </span>
+        </div>
+      ) : expiredQuote ? (
+        <div
+          className="pricing-calculator__review"
+          id={expiredQuoteActionId}
+          role="alert"
+          tabIndex={-1}
+        >
+          <ShieldAlert aria-hidden="true" size={18} />
+          <div>
+            <strong>Quote expired before it was sent</strong>
+            <p>
+              It expired on {formatQuoteDate(expiredQuote.validUntil)}. Its website revision, scope
+              and commercial terms are unchanged. Reconfirming creates a new 14-day approval; it
+              does not contact the client or enable billing or launch.
+            </p>
+            <ButtonGroup>
+              <Button disabled={calculation.reviewRequired} onClick={approve} type="button">
+                <Sparkles aria-hidden="true" size={16} /> Reconfirm unchanged quote
+              </Button>
+            </ButtonGroup>
+          </div>
         </div>
       ) : (
         <ButtonGroup>

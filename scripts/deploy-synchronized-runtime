@@ -1,0 +1,345 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+studio_directory="$(cd "$(dirname "$0")/.." && pwd)"
+clientspace_directory="$(cd "$studio_directory/../made-solid-website" && pwd)"
+
+for required_name in \
+  RAILWAY_PROJECT_ID \
+  RAILWAY_SERVICE_ID; do
+  if [[ -z "${!required_name:-}" ]]; then
+    echo "$required_name is required for a synchronized runtime deployment."
+    exit 1
+  fi
+done
+
+website_railway_project_id="${MADE_SOLID_WEBSITE_RAILWAY_PROJECT_ID:-6bc96d42-6c26-4ef5-967e-3ef8c62ec314}"
+website_railway_service_id="${MADE_SOLID_WEBSITE_RAILWAY_SERVICE_ID:-c18c6e44-3210-4222-b8d3-0b8d378d3b6e}"
+
+run_railway_cli() {
+  env \
+    -u RAILWAY_TOKEN \
+    -u RAILWAY_PROJECT_ID \
+    -u RAILWAY_PROJECT_NAME \
+    -u RAILWAY_SERVICE_ID \
+    -u RAILWAY_SERVICE_NAME \
+    -u RAILWAY_ENVIRONMENT \
+    -u RAILWAY_ENVIRONMENT_ID \
+    -u RAILWAY_ENVIRONMENT_NAME \
+    npx --yes @railway/cli "$@"
+}
+
+echo "[synchronized-runtime] Verifying Clientspace."
+(
+  cd "$clientspace_directory"
+  npm run lint
+  npm run typecheck
+  npm run build
+  node --test tests/website-comparison-review.test.mjs
+  npx playwright test tests/rehearsal-responsive.spec.js --workers=1
+  npx playwright test tests/admin-balance-editor.spec.js --workers=1
+)
+
+echo "[synchronized-runtime] Verifying Studio."
+(
+  cd "$studio_directory"
+  npm run lint
+  npm run build
+  npx vitest run src/lib/rehearsal-runtime.test.ts --pool=forks
+  node --test \
+    tests/worker/clientspace-rehearsal.test.mjs \
+    tests/worker/clientspace-balance-sync.test.mjs \
+    tests/worker/guided-client-handoff-package.test.mjs \
+    tests/worker/reliable-rehearsal-creation-package.test.mjs \
+    tests/worker/verified-preview-completion-package.test.mjs \
+    tests/worker/compatible-handoff-timestamps-package.test.mjs \
+    tests/worker/rehearsal-recipient-isolation-package.test.mjs \
+    tests/worker/guided-clientspace-test-package.test.mjs \
+    tests/worker/immediate-rehearsal-pipeline-isolation-package.test.mjs \
+    tests/worker/branded-exact-client-preview-package.test.mjs \
+    tests/worker/email-ready-homepage-preview-package.test.mjs \
+    tests/worker/settled-email-homepage-capture-package.test.mjs \
+    tests/worker/device-preview.test.mjs \
+    tests/worker/owner-device-preview-package.test.mjs \
+    tests/worker/readable-agent-studio-refinement-package.test.mjs \
+    tests/worker/visible-chatgpt-credits-package.test.mjs \
+    tests/worker/purpose-aware-codex-branching-package.test.mjs \
+    tests/worker/context-aware-chat-titles-and-states-package.test.mjs \
+    tests/worker/retrospective-chat-context-package.test.mjs \
+    tests/worker/validated-codex-branch-actions-package.test.mjs \
+    tests/worker/expanded-chat-dropdown-titles-package.test.mjs \
+    tests/worker/interpreted-chat-dropdown-titles-package.test.mjs \
+    tests/worker/recoverable-quote-expiry-package.test.mjs \
+    tests/worker/polished-device-preview-toolbar-package.test.mjs \
+    tests/worker/pinned-tagged-codex-chats-package.test.mjs \
+    tests/worker/feature-release-store.test.mjs \
+    tests/worker/feature-release-management-package.test.mjs \
+    tests/worker/managed-feature-wording-package.test.mjs \
+    tests/worker/visible-feature-release-status-package.test.mjs \
+    tests/worker/durable-ai-chat-titles-package.test.mjs \
+    tests/worker/lece-email-and-quote-recovery-package.test.mjs \
+    tests/worker/reliable-feature-ledger-package.test.mjs \
+    tests/worker/chat-feature-history-package.test.mjs \
+    tests/worker/multi-feature-chat-lineage-package.test.mjs \
+    tests/worker/actionable-release-pipeline-package.test.mjs \
+    tests/worker/automatic-feature-development-release-package.test.mjs \
+    tests/worker/accurate-feature-titles-package.test.mjs \
+    tests/worker/clientspace-quote-reconfirmation.test.mjs \
+    tests/worker/automatic-clientspace-homepage-capture.test.mjs \
+    tests/worker/scrolling-homepage-gif.test.mjs \
+    tests/worker/animated-clientspace-homepage-preview-package.test.mjs \
+    tests/worker/persisted-animated-homepage-preview-package.test.mjs \
+    tests/worker/smooth-homepage-preview-loop-package.test.mjs \
+    tests/worker/reliable-smooth-homepage-capture-package.test.mjs \
+    tests/worker/live-animated-homepage-capture-package.test.mjs \
+    tests/worker/hero-animated-homepage-capture-package.test.mjs \
+    tests/worker/rehearsal-introduction-reset-package.test.mjs \
+    tests/worker/reconciled-introduction-receipt-package.test.mjs \
+    tests/worker/prioritised-introduction-status-package.test.mjs \
+    tests/worker/direct-reply-comparison-introduction-package.test.mjs \
+    tests/worker/paired-device-comparison-email-package.test.mjs \
+    tests/worker/responsive-comparison-review-package.test.mjs \
+    tests/worker/concise-clientspace-access-package.test.mjs \
+    tests/worker/reliable-comparison-review-email-package.test.mjs \
+    tests/worker/live-synchronized-comparison-package.test.mjs \
+    tests/worker/interactive-device-comparison-package.test.mjs \
+    tests/worker/polished-website-codex-recovery-package.test.mjs \
+    tests/worker/proxy-safe-live-comparison-package.test.mjs \
+    tests/worker/compact-chat-feature-history-package.test.mjs \
+    tests/worker/exact-redesign-comparison-package.test.mjs \
+    tests/worker/simplified-website-review-package.test.mjs \
+    tests/worker/responsive-preview-launch-package.test.mjs \
+    tests/worker/evidence-led-homepage-art-direction-package.test.mjs \
+    tests/worker/inspect-email-reply-cta-package.test.mjs \
+    tests/worker/railway-only-product-releases-package.test.mjs \
+    tests/worker/automatic-feature-development-release.test.mjs \
+    tests/worker/product-release-overview-package.test.mjs \
+    tests/worker/ai-interpreted-chat-titles-package.test.mjs
+)
+
+echo "[synchronized-runtime] Deploying Clientspace before Studio."
+(
+  cd "$clientspace_directory"
+  run_railway_cli up --ci \
+    --project "$website_railway_project_id" \
+    --service "$website_railway_service_id" \
+    --environment production \
+    --message "Deploy signed website comparison receiver before Studio"
+)
+
+clientspace_ready=0
+for _ in $(seq 1 30); do
+  response="$(curl --silent --show-error --max-time 10 \
+    --request POST \
+    --header 'Content-Type: application/json' \
+    --data '{}' \
+    --write-out $'\n%{http_code}' \
+    https://madesolid.com.au/api/integrations/studio/rehearsals || true)"
+  status="${response##*$'\n'}"
+  body="${response%$'\n'*}"
+  if [[ "$status" == "401" && "$body" == *"Studio integration access required"* ]]; then
+    clientspace_ready=1
+    break
+  fi
+  sleep 2
+done
+if [[ "$clientspace_ready" != "1" ]]; then
+  echo "Clientspace did not expose the protected rehearsal receiver. Studio was not deployed."
+  exit 1
+fi
+
+balance_receiver_ready=0
+for _ in $(seq 1 30); do
+  balance_response="$(curl --silent --show-error --max-time 10 \
+    --request POST \
+    --header 'Content-Type: application/json' \
+    --data '{}' \
+    --write-out $'\n%{http_code}' \
+    https://madesolid.com.au/api/integrations/studio/balance-revisions || true)"
+  balance_status="${balance_response##*$'\n'}"
+  balance_body="${balance_response%$'\n'*}"
+  if [[ "$balance_status" == "401" && "$balance_body" == *"Studio integration access required"* ]]; then
+    balance_receiver_ready=1
+    break
+  fi
+  sleep 2
+done
+if [[ "$balance_receiver_ready" != "1" ]]; then
+  echo "Clientspace did not expose the protected balance revision receiver. Studio was not deployed."
+  exit 1
+fi
+
+bridge_ready=0
+for _ in $(seq 1 30); do
+  bridge_response="$(curl --silent --show-error --max-time 20 \
+    --dump-header - --output /dev/null \
+    --write-out $'\n%{http_code}' \
+    https://madesolid.com.au/review-bridge.js || true)"
+  bridge_status="${bridge_response##*$'\n'}"
+  bridge_headers="${bridge_response%$'\n'*}"
+  if [[ "$bridge_status" == "200" && \
+        "$bridge_headers" == *"x-made-solid-capture-contract: settled-email-homepage-capture-v2"* ]]; then
+    bridge_ready=1
+    break
+  fi
+  sleep 2
+done
+if [[ "$bridge_ready" != "1" ]]; then
+  echo "Clientspace did not expose the settled email capture receiver. Studio was not deployed."
+  exit 1
+fi
+
+homepage_capture_receiver_ready=0
+for _ in $(seq 1 30); do
+  response="$(curl --silent --show-error --max-time 10 \
+    --request POST \
+    --header 'Content-Type: application/json' \
+    --data '{}' \
+    --write-out $'\n%{http_code}' \
+    https://madesolid.com.au/api/integrations/studio/homepage-captures || true)"
+  status="${response##*$'\n'}"
+  body="${response%$'\n'*}"
+  if [[ "$status" == "401" && "$body" == *"Studio integration access required"* ]]; then
+    homepage_capture_receiver_ready=1
+    break
+  fi
+  sleep 2
+done
+if [[ "$homepage_capture_receiver_ready" != "1" ]]; then
+  echo "Clientspace did not expose the protected homepage capture receiver. Studio was not deployed."
+  exit 1
+fi
+
+comparison_review_ready=0
+for _ in $(seq 1 30); do
+  response="$(curl --silent --show-error --max-time 10 \
+    --dump-header - \
+    --write-out $'\n%{http_code}' \
+    https://madesolid.com.au/api/website-reviews/00000000-0000-4000-8000-000000000000/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa || true)"
+  status="${response##*$'\n'}"
+  body="${response%$'\n'*}"
+  if [[ "$status" == "404" && \
+        "$body" == *"Review unavailable"* && \
+        "$body" == *"made-solid-website-comparison-v3"* ]]; then
+    comparison_review_ready=1
+    break
+  fi
+  sleep 2
+done
+if [[ "$comparison_review_ready" != "1" ]]; then
+  echo "Clientspace did not expose the signed comparison review receiver. Studio was not deployed."
+  exit 1
+fi
+
+introduction_reset_ready=0
+for _ in $(seq 1 30); do
+  response="$(curl --silent --show-error --max-time 10 \
+    --request POST \
+    --header 'Content-Type: application/json' \
+    --data '{}' \
+    --write-out $'\n%{http_code}' \
+    https://madesolid.com.au/api/admin/projects/00000000-0000-4000-8000-000000000000/outreach/reset || true)"
+  status="${response##*$'\n'}"
+  body="${response%$'\n'*}"
+  if [[ "$status" == "403" && "$body" == *"Studio owner access required"* ]]; then
+    introduction_reset_ready=1
+    break
+  fi
+  sleep 2
+done
+if [[ "$introduction_reset_ready" != "1" ]]; then
+  echo "Clientspace did not expose the protected rehearsal introduction reset receiver. Studio was not deployed."
+  exit 1
+fi
+
+echo "[synchronized-runtime] Deploying Studio after Clientspace passed its endpoint check."
+(
+  cd "$studio_directory"
+  run_railway_cli up --ci \
+    --project "$RAILWAY_PROJECT_ID" \
+    --service "$RAILWAY_SERVICE_ID" \
+    --environment production \
+    --message "Deploy synchronized Studio and Clientspace runtime"
+)
+
+studio_ready=0
+for _ in $(seq 1 90); do
+  health="$(curl --fail --silent --show-error --max-time 10 \
+    https://studio.madesolid.com.au/health || true)"
+  if [[ "$health" == *'"runtimeContract":"made-solid-studio-runtime-v30.3"'* && \
+        "$health" == *'"clientspace-rehearsal-v1"'* && \
+        "$health" == *'"automatic-rehearsal-preview-v1"'* && \
+        "$health" == *'"guided-clientspace-test-v1"'* && \
+        "$health" == *'"universal-builder-profiles-v1"'* && \
+        "$health" == *'"resilient-codex-runtime-updates-v1"'* && \
+        "$health" == *'"manual-codex-update-retry-v1"'* && \
+        "$health" == *'"branded-exact-client-preview-v1"'* && \
+        "$health" == *'"email-ready-homepage-preview-v1"'* && \
+        "$health" == *'"clientspace-admin-website-preview-v1"'* && \
+        "$health" == *'"settled-email-homepage-capture-v2"'* && \
+        "$health" == *'"automatic-builder-quality-repair-v1"'* && \
+        "$health" == *'"reliable-builder-repair-v1"'* && \
+        "$health" == *'"settled-navigation-quality-v1"'* && \
+        "$health" == *'"owner-device-preview-v1"'* && \
+        "$health" == *'"clientspace-balance-sync-v1"'* && \
+        "$health" == *'"purpose-aware-codex-branching-v1"'* && \
+        "$health" == *'"retrospective-chat-context-v1"'* && \
+        "$health" == *'"validated-codex-branch-actions-v1"'* && \
+        "$health" == *'"polished-device-preview-toolbar-v1"'* && \
+        "$health" == *'"pinned-tagged-codex-chats-v1"'* && \
+        "$health" == *'"feature-release-management-v1"'* && \
+        "$health" == *'"feature-release-metadata-v2"'* && \
+        "$health" == *'"automatic-feature-development-release-v1"'* && \
+        "$health" == *'"continuous-feature-release-reconciliation-v1"'* && \
+        "$health" == *'"clientspace-quote-reconfirmation-v1"'* && \
+        "$health" == *'"automatic-clientspace-homepage-capture-v1"'* && \
+        "$health" == *'"animated-clientspace-homepage-preview-v1"'* && \
+        "$health" == *'"animated-clientspace-homepage-preview-v2"'* && \
+        "$health" == *'"animated-clientspace-homepage-preview-v3"'* && \
+        "$health" == *'"animated-clientspace-homepage-preview-v4"'* && \
+        "$health" == *'"animated-clientspace-homepage-preview-v5"'* && \
+        "$health" == *'"paired-device-clientspace-homepage-preview-v6"'* && \
+        "$health" == *'"desktop-only-clientspace-homepage-preview-v7"'* && \
+        "$health" == *'"responsive-split-clientspace-homepage-preview-v8"'* && \
+        "$health" == *'"responsive-comparison-review-v1"'* && \
+        "$health" == *'"live-synchronized-comparison-v1"'* && \
+        "$health" == *'"interactive-device-correct-comparison-v1"'* && \
+        "$health" == *'"proxy-safe-live-comparison-v1"'* && \
+        "$health" == *'"exact-redesign-comparison-v1"'* && \
+        "$health" == *'"simplified-old-new-review-v1"'* && \
+        "$health" == *'"truthful-live-codex-progress-v1"'* && \
+        "$health" == *'"evidence-led-homepage-art-direction-v1"'* && \
+        "$health" == *'"inspect-email-reply-cta-v1"'* && \
+        "$health" == *'"railway-only-product-releases-v1"'* ]]; then
+    studio_ready=1
+    break
+  fi
+  sleep 5
+done
+if [[ "$studio_ready" != "1" ]]; then
+  echo "Studio deployed but its synchronized runtime capability did not become healthy."
+  exit 1
+fi
+
+inspect_ready=0
+for _ in $(seq 1 30); do
+  inspect_response="$(curl --silent --show-error --max-time 10 \
+    --dump-header - --output /dev/null \
+    --write-out $'\n%{http_code}' \
+    https://inspect.madesolid.com.au/health || true)"
+  inspect_status="${inspect_response##*$'\n'}"
+  inspect_headers="${inspect_response%$'\n'*}"
+  if [[ "$inspect_status" == "200" && \
+        "$inspect_headers" == *"x-made-solid-device-preview: ready"* ]]; then
+    inspect_ready=1
+    break
+  fi
+  sleep 2
+done
+if [[ "$inspect_ready" != "1" ]]; then
+  echo "Studio deployed but the protected owner device preview host did not become healthy."
+  exit 1
+fi
+
+echo "[synchronized-runtime] Studio and Clientspace are synchronized and ready."

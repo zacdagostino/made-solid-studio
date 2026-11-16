@@ -108,7 +108,7 @@ const value = 1;
     expect(codexSpeechText('Checks ➜ complete.', 'literal')).toBe('Checks then complete.');
   });
 
-  it('keeps the introduction but skips long technical check lists in Natural style', () => {
+  it('reads every item in long technical lists in Natural and Literal styles', () => {
     const markdown = `I completed the verification checks; the full results are in chat.
 
 - TypeScript typecheck passed across the workspace source files
@@ -118,12 +118,16 @@ const value = 1;
 
 The reading update is ready.`;
 
-    expect(codexSpeechText(markdown, 'natural')).toBe(
-      [
-        'I completed the verification checks; the full results are in chat.',
-        'The reading update is ready.',
-      ].join('\n\n'),
+    const natural = codexSpeechText(markdown, 'natural');
+
+    expect(natural).toContain('I completed the verification checks; the full results are in chat.');
+    expect(natural).toContain('TypeScript typecheck passed across the workspace source files.');
+    expect(natural).toContain('ESLint completed with no warnings in the application package.');
+    expect(natural).toContain(
+      'Vitest ran the focused speech transformation unit tests successfully.',
     );
+    expect(natural).toContain('Production Vite build emitted the expected hashed browser assets.');
+    expect(natural).toContain('The reading update is ready.');
     expect(codexSpeechText(markdown, 'literal')).toContain(
       'Bullet. TypeScript typecheck passed across the workspace source files.',
     );
@@ -136,7 +140,7 @@ The reading update is ready.`;
     );
   });
 
-  it('summarises technical implementation and verification handoff paragraphs in Natural style', () => {
+  it('keeps technical implementation and verification paragraphs in Natural style', () => {
     const markdown = `The reading feature is fixed.
 
 Implemented in [codex-speech.ts](/workspace/src/lib/codex-speech.ts) with coverage in codex-speech.test.ts and codex-feedback.spec.js.
@@ -146,7 +150,8 @@ All checks passed: formatting, lint, TypeScript, production build, 22 speech tes
     expect(codexSpeechText(markdown, 'natural')).toBe(
       [
         'The reading feature is fixed.',
-        'The technical implementation and verification details are in the chat.',
+        'Implemented in codex-speech.ts with coverage in codex-speech.test.ts and codex-feedback.spec.js.',
+        'All checks passed: formatting, lint, TypeScript, production build, 22 speech tests, 75 package tests, and Playwright at 375×812, 768×1024, and 1440×900. The build only reported the existing large-chunk advisory.',
       ].join('\n\n'),
     );
     expect(codexSpeechText(markdown, 'literal')).toContain(

@@ -13,6 +13,7 @@ import type {
   AuditObservation,
   AuditSpecialistTask,
   BuildManifest,
+  BuilderPreferences,
   BuilderPreviewMode,
   BuilderRunEvidence,
   BuilderRunMode,
@@ -51,9 +52,12 @@ import {
   manifestSourceMatchesBrief,
 } from './build-manifest';
 import { createBriefDraft, visualContentMatchesBrief } from './redesign-brief';
+import { defaultBuilderPreferences, normalizeBuilderPreferences } from './builder-preferences';
 
 export type WorkspaceRepository = {
   bootstrap(): Promise<void>;
+  getBuilderPreferences(): Promise<BuilderPreferences>;
+  saveBuilderPreferences(preferences: BuilderPreferences): Promise<BuilderPreferences>;
   listTaxExpenses(): Promise<TaxExpense[]>;
   createTaxExpense(input: TaxExpenseInput): Promise<TaxExpense>;
   updateTaxExpense(id: string, input: TaxExpenseInput): Promise<TaxExpense>;
@@ -209,6 +213,7 @@ const databaseName = 'siteforge-os';
 const databaseVersion = 9;
 const legacyStorageKey = 'siteforge-os.records.v2';
 const localAgentPackageKey = 'agent-package-v6';
+const localBuilderPreferencesKey = 'website-builder-preferences-v1';
 const localCreativePackageId = 'agent-package-local-v6-1-creative-composition';
 const localExpressivePackageId = 'agent-package-local-v6-2-expressive-craft';
 const localResilientQualityPackageId = 'agent-package-local-v6-3-resilient-quality';
@@ -485,6 +490,122 @@ const localImmediateWebsiteCodexOpenPackageId =
   'agent-package-local-v25-1-immediate-website-codex-open';
 const localAutomaticClientEmailHandoffPackageId =
   'agent-package-local-v24-9-automatic-client-email-handoff';
+const localVisibleChatGptCreditsPackageId = 'agent-package-local-v29-1-visible-chatgpt-credits';
+const localPurposeAwareCodexBranchingPackageId =
+  'agent-package-local-v29-2-purpose-aware-codex-branching';
+const localContextAwareChatTitlesAndStatesPackageId =
+  'agent-package-local-v29-3-context-aware-chat-titles-and-states';
+const localRetrospectiveChatContextPackageId =
+  'agent-package-local-v29-4-retrospective-chat-context';
+const localValidatedCodexBranchActionsPackageId =
+  'agent-package-local-v29-5-validated-codex-branch-actions';
+const localExpandedChatDropdownTitlesPackageId =
+  'agent-package-local-v29-6-expanded-chat-dropdown-titles';
+const localRecoverableQuoteExpiryPackageId = 'agent-package-local-v29-7-recoverable-quote-expiry';
+const localInterpretedChatDropdownTitlesPackageId =
+  'agent-package-local-v29-8-interpreted-chat-dropdown-titles';
+const localPolishedDevicePreviewToolbarPackageId =
+  'agent-package-local-v29-9-polished-device-preview-toolbar';
+const localPinnedTaggedCodexChatsPackageId = 'agent-package-local-v30-0-pinned-tagged-codex-chats';
+const localFeatureReleaseManagementPackageId =
+  'agent-package-local-v30-1-feature-release-management';
+const localManualCodexUpdateRecoveryPackageId =
+  'agent-package-local-v30-2-manual-codex-update-recovery';
+const localCompactCodexChatChromePackageId = 'agent-package-local-v30-3-compact-codex-chat-chrome';
+const localAiInterpretedChatTitlesPackageId =
+  'agent-package-local-v30-4-ai-interpreted-chat-titles';
+const localManagedFeatureWordingPackageId = 'agent-package-local-v30-5-managed-feature-wording';
+const localVisibleFeatureReleaseStatusPackageId =
+  'agent-package-local-v30-6-visible-feature-release-status';
+const localDurableAiChatTitlesPackageId = 'agent-package-local-v30-7-durable-ai-chat-titles';
+const localProductReleaseOverviewPackageId = 'agent-package-local-v30-8-product-release-overview';
+const localLeceEmailAndQuoteRecoveryPackageId =
+  'agent-package-local-v30-9-lece-email-and-quote-recovery';
+const localReliableFeatureLedgerPackageId = 'agent-package-local-v31-0-reliable-feature-ledger';
+const localChatFeatureHistoryPackageId = 'agent-package-local-v31-1-chat-feature-history';
+const localMultiFeatureChatLineagePackageId =
+  'agent-package-local-v31-2-multi-feature-chat-lineage';
+const localActionableReleasePipelinePackageId =
+  'agent-package-local-v31-3-actionable-release-pipeline';
+const localAutomaticFeatureDevelopmentReleasePackageId =
+  'agent-package-local-v31-4-automatic-feature-development-release';
+const localUninterruptedStudioChatPackageId = 'agent-package-local-v31-5-uninterrupted-studio-chat';
+const localAccurateFeatureTitlesPackageId =
+  'agent-package-local-v31-6-accurate-feature-and-chat-titles';
+const localClientspaceQuoteReconfirmationPackageId =
+  'agent-package-local-v31-7-clientspace-quote-reconfirmation';
+const localClientspaceDevelopmentQuoteReconfirmationPackageId =
+  'agent-package-local-v31-8-clientspace-development-quote-reconfirmation';
+const localAutomaticClientspaceHomepageCapturePackageId =
+  'agent-package-local-v31-9-automatic-clientspace-homepage-capture';
+const localAnimatedClientspaceHomepagePreviewPackageId =
+  'agent-package-local-v32-0-animated-clientspace-homepage-preview';
+const localPersistedAnimatedHomepagePreviewPackageId =
+  'agent-package-local-v32-1-persisted-animated-homepage-preview';
+const localSmoothHomepagePreviewLoopPackageId =
+  'agent-package-local-v32-2-smooth-homepage-preview-loop';
+const localReliableSmoothHomepageCapturePackageId =
+  'agent-package-local-v32-3-reliable-smooth-homepage-capture';
+const localLiveAnimatedHomepageCapturePackageId =
+  'agent-package-local-v32-4-live-animated-homepage-capture';
+const localHeroAnimatedHomepageCapturePackageId =
+  'agent-package-local-v32-5-hero-animated-homepage-capture';
+const localRehearsalIntroductionResetPackageId =
+  'agent-package-local-v32-6-rehearsal-introduction-reset';
+const localReconciledIntroductionReceiptPackageId =
+  'agent-package-local-v32-7-reconciled-introduction-receipt';
+const localPrioritisedIntroductionStatusPackageId =
+  'agent-package-local-v32-8-prioritised-introduction-status';
+const localDirectReplyComparisonIntroductionPackageId =
+  'agent-package-local-v32-9-direct-reply-comparison-introduction';
+const localTruthfulLiveCodexProgressPackageId =
+  'agent-package-local-v33-0-truthful-live-codex-progress';
+const localInstantCachedCodexAccessPackageId =
+  'agent-package-local-v33-1-instant-cached-codex-access';
+const localPairedDeviceComparisonEmailPackageId =
+  'agent-package-local-v33-2-paired-device-comparison-email';
+const localEmailSafePairedComparisonPackageId =
+  'agent-package-local-v33-3-email-safe-paired-comparison';
+const localPasswordlessClientspaceAccessPackageId =
+  'agent-package-local-v33-4-passwordless-clientspace-access';
+const localDesktopOnlyComparisonEmailPackageId =
+  'agent-package-local-v33-5-desktop-only-comparison-email';
+const localResponsiveSplitComparisonEmailPackageId =
+  'agent-package-local-v33-6-responsive-split-comparison-email';
+const localCompatibleIntroductionLedgerPackageId =
+  'agent-package-local-v33-7-compatible-introduction-ledger';
+const localRecoverableWebsiteCodexAccessPackageId =
+  'agent-package-local-v33-8-recoverable-website-codex-access';
+const localContinuousFeatureReleaseReconciliationPackageId =
+  'agent-package-local-v33-9-continuous-feature-release-reconciliation';
+const localPersistentWebsiteCodexPanelPackageId =
+  'agent-package-local-v34-0-persistent-website-codex-panel';
+const localResponsiveComparisonReviewPackageId =
+  'agent-package-local-v34-1-responsive-comparison-review';
+const localConciseClientspaceAccessPackageId =
+  'agent-package-local-v34-2-concise-clientspace-access';
+const localReliableComparisonReviewEmailPackageId =
+  'agent-package-local-v34-3-reliable-comparison-review-email';
+const localLiveSynchronizedComparisonPackageId =
+  'agent-package-local-v34-4-live-synchronized-comparison';
+const localInteractiveDeviceComparisonPackageId =
+  'agent-package-local-v34-5-interactive-device-comparison';
+const localPolishedWebsiteCodexRecoveryPackageId =
+  'agent-package-local-v34-6-polished-website-codex-recovery';
+const localProxySafeLiveComparisonPackageId =
+  'agent-package-local-v34-7-proxy-safe-live-comparison';
+const localCompactChatFeatureHistoryPackageId =
+  'agent-package-local-v34-8-compact-chat-feature-history';
+const localExactRedesignComparisonPackageId = 'agent-package-local-v34-9-exact-redesign-comparison';
+const localSimplifiedWebsiteReviewPackageId = 'agent-package-local-v35-0-simplified-website-review';
+const localResponsivePreviewLaunchPackageId = 'agent-package-local-v35-1-responsive-preview-launch';
+const localEvidenceLedHomepagePackageId =
+  'agent-package-local-v35-2-evidence-led-homepage-art-direction';
+const localInspectEmailReplyCtaPackageId = 'agent-package-local-v35-3-inspect-email-reply-cta';
+const localRailwayOnlyProductReleasesPackageId =
+  'agent-package-local-v35-4-railway-only-product-releases';
+const localReliableCodexQueueHandoffPackageId =
+  'agent-package-local-v35-8-reliable-codex-queue-handoff';
 
 type StoreName =
   | 'activities'
@@ -627,6 +748,28 @@ export class SiteforgeRepository {
     const transaction = database.transaction(storeName, 'readonly');
     const records = await requestResult(transaction.objectStore(storeName).getAll());
     return records as T[];
+  }
+
+  async getBuilderPreferences(): Promise<BuilderPreferences> {
+    const record = await this.get<MetaRecord>('meta', localBuilderPreferencesKey);
+    if (!record) return defaultBuilderPreferences();
+    try {
+      return normalizeBuilderPreferences(JSON.parse(record.value));
+    } catch {
+      return defaultBuilderPreferences();
+    }
+  }
+
+  async saveBuilderPreferences(preferences: BuilderPreferences): Promise<BuilderPreferences> {
+    const saved = {
+      ...normalizeBuilderPreferences(preferences),
+      updatedAt: new Date().toISOString(),
+    };
+    await this.put('meta', {
+      id: localBuilderPreferencesKey,
+      value: JSON.stringify(saved),
+    } satisfies MetaRecord);
+    return saved;
   }
 
   private async getAllForBusiness<T>(
@@ -4053,29 +4196,2026 @@ export class SiteforgeRepository {
         'Unified client proposal test package: one saved form and quote, existing handoff navigation, transparent payment setup and clear launch steps.',
       stagedBehaviourIds: ['framework-quality-gates'],
     };
-    const localBoundedCodexQueuePackage: AgentPackage = {
+    const localRecoveringCodexTranscriptsPackage: AgentPackage = {
       ...localUnifiedProposalPackage,
-      id: 'agent-package-local-v25-3-bounded-codex-queue',
+      id: 'agent-package-local-v25-3-recovering-codex-transcripts',
       version: 25.3,
-      status: 'test_ready',
       basePackageId: localUnifiedProposalPackage.id,
       builderContractVersion: 'made-solid-studio-builder-agent-v25.3',
       contractAddendum:
-        'Bound every Codex RPC, release stalled shared connections and keep independent chats usable after a request failure.',
+        'New Codex conversations clear the previous conversation error immediately. Incomplete background updates retain only the same conversation last loaded transcript with an explicit reconnecting notice and recover automatically. Stalled child-agent reads cannot block the parent transcript.',
       instructionsAddendum:
-        'Preserve saved chats. Requeue only definite busy rejections. Never automatically replay a send with an unknown acknowledgement; surface the failure and ask the owner to check the conversation before retrying.',
+        'Bound the full status request including authentication and body reading, discard late responses after a conversation transition, and clear the polling lock on every outcome. Keep last loaded messages and agent placement together only for the same conversation, disable sending during transcript recovery, and replace them with the next complete response. Never merge evidence across conversation IDs or bypass workspace checks.',
       summary:
-        'Bounded Codex queue: stalled requests and Interrupt fail visibly, connections recover, and definite busy rejections remain retryable.',
+        'Recovering Codex transcripts test package: clears new-chat errors and restores stalled or incomplete chat updates without a page refresh.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localCompleteCodexReadPlaybackPackage: AgentPackage = {
+      ...localRecoveringCodexTranscriptsPackage,
+      id: 'agent-package-local-v25-4-complete-codex-read-playback',
+      version: 25.4,
+      basePackageId: localRecoveringCodexTranscriptsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v25.4',
+      contractAddendum:
+        'Natural Codex read playback preserves every numbered item, bullet, implementation paragraph, and verification detail from the selected reply. Markdown decoration remains quiet while the substantive visible text is spoken in document order through both private Google audio and device speech fallback.',
+      instructionsAddendum:
+        'Do not remove, condense, or replace reply content based on list length or technical keywords. Keep each list item as a separate speech paragraph so chunking, read-along position, restart, and fallback playback retain the complete sequence. Literal mode may continue to announce structural labels, and Natural mode may continue to simplify Markdown syntax and omit fenced source code with an audible notice.',
+      summary:
+        'Complete Codex read playback test package: Natural voice playback reads every list item and technical handoff detail in order.',
       capabilityAssessment: 'foundation_change_required',
       capabilityProposal:
-        'Prevents a silent Codex connection from holding the shared chat queue indefinitely.',
+        'Prevents read playback from silently dropping substantive reply content while retaining the existing Natural and Literal presentation choices.',
       stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localStableChatReconnectionPackage: AgentPackage = {
+      ...localCompleteCodexReadPlaybackPackage,
+      id: 'agent-package-local-v25-5-stable-chat-reconnection',
+      version: 25.5,
+      status: 'test_ready',
+      basePackageId: localCompleteCodexReadPlaybackPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v25.5',
+      contractAddendum:
+        'Chat reconnection notices preserve the compact conversation selector and the transcript layout. A saved conversation cannot make an unavailable service appear Ready.',
+      instructionsAddendum:
+        'Keep the workspace scope and connection notice in one stable layout row. Display Reconnecting while service status is unavailable, retain the saved conversation, and restore the connected header after successful automatic polling.',
+      summary:
+        'Stable chat reconnection test package: prevents stretched selectors and contradictory Ready labels while reconnecting.',
+      capabilityProposal:
+        'Keeps mobile chat usable and connection status truthful through transient service failures.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localVisibleCodexFailuresPackage: AgentPackage = {
+      ...localStableChatReconnectionPackage,
+      id: 'agent-package-local-v25-6-visible-codex-failures',
+      version: 25.6,
+      basePackageId: localStableChatReconnectionPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v25.6',
+      contractAddendum:
+        'Failed Codex turns preserve the original user message and show an explicit failure notice. Safety-blocked turns are identified without exposing raw provider output or automatically retrying them.',
+      instructionsAddendum:
+        'Use saved feedback records to remove transport context from failed and dispatching messages. Derive a safe failure notice from the latest failed turn; clear it when a newer turn supersedes it. Keep safety controls intact and never replay blocked requests automatically.',
+      summary:
+        'Visible Codex failures test package: clean failed messages and explicit turn failure notices.',
+      capabilityProposal:
+        'Explains missing replies without leaking transport instructions or bypassing provider safety decisions.',
+    };
+    const localCompatibleCodexFailureDisplayPackage: AgentPackage = {
+      ...localVisibleCodexFailuresPackage,
+      id: 'agent-package-local-v25-7-compatible-codex-failure-display',
+      version: 25.7,
+      basePackageId: localVisibleCodexFailuresPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v25.7',
+      contractAddendum:
+        'The development chat displays failures correctly even when its status API is served by an older packaged runtime.',
+      instructionsAddendum:
+        'Recognize only the known complete Studio transport suffix when cleaning legacy user messages. Preserve message formatting and unrelated text. Use lastTurnStatus to show a generic failed-turn notice when the older runtime supplies no failure detail. Never retry or bypass blocked turns.',
+      summary:
+        'Compatible Codex failure display test package: clean legacy failed messages and report failures from the packaged status API.',
+    };
+    const localFailedChatContinuationPackage: AgentPackage = {
+      ...localCompatibleCodexFailureDisplayPackage,
+      id: 'agent-package-local-v25-8-failed-chat-continuation',
+      version: 25.8,
+      basePackageId: localCompatibleCodexFailureDisplayPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v25.8',
+      contractAddendum:
+        'A failed Codex turn can continue in a newly selected conversation from the last completed assistant reply while the original conversation remains unchanged.',
+      instructionsAddendum:
+        'Offer recovery only when a completed assistant reply can be branched. Use the existing protected native branch operation with that successful turn identifier, exclude the failed user turn and its transport context, never retry the failed prompt automatically, and focus the composer after the recovered conversation opens.',
+      summary:
+        'Failed chat continuation test package: continue safely from the last successful reply without replaying the failed prompt.',
+      capabilityProposal:
+        'Restores a usable composer after a failed turn while preserving the provider safety decision and the original conversation.',
+    };
+    const localClientspaceRehearsalPackage: AgentPackage = {
+      ...localFailedChatContinuationPackage,
+      id: 'agent-package-local-v25-9-clientspace-rehearsal',
+      version: 25.9,
+      basePackageId: localFailedChatContinuationPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v25.9',
+      contractAddendum:
+        'A rehearsal is a separate test prospect and Clientspace that references an original exact verified website without copying or relabelling its release proof.',
+      instructionsAddendum:
+        'Keep rehearsal contact, proposal and lifecycle state separate from the real prospect. Label every Studio, handoff and Clientspace surface as test-only; create no invitation implicitly; restrict deliberate rehearsal email to its saved test inbox; reject payment, recurring billing and live launch actions server-side.',
+      summary:
+        'Clientspace rehearsal test package: safely rehearses the complete proposal and client experience without affecting the real prospect.',
+      capabilityProposal:
+        'Lets the owner prove the first-client workflow end to end while preserving immutable source evidence and hard commercial safeguards.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localGuidedClientHandoffPackage: AgentPackage = {
+      ...localClientspaceRehearsalPackage,
+      id: 'agent-package-local-v26-0-guided-client-handoff',
+      version: 26.0,
+      status: 'test_ready',
+      basePackageId: localClientspaceRehearsalPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v26.0',
+      contractAddendum:
+        'Client handoff presents website and report readiness, saved client details, quote approval and a final review in a responsive guided workflow.',
+      instructionsAddendum:
+        'Preserve exact release and quote checks, draft persistence and explicit invitation approval. Summarise the current client, project and contact before private preparation; keep technical history and launch guidance in accessible disclosures.',
+      summary:
+        'Guided client handoff test package: clearer readiness, client details, quote approval and final review across mobile, tablet and desktop.',
+      capabilityProposal:
+        'Makes the next handoff action understandable while preserving private preparation and deliberate client invitations.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localReliableRehearsalCreationPackage: AgentPackage = {
+      ...localGuidedClientHandoffPackage,
+      id: 'agent-package-local-v26-1-reliable-rehearsal-creation',
+      version: 26.1,
+      status: 'test_ready',
+      basePackageId: localGuidedClientHandoffPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v26.1',
+      contractAddendum:
+        'Creating a client-experience rehearsal uses one stable rehearsal identity and recovers automatically from a transient incomplete Studio runtime response without duplicating the test prospect.',
+      instructionsAddendum:
+        'Describe the rehearsal as practising the client experience, identify the destination as the owner email used for the test, retry an incomplete runtime response once with the exact same idempotency identifier, and preserve a clear actionable error if confirmation still fails.',
+      summary:
+        'Reliable rehearsal creation test package: clearer test-email language and automatic recovery from blank runtime responses.',
+      capabilityProposal:
+        'Prevents raw JSON errors and duplicate rehearsals when the live Studio connection briefly interrupts rehearsal creation.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localContextualCodexChatTitlesPackage: AgentPackage = {
+      ...localReliableRehearsalCreationPackage,
+      id: 'agent-package-local-v26-2-contextual-codex-chat-titles',
+      version: 26.2,
+      status: 'test_ready',
+      basePackageId: localReliableRehearsalCreationPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v26.2',
+      contractAddendum:
+        'Studio Codex conversation titles describe the current work rather than copying an unclear latest message. A short referential follow-up retains its action while resolving its subject from the preceding private request or a meaningful saved title.',
+      instructionsAddendum:
+        'Carry only the two newest already-saved prompts for each validated conversation into the private status response. Derive chooser labels locally with no additional model or per-thread request: summarize standalone prompts directly, resolve vague follow-ups such as implement it, discuss this, do it, or it still does not work against the preceding prompt, and ignore generic saved names when no useful context exists.',
+      summary:
+        'Contextual Codex chat titles test package: keeps each chat recognizable when the latest message relies on earlier conversation context.',
+      capabilityProposal:
+        'Makes the conversation chooser useful after short follow-ups without adding model latency, usage cost, or cross-thread reads.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localAutomaticRehearsalPreviewPackage: AgentPackage = {
+      ...localContextualCodexChatTitlesPackage,
+      id: 'agent-package-local-v26-3-automatic-rehearsal-preview',
+      version: 26.3,
+      status: 'test_ready',
+      basePackageId: localContextualCodexChatTitlesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v26.3',
+      contractAddendum:
+        'Preparing a Clientspace rehearsal automatically queues the verified exact-source preview when it does not already exist, follows its persisted worker status, and continues the rehearsal after the preview is ready.',
+      instructionsAddendum:
+        'Do not send the owner backwards to prepare a separate original handoff. Reuse an existing exact-source preview job or queue it with the saved test-only contact and approved quote, surface its real persisted phase, and resume Clientspace preparation without another click. Never contact the real client.',
+      summary:
+        'Automatic rehearsal preview test package: removes the separate original-handoff prerequisite and carries the test through its verified preview step.',
+      capabilityProposal:
+        'Makes the rehearsal one understandable workflow while retaining exact-source verification, idempotent worker jobs and all commercial safeguards.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localPublishedRepositoryFallbackPackage: AgentPackage = {
+      ...localAutomaticRehearsalPreviewPackage,
+      id: 'agent-package-local-v26-4-published-repository-fallback',
+      version: 26.4,
+      status: 'test_ready',
+      basePackageId: localAutomaticRehearsalPreviewPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v26.4',
+      contractAddendum:
+        'Exact-source handoff verification accepts a workspace without a local origin remote only when the persisted ready GitHub publication for the exact builder run independently matches the expected repository.',
+      instructionsAddendum:
+        'Keep commit, tree, clean-worktree and attestation checks unchanged. Reject a mismatched configured origin. When origin is absent, require the immutable ready GitHub publication for the same builder run to match before deploying the verified preview.',
+      summary:
+        'Published repository fallback test package: safely recovers verified preview handoffs when local origin metadata is absent.',
+      capabilityProposal:
+        'Prevents a missing local Git remote from blocking an otherwise fully verified rehearsal without weakening repository identity checks.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localIsolatedExactPreviewPackage: AgentPackage = {
+      ...localPublishedRepositoryFallbackPackage,
+      id: 'agent-package-local-v26-5-isolated-exact-preview',
+      version: 26.5,
+      status: 'test_ready',
+      basePackageId: localPublishedRepositoryFallbackPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v26.5',
+      contractAddendum:
+        'The handoff worker selects a clean local checkout of the attested commit or creates a disposable detached Git worktree for that exact commit, without rewinding or changing the active editable website.',
+      instructionsAddendum:
+        'Search only configured prospect repository roots, require the attested commit object, preserve the active checkout, use a uniquely created temporary worktree when isolation is needed, and remove only that exact temporary worktree after success or failure.',
+      summary:
+        'Isolated exact preview test package: deploys the verified handoff commit without requiring the editable workspace to remain on that older revision.',
+      capabilityProposal:
+        'Allows a rehearsal of a verified committed edit after later development has begun while preserving both exact-source proof and the current working tree.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localAuthenticatedPreviewDeploymentPackage: AgentPackage = {
+      ...localIsolatedExactPreviewPackage,
+      id: 'agent-package-local-v26-6-authenticated-preview-deployment',
+      version: 26.6,
+      status: 'test_ready',
+      basePackageId: localIsolatedExactPreviewPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v26.6',
+      contractAddendum:
+        'The protected handoff worker passes its configured Vercel access token explicitly to every private project inspection, creation and preview deployment command. An explicit rehearsal retry resets exhausted infrastructure attempts on the same idempotent job.',
+      instructionsAddendum:
+        'Require a server-only Vercel access token at worker startup, accept the runtime access-token variable or standard CLI token fallback, pass it directly to bounded Vercel commands, and never persist or expose it in browser state or job output.',
+      summary:
+        'Authenticated preview deployment test package: removes interactive Vercel login and safely resets exhausted attempts when the owner retries the same rehearsal.',
+      capabilityProposal:
+        'Makes automated rehearsal preview deployment reliable after runtime restarts while keeping the credential server-only.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localVerifiedPreviewCompletionPackage: AgentPackage = {
+      ...localAuthenticatedPreviewDeploymentPackage,
+      id: 'agent-package-local-v26-7-verified-preview-completion',
+      version: 26.7,
+      status: 'test_ready',
+      basePackageId: localAuthenticatedPreviewDeploymentPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v26.7',
+      contractAddendum:
+        'The protected handoff worker reuses a ready private Vercel preview only when its project metadata matches the exact source commit. A new deployment is polled to a verified ready or failed terminal state instead of assuming the initial CLI response is complete.',
+      instructionsAddendum:
+        'After exact source and release-attestation checks pass, expose a persisted deploying-preview phase. Reuse only a non-production ready preview for the exact commit, otherwise create one and inspect it until ready, failed, cancelled or the bounded timeout expires.',
+      summary:
+        'Verified preview completion test package: makes automatic rehearsal handoff resilient to asynchronous Vercel deployment responses.',
+      capabilityProposal:
+        'Prevents a successfully built private preview from being misclassified as failed while preserving exact-commit and no-production-domain safeguards.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localCompatibleHandoffTimestampPackage: AgentPackage = {
+      ...localVerifiedPreviewCompletionPackage,
+      id: 'agent-package-local-v26-8-compatible-handoff-timestamps',
+      version: 26.8,
+      status: 'test_ready',
+      basePackageId: localVerifiedPreviewCompletionPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v26.8',
+      contractAddendum:
+        'The synchronized Clientspace receiver accepts standards-compliant ISO timestamps with either the Z UTC designator or an explicit UTC offset. Rejected handoff fields are retained in the private worker failure summary.',
+      instructionsAddendum:
+        'Keep exact-source, quote and attestation checks unchanged. Normalize validation around equivalent ISO datetime representations, and surface protected receiver field errors in the persisted Studio job without exposing secrets or raw request bodies.',
+      summary:
+        'Compatible handoff timestamps test package: prevents valid Supabase UTC timestamps from stopping rehearsal preparation and makes future contract failures actionable.',
+      capabilityProposal:
+        'Allows the verified report and source handoff to cross Studio and Clientspace reliably while preserving all release safeguards.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localOversizedCodexConversationRecoveryPackage: AgentPackage = {
+      ...localCompatibleHandoffTimestampPackage,
+      id: 'agent-package-local-v26-9-oversized-codex-conversation-recovery',
+      version: 26.9,
+      status: 'test_ready',
+      basePackageId: localCompatibleHandoffTimestampPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v26.9',
+      contractAddendum:
+        'An oversized or slow Codex transcript remains usable through a bounded newest-turn summary page. The complete saved rollout is preserved, stale older in-progress turns do not override the newest lifecycle, and an authenticated reviewer can explicitly trigger native context compaction without deleting the conversation.',
+      instructionsAddendum:
+        'Attempt the normal complete transcript read within its bounded timeout, then remember that thread and use experimental thread/turns/list with newest-first summary items for subsequent status reads. Render the limited-history state plainly, keep the composer usable, and expose Repair chat only as a guarded thread/compact/start request after active work finishes. Never truncate, rewrite, or delete the source rollout.',
+      summary:
+        'Oversized Codex conversation recovery test package: keeps long chats open and adds a safe in-UI repair action.',
+      capabilityProposal:
+        'Prevents one large transcript from becoming permanently inaccessible while preserving its complete history and workspace boundary.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localRehearsalRecipientIsolationPackage: AgentPackage = {
+      ...localOversizedCodexConversationRecoveryPackage,
+      id: 'agent-package-local-v27-0-rehearsal-recipient-isolation',
+      version: 27,
+      status: 'test_ready',
+      basePackageId: localOversizedCodexConversationRecoveryPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v27.0',
+      contractAddendum:
+        'Automatic rehearsal preparation keeps the rehearsal test inbox separate from the original prospect handoff. An exact source revision may refresh an existing Clientspace without supplying a recipient, in which case the established client-account email is preserved.',
+      instructionsAddendum:
+        'Never copy rehearsal contact fields into the original source handoff. Queue source-only preparation with the original prospect identity and no recipient override; keep the test inbox only on the separately identified rehearsal record.',
+      summary:
+        'Rehearsal recipient isolation test package: refreshes the verified source preview without attempting to replace an existing client account email.',
+      capabilityProposal:
+        'Lets rehearsal creation continue automatically for an existing Clientspace while preventing test contact details from leaking into the real client handoff.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localGuidedClientspaceTestPackage: AgentPackage = {
+      ...localRehearsalRecipientIsolationPackage,
+      id: 'agent-package-local-v27-1-guided-clientspace-test',
+      version: 27.1,
+      status: 'test_ready',
+      basePackageId: localRehearsalRecipientIsolationPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v27.1',
+      contractAddendum:
+        'A Clientspace rehearsal remains an internal child of its original prospect instead of appearing in the sales pipeline. Studio resolves the existing rehearsal before offering creation, displays the protected recipient and current Clientspace invitation lifecycle, and prevents accidental duplicate test records.',
+      instructionsAddendum:
+        'Present one state-aware safe-test workflow on the original prospect. Keep internal rehearsal records out of prospect metrics and lists, query Clientspace read-only for account and invitation status, state exactly whether anything was sent, and place internal identifiers behind technical details.',
+      summary:
+        'Guided Clientspace test package: replaces duplicate-looking rehearsal prospects with one truthful, state-aware test flow.',
+      capabilityProposal:
+        'Makes first-client rehearsal understandable without weakening recipient isolation, billing blocks, launch blocks or deliberate invitation controls.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localUniversalBuilderModelSettingsPackage: AgentPackage = {
+      ...localGuidedClientspaceTestPackage,
+      id: 'agent-package-local-v27-2-universal-builder-model-settings',
+      version: 27.2,
+      status: 'test_ready',
+      basePackageId: localGuidedClientspaceTestPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v27.2',
+      contractAddendum:
+        'Every website build and Agent Studio test snapshots the effective organization-wide Codex model, reasoning effort, runtime version, and agent package. Page tests, whole-site tests, and full builds retain separate recommended or custom profiles.',
+      instructionsAddendum:
+        'Discover selectable models and reasoning levels from the authenticated Codex runtime catalogue. Persist one owner-visible builder preference per workflow class, apply it to every build entry point, and copy the resolved profile onto each queued run before a worker can claim it. Never rewrite an earlier run when settings change.',
+      summary:
+        'Universal builder model settings test package: adds one editable Settings source for every website build and test with immutable per-run execution details.',
+      capabilityProposal:
+        'Makes model selection consistent and auditable across prospect builds and Agent Studio tests while retaining economical page-test and quality-first full-site defaults.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localResilientCodexRuntimeUpdatesPackage: AgentPackage = {
+      ...localUniversalBuilderModelSettingsPackage,
+      id: 'agent-package-local-v27-3-resilient-codex-runtime-updates',
+      version: 27.3,
+      status: 'test_ready',
+      basePackageId: localUniversalBuilderModelSettingsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v27.3',
+      contractAddendum:
+        'Codex runtime updates expose persisted phase timing and ordered progress, resume an interrupted activation health check, and automatically restore the previous executable when a bounded activation phase stalls. Existing conversations remain readable, and messages submitted during the App Server handover are saved durably for automatic delivery after reconnection.',
+      instructionsAddendum:
+        'Keep the current Codex executable serving chat while checking and downloading. Pause durable queue dispatch only for the activation handover, accept and validate existing-conversation messages into that queue, resume dispatch after reconnection, and never report a saved message as sent. Resume or roll back persisted restarting state after a supervisor restart; fail any checking, download, restart-pending, or health-check phase that exceeds its bounded timeout with an owner-visible explanation.',
+      summary:
+        'Resilient Codex runtime updates test package: adds visible phases, bounded recovery, resumable health checks, and durable chat sends during activation.',
+      capabilityProposal:
+        'Prevents a runtime update from trapping Studio in an indefinite updating state or forcing the owner to copy and retry a chat message.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localVoiceDictatedCodexChatPackage: AgentPackage = {
+      ...localResilientCodexRuntimeUpdatesPackage,
+      id: 'agent-package-local-v27-4-voice-dictated-codex-chat',
+      version: 27.4,
+      status: 'test_ready',
+      basePackageId: localResilientCodexRuntimeUpdatesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v27.4',
+      contractAddendum:
+        'The Codex message composer can use browser speech recognition to append live transcription to the saved draft. Studio sends only the reviewed text when the owner explicitly presses Send; it never stores or forwards microphone audio.',
+      instructionsAddendum:
+        'Expose a 44px accessible microphone control without reducing the compact composer. Show starting, listening, stopping, permission-error, and unavailable states; preserve existing draft text; stop on backgrounding or navigation; and require review before an explicit send.',
+      summary:
+        'Voice-dictated Codex chat test package: adds live browser transcription as a reviewable message draft with explicit privacy and error states.',
+      capabilityProposal:
+        'Lets the Studio owner speak longer Codex requests while retaining the same editable draft and deliberate send boundary.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localImmediateRehearsalPipelineIsolationPackage: AgentPackage = {
+      ...localVoiceDictatedCodexChatPackage,
+      id: 'agent-package-local-v27-5-immediate-rehearsal-pipeline-isolation',
+      version: 27.5,
+      status: 'test_ready',
+      basePackageId: localVoiceDictatedCodexChatPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v27.5',
+      contractAddendum:
+        'Internal Clientspace rehearsal children remain attached to their original prospect and are excluded from pipeline lists and metrics from the first lightweight organization read, before detailed workspace hydration completes.',
+      instructionsAddendum:
+        'Classify rehearsal businesses from their proposal-draft marker whenever the prospect index is loaded. Keep the internal record intact for recipient, proposal, payment and lifecycle isolation, but expose its controls only from the original prospect handoff.',
+      summary:
+        'Immediate rehearsal pipeline isolation test package: prevents internal test children from flashing in the prospect pipeline during startup.',
+      capabilityProposal:
+        'Removes the duplicate-looking rehearsal card without deleting or weakening the isolated test workspace behind the original prospect.',
+      stagedBehaviourIds: ['framework-quality-gates'],
+    };
+    const localBrandedExactClientPreviewPackage: AgentPackage = {
+      ...localImmediateRehearsalPipelineIsolationPackage,
+      id: 'agent-package-local-v27-6-branded-exact-client-preview',
+      version: 27.6,
+      status: 'test_ready',
+      basePackageId: localImmediateRehearsalPipelineIsolationPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v27.6',
+      contractAddendum:
+        'A verified source handoff may assign only its dedicated preview.<project>.madesolid.com.au hostname to the exact immutable Vercel preview deployment. The branded preview remains separate from the project live hostname and production release.',
+      instructionsAddendum:
+        'Register the branded preview as a project custom domain, pin its alias to the exact source-commit deployment, verify the alias resolves to that deployment, and prove it is publicly reachable without a provider login before saving it to Clientspace. Fail closed instead of exposing a Vercel URL or moving the live client domain.',
+      summary:
+        'Branded exact client preview test package: gives client review emails a Made Solid preview hostname pinned to the verified website version.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps Vercel deployment addresses internal while preserving exact-version review and a separate, deliberate live launch.',
+      stagedBehaviourIds: ['client-url-release-contract'],
+    };
+    const localEmailReadyHomepagePreviewPackage: AgentPackage = {
+      ...localBrandedExactClientPreviewPackage,
+      id: 'agent-package-local-v27-7-email-ready-homepage-preview',
+      version: 27.7,
+      status: 'test_ready',
+      basePackageId: localBrandedExactClientPreviewPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v27.7',
+      contractAddendum:
+        'Every generated website foundation exposes the Made Solid review bridge only when it is embedded by a trusted Made Solid parent. The bridge provides a settled exact-homepage capture for client introduction emails without changing the public website or its live release state.',
+      instructionsAddendum:
+        'Keep the review bridge in the locked foundation, restrict its parent origin to Made Solid or local development, wait for final website content and visible media before capture, and use the exact branded preview URL as both the capture source and linked destination.',
+      summary:
+        'Email-ready homepage preview test package: lets Clientspace embed a settled screenshot from the exact branded website in the introduction email.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the first client email visual and dependable while the screenshot and branded live preview remain tied to the same verified website version.',
+      stagedBehaviourIds: ['client-url-release-contract'],
+    };
+    const localCompactCodexComposerNotificationsPackage: AgentPackage = {
+      ...localEmailReadyHomepagePreviewPackage,
+      id: 'agent-package-local-v27-8-compact-codex-composer-notifications',
+      version: 27.8,
+      status: 'test_ready',
+      basePackageId: localEmailReadyHomepagePreviewPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v27.8',
+      contractAddendum:
+        'Codex runtime update, rollback, and failure notices can be dismissed for their exact lifecycle state. Adding camera-roll or captured image evidence keeps the message field compact and every inline composer action reachable while previews remain removable and horizontally scrollable.',
+      instructionsAddendum:
+        'Give each visible Codex runtime-update state an accessible 44px dismiss action and allow a later lifecycle state to appear. Do not focus or expand the message field merely because an image was attached. Keep attachment previews in one bounded horizontal strip without clipping capture, setup, settings, Stop, or Send controls at mobile, tablet, or desktop widths.',
+      summary:
+        'Compact Codex composer notifications test package: adds dismissible update notices and keeps photo attachments from pushing inline chat actions out of reach.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps the embedded Codex chat controllable after photo attachment and lets the owner clear update or rollback notices without hiding later lifecycle changes.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localPublicOnlyManifestSourcesPackage: AgentPackage = {
+      ...localCompactCodexComposerNotificationsPackage,
+      id: 'agent-package-local-v27-9-public-only-manifest-sources',
+      version: 27.9,
+      status: 'test_ready',
+      basePackageId: localCompactCodexComposerNotificationsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v27.9',
+      contractAddendum:
+        'Research capture, redesign briefs, and Build Manifests may contain only stable public website pages. Authentication, login, OAuth, credential-bearing, and temporary session redirect URLs are excluded before they can become page plans or builder routes.',
+      instructionsAddendum:
+        'Treat authentication redirects as failed private evidence, continue capturing the remaining public pages, normalise safe page URLs consistently across selection and disposition matching, and never expose session query parameters in a Build Manifest or builder error.',
+      summary:
+        'Public-only manifest sources test package: excludes temporary authentication redirects while preserving every legitimate captured public page.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents provider login sessions from becoming generated site routes or blocking an otherwise valid public-page manifest.',
+      stagedBehaviourIds: ['site-navigation-architecture'],
+    };
+    const localBuilderVersionDialogPackage: AgentPackage = {
+      ...localPublicOnlyManifestSourcesPackage,
+      id: 'agent-package-local-v28-0-builder-version-dialog',
+      version: 28,
+      status: 'test_ready',
+      basePackageId: localPublicOnlyManifestSourcesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v28.0',
+      contractAddendum:
+        'Agent Studio and full website build workspaces expose the same in-place Codex version dialog. It shows the effective page-test, whole-site-test, and full-site model and reasoning profiles plus the active runtime version without navigating away from current work.',
+      instructionsAddendum:
+        'Provide one accessible shared dialog from Agent Studio and complete website build controls. Keep the trigger at least 44 pixels, trap focus while open, support close control and Escape dismissal with focus restoration, prevent mobile overflow, and retain immutable model, reasoning, runtime, and package details on existing runs.',
+      summary:
+        'Builder version dialog test package: restores in-place access to the Codex versions used by Agent Studio and complete website builds.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Lets the Studio owner inspect or change future builder execution profiles without losing the current Agent Studio or prospect-build context.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localVisibleBuilderCodexVersionPackage: AgentPackage = {
+      ...localBuilderVersionDialogPackage,
+      id: 'agent-package-local-v28-1-visible-builder-codex-version',
+      version: 28.1,
+      status: 'test_ready',
+      basePackageId: localBuilderVersionDialogPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v28.1',
+      contractAddendum:
+        'Agent Studio tests and full website builds always show the effective Codex model, reasoning level, and runtime version before work starts, while it is active, and after it finishes or stops. Active and completed runs use only their immutable execution snapshot.',
+      instructionsAddendum:
+        'Show a responsive accessible Codex execution summary beside each builder workflow. Before a run, identify the saved effective profile and current runtime while stating that the exact runtime is captured at worker start. During and after a run, replace planned values with the immutable model, reasoning, runtime, and profile source saved on that run; never present current preferences as historical execution facts.',
+      summary:
+        'Visible builder Codex version test package: keeps the planned or recorded Codex execution version visible through the full build lifecycle.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Lets the Studio owner confirm which Codex configuration will run and verify the exact recorded configuration while reviewing active or finished work.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localAutomaticBuilderQualityRepairPackage: AgentPackage = {
+      ...localVisibleBuilderCodexVersionPackage,
+      id: 'agent-package-local-v28-2-automatic-builder-quality-repair',
+      version: 28.2,
+      status: 'test_ready',
+      basePackageId: localVisibleBuilderCodexVersionPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v28.2',
+      contractAddendum:
+        'Agent Studio tests and complete website builds run one bounded automatic Codex repair pass when the first automated quality suite does not pass, then compile and execute the complete suite again. The first results remain immutable repair input, and an unsuccessful repair preserves the original private preview and evidence.',
+      instructionsAddendum:
+        'Repair only the exact recorded quality findings within the existing manifest, factual, asset, route, file-scope, and locked-foundation boundaries. Do not suppress checks, remove required content, add dependencies, broaden claims, or redesign unrelated work. Run at most one automatic pass; if findings remain or repair cannot finish, keep the build private and surface the original and final evidence with a focused human next action.',
+      summary:
+        'Automatic builder quality repair test package: fixes recorded Agent Studio and full-site quality failures once, then reruns the complete suite.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Reduces manual repair loops while keeping bounded cost, immutable evidence, safe fallback source, and honest review-required outcomes.',
+      stagedBehaviourIds: ['visual-codex-feedback', 'framework-quality-gates'],
+    };
+    const localReliableBuilderRepairPackage: AgentPackage = {
+      ...localAutomaticBuilderQualityRepairPackage,
+      id: 'agent-package-local-v28-3-reliable-builder-repair',
+      version: 28.3,
+      status: 'test_ready',
+      basePackageId: localAutomaticBuilderQualityRepairPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v28.3',
+      contractAddendum:
+        'Every Codex website build and quality repair uses workspace-write with automatic approval review in the protected container. A successful Codex process must change generated source; an execution-environment block or zero-change result is a worker failure and can never be compiled or presented as a website. Manual quality repair restores saved source when available and otherwise rebuilds the selected scope from its immutable manifest.',
+      instructionsAddendum:
+        'Treat namespace or shell execution denial as an infrastructure failure even when the Codex process exits successfully. Require a real generated-source change before validation, retain locked-foundation and scoped-file checks, and give completed tests one repair action that runs Codex against their recorded findings. If no validated checkpoint exists, use the immutable manifest and approved assets rather than retesting the locked starter.',
+      summary:
+        'Reliable builder repair test package: restores container-safe Codex editing, rejects zero-change builds, and makes manual quality repair rebuild unusable starter output.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents a blocked Codex shell from masquerading as a finished website and gives failed Agent Studio or full-site tests a repair path that produces openable generated output.',
+      stagedBehaviourIds: ['visual-codex-feedback', 'framework-quality-gates'],
+    };
+    const localCompactPhotoComposerPackage: AgentPackage = {
+      ...localReliableBuilderRepairPackage,
+      id: 'agent-package-local-v28-4-compact-photo-composer',
+      version: 28.4,
+      status: 'test_ready',
+      basePackageId: localReliableBuilderRepairPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v28.4',
+      contractAddendum:
+        'Attaching camera-roll or captured images keeps every Codex composer action, including Send, fully inside both the composer and browser viewport at 320px and wider. Compact controls retain 44px targets and attachment previews remain horizontally scrollable.',
+      instructionsAddendum:
+        'Verify the image-attached composer at 320 by 568, 375 by 812, 768 by 1024, and 1440 by 900. Require zero unintended horizontal overflow and keep the complete upload, capture, run setup, chat settings, and Send controls within the visible composer without shrinking their touch targets.',
+      summary:
+        'Compact photo composer test package: keeps Send fully visible after image attachment at the narrowest supported Studio viewport.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents image evidence from making a Codex message impossible to send on compact phones.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localSettledNavigationQualityPackage: AgentPackage = {
+      ...localCompactPhotoComposerPackage,
+      id: 'agent-package-local-v28-5-settled-navigation-quality',
+      version: 28.5,
+      status: 'test_ready',
+      basePackageId: localCompactPhotoComposerPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v28.5',
+      contractAddendum:
+        'Responsive navigation quality replay completes the normal Escape-dismissal exit before changing the browser to reduced motion and testing the same trigger again. An invisible outgoing backdrop may never be mistaken for a broken compact trigger.',
+      instructionsAddendum:
+        'Verify normal pointer opening, Escape dismissal, focus restoration, completed exit-layer removal, and reduced-motion reopening in that order. Report a persistent outgoing layer separately from a trigger activation failure, and never switch motion preferences during an active exit transition.',
+      summary:
+        'Settled navigation quality test package: removes a false compact-menu failure caused by changing motion preferences during exit.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps genuine blocked menu interactions reviewable while allowing valid responsive navigation to pass the complete browser suite.',
+      stagedBehaviourIds: ['visual-codex-feedback', 'framework-quality-gates'],
+    };
+    const localVisibleBuilderModelsPackage: AgentPackage = {
+      ...localSettledNavigationQualityPackage,
+      id: 'agent-package-local-v28-6-visible-builder-models',
+      version: 28.6,
+      status: 'test_ready',
+      basePackageId: localSettledNavigationQualityPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v28.6',
+      contractAddendum:
+        'Agent Studio and full website workflows show the effective Codex model before a build starts and retain the immutable model snapshot beside every saved generated website. Agent Studio separates primary website creation from optional package refinement.',
+      instructionsAddendum:
+        'Keep the planned model summary above each build setup. Show the recorded model and reasoning level on every completed or stopped website entry, never substituting current preferences for historical run data. Group the primary Agent Studio creation flow separately from collapsed advanced package capabilities and directions.',
+      summary:
+        'Visible builder models test package: surfaces the planned and recorded Codex model throughout cleaner, grouped website creation workflows.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes model choice verifiable before building and preserves that execution fact while reducing Agent Studio setup clutter.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localSettledEmailHomepageCapturePackage: AgentPackage = {
+      ...localVisibleBuilderModelsPackage,
+      id: 'agent-package-local-v28-7-settled-email-homepage-capture',
+      version: 28.7,
+      status: 'test_ready',
+      basePackageId: localVisibleBuilderModelsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v28.7',
+      contractAddendum:
+        'The first-introduction email may accept a generated homepage screenshot only from the versioned Made Solid capture bridge after the page has reached its final reveal state, fonts and visible media have loaded, and the viewport geometry has remained stable. An unverified, timed-out, stale-bridge, or partially loaded image keeps sending locked.',
+      instructionsAddendum:
+        'Use the settled-email-homepage-capture-v2 handshake for email screenshots. Disable capture-time motion, wait for loaded fonts and every visible image or video, require a stable viewport across repeated checks, and fail with a retryable explanation instead of continuing after a timeout. Keep the exact verified website URL as the screenshot source and email destination.',
+      summary:
+        'Settled email homepage capture test package: prevents the introduction email from saving a partially loaded website preview.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the initial client email wait for a fully loaded, visually settled homepage and reject stale or incomplete captures.',
+      stagedBehaviourIds: ['client-url-release-contract'],
+    };
+    const localOwnerDevicePreviewPackage: AgentPackage = {
+      ...localSettledEmailHomepageCapturePackage,
+      id: 'agent-package-local-v28-8-owner-device-preview',
+      version: 28.8,
+      status: 'test_ready',
+      basePackageId: localSettledEmailHomepageCapturePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v28.8',
+      contractAddendum:
+        'Every saved Agent Studio test, complete website build, and owner-managed live website exposes one separate Made Solid Inspect link with phone, tablet, and desktop viewport presets. The clean client review hostname, feedback workflow, generated source, and publication state remain unchanged.',
+      instructionsAddendum:
+        'Open responsive inspection through the protected inspect.madesolid.com.au shell. Default to the 1440 by 900 desktop viewport, allow 375 by 812 phone and 768 by 1024 tablet selection, preserve the selected device in the viewer URL, and clearly distinguish mutable working source from immutable saved output. Accept only issued private preview capabilities or exact Made Solid branded client previews; never turn the viewer into an arbitrary URL proxy.',
+      summary:
+        'Owner device preview test package: opens generated and editable websites in one phone-accessible desktop, tablet, and phone inspection surface.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Lets the Studio owner inspect a real desktop-responsive layout from a phone while keeping Clientspace review links and feedback separate.',
+      stagedBehaviourIds: ['client-url-release-contract'],
+    };
+    const localEditableClientspaceBalancePackage: AgentPackage = {
+      ...localOwnerDevicePreviewPackage,
+      id: 'agent-package-local-v28-9-editable-clientspace-balance',
+      version: 28.9,
+      status: 'test_ready',
+      basePackageId: localOwnerDevicePreviewPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v28.9',
+      contractAddendum:
+        'Clientspace Admin exposes the current final balance as a route-backed pricing control. Every edit creates an immutable quote revision with an explicit reason and outstanding-milestone breakdown; payment-started balances remain locked. A protected durable worker synchronizes the exact revision into the originating Studio proposal without changing the committed website scope.',
+      instructionsAddendum:
+        'Treat Clientspace as the operational source for post-handoff balance amendments. Preserve the opening payment, require every outstanding milestone and an audit reason, keep Stripe blocked unless the current project balance and quote agree, and expose queued, running, synced, or failed Studio synchronization truthfully. In Studio, show the imported Clientspace balance and reason on the ready handoff.',
+      summary:
+        'Editable Clientspace balance test package: opens a complete pricing breakdown, saves safe balance revisions, and synchronizes them back to Studio.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Lets the owner revise a final balance once in Clientspace while preserving quote history, checkout integrity, and the matching Studio commercial record.',
+      stagedBehaviourIds: ['commercial-offer-strategy'],
+    };
+    const localReadableAgentStudioRefinementPackage: AgentPackage = {
+      ...localEditableClientspaceBalancePackage,
+      id: 'agent-package-local-v29-0-readable-agent-studio-refinement',
+      version: 29,
+      status: 'test_ready',
+      basePackageId: localEditableClientspaceBalancePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v29.0',
+      contractAddendum:
+        'Agent Studio advanced refinement remains a full-width, readable disclosure at every supported viewport and during live source updates. Earlier stacked refinement markup and the current disclosure layout may coexist briefly without collapsing explanatory text into a narrow grid column.',
+      instructionsAddendum:
+        'Scope the current two-column summary layout to its explicit disclosure variant, retain a safe single-column base header for live-update compatibility, and verify the closed and open refinement states at 320 by 568, 375 by 812, 768 by 1024, and 1440 by 900 without horizontal overflow.',
+      summary:
+        'Readable Agent Studio refinement test package: keeps advanced package guidance full-width through compact layouts and live source transitions.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents Agent Studio refinement guidance from collapsing into one-word lines while the development UI receives a source update.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localVisibleChatGptCreditsPackage: AgentPackage = {
+      ...localReadableAgentStudioRefinementPackage,
+      id: localVisibleChatGptCreditsPackageId,
+      version: 29.1,
+      status: 'test_ready',
+      basePackageId: localReadableAgentStudioRefinementPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v29.1',
+      contractAddendum:
+        'Studio Codex distinguishes purchased ChatGPT flexible-usage credits from separately billed OpenAI API access. When included usage is exhausted and the signed-in Codex account reports a usable credit balance, chat visibly states that ChatGPT credits are active and shows the verified remaining balance.',
+      instructionsAddendum:
+        'Read the Codex credit snapshot and ordinaryUsageAllowed state from account/rateLimits/read. Expose only bounded credit availability, unlimited status, and non-negative balance. Show an active-credit notice in the chat header and the exact remaining balance in Chat settings only when included use is exhausted and credits are available. Label server API-key billing as a separate mechanism and never infer or estimate a credit balance.',
+      summary:
+        'Visible ChatGPT credits test package: confirms when Codex has moved beyond included usage and shows the live remaining credit balance without conflating it with API billing.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the active paid-usage state and remaining ChatGPT credit balance clear before the owner continues a Codex conversation.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localPurposeAwareCodexBranchingPackage: AgentPackage = {
+      ...localVisibleChatGptCreditsPackage,
+      id: localPurposeAwareCodexBranchingPackageId,
+      version: 29.2,
+      status: 'test_ready',
+      basePackageId: localVisibleChatGptCreditsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v29.2',
+      contractAddendum:
+        'Codex branches distinguish deliberate exploration from recovery after a broken source conversation. Recovery keeps the source history privately stored but removes that unusable chat from the conversation chooser; an intentional branch leaves both the source and branch visible.',
+      instructionsAddendum:
+        'Label the failed-turn Continue in a new chat action as recovery and every message-level Branch action as intentional. Persist only recovery source thread IDs in the private runtime, filter them from conversation selection after the fork succeeds and across restart, and never delete their native thread or evidence. Preserve existing exact-turn, workspace-scope, and branch-failure guarantees.',
+      summary:
+        'Purpose-aware Codex branching test package: hides broken recovery sources while preserving source chats for intentional branches.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps the conversation chooser clear after broken-chat recovery without hiding the reference chat for a branch the reviewer created on purpose.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localContextAwareChatTitlesAndStatesPackage: AgentPackage = {
+      ...localPurposeAwareCodexBranchingPackage,
+      id: localContextAwareChatTitlesAndStatesPackageId,
+      version: 29.3,
+      status: 'test_ready',
+      basePackageId: localPurposeAwareCodexBranchingPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v29.3',
+      contractAddendum:
+        'Every Codex conversation chooser title is a concise summary of its newest task, including referential follow-ups resolved from the preceding request. The chooser permanently distinguishes active running work from completed work; unread completion is an additional notification and does not replace the completed state.',
+      instructionsAddendum:
+        'Keep conversation titles at 48 characters or fewer, strip captured-page instructions, and resolve short requests such as implement it against the preceding saved user prompt. Label active work Running with a spinner and completed work Completed with a distinct success icon and treatment. Preserve Completed after the chat is viewed, while clearing only its unread notification.',
+      summary:
+        'Context-aware chat titles and states test package: concise latest-task names with durable Running and Completed dropdown states.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes every chat identifiable at a glance and keeps its running or completed lifecycle visible after notifications are read.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localRetrospectiveChatContextPackage: AgentPackage = {
+      ...localContextAwareChatTitlesAndStatesPackage,
+      id: localRetrospectiveChatContextPackageId,
+      version: 29.4,
+      status: 'test_ready',
+      basePackageId: localContextAwareChatTitlesAndStatesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v29.4',
+      contractAddendum:
+        'Existing Codex conversations recover a bounded recent user-prompt history from their native transcript, so vague latest messages do not become vague chooser titles. Recovered prompts are cleaned server-side before entering the private status response and cached by conversation revision.',
+      instructionsAddendum:
+        'For every visible conversation without sufficient saved Studio prompt records, read only its bounded recent turn summaries and retain up to eight cleaned user prompts. Strip captured-page and progress instructions before serialization. Resolve vague chains such as do it, is that appropriate, or do previous chats do it against the newest substantive task; cache results and preserve the native completion status.',
+      summary:
+        'Retrospective chat context test package: repairs vague titles across existing chats from cleaned, bounded native prompt history.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes older conversations identifiable without requiring a new message or exposing Studio runtime instructions.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localValidatedCodexBranchActionsPackage: AgentPackage = {
+      ...localRetrospectiveChatContextPackage,
+      id: localValidatedCodexBranchActionsPackageId,
+      version: 29.5,
+      status: 'test_ready',
+      basePackageId: localRetrospectiveChatContextPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v29.5',
+      contractAddendum:
+        'The dedicated Codex branch endpoint accepts only intentional branch and repair actions. Unknown actions fail before any conversation lookup or Codex work begins.',
+      instructionsAddendum:
+        'Validate the dedicated branch endpoint action against branch-thread and repair-thread before calling the Codex bridge. Return a clear private validation error for every unknown action, while preserving the selected workspace and branch purpose for valid requests.',
+      summary:
+        'Validated Codex branch actions test package: rejects unknown dedicated branch actions before Codex work begins.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps branch and repair requests deterministic and prevents malformed Studio requests from being interpreted as intentional branches.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localExpandedChatDropdownTitlesPackage: AgentPackage = {
+      ...localValidatedCodexBranchActionsPackage,
+      id: localExpandedChatDropdownTitlesPackageId,
+      version: 29.6,
+      status: 'test_ready',
+      basePackageId: localValidatedCodexBranchActionsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v29.6',
+      contractAddendum:
+        'Codex conversation names have separate compact and expanded presentations. The selected conversation control remains concise, while every open chooser row renders the complete contextual task summary without character truncation, ellipsis, or a line clamp.',
+      instructionsAddendum:
+        'Keep the closed conversation selector at its existing compact 48-character title contract. In the open conversation chooser, generate the full cleaned contextual summary, preserve explanatory task clauses, wrap the complete title to as many lines as required, and never substitute an ellipsis. Maintain status metadata, touch targets, menu scrolling, and zero horizontal overflow at every required viewport.',
+      summary:
+        'Expanded chat dropdown titles test package: shows each complete contextual task in the open chooser while keeping the selected chat compact.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Provides enough context to identify similar chats in the chooser without making the closed chat control oversized.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localRecoverableQuoteExpiryPackage: AgentPackage = {
+      ...localExpandedChatDropdownTitlesPackage,
+      id: localRecoverableQuoteExpiryPackageId,
+      version: 29.7,
+      status: 'test_ready',
+      basePackageId: localExpandedChatDropdownTitlesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v29.7',
+      contractAddendum:
+        'An expired approved quote remains visible as a distinct recoverable commercial state. When its exact website revision, scope and terms are unchanged, Studio can issue a fresh bounded approval without contacting the client or weakening Clientspace payment and release safeguards.',
+      instructionsAddendum:
+        'Separate quote term matching from time validity. Show the exact expiry date, explain that an unsent invitation remains blocked, and offer Reconfirm unchanged quote only when source, scope and commercial terms still match. Reconfirmation creates a new reference and validity window. Rehearsal billing and live launch remain blocked.',
+      summary:
+        'Recoverable quote expiry test package: explains expired approvals and safely reconfirms unchanged quotes without client contact.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Turns an ambiguous approved-but-blocked quote into an explicit expiry state with a safe, exact-scope recovery action.',
+      stagedBehaviourIds: ['commercial-offer-strategy'],
+    };
+    const localInterpretedChatDropdownTitlesPackage: AgentPackage = {
+      ...localRecoverableQuoteExpiryPackage,
+      id: localInterpretedChatDropdownTitlesPackageId,
+      version: 29.8,
+      status: 'test_ready',
+      basePackageId: localRecoverableQuoteExpiryPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v29.8',
+      contractAddendum:
+        'Open Codex conversation chooser titles are concise semantic interpretations of the current task, never copies of complete user prompts or Codespace resume instructions. They may use more room than the selected-chat label only when that context is necessary to distinguish the work.',
+      instructionsAddendum:
+        'Summarize the task rather than rendering the full cleaned prompt. Keep dropdown interpretations to 96 characters or fewer without adding ellipsis, preserve the task subject and distinguishing outcome, and resolve Codespace paused or continue-the-same-request messages against the newest substantive prompt in bounded history. Keep the closed selector on its compact 48-character contract.',
+      summary:
+        'Interpreted chat dropdown titles test package: replaces copied prompts and resume instructions with concise current-task summaries.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps the conversation list scannable while retaining enough task meaning to distinguish similar chats.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localPolishedDevicePreviewToolbarPackage: AgentPackage = {
+      ...localInterpretedChatDropdownTitlesPackage,
+      id: localPolishedDevicePreviewToolbarPackageId,
+      version: 29.9,
+      status: 'test_ready',
+      basePackageId: localInterpretedChatDropdownTitlesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v29.9',
+      contractAddendum:
+        'The private Inspect device viewer uses an explicit responsive toolbar layout. Product identity, website identity, preview tools, and device selection never overlap or leave the viewport, including with long website names at compact mobile, mobile, tablet, and desktop widths.',
+      instructionsAddendum:
+        'Use a compact three-row toolbar through tablet width and a single ordered row on desktop. Keep Rotate and Reload available as 44px touch targets, present Phone, Tablet, and Desktop as one segmented control, truncate only the secondary website identity when required, and preserve full keyboard, focus, loading, and reduced-motion behaviour.',
+      summary:
+        'Polished device preview toolbar test package: gives Inspect a compact, non-overlapping header with clear preview and device controls.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes desktop previews usable from a phone without the Inspect product label, website title, or controls colliding.',
+      stagedBehaviourIds: ['client-url-release-contract'],
+    };
+    const localPinnedTaggedCodexChatsPackage: AgentPackage = {
+      ...localPolishedDevicePreviewToolbarPackage,
+      id: localPinnedTaggedCodexChatsPackageId,
+      version: 30.0,
+      status: 'test_ready',
+      basePackageId: localPolishedDevicePreviewToolbarPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v30.0',
+      contractAddendum:
+        'Studio Codex conversations have private durable organization metadata. A reviewer can pin any chat above unpinned chats in its existing workspace section and assign up to eight visible tag names without changing the Codex transcript or workspace boundary.',
+      instructionsAddendum:
+        'Persist pin and tag metadata in the protected Studio runtime, validate the exact conversation scope before saving it, and return organization data with conversation status. Sort pinned chats first within each existing client or Universal Studio section while preserving relative order, show tags without horizontal overflow, and provide a keyboard-accessible editor with clear limits and errors.',
+      summary:
+        'Pinned and tagged Codex chats test package: keeps important conversations first and adds durable multi-tag organization.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes long-running Studio chat history easier to scan and organize without renaming or altering conversation content.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localFeatureReleaseManagementPackage: AgentPackage = {
+      ...localPinnedTaggedCodexChatsPackage,
+      id: localFeatureReleaseManagementPackageId,
+      version: 30.1,
+      status: 'test_ready',
+      basePackageId: localPinnedTaggedCodexChatsPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v30.1',
+      contractAddendum:
+        'Studio maintains a protected Feature Releases registry for material changes completed by Codex. Each feature preserves exact conversation and turn lineage, affected software and files, immutable source commits, and separately verified development and production deployment evidence.',
+      instructionsAddendum:
+        'Create or update a feature only after a completed Codex turn records observable file changes. Keep one feature linked across its source chat and explicit follow-up branches. Group release targets by Made Solid Studio and Made Solid website or Clientspace, never infer deployment from Git, and enable deployment only for clean repositories at the exact recorded commits. Require explicit confirmation for production, persist deployment lifecycle and failure detail, deploy cross-product receivers before Studio, and open historical source output without silently branching it.',
+      summary:
+        'Feature Releases test package: traces Codex-built changes from their exact chat output through committed source and verified development or production releases.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Adds an owner-only release control plane inside Codex with automatic feature capture, software grouping, source-chat continuation, exact-commit gates, and truthful environment status.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localManualCodexUpdateRecoveryPackage: AgentPackage = {
+      ...localFeatureReleaseManagementPackage,
+      id: localManualCodexUpdateRecoveryPackageId,
+      version: 30.2,
+      status: 'test_ready',
+      basePackageId: localFeatureReleaseManagementPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v30.2',
+      contractAddendum:
+        'Codex runtime recovery is directly available from Chat settings and from a dedicated route. A failed or rolled-back activation can be retried explicitly, exposes truthful loading and error states, and a dismissed lifecycle notice stays dismissed until the runtime enters a different lifecycle state.',
+      instructionsAddendum:
+        'Link Chat settings to the route-persistent Codex updates page. Send manual recovery through a protected retry action that clears only failed staging metadata before rerunning the verified update flow. Keep chat usable during recovery, disable duplicate retries, announce state changes, and persist dismissal against the exact runtime lifecycle key.',
+      summary:
+        'Manual Codex update recovery test package: adds a dedicated update page, in-notice retry, verified retry lifecycle, and durable notice dismissal.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Lets the owner recover a stopped runtime update without waiting for the next automatic cycle or repeatedly dismissing the same error.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localCompactCodexChatChromePackage: AgentPackage = {
+      ...localManualCodexUpdateRecoveryPackage,
+      id: localCompactCodexChatChromePackageId,
+      version: 30.3,
+      status: 'test_ready',
+      basePackageId: localManualCodexUpdateRecoveryPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v30.3',
+      contractAddendum:
+        "The Studio Codex chat keeps workspace scope in its compact header and gives the conversation picker and new-chat action one intrinsic control row. Neither control may absorb the transcript's flexible height at any supported viewport.",
+      instructionsAddendum:
+        'Render Universal Studio or client-only scope as a concise labelled header chip with its fuller explanation available as accessible context. Keep the conversation selector and 44px new-chat touch target aligned in a content-sized row, reserve remaining height for the transcript, and verify the open chat without overflow at mobile, tablet, and desktop widths.',
+      summary:
+        'Compact Codex chat chrome test package: moves workspace scope into the header and prevents the new-chat row from stretching into transcript space.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Restores usable transcript space in the Studio chat while retaining clear scope, keyboard access, and a full-size touch target for starting a conversation.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localAiInterpretedChatTitlesPackage: AgentPackage = {
+      ...localCompactCodexChatChromePackage,
+      id: localAiInterpretedChatTitlesPackageId,
+      version: 30.4,
+      status: 'test_ready',
+      basePackageId: localCompactCodexChatChromePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v30.4',
+      contractAddendum:
+        'Codex interprets each conversation’s newest task from bounded recent context and persists separate compact and expanded semantic titles. Prompt-copying heuristics remain only as a temporary unavailable-state fallback and are not the saved title source.',
+      instructionsAddendum:
+        'Generate stale conversation titles with one private read-only Codex request, treating conversation content as untrusted data. Save a 3-7 word compact title and a 6-14 word dropdown title against the exact current-task signature. Regenerate after that signature changes, resolve vague follow-ups from recent context, and never expose the private title-generation exchange as a user chat.',
+      summary:
+        'AI-interpreted chat titles test package: replaces prompt-copying title rules with cached semantic titles generated from the current task and recent context.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes current and previous chats identifiable by their actual task while keeping the selected-chat label compact and the open dropdown more descriptive.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localManagedFeatureWordingPackage: AgentPackage = {
+      ...localAiInterpretedChatTitlesPackage,
+      id: localManagedFeatureWordingPackageId,
+      version: 30.5,
+      status: 'test_ready',
+      basePackageId: localAiInterpretedChatTitlesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v30.5',
+      contractAddendum:
+        'Feature Releases uses semantic owner-facing names and concise product descriptions instead of implementation prompts or raw Codex completion text. Generated wording remains editable, regenerable and mergeable without losing exact source-chat lineage or overstating deployment evidence.',
+      instructionsAddendum:
+        'Derive new feature wording from the interpreted conversation task, completed behaviour and changed components. Keep titles as short product capabilities and descriptions as one plain-language outcome sentence. Preserve manual wording across refreshes, provide explicit improve and edit actions, merge related records only after confirmation, retain every implementation turn, and reset environment verification whenever merged source revisions differ.',
+      summary:
+        'Managed Feature Releases wording test package: replaces vague implementation-command cards with semantic editable descriptions and safe feature merging.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the release overview understandable as a product ledger while preserving auditable chat, source and deployment history.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localVisibleFeatureReleaseStatusPackage: AgentPackage = {
+      ...localManagedFeatureWordingPackage,
+      id: localVisibleFeatureReleaseStatusPackageId,
+      version: 30.6,
+      status: 'test_ready',
+      basePackageId: localManagedFeatureWordingPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v30.6',
+      contractAddendum:
+        'Every Feature Releases overview card exposes source readiness, development deployment and production deployment as separate truthful states without requiring the reviewer to open its detail view.',
+      instructionsAddendum:
+        'Summarize source, development and production independently on each feature card. For multi-product features show verified target counts when deployment is partial, distinguish queued and failed states, and never infer deployment from a commit or from another environment. Keep exact revisions, URLs, files and actions in the detail view.',
+      summary:
+        'Visible Feature Releases status test package: shows commit, development and production state directly on every overview card.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Lets the owner scan what is local, deployed to development or live in production without opening every feature.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localDurableAiChatTitlesPackage: AgentPackage = {
+      ...localVisibleFeatureReleaseStatusPackage,
+      id: localDurableAiChatTitlesPackageId,
+      version: 30.7,
+      status: 'test_ready',
+      basePackageId: localVisibleFeatureReleaseStatusPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v30.7',
+      contractAddendum:
+        'AI-interpreted chat titles persist in a dedicated runtime record that legacy Studio processes cannot overwrite. Title generation runs as private background work after status responses, so the authenticated development gateway never waits on the model turn.',
+      instructionsAddendum:
+        'Store interpreted conversation titles separately from shared legacy conversation state. Schedule at most one bounded AI-title batch after returning each normal chat status response, persist valid results atomically, and let later status polls continue the backfill and reveal completed titles. Never make the browser hold open a long title-generation request.',
+      summary:
+        'Durable AI chat titles test package: prevents legacy state overwrites and moves title interpretation behind non-blocking status polling.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes AI-interpreted titles survive runtime restarts and appear reliably through the real development gateway.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localProductReleaseOverviewPackage: AgentPackage = {
+      ...localDurableAiChatTitlesPackage,
+      id: localProductReleaseOverviewPackageId,
+      version: 30.8,
+      status: 'test_ready',
+      basePackageId: localDurableAiChatTitlesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v30.8',
+      contractAddendum:
+        'Feature Releases provides one owner-facing release overview with separate Made Solid Studio, public website, Clientspace and Clientspace admin surfaces. Each surface compares development with production, counts pending product features and lists the recorded revisions that determine its status. Internal research and documentation remain visible without inflating product release counts.',
+      instructionsAddendum:
+        'Classify changed paths into product surfaces while preserving their owning repository and exact source lineage. Treat a verified deployment as current only when it still matches the recorded committed revision; when newer local or committed work exists, label the deployment as an earlier live revision. Keep each product summary expandable, keyboard accessible and usable in the compact Codex panel from phone through desktop.',
+      summary:
+        'Product release overview test package: shows what is current or pending across Studio, website, Clientspace and Clientspace admin.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Turns the feature ledger into a clear cross-product release dashboard without losing revision-level evidence.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localLeceEmailAndQuoteRecoveryPackage: AgentPackage = {
+      ...localProductReleaseOverviewPackage,
+      id: localLeceEmailAndQuoteRecoveryPackageId,
+      version: 30.9,
+      status: 'test_ready',
+      basePackageId: localProductReleaseOverviewPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v30.9',
+      contractAddendum:
+        'Clientspace Admin keeps AI-assisted incoming email replies inside the current Messages workspace, automatically prepares review-only drafts for matched client email, and requires explicit human editing, approval and confirmation before production delivery. Expired LECE rehearsal quotes expose direct recovery actions in both Clientspace and Studio without contacting the client or enabling live billing.',
+      instructionsAddendum:
+        'Preserve all current Clientspace communication, payment, balance, release and rehearsal capabilities while restoring the inbound email approval desk. Match only the selected project client email, keep generated drafts private and unsent, invalidate approval after edits, and disable delivery in development. When a rehearsal quote expires, link Clientspace directly to the exact Studio rehearsal and place a prominent Studio action that focuses the unchanged-quote reconfirmation control.',
+      summary:
+        'LECE email and quote recovery test package: restores AI-assisted reply review and makes expired test quotes directly recoverable.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Restores the protected inbound-email workflow and removes the dead end from expired LECE rehearsal quotes.',
+      stagedBehaviourIds: ['inbound-client-email-review', 'commercial-offer-strategy'],
+    };
+    const localReliableFeatureLedgerPackage: AgentPackage = {
+      ...localLeceEmailAndQuoteRecoveryPackage,
+      id: localReliableFeatureLedgerPackageId,
+      version: 31.0,
+      status: 'test_ready',
+      basePackageId: localLeceEmailAndQuoteRecoveryPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v31.0',
+      contractAddendum:
+        'Feature Releases durably records every inspected completed Codex turn, reconciles the newest missing turns first in bounded batches, and never replays completed no-change conversations after a runtime restart. Generated feature wording uses a recognisable capability name and a multi-sentence owner-facing explanation, while manual wording remains immutable until the owner edits it again.',
+      instructionsAddendum:
+        'Persist processed thread-and-turn keys with the private feature ledger, seed them from existing implementation history and cap retained reconciliation history. Reconcile a bounded newest-first batch and serialize overlapping maintenance passes. Treat Studio source as live in the editable development workspace, but require recorded deployment verification for the separate website and Clientspace development runtime. Never infer production deployment from workspace availability.',
+      summary:
+        'Reliable feature ledger test package: keeps newly completed features current, improves their explanations and distinguishes the live Studio workspace from deployed environments.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the Features tab a dependable owner record instead of a restart-sensitive best-effort list.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localChatFeatureHistoryPackage: AgentPackage = {
+      ...localReliableFeatureLedgerPackage,
+      id: localChatFeatureHistoryPackageId,
+      version: 31.1,
+      status: 'test_ready',
+      basePackageId: localReliableFeatureLedgerPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v31.1',
+      contractAddendum:
+        'A Codex conversation linked to feature work uses the newest linked Feature Releases title as its owner-facing chat name. The conversation chooser exposes an expandable, scrollable feature history for every chat, and the selected chat shows the same history above its transcript with exact feature markers at completed turns.',
+      instructionsAddendum:
+        'Expose linked thread identifiers from the private feature ledger without changing persisted feature lineage. Resolve chat names and histories from that same feature record, falling back to the interpreted conversation title only before a feature exists. Selecting a feature must open its source chat, scroll to the exact saved turn, focus its labelled marker and report clearly when that turn is outside bounded history.',
+      summary:
+        'Chat feature history test package: names chats after their latest feature and navigates from feature history to exact transcript turns.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes feature-led work easy to recognise and revisit without searching through long chat transcripts.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localMultiFeatureChatLineagePackage: AgentPackage = {
+      ...localChatFeatureHistoryPackage,
+      id: localMultiFeatureChatLineagePackageId,
+      version: 31.2,
+      status: 'test_ready',
+      basePackageId: localChatFeatureHistoryPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v31.2',
+      contractAddendum:
+        'One Codex conversation may own multiple distinct Feature Releases records. When completed work clearly introduces a new capability, the ledger creates a new feature entry, preserves the earlier feature and makes the newest feature the chat name instead of appending every later turn to the first feature.',
+      instructionsAddendum:
+        'Detect explicit semantic feature boundaries before resolving the active thread feature. Preserve each implementation under exactly one feature, update the thread pointer to the newest feature and keep earlier same-thread features discoverable through implementation lineage. Migrate the completed chat-feature-history turn out of the older product-release-overview record without discarding either turn.',
+      summary:
+        'Multi-feature chat lineage test package: keeps distinct features separate inside one chat and names the chat after the newest feature.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents a long-running chat from being permanently named after its first feature.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localActionableReleasePipelinePackage: AgentPackage = {
+      ...localMultiFeatureChatLineagePackage,
+      id: localActionableReleasePipelinePackageId,
+      version: 31.3,
+      status: 'test_ready',
+      basePackageId: localMultiFeatureChatLineagePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v31.3',
+      contractAddendum:
+        'Feature Releases presents Workspace, Development and Production as distinct release stages. Local files are never described as queued deployment work, identical feature titles count once while duplicate records remain visible for reconciliation, and each state exposes one safe next action.',
+      instructionsAddendum:
+        'Classify uncommitted or unresolved targets as workspace review, prevent them from appearing ready in either environment, and explain the blocker beside the action. Prepare release with Codex must open a linked follow-up with a review-only draft that scopes files, reconciles stale records, runs checks and forbids production deployment. Development deployment still requires an exact clean commit; production still requires verified development and explicit confirmation.',
+      summary:
+        'Actionable release pipeline test package: replaces ambiguous pending labels with precise stages, blockers and safe next actions.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes release status understandable and actionable without overstating local files as deployed or queued.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localAutomaticFeatureDevelopmentReleasePackage: AgentPackage = {
+      ...localActionableReleasePipelinePackage,
+      id: localAutomaticFeatureDevelopmentReleasePackageId,
+      version: 31.4,
+      status: 'test_ready',
+      basePackageId: localActionableReleasePipelinePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v31.4',
+      contractAddendum:
+        'A newly completed feature with an exact committed revision automatically queues, deploys and verifies its development release. Local, unresolved or mixed workspace changes remain blocked for review, and production promotion remains a separate explicitly confirmed action.',
+      instructionsAddendum:
+        'Invoke automatic development release only from the durable completed-feature record and only when its refreshed status is ready_development. Reuse the protected exact-revision deployment contract, persist queued and terminal states, record verification failure without promotion, and never infer that local changes are deployed. Advertise and verify automatic-feature-development-release-v1 in the private runtime health contract.',
+      summary:
+        'Automatic feature development release test package: safely deploys exact committed features to development immediately after completion.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the owner expectation true for safe revisions while keeping mixed local work and every production release under review.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localUninterruptedStudioChatPackage: AgentPackage = {
+      ...localAutomaticFeatureDevelopmentReleasePackage,
+      id: localUninterruptedStudioChatPackageId,
+      version: 31.5,
+      status: 'test_ready',
+      basePackageId: localAutomaticFeatureDevelopmentReleasePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v31.5',
+      contractAddendum:
+        'Studio chat and workspace refreshes remain non-blocking: a new chat accepts a focused draft while its durable thread is created, live transcript updates never blur that draft, and a cached app resume uses compact top status instead of the full-screen loading presentation.',
+      instructionsAddendum:
+        'Keep new-chat creation honest and compact without fabricated transcript rows. Preserve focused draft input across streamed transcript updates. Use the synchronous cache hint only to choose presentation; IndexedDB and the repository remain the saved-data sources of truth and hydrate the mounted route dynamically.',
+      summary:
+        'Uninterrupted Studio chat test package: keeps new-chat drafting, live typing and cached mobile resume usable during background work.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Removes blocking chat and resume states without weakening durable conversation or workspace hydration.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localAccurateFeatureTitlesPackage: AgentPackage = {
+      ...localUninterruptedStudioChatPackage,
+      id: localAccurateFeatureTitlesPackageId,
+      version: 31.6,
+      status: 'test_ready',
+      basePackageId: localUninterruptedStudioChatPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v31.6',
+      contractAddendum:
+        'Feature Releases and chat names use current-task feature metadata rather than a previously cached conversation label. Generated feature titles use polished product capitalization, distinct requests in one chat retain separate history entries, and a prompt containing several related outcomes receives one accurate encompassing title and description.',
+      instructionsAddendum:
+        'Generate dedicated feature title and summary fields alongside conversation labels, bind them to the exact current-task signature, and never reuse stale metadata for a later completed turn. Re-evaluate older generated records from their own implementation evidence, preserve manual wording, and keep chat names sourced from the newest linked feature.',
+      summary:
+        'Accurate feature and chat titles test package: fixes stale repeated names, standardizes capitalization and covers multi-outcome prompts clearly.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes feature history and chat names accurate enough to identify completed work without reopening the transcript.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localClientspaceQuoteReconfirmationPackage: AgentPackage = {
+      ...localAccurateFeatureTitlesPackage,
+      id: localClientspaceQuoteReconfirmationPackageId,
+      version: 31.7,
+      status: 'test_ready',
+      basePackageId: localAccurateFeatureTitlesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v31.7',
+      contractAddendum:
+        'An expired Clientspace rehearsal quote can be reconfirmed from the exact preflight warning that blocks its invitation. Clientspace requests a new 14-day approval from Studio, verifies that every commercial and source term is unchanged, updates both saved records, and leaves client contact, charging and launch as separate blocked actions.',
+      instructionsAddendum:
+        'Keep quote recovery inside the selected Clientspace project. Authenticate the cross-product request, require an expired unsent rehearsal quote, preserve exact source and commercial terms, issue only a new reference and bounded validity window, and show loading, success and safe retry errors beside the preflight action.',
+      summary:
+        'Clientspace quote reconfirmation test package: renews unchanged expired rehearsal quotes directly from preflight without leaving the project.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Removes the Studio detour while preserving the rehearsal payment, invitation and launch safety boundaries.',
+      stagedBehaviourIds: ['commercial-offer-strategy'],
+    };
+    const localClientspaceDevelopmentQuoteReconfirmationPackage: AgentPackage = {
+      ...localClientspaceQuoteReconfirmationPackage,
+      id: localClientspaceDevelopmentQuoteReconfirmationPackageId,
+      version: 31.8,
+      status: 'test_ready',
+      basePackageId: localClientspaceQuoteReconfirmationPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v31.8',
+      contractAddendum:
+        'The protected development Clientspace keeps expired rehearsal-quote recovery inside Clientspace Admin. Its authenticated rehearsal-only route forwards to the production receiver while production credentials remain isolated, and the preflight action never redirects to Studio.',
+      instructionsAddendum:
+        'Permit the quote-reconfirmation mutation only for a saved test rehearsal after owner authentication. Proxy the exact Clientspace Admin request to the protected production receiver, retain the current project and section, and render loading, success or retry guidance in the same preflight surface.',
+      summary:
+        'Clientspace development quote reconfirmation test package: removes the remaining Studio redirect and completes the action inside protected Clientspace Admin.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the development rehearsal behave like the intended Clientspace workflow without copying privileged credentials into Preview.',
+      stagedBehaviourIds: ['commercial-offer-strategy'],
+    };
+    const localAutomaticClientspaceHomepageCapturePackage: AgentPackage = {
+      ...localClientspaceDevelopmentQuoteReconfirmationPackage,
+      id: localAutomaticClientspaceHomepageCapturePackageId,
+      version: 31.9,
+      status: 'test_ready',
+      basePackageId: localClientspaceDevelopmentQuoteReconfirmationPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v31.9',
+      contractAddendum:
+        'Creating a verified Clientspace rehearsal immediately queues a durable homepage capture. The protected Studio browser waits for fonts, visible media and stable geometry, then Clientspace persists the finished email image against the exact project and preview URL before the Email tab is opened.',
+      instructionsAddendum:
+        'Start the homepage capture after rehearsal provisioning without sending the invitation. Persist queued, running, ready and failed lifecycle states, accept output only from the verified Made Solid preview, and let the first-introduction email reuse the ready image with its existing manual fallback.',
+      summary:
+        'Automatic Clientspace homepage capture test package: prepares and saves the first-email website screenshot as soon as the rehearsal is created.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Removes the Email-tab capture delay while preserving exact-preview verification and explicit email sending.',
+      stagedBehaviourIds: ['client-url-release-contract'],
+    };
+    const localAnimatedClientspaceHomepagePreviewPackage: AgentPackage = {
+      ...localAutomaticClientspaceHomepageCapturePackage,
+      id: localAnimatedClientspaceHomepagePreviewPackageId,
+      version: 32,
+      status: 'test_ready',
+      basePackageId: localAutomaticClientspaceHomepageCapturePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v32.0',
+      contractAddendum:
+        'The prepared first-email homepage image is an email-safe scrolling GIF when the verified page can be animated below the strict payload limit. Its first frame is a complete static hero, it pans down and returns to the top in a restrained loop, and JPEG remains the automatic fallback.',
+      instructionsAddendum:
+        'Generate the animation from one settled immutable homepage capture rather than recording runtime motion. Cap the binary below 1.9 MB, preserve the verified preview URL and private storage lifecycle, embed it as an inline GIF, and fall back to the existing JPEG whenever the page is too short, encoding fails or the result exceeds the limit.',
+      summary:
+        'Animated Clientspace homepage preview test package: turns the prepared first-email image into a compact scrolling loop with a safe static fallback.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Shows the prospect more of the finished homepage without delaying the Email tab, sending automatically or making the message image-only.',
+      stagedBehaviourIds: ['client-url-release-contract'],
+    };
+    const localPersistedAnimatedHomepagePreviewPackage: AgentPackage = {
+      ...localAnimatedClientspaceHomepagePreviewPackage,
+      id: localPersistedAnimatedHomepagePreviewPackageId,
+      version: 32.1,
+      status: 'test_ready',
+      basePackageId: localAnimatedClientspaceHomepagePreviewPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v32.1',
+      contractAddendum:
+        'The private Clientspace review-capture bucket explicitly accepts the bounded scrolling GIF alongside its existing JPEG and PNG evidence. The capture worker verifies that storage contract before persisting an animated first-email homepage preview.',
+      instructionsAddendum:
+        'Keep the review-capture bucket private and capped at 6 MB, allow image/gif without removing image/jpeg or image/png, and fail safely before email preparation if the protected storage contract cannot be updated or the animation cannot be persisted.',
+      summary:
+        'Persisted animated homepage preview test package: saves the verified scrolling GIF in Clientspace private storage for rehearsal email review.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Completes the animated preview workflow by aligning private storage with the already verified capture and email contracts.',
+      stagedBehaviourIds: ['client-url-release-contract'],
+    };
+    const localSmoothHomepagePreviewLoopPackage: AgentPackage = {
+      ...localPersistedAnimatedHomepagePreviewPackage,
+      id: localSmoothHomepagePreviewLoopPackageId,
+      version: 32.2,
+      status: 'test_ready',
+      basePackageId: localPersistedAnimatedHomepagePreviewPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v32.2',
+      contractAddendum:
+        'The first-email homepage GIF begins with the real captured loading screen, softly reveals the settled homepage, scrolls downward once at a slow memory-bounded frame rate, holds the exact bottom, and fades back to its opening frame instead of reversing upward.',
+      instructionsAddendum:
+        'Capture the loading viewport immediately after DOM readiness and capture the complete homepage only after fonts, visible media and geometry settle. Build one phase-ordered loop of loading hold, loaded reveal, linear downward scroll, bottom hold and reset fade. Preserve the 1.9 MB email limit, cap raw animation frames at 64 MB, and adapt delay or dimensions instead of omitting the bottom frame.',
+      summary:
+        'Smooth homepage preview loop test package: shows the real loading screen, scrolls slowly to the page bottom, and fades back smoothly within bounded memory.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the prepared email preview smooth and legible while preserving the authentic loading experience, exact page ending and bounded private capture workflow.',
+      stagedBehaviourIds: ['client-url-release-contract'],
+    };
+    const localReliableSmoothHomepageCapturePackage: AgentPackage = {
+      ...localSmoothHomepagePreviewLoopPackage,
+      id: localReliableSmoothHomepageCapturePackageId,
+      version: 32.3,
+      status: 'test_ready',
+      basePackageId: localSmoothHomepagePreviewLoopPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v32.3',
+      contractAddendum:
+        'The smooth first-email homepage GIF must finish inside the protected Clientspace capture lifecycle. The capture worker starts with an email-sized high-frame-rate profile, uses bounded page-settling waits and the fastest GIF encoding effort, while retaining the loading reveal, slow one-way scroll, exact-bottom hold and fade reset.',
+      instructionsAddendum:
+        'Keep raw frames capped at 64 MB and the finished email GIF below 1.9 MB. Begin with the 420-pixel 24-colour profile instead of repeatedly encoding larger files that cannot fit the email budget, bound network-idle and visible-media waits, use the fastest CPU-effort palette pass, and allow the protected receiver up to 120 seconds so it can persist the finished animation instead of leaving the earlier capture in place.',
+      summary:
+        'Reliable smooth homepage capture test package: finishes and persists the new loading-to-bottom fade loop within the protected capture window.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents a receiver timeout from silently leaving the old laggy GIF visible after the smooth animation runtime has been deployed.',
+      stagedBehaviourIds: ['client-url-release-contract'],
+    };
+    const localLiveAnimatedHomepageCapturePackage: AgentPackage = {
+      ...localReliableSmoothHomepageCapturePackage,
+      id: localLiveAnimatedHomepageCapturePackageId,
+      version: 32.4,
+      status: 'test_ready',
+      basePackageId: localReliableSmoothHomepageCapturePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v32.4',
+      contractAddendum:
+        'The first-email homepage GIF records the real loading introduction and live scroll-triggered website motion instead of animating crops from a frozen full-page screenshot. A media warm-up pass loads lazy company logos and other imagery before the clean loading sequence is replayed.',
+      instructionsAddendum:
+        'Capture the verified homepage with normal motion at 100 millisecond intervals. Warm lazy media by traversing the page, reload to replay the authentic brand introduction, eagerly settle image assets, then record a linear downward browser scroll so viewport animations appear. Keep compressed source frames and the raw encoded stack bounded, preserve the exact-bottom hold and fade reset, and keep the finished GIF below 1.9 MB.',
+      summary:
+        'Live animated homepage capture test package: records the loading animation, scroll-triggered motion and fully loaded company imagery in the saved email GIF.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the email preview faithful to the real website experience without dropping lazy assets or exceeding the protected capture budget.',
+      stagedBehaviourIds: ['client-url-release-contract'],
+    };
+    const localHeroAnimatedHomepageCapturePackage: AgentPackage = {
+      ...localLiveAnimatedHomepageCapturePackage,
+      id: localHeroAnimatedHomepageCapturePackageId,
+      version: 32.5,
+      status: 'test_ready',
+      basePackageId: localLiveAnimatedHomepageCapturePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v32.5',
+      contractAddendum:
+        'The first-email homepage GIF records the complete live hero entrance immediately after the loading introduction hands off, before image and layout settling can consume the short animation off-camera.',
+      instructionsAddendum:
+        'After the branded loading overlay becomes hidden, immediately record 1.2 seconds of the real hero entrance at 80 millisecond intervals. Only then settle eager media and geometry before continuing the live downward scroll. Preserve the loading animation, lazy-asset warm-up, exact-bottom hold, fade reset, 64 MB raw-frame cap and 1.9 MB email limit.',
+      summary:
+        'Hero-animated homepage capture test package: preserves the complete hero entrance between the loading sequence and smooth live-page scroll.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps the hero heading, supporting copy and media visibly animating in the saved GIF instead of allowing their entrance to finish during capture settling.',
+      stagedBehaviourIds: ['client-url-release-contract', 'hero-handoff'],
+    };
+    const localRehearsalIntroductionResetPackage: AgentPackage = {
+      ...localHeroAnimatedHomepageCapturePackage,
+      id: localRehearsalIntroductionResetPackageId,
+      version: 32.6,
+      status: 'test_ready',
+      basePackageId: localHeroAnimatedHomepageCapturePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v32.6',
+      contractAddendum:
+        'After a first-introduction email is accepted, Clientspace Admin shows a persistent sent receipt and waiting state instead of leaving an active duplicate-send control. A rehearsal-only reset preserves send history, advances the Clientspace welcome version and returns only the test invitation to pending.',
+      instructionsAddendum:
+        'Keep accepted outreach records immutable. Show recipient, subject and sent time, state that no follow-up sends automatically, and allow a deliberate follow-up draft. Expose Reset test introduction only when the selected project is a verified rehearsal. The protected reset must clear the rehearsal invitation timestamp, restore pending invitation status, increment the welcome version and never affect a production client.',
+      summary:
+        'Rehearsal introduction reset test package: adds a truthful post-send UI and safely replays the test client welcome before another introduction email.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes repeated end-to-end introduction testing possible without weakening production outreach safeguards or deleting the audit trail.',
+      stagedBehaviourIds: ['client-introduction-outreach'],
+    };
+    const localReconciledIntroductionReceiptPackage: AgentPackage = {
+      ...localRehearsalIntroductionResetPackage,
+      id: localReconciledIntroductionReceiptPackageId,
+      version: 32.7,
+      status: 'test_ready',
+      basePackageId: localRehearsalIntroductionResetPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v32.7',
+      contractAddendum:
+        'Clientspace Admin reconciles the project invitation timestamp with the linked Studio handoff invitation timestamp before rendering first-introduction state, so a retained delivery record cannot be hidden by a stale pending project status.',
+      instructionsAddendum:
+        'Treat either persisted invitation timestamp as delivery evidence. Preserve accepted status where present; otherwise normalize a timestamp-backed invitation to sent. A rehearsal reset must continue clearing both timestamps before the send controls return.',
+      summary:
+        'Reconciled introduction receipt test package: restores the sent receipt and rehearsal reset when historical invitation status drifted from its durable delivery timestamp.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps the post-send UI truthful for existing rehearsals without sending again, deleting history or weakening the explicit reset boundary.',
+      stagedBehaviourIds: ['client-introduction-outreach'],
+    };
+    const localPrioritisedIntroductionStatusPackage: AgentPackage = {
+      ...localReconciledIntroductionReceiptPackage,
+      id: localPrioritisedIntroductionStatusPackageId,
+      version: 32.8,
+      status: 'test_ready',
+      basePackageId: localReconciledIntroductionReceiptPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v32.8',
+      contractAddendum:
+        'After a first introduction is accepted, Clientspace Admin places the durable sent receipt immediately below the message templates and before the email editor and long website preview. The normal follow-up is the primary action; the protected rehearsal reset remains a quieter testing control with its explanation attached.',
+      instructionsAddendum:
+        'Keep the sent time, recipient, subject and waiting-state explanation visible near the top of the email workspace. Do not make the reviewer scroll through the composed email, live website or homepage capture to discover the delivery result. Emphasize Prepare follow-up, visually subordinate Reset test introduction, and never expose rehearsal language for production projects.',
+      summary:
+        'Prioritised introduction status test package: moves the sent receipt and test controls above the long email preview and clarifies the next-action hierarchy.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the completed outreach state immediately discoverable while keeping routine follow-up distinct from destructive-looking test reset controls.',
+      stagedBehaviourIds: ['client-introduction-outreach'],
+    };
+    const localDirectReplyComparisonIntroductionPackage: AgentPackage = {
+      ...localPrioritisedIntroductionStatusPackage,
+      id: localDirectReplyComparisonIntroductionPackageId,
+      version: 32.9,
+      status: 'test_ready',
+      basePackageId: localPrioritisedIntroductionStatusPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v32.9',
+      contractAddendum:
+        'The first cold introduction is a direct Zac-to-client email and must not introduce, link to or create Clientspace access before the recipient expresses interest. It presents a complete redesign offer as four icon-led commitments and embeds one bounded current-to-redesign desktop/mobile animation linked to the verified redesign.',
+      instructionsAddendum:
+        'Keep the first-email heading outcome-focused, explain that verified public pages, content and existing functionality were carried across, and promise to add anything important missed from the current website at no additional cost while excluding genuinely new functionality. Offer a normal email reply with no account or setup. Capture the verified current homepage and redesign into one labelled GIF: desktop before, wipe to redesign, real loading and hero motion, a short slow scroll, mobile before-and-after wipe, redesigned hold and fade reset. Keep it at 420 pixels wide, under 1.9 MB and within the 64 MB raw-frame budget.',
+      summary:
+        'Direct reply comparison introduction test package: removes the premature Clientspace invitation, clarifies the complete redesign offer and delivers one bounded desktop-and-mobile before/after GIF.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Lets a cold prospect understand the finished offer and reply naturally before any portal workflow is introduced, without increasing attachment count or weakening verified-preview safeguards.',
+      stagedBehaviourIds: ['client-introduction-outreach', 'client-url-release-contract'],
+    };
+    const localTruthfulLiveCodexProgressPackage: AgentPackage = {
+      ...localDirectReplyComparisonIntroductionPackage,
+      id: localTruthfulLiveCodexProgressPackageId,
+      version: 33,
+      status: 'test_ready',
+      basePackageId: localDirectReplyComparisonIntroductionPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v33.0',
+      contractAddendum:
+        'Studio retains safe completed App Server items from the live notification stream when an active thread read lags. The chat distinguishes recent native activity with delayed transcript detail, a missing activity signal that may indicate a stalled turn, and a failed status refresh. Historical user requests interrupted by a newer queued message remain visibly labelled as replaced.',
+      instructionsAddendum:
+        'Observe only bounded App Server lifecycle and completed-item notifications. Merge allowlisted commentary and structural activity into the selected active turn without exposing reasoning, raw command output, arguments or private paths. Track separate native-activity, visible-update and status-refresh signals; after a meaningful delay, explain the evidenced condition and offer Check now plus Stop Codex. Label superseded turns at their saved user message and never imply that a replaced request is still running.',
+      summary:
+        'Truthful live Codex progress test package: restores delayed in-progress activity, diagnoses silent or disconnected turns and marks requests replaced by a newer message.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Tells the owner whether Codex is working, the transcript is delayed or the activity signal is stale, with safe recovery actions instead of an indefinite ambiguous spinner.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localInstantCachedCodexAccessPackage: AgentPackage = {
+      ...localTruthfulLiveCodexProgressPackage,
+      id: localInstantCachedCodexAccessPackageId,
+      version: 33.1,
+      status: 'test_ready',
+      basePackageId: localTruthfulLiveCodexProgressPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v33.1',
+      contractAddendum:
+        'Studio keeps a bounded private cache of the latest selected Codex transcript for each universal or client-scoped surface. Opening chat during startup renders that saved transcript immediately while the connection remains visibly unverified. Every trusted website and Clientspace launcher opens its embedded panel on the first activation without waiting for a runtime-ready acknowledgement.',
+      instructionsAddendum:
+        'Persist only bounded owner-browser chat data, keep universal and client workspace caches isolated, and replace the cached view after a verified live status response. Never cache queued work, update notices or active lifecycle state as live: label the header Waiting and keep Send and new-chat actions disabled until connection succeeds. Treat network timeouts as reconnectable rather than proof that the launcher is unsupported. On trusted owner surfaces, size and reveal the configured Studio iframe on activation while continuing origin and contentWindow validation for messages.',
+      summary:
+        'Instant cached Codex access test package: opens every owner launcher immediately and restores the latest chat while the live connection is still pending.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Removes the blank startup wait without hiding connection state, enabling stale actions or weakening the authenticated embedded-panel boundary.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localPairedDeviceComparisonEmailPackage: AgentPackage = {
+      ...localInstantCachedCodexAccessPackage,
+      id: localPairedDeviceComparisonEmailPackageId,
+      version: 33.2,
+      status: 'test_ready',
+      basePackageId: localInstantCachedCodexAccessPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v33.2',
+      contractAddendum:
+        'The first introduction embeds two verified comparison animations: one true 1440 by 900 desktop capture and one true 375 by 812 mobile capture. Each keeps the current website and redesign side by side, scrolls both pages together at a slow percentage-matched pace, holds the bottom and fades directly back to the opening frame.',
+      instructionsAddendum:
+        'Do not stretch mobile content into a desktop canvas, crop the current desktop site, or use a reveal wipe. Warm and verify media before capture, replay the redesign loading and hero entrance beside the current-site opening frame, then scroll both sides by relative page progress for about 22 seconds. Store and require both bounded GIFs before enabling the first email.',
+      summary:
+        'Paired device comparison email test package: separates desktop and mobile into smooth side-by-side GIFs with correct proportions, complete current-site framing and a slow fade-reset loop.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the emailed comparison readable and faithful on each device without restoring the stretched single-GIF presentation or weakening the verified capture boundary.',
+      stagedBehaviourIds: ['client-introduction-outreach', 'client-url-release-contract'],
+    };
+    const localEmailSafePairedComparisonPackage: AgentPackage = {
+      ...localPairedDeviceComparisonEmailPackage,
+      id: localEmailSafePairedComparisonPackageId,
+      version: 33.3,
+      status: 'test_ready',
+      basePackageId: localPairedDeviceComparisonEmailPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v33.3',
+      contractAddendum:
+        'Paired comparison capture must remain inside the email-safe asset budget for real prospect pages. The mobile composition preserves the true 375 by 812 viewport ratio while adapting only its encoded canvas and palette; it must never substitute the obsolete single animation.',
+      instructionsAddendum:
+        'Keep the 22-second percentage-matched scroll, loading sequence, hero entrance, bottom hold and fade reset intact. Encode the mobile pair on a compact proportional canvas and progressively reduce palette complexity when necessary, without stretching either panel or dropping back to a reveal wipe.',
+      summary:
+        'Email-safe paired comparison test package: keeps the real mobile pair smooth, proportional and below the inline-image limit on content-heavy prospect pages.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents live prospect content from rejecting the new mobile animation while preserving the paired-device interaction and verified asset boundary.',
+      stagedBehaviourIds: ['client-introduction-outreach'],
+    };
+    const localPasswordlessClientspaceAccessPackage: AgentPackage = {
+      ...localEmailSafePairedComparisonPackage,
+      id: localPasswordlessClientspaceAccessPackageId,
+      version: 33.4,
+      status: 'test_ready',
+      basePackageId: localEmailSafePairedComparisonPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v33.4',
+      contractAddendum:
+        'Cold outreach and Clientspace access are separate reviewed messages. The first introduction offers a normal email reply without an account or portal link. After interest, the reviewer can send a dedicated passwordless Clientspace access email whose one-time confirmation opens the welcome, explains future secure-link sign-in, then introduces Milo.',
+      instructionsAddendum:
+        'Track the introduction receipt separately from the Clientspace invitation state. Generate a fresh magic link only for the explicitly selected Clientspace access delivery, preserve the scanner-safe confirmation step, and never ask the client to create or remember a password. Keep the welcome header and navigation rail clear at mobile, tablet and desktop widths, and make Milo available in protected rehearsals as well as authenticated client entry.',
+      summary:
+        'Passwordless Clientspace access test package: separates cold outreach from the later secure access email, explains account entry after the welcome and restores Milo across responsive rehearsal entry.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the client journey explicit and secure without introducing an account before interest, while preserving review-only delivery controls and the passwordless authentication boundary.',
+      stagedBehaviourIds: ['client-introduction-outreach'],
+    };
+    const localDesktopOnlyComparisonEmailPackage: AgentPackage = {
+      ...localPasswordlessClientspaceAccessPackage,
+      id: localDesktopOnlyComparisonEmailPackageId,
+      version: 33.5,
+      status: 'test_ready',
+      basePackageId: localPasswordlessClientspaceAccessPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v33.5',
+      contractAddendum:
+        'The first introduction embeds one verified desktop comparison animation only. It keeps the current website and redesign side by side, scrolls both complete pages together at a slow percentage-matched pace, holds the bottom and fades directly back to the opening frame. No mobile comparison is captured, stored, previewed or delivered.',
+      instructionsAddendum:
+        'Capture only the true 1440 by 900 desktop pair, preserve the redesign loading and hero entrance, and require exactly one bounded desktop GIF before enabling the first email. Reject legacy two-asset capture records so the reviewer receives a fresh desktop-only comparison rather than a hidden mobile attachment.',
+      summary:
+        'Desktop-only comparison email test package: simplifies the first introduction to one smooth side-by-side desktop GIF and removes the mobile animation from the full delivery contract.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps the comparison readable and lighter in email while preserving the verified capture, matched scrolling and fade-reset behavior.',
+      stagedBehaviourIds: ['client-introduction-outreach', 'client-url-release-contract'],
+    };
+    const localResponsiveSplitComparisonEmailPackage: AgentPackage = {
+      ...localDesktopOnlyComparisonEmailPackage,
+      id: localResponsiveSplitComparisonEmailPackageId,
+      version: 33.6,
+      status: 'test_ready',
+      basePackageId: localDesktopOnlyComparisonEmailPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v33.6',
+      contractAddendum:
+        'The first introduction embeds two synchronized desktop animations: the current website and redesign. Email layout places them side by side on larger screens and stacks them vertically on phones, while both retain percentage-matched scrolling, bottom hold and a direct fade to their opening frames.',
+      instructionsAddendum:
+        'Capture both sites from true 1440 by 900 desktop viewports as separate bounded GIFs. Use an 80 millisecond target frame delay, encode the raw stacks sequentially, and require exactly the current and redesign assets before enabling the email. Reject the earlier combined desktop asset so mobile email can reflow the comparison without stretching or cropping it.',
+      summary:
+        'Responsive split comparison email test package: stacks separate current and redesign animations on phones, keeps them side by side on desktop and doubles the bounded scrolling frame rate.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the desktop comparison readable in narrow email clients while improving motion smoothness without holding two raw animation stacks in memory together.',
+      stagedBehaviourIds: ['client-introduction-outreach', 'client-url-release-contract'],
+    };
+    const localCompatibleIntroductionLedgerPackage: AgentPackage = {
+      ...localResponsiveSplitComparisonEmailPackage,
+      id: localCompatibleIntroductionLedgerPackageId,
+      version: 33.7,
+      status: 'test_ready',
+      basePackageId: localResponsiveSplitComparisonEmailPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v33.7',
+      contractAddendum:
+        'The explicit rehearsal send remains idempotent when the production outreach ledger predates the optional template column. The server retries only a PostgREST missing-template-column insert without that optional field; every other ledger failure remains blocked and is recorded in protected runtime logs.',
+      instructionsAddendum:
+        'Keep the verified recipient, two-image comparison, idempotency key and human-confirmed send boundary unchanged. Preserve template metadata whenever the live ledger supports it, and use the legacy insert only for the exact PGRST204 missing-template-column response.',
+      summary:
+        'Compatible introduction ledger test package: restores explicit rehearsal email sends across the additive template-schema rollout without weakening recipient or idempotency safeguards.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents a harmless additive schema-version mismatch from blocking an owner-confirmed rehearsal email while keeping unexpected database errors fail-closed.',
+      stagedBehaviourIds: ['client-introduction-outreach'],
+    };
+    const localRecoverableWebsiteCodexAccessPackage: AgentPackage = {
+      ...localCompatibleIntroductionLedgerPackage,
+      id: localRecoverableWebsiteCodexAccessPackageId,
+      version: 33.8,
+      status: 'test_ready',
+      basePackageId: localCompatibleIntroductionLedgerPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v33.8',
+      contractAddendum:
+        'When the owner opens the Codex panel on dev.madesolid.com.au after its private Development Studio session expires, the framed gateway returns a narrowly scoped access-required message instead of exposing a raw unavailable response. The authenticated website bridge sends the owner through the existing Studio verification flow, returns to the exact website route, and reopens Codex automatically.',
+      instructionsAddendum:
+        'Keep recovery bound to the exact development website origin, exact iframe window, Fetch Metadata checks and authenticated Studio owner. Store no access token in website markup or browser storage. Accept only an exact dev.madesolid.com.au return URL, renew the HttpOnly Development Studio session through the existing short-lived exchange, and preserve the owner-only frame and no-index boundaries.',
+      summary:
+        'Recoverable website Codex access test package: renews an expired private Workspace session and reopens the chat on the same development website page.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents an expired private Workspace cookie from replacing the owner Codex panel with an unavailable message while preserving the authenticated owner boundary.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localContinuousFeatureReleaseReconciliationPackage: AgentPackage = {
+      ...localRecoverableWebsiteCodexAccessPackage,
+      id: localContinuousFeatureReleaseReconciliationPackageId,
+      version: 33.9,
+      status: 'test_ready',
+      basePackageId: localRecoverableWebsiteCodexAccessPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v33.9',
+      contractAddendum:
+        'The protected Studio runtime continuously reconciles each exact completed Codex turn once into Feature Releases when it owns the private ledger, including when Development Studio delegates that ownership upstream. Legacy conversation aliases for an already processed turn do not retry forever. An open Features view refreshes without a deployment being queued and refreshes immediately when the owner returns to it.',
+      instructionsAddendum:
+        'Run chat maintenance and completed-feature reconciliation independently on the protected runtime cadence so either operation can recover after a transient failure. Preserve bounded newest-first reconciliation, durable processed-turn keys and the no-file-change filter, and deduplicate recovered conversation aliases by their globally unique turn identifier. Advertise continuous-feature-release-reconciliation-v1 only where the owning runtime performs this work, so Development Studio can take over safely from an older upstream runtime without duplicate processing. Refresh the active Features view in the background without replacing current evidence with loading placeholders, and ignore superseded responses.',
+      summary:
+        'Continuous feature release reconciliation test package: records completed material Codex work automatically and keeps the open Features view current.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Repairs the runtime ownership gap that left completed work unprocessed and removes the need to reopen or manually refresh the Features view.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localPersistentWebsiteCodexPanelPackage: AgentPackage = {
+      ...localContinuousFeatureReleaseReconciliationPackage,
+      id: localPersistentWebsiteCodexPanelPackageId,
+      version: 34,
+      status: 'test_ready',
+      basePackageId: localContinuousFeatureReleaseReconciliationPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v34.0',
+      contractAddendum:
+        'The authenticated development website remembers whether its owner-only Codex panel was open or closed for the current browser tab. A foreground, focus or restored-page synchronization keeps an open cached panel visible and repeatedly requests the trusted embedded panel state instead of replacing it with the three-dot fallback. A transient closed response cannot override an in-flight open request; only the panel’s explicit close action may do so.',
+      instructionsAddendum:
+        'Store only the open or closed presentation state in website session storage and keep transcript data inside the authenticated Studio origin. On pagehide, conceal the iframe without forgetting that state. On pageshow, focus, online or visible restoration, immediately restore the remembered geometry, continue the bounded trusted-origin handshake and reload a non-responsive iframe after the existing timeout. Ignore false closed acknowledgements while an open request is pending, but accept an explicit close action from the exact trusted iframe window. Preserve expired-access recovery, client-preview exclusion and the first-tap connecting behavior.',
+      summary:
+        'Persistent website Codex panel test package: keeps an open cached chat accessible across phone foreground recovery and prevents transient synchronization from closing it.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Removes the three-dot-only return state and random-looking panel collapse without caching private transcript content in the website host or weakening the owner-only iframe boundary.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localResponsiveComparisonReviewPackage: AgentPackage = {
+      ...localPersistentWebsiteCodexPanelPackage,
+      id: localResponsiveComparisonReviewPackageId,
+      version: 34.1,
+      status: 'test_ready',
+      basePackageId: localPersistentWebsiteCodexPanelPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v34.1',
+      contractAddendum:
+        'The first introduction links every website comparison affordance to one revocable Made Solid review capability. The review opens in desktop comparison mode, offers exact phone, tablet and desktop evidence plus an interactive redesign preview, and keeps full-size viewport geometry when the host device is narrower.',
+      instructionsAddendum:
+        'Create comparison evidence from independent 375 by 812 phone, 768 by 1024 tablet and 1440 by 900 browser contexts. Keep the current-site URL private behind a signed Clientspace capability, return only short-lived private evidence URLs, and never accept an arbitrary comparison origin in Inspect. Make the reveal slider mouse, touch and keyboard operable. Full screen must hide mode, device and zoom choices, request browser fullscreen where supported, retain a CSS fallback and persistent exit control, restore on Escape, preserve the selected device and mode, and keep the underlying redesign interactive in Preview mode.',
+      summary:
+        'Responsive comparison review test package: sends the first email to a signed phone-ready before-and-after viewer with exact device sizes, a touch slider and focused full screen.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Lets a prospect understand the redesign against verified current-site evidence on any device without iframe dependence, stretched desktop captures or a public arbitrary-URL proxy.',
+      stagedBehaviourIds: ['client-introduction-outreach', 'client-url-release-contract'],
+    };
+    const localConciseClientspaceAccessPackage: AgentPackage = {
+      ...localResponsiveComparisonReviewPackage,
+      id: localConciseClientspaceAccessPackageId,
+      version: 34.2,
+      status: 'test_ready',
+      basePackageId: localResponsiveComparisonReviewPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v34.2',
+      contractAddendum:
+        'The dedicated Clientspace access email is a short entry message rather than a second proposal. Its primary Open your Clientspace action appears immediately after one concise workspace summary, followed by one passwordless-return note. The public Made Solid FAQ links to the real client login and explains initial confirmation, later passwordless access, expired links and new devices.',
+      instructionsAddendum:
+        'Keep cold outreach separate from Clientspace access. In the access email, put the one-time confirmation action before secondary explanation, omit repeated website and report sections, and explain passwordless return access once without weakening the scanner-safe confirmation or exact-recipient boundary. Keep the public login guidance accurate, actionable and keyboard accessible.',
+      summary:
+        'Concise Clientspace access test package: moves the secure workspace action to the top of a shorter email and documents passwordless return access in the public FAQ.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Reduces friction at the moment an interested client enters Clientspace while making the real passwordless login route and recovery path easy to find later.',
+      stagedBehaviourIds: ['client-introduction-outreach'],
+    };
+    const localReliableComparisonReviewEmailPackage: AgentPackage = {
+      ...localConciseClientspaceAccessPackage,
+      id: localReliableComparisonReviewEmailPackageId,
+      version: 34.3,
+      status: 'test_ready',
+      basePackageId: localConciseClientspaceAccessPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v34.3',
+      contractAddendum:
+        'A first-introduction email is ready only when its exact capture includes the signed responsive comparison review URL as well as both email animations. A legacy animation-only capture must be replaced automatically and may never fall back to the direct redesign preview link.',
+      instructionsAddendum:
+        'Treat the signed comparison review URL as part of the immutable first-email capture result. When a saved capture predates responsive comparison evidence, regenerate it before enabling preview, copy or send actions. Do not cache an animation-only result as current, and reject any capture response that omits the signed review capability.',
+      summary:
+        'Reliable comparison-review email test package: automatically upgrades legacy captures so every first-email link opens the signed before-and-after review.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Closes the legacy-capture fallback that could leave an initial email pointing straight to the redesign instead of the responsive comparison experience.',
+      stagedBehaviourIds: ['client-introduction-outreach', 'client-url-release-contract'],
+    };
+    const localLiveSynchronizedComparisonPackage: AgentPackage = {
+      ...localReliableComparisonReviewEmailPackage,
+      id: localLiveSynchronizedComparisonPackageId,
+      version: 34.4,
+      status: 'test_ready',
+      basePackageId: localReliableComparisonReviewEmailPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v34.4',
+      contractAddendum:
+        'The signed before-and-after review renders the current public website and redesign as live sandboxed pages at exact phone, tablet and desktop widths. Both pages remain at the top while entrance animations finish, then travel down their full captured heights on one slow synchronized track. Wheel, vertical touch, or keyboard scrolling stops autoplay immediately. The centered reveal handle demonstrates horizontal dragging with a restrained reduced-motion-safe hint.',
+      instructionsAddendum:
+        'Persist each captured page height with its device evidence and require that height before issuing the review. Expose the verified current public URL only through the signed review configuration, allow only its exact origin in Inspect frame-src, and keep forms and direct page interaction blocked in Compare mode. Map one normalized scroll progress to each live page’s own full height so different page lengths reach their bottoms together without cropping. Preserve interactive redesign Preview mode separately.',
+      summary:
+        'Live synchronized comparison test package: replaces cropped screenshots with live pages, a centered animated reveal handle and user-cancellable slow scrolling.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the comparison feel like the real websites while retaining exact device geometry, bounded signed access, safe sandboxing and accessible manual control.',
+      stagedBehaviourIds: ['client-introduction-outreach', 'client-url-release-contract'],
+    };
+    const localInteractiveDeviceComparisonPackage: AgentPackage = {
+      ...localLiveSynchronizedComparisonPackage,
+      id: localInteractiveDeviceComparisonPackageId,
+      version: 34.5,
+      status: 'test_ready',
+      basePackageId: localLiveSynchronizedComparisonPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v34.5',
+      contractAddendum:
+        'Compare mode uses a signed, bounded HTML relay to request the current and redesigned websites with the selected phone, tablet or desktop browser identity. The sandboxed live documents retain links, animation and native scrolling; a narrow centered divider is the only drag interception surface. A bridge synchronizes real document scroll positions and stops autoplay on the first page interaction.',
+      instructionsAddendum:
+        'Resolve both comparison documents only from the signed review configuration and exact approved preview target. Reject redirects, non-HTML responses, oversized documents, private-network destinations and unsigned relay requests. Keep form submission blocked. Reset reveal to 50 percent on compare entry, reload and device changes, and synchronize native document scrolling by normalized progress without replacing either document with captured imagery.',
+      summary:
+        'Interactive device-correct comparison test package: renders the actual desktop, tablet or phone websites inside Compare with live interaction, synchronized native scrolling and a reliably centered divider.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Fixes mobile browsers receiving the original site’s phone-only server rendering and removes the page-sized interaction blocker that made live websites behave like static images.',
+      stagedBehaviourIds: ['client-introduction-outreach', 'client-url-release-contract'],
+    };
+    const localPolishedWebsiteCodexRecoveryPackage: AgentPackage = {
+      ...localInteractiveDeviceComparisonPackage,
+      id: localPolishedWebsiteCodexRecoveryPackageId,
+      version: 34.6,
+      status: 'test_ready',
+      basePackageId: localInteractiveDeviceComparisonPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v34.6',
+      contractAddendum:
+        'The authenticated development website never paints an embedded Studio document until the exact iframe window at the configured Studio origin reports ready. A host-owned, geometry-matched connecting surface covers first open, tab restoration and foreground recovery. Offline, frame and bounded no-response failures become a branded recoverable state, so browser failure pages, Railway responses and the standalone Studio loader remain hidden.',
+      instructionsAddendum:
+        'Keep the Studio iframe invisible and non-interactive until a ready-true message passes both exact-origin and exact-window validation. Preserve only the tab-scoped open or closed presentation state. While an open panel reconnects, render the accessible Clientspace-owned shell with a 44-pixel close control; after a bounded retry and deadline, show plain-language retry and close actions without exposing provider HTML. Retry with a fresh resume token, restore focus on host close, distinguish offline copy, respect reduced motion and remove the shell alongside the owner controls in nested client previews.',
+      summary:
+        'Polished website Codex recovery test package: replaces raw Studio, browser and Railway failure pages with a trusted-ready loading shell and actionable retry experience.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps unready cross-origin documents out of the owner experience while preserving automatic recovery, secure readiness validation and a clear manual retry path.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localProxySafeLiveComparisonPackage: AgentPackage = {
+      ...localPolishedWebsiteCodexRecoveryPackage,
+      id: localProxySafeLiveComparisonPackageId,
+      version: 34.7,
+      status: 'test_ready',
+      basePackageId: localPolishedWebsiteCodexRecoveryPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v34.7',
+      contractAddendum:
+        'The signed live-document relay is routed by its dedicated /inspect/live path even when a deployment proxy rewrites the upstream Host header. Review-token, exact-source, device, destination, response-type, size and private-network validation remain mandatory.',
+      instructionsAddendum:
+        'Recognize only the exact /inspect/live path before applying the signed Clientspace review configuration and destination checks. Do not use the proxy-facing Host header as a second authorization decision because managed deployment proxies may replace it. Preserve every existing signed-review, exact-target, device, redirect, HTML, size and private-network boundary.',
+      summary:
+        'Proxy-safe live comparison test package: keeps signed interactive comparison documents available through the deployed Inspect proxy instead of falling through to a static not-found page.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes the live before-and-after websites load reliably behind the production reverse proxy without weakening the signed comparison boundary.',
+      stagedBehaviourIds: ['client-introduction-outreach', 'client-url-release-contract'],
+    };
+    const localCompactChatFeatureHistoryPackage: AgentPackage = {
+      ...localProxySafeLiveComparisonPackage,
+      id: localCompactChatFeatureHistoryPackageId,
+      version: 34.8,
+      status: 'test_ready',
+      basePackageId: localProxySafeLiveComparisonPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v34.8',
+      contractAddendum:
+        'The collapsed Feature history disclosure in the Codex chat is content-sized at phone, tablet and desktop widths. The transcript remains the flexible row that receives the available reading space, while an opened feature history remains bounded and independently scrollable.',
+      instructionsAddendum:
+        'Keep the selected-chat feature history as a compact disclosure above the transcript. When chat chrome gains or loses a direct grid child, preserve the transcript as the only flexible content row. Verify the collapsed and expanded states without shrinking labelled controls below their shared touch targets.',
+      summary:
+        'Compact chat feature history test package: prevents the collapsed feature disclosure from taking over the transcript area on mobile and larger viewports.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps feature context available without sacrificing the conversation area needed to read and continue the chat.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localExactRedesignComparisonPackage: AgentPackage = {
+      ...localCompactChatFeatureHistoryPackage,
+      id: localExactRedesignComparisonPackageId,
+      version: 34.9,
+      status: 'test_ready',
+      basePackageId: localCompactChatFeatureHistoryPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v34.9',
+      contractAddendum:
+        'Compare mode renders the redesign from the exact signed private preview document used by Preview mode. The trusted preview host injects only the normalized-scroll comparison bridge, while the unrelated current public website remains isolated behind the bounded HTML relay.',
+      instructionsAddendum:
+        'Do not fetch and re-serve the generated redesign HTML through the public-site comparison relay. Load the signed preview capability directly with its inspect and comparison markers, preserve those markers during internal navigation, and inject the comparison bridge only while serving that exact private capability. Keep the redesign frame cross-origin from Inspect with scripts and same-origin enabled so its normal runtime, assets, hero reveal and hydration match Preview. Continue to relay the untrusted current public website without same-origin permission.',
+      summary:
+        'Exact redesign comparison test package: makes the desktop hero and complete redesign render identically in Preview and Compare while retaining synchronized scrolling.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Removes the second HTML-proxy rendering path that could strand generated hero reveals, without weakening isolation for the original public website.',
+      stagedBehaviourIds: ['client-introduction-outreach', 'client-url-release-contract'],
+    };
+    const localSimplifiedWebsiteReviewPackage: AgentPackage = {
+      ...localExactRedesignComparisonPackage,
+      id: localSimplifiedWebsiteReviewPackageId,
+      version: 35,
+      status: 'test_ready',
+      basePackageId: localExactRedesignComparisonPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v35.0',
+      contractAddendum:
+        'The signed website review presents one complete live page at a time behind explicit Old site and New site tabs. The selected site keeps its native scrolling and page interaction without a split reveal layer, synchronized autoplay or page-wide drag surface. Phone, tablet and desktop controls continue to render the selected exact viewport, including desktop geometry on a phone.',
+      instructionsAddendum:
+        'Default a signed review to New site and persist the selected site and device in the review URL. Load the old public website only through the signed device-aware HTML relay, and load the new website from the exact signed private preview document. Keep inactive versions mounted but hidden so switching is immediate and each page retains its own state. Full screen must hide all review controls and leave only the selected live page plus an accessible exit control.',
+      summary:
+        'Simplified website review test package: replaces the split slider with polished full-page Old site and New site tabs, compact responsive controls and focused full screen.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes before-and-after review obvious and usable on phones while retaining live websites, exact desktop dimensions and the signed review boundary.',
+      stagedBehaviourIds: ['client-introduction-outreach', 'client-url-release-contract'],
+    };
+    const localResponsivePreviewLaunchPackage: AgentPackage = {
+      ...localSimplifiedWebsiteReviewPackage,
+      id: localResponsivePreviewLaunchPackageId,
+      version: 35.1,
+      status: 'test_ready',
+      basePackageId: localSimplifiedWebsiteReviewPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v35.1',
+      contractAddendum:
+        'Agent Studio device-preview launches immediately render a secure-access waiting document in the user-opened tab. Preview capability creation runs concurrently with selected-entry-page resolution, and the tab navigates only after the exact private URL is ready.',
+      instructionsAddendum:
+        'Keep private preview capability tokens out of Studio routes and visible loading copy. Open the waiting tab only from the reviewer gesture, announce that secure private access is being prepared, respect reduced motion, overlap independent capability and entry-page lookups, then replace that exact tab with the device preview URL.',
+      summary:
+        'Responsive preview launch test package: replaces the slow blank mobile tab with an accessible secure-preview loading state and concurrent private-access preparation.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Makes Agent Studio previews feel responsive on mobile without weakening popup handling or the private preview capability boundary.',
+      stagedBehaviourIds: ['package-behaviour', 'client-url-release-contract'],
+    };
+    const localEvidenceLedHomepagePackage: AgentPackage = {
+      ...localResponsivePreviewLaunchPackage,
+      id: localEvidenceLedHomepagePackageId,
+      version: 35.2,
+      status: 'test_ready',
+      basePackageId: localResponsivePreviewLaunchPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v35.2',
+      contractAddendum:
+        'Homepage art direction starts from an explicit evidence-grounded company context and a recorded hero decision. Hero media is optional: it must be reviewed photography or a verified dossier-content component, while logo-only builds use a deliberate typographic or information-led composition without decorative fallback media.',
+      instructionsAddendum:
+        'Read the complete staged homepage dossier before choosing typography or composition. Record what the organisation does, its audience, supported differentiators, primary visitor action, cited source evidence, hero concept, composition, media mode, and avoided generic formula in DESIGN_DECISIONS.json. Do not repeat the dark split, eyebrow, oversized serif-and-italic heading, CTA, and decorative media-panel formula without specific brand or content evidence. Omit hero media when no approved photograph or verified content component supports it; do not add effects or motion to satisfy a quota.',
+      summary:
+        'Evidence-led homepage art direction test package: grounds every hero in company context, makes photography availability explicit, and rejects decorative fallback media and unsubstantiated generic hero formulas.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Adds deterministic company-context and hero-media quality checks while removing composition quotas that caused unrelated homepage tests to converge.',
+      stagedBehaviourIds: [
+        'next-component-architecture',
+        'motion-runtime',
+        'framework-quality-gates',
+      ],
+    };
+    const localInspectEmailReplyCtaPackage: AgentPackage = {
+      ...localEvidenceLedHomepagePackage,
+      id: localInspectEmailReplyCtaPackageId,
+      version: 35.3,
+      status: 'test_ready',
+      basePackageId: localEvidenceLedHomepagePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v35.3',
+      contractAddendum:
+        'A signed first-email website review includes one restrained Made Solid response action outside the website viewport. The action uses contact details from the signed Clientspace review configuration, opens the visitor’s email application with a business-specific subject, and never accepts a recipient from editable Inspect URL parameters. It is absent from owner-only previews and hidden with every other review control in full screen.',
+      instructionsAddendum:
+        'Render Email Zac only when the signed website-review configuration supplies a validated contact email and subject. Keep the original-email reply as the preferred way to retain conversation threading, do not add a form or Clientspace gate, preserve the exact website viewport geometry, and hide the response bar in focused full screen. Accept the preceding signed comparison contract during the coordinated runtime rollout.',
+      summary:
+        'Inspect email reply CTA test package: adds a polished signed Email Zac action after the prospect reviews the redesign, without adding an account or feedback form.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Closes the cold-introduction review journey with a clear low-friction response path while preserving signed-review security and normal email replies.',
+      stagedBehaviourIds: ['client-introduction-outreach', 'client-url-release-contract'],
+    };
+    const localRailwayOnlyProductReleasesPackage: AgentPackage = {
+      ...localInspectEmailReplyCtaPackage,
+      id: localRailwayOnlyProductReleasesPackageId,
+      version: 35.4,
+      status: 'test_ready',
+      basePackageId: localInspectEmailReplyCtaPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v35.4',
+      contractAddendum:
+        'Made Solid Studio and the Made Solid website/Clientspace deploy only to their existing Railway projects and services. A synchronized release verifies and deploys the website receiver first, proves the signed runtime contract on madesolid.com.au, and deploys Studio only after that receiver is healthy.',
+      instructionsAddendum:
+        'Never use Vercel for Made Solid Studio or the Made Solid website/Clientspace runtime. Target the existing Railway project, service and explicit development or production environment; never create a replacement service during release. Preserve receiver-first synchronized verification and stop before Studio when any website deployment or contract check fails.',
+      summary:
+        'Railway-only product releases test package: moves website, Clientspace and Studio release automation onto their existing Railway services with receiver-first health gates.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Keeps every first-party Made Solid runtime on one documented deployment platform and prevents a future Codex release from silently falling back to Vercel.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localCompactInspectPackage: AgentPackage = {
+      ...localRailwayOnlyProductReleasesPackage,
+      id: 'agent-package-local-v35-5-compact-inspect',
+      version: 35.5,
+      status: 'test_ready',
+      basePackageId: localRailwayOnlyProductReleasesPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v35.5',
+      contractAddendum:
+        'Inspect reserves more space for the website with a two-row mobile toolbar, accessible device icons, a compact zoom footer and a restrained canvas.',
+      instructionsAddendum:
+        'Keep 44px touch targets, signed Email Zac contact, exact preview dimensions, version switching and full-screen controls. Verify 320px and 375px phones, tablet and desktop without horizontal overflow.',
+      summary:
+        'Compact Inspect test package: gives phone previews more room with a two-row toolbar, device icons and a compact footer.',
+      capabilityProposal:
+        'Makes website review easier on phones without shrinking touch targets or changing the inspected website viewport.',
+      stagedBehaviourIds: ['client-url-release-contract'],
+    };
+    const localStillHomepageEmailPackage: AgentPackage = {
+      ...localCompactInspectPackage,
+      id: 'agent-package-local-v35-6-still-homepage-email',
+      version: 35.6,
+      status: 'test_ready',
+      basePackageId: localCompactInspectPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v35.6',
+      contractAddendum:
+        'The first introduction email embeds one still image of the new website homepage hero. The image comes from the saved verified desktop redesign comparison, and the signed Inspect link still opens the complete responsive old-and-new review.',
+      instructionsAddendum:
+        'Do not attach old or new website GIFs to the introduction email. Read the new homepage JPEG from the protected saved capture, attach it inline once, and keep the interactive review as a link. Other email templates and the plain-text reply path remain unchanged.',
+      summary:
+        'Still homepage email test package: replaces the paired introduction GIFs with one verified new-homepage hero image.',
+      capabilityProposal:
+        'Makes the first prospect email faster to understand while keeping the complete old-and-new website review one click away.',
+      stagedBehaviourIds: ['client-introduction-outreach'],
+    };
+    const localContinuousClientEmailInboxPackage: AgentPackage = {
+      ...localStillHomepageEmailPackage,
+      id: 'agent-package-local-v35-7-continuous-client-email-inbox',
+      version: 35.7,
+      status: 'test_ready',
+      basePackageId: localStillHomepageEmailPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v35.7',
+      contractAddendum:
+        'The supervised Studio runtime checks the protected Clientspace inbox receiver every minute. Clientspace saves email from exact project address matches once, prepares private review-only AI drafts, and exposes unread project email to admin Overview, Messages, and open-session notifications.',
+      instructionsAddendum:
+        'Keep inbound email private and project-scoped. Never send an AI reply automatically. Clear unread status only when staff open the matching email; keep the background check independent of whether the admin browser is open.',
+      summary:
+        'Continuous client email inbox test package: checks incoming mail in the background and alerts staff to new project-specific email.',
+      capabilityProposal:
+        'Makes the existing review desk timely and discoverable without changing the human approval boundary for replies.',
+      stagedBehaviourIds: ['inbound-client-email-review'],
+    };
+    const localReliableCodexQueueHandoffPackage: AgentPackage = {
+      ...localContinuousClientEmailInboxPackage,
+      id: localReliableCodexQueueHandoffPackageId,
+      version: 35.8,
+      status: 'test_ready',
+      basePackageId: localContinuousClientEmailInboxPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v35.8',
+      contractAddendum:
+        'The Studio Codex queue confirms an apparently active conversation against its latest turn before holding a message. A completed turn with a lagging active thread summary cannot strand later requests. Selecting Interrupt waits for the selected queued request to hand off when no active turn remains.',
+      instructionsAddendum:
+        'Use authoritative included turn state for dispatch when a thread summary is active. Leave genuinely in-progress turns queued, keep independent idle conversations parallel, and retain a durable request when current detail cannot be read. After an interrupt request finds no active turn, complete the selected queue hand-off before returning status.',
+      summary:
+        'Reliable Codex queue handoff test package: sends messages after completed turns despite stale active thread summaries and makes Interrupt advance the selected request.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Removes the false busy state that made completed Studio chats look permanently queued while preserving real active-turn and workspace-scope safeguards.',
+      stagedBehaviourIds: ['visual-codex-feedback'],
+    };
+    const localRenderedEmailCapturePackage: AgentPackage = {
+      ...localReliableCodexQueueHandoffPackage,
+      id: 'agent-package-local-v35-9-rendered-email-capture',
+      version: 35.9,
+      status: 'test_ready',
+      basePackageId: localReliableCodexQueueHandoffPackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v35.9',
+      contractAddendum:
+        'Email homepage images require loaded visible media, a dismissed intro, completed finite reveal animations and stable rendered geometry and opacity. A loading timeout fails capture instead of saving an incomplete image.',
+      instructionsAddendum:
+        'Use waitForHomepageCapture for every still homepage capture. Wait for visible images, backgrounds and videos, fonts, loader dismissal and finite animations. Leave infinite decorative motion alone. Never replace a loading timeout with a successful screenshot.',
+      summary:
+        'Rendered email capture test package: waits for the website intro, media and reveal animations before saving the email image.',
+      capabilityProposal: 'Prevents blank homepage screenshots in client introduction emails.',
+      stagedBehaviourIds: ['client-introduction-outreach'],
+    };
+    const localReliableAdminWebsitePreviewPackage: AgentPackage = {
+      ...localRenderedEmailCapturePackage,
+      id: 'agent-package-local-v36-0-reliable-admin-website-preview',
+      version: 36.0,
+      status: 'test_ready',
+      basePackageId: localRenderedEmailCapturePackage.id,
+      builderContractVersion: 'made-solid-studio-builder-agent-v36.0',
+      contractAddendum:
+        'Verified private website previews permit embedding by the explicitly configured Clientspace origin as well as the existing Studio and Inspect origins. Expiring capabilities, draft restrictions and all other preview protections remain enforced.',
+      instructionsAddendum:
+        'Keep the Admin email website preview project-scoped, show loading and delayed-load feedback, and offer a keyboard-accessible retry and the existing external website review. Never treat the iframe load event as proof that a cross-origin website rendered successfully or allow arbitrary framing origins.',
+      summary:
+        'Reliable admin website preview test package: fixes Clientspace framing permissions for private previews and adds loading feedback and retry to the email website preview.',
+      capabilityAssessment: 'foundation_change_required',
+      capabilityProposal:
+        'Prevents supported private previews from being silently blocked in Clientspace Admin and lets staff recover from a delayed or blank embedded website.',
+      stagedBehaviourIds: ['client-introduction-outreach'],
     };
     if (!localPackageRecord) {
       await this.put('meta', {
         id: localAgentPackageKey,
         value: JSON.stringify([
-          localBoundedCodexQueuePackage,
+          localReliableAdminWebsitePreviewPackage,
+          localRenderedEmailCapturePackage,
+          localReliableCodexQueueHandoffPackage,
+          localContinuousClientEmailInboxPackage,
+          localStillHomepageEmailPackage,
+          localCompactInspectPackage,
+          localRailwayOnlyProductReleasesPackage,
+          localInspectEmailReplyCtaPackage,
+          localEvidenceLedHomepagePackage,
+          localResponsivePreviewLaunchPackage,
+          localSimplifiedWebsiteReviewPackage,
+          localExactRedesignComparisonPackage,
+          localCompactChatFeatureHistoryPackage,
+          localProxySafeLiveComparisonPackage,
+          localPolishedWebsiteCodexRecoveryPackage,
+          localInteractiveDeviceComparisonPackage,
+          localLiveSynchronizedComparisonPackage,
+          localReliableComparisonReviewEmailPackage,
+          localConciseClientspaceAccessPackage,
+          localResponsiveComparisonReviewPackage,
+          localPersistentWebsiteCodexPanelPackage,
+          localContinuousFeatureReleaseReconciliationPackage,
+          localRecoverableWebsiteCodexAccessPackage,
+          localCompatibleIntroductionLedgerPackage,
+          localResponsiveSplitComparisonEmailPackage,
+          localDesktopOnlyComparisonEmailPackage,
+          localPasswordlessClientspaceAccessPackage,
+          localEmailSafePairedComparisonPackage,
+          localPairedDeviceComparisonEmailPackage,
+          localInstantCachedCodexAccessPackage,
+          localTruthfulLiveCodexProgressPackage,
+          localDirectReplyComparisonIntroductionPackage,
+          localPrioritisedIntroductionStatusPackage,
+          localReconciledIntroductionReceiptPackage,
+          localRehearsalIntroductionResetPackage,
+          localHeroAnimatedHomepageCapturePackage,
+          localLiveAnimatedHomepageCapturePackage,
+          localReliableSmoothHomepageCapturePackage,
+          localSmoothHomepagePreviewLoopPackage,
+          localPersistedAnimatedHomepagePreviewPackage,
+          localAnimatedClientspaceHomepagePreviewPackage,
+          localAutomaticClientspaceHomepageCapturePackage,
+          localClientspaceDevelopmentQuoteReconfirmationPackage,
+          localClientspaceQuoteReconfirmationPackage,
+          localAccurateFeatureTitlesPackage,
+          localUninterruptedStudioChatPackage,
+          localAutomaticFeatureDevelopmentReleasePackage,
+          localActionableReleasePipelinePackage,
+          localMultiFeatureChatLineagePackage,
+          localChatFeatureHistoryPackage,
+          localReliableFeatureLedgerPackage,
+          localLeceEmailAndQuoteRecoveryPackage,
+          localProductReleaseOverviewPackage,
+          localDurableAiChatTitlesPackage,
+          localVisibleFeatureReleaseStatusPackage,
+          localManagedFeatureWordingPackage,
+          localAiInterpretedChatTitlesPackage,
+          localCompactCodexChatChromePackage,
+          localManualCodexUpdateRecoveryPackage,
+          localFeatureReleaseManagementPackage,
+          localPinnedTaggedCodexChatsPackage,
+          localPolishedDevicePreviewToolbarPackage,
+          localInterpretedChatDropdownTitlesPackage,
+          localRecoverableQuoteExpiryPackage,
+          localExpandedChatDropdownTitlesPackage,
+          localValidatedCodexBranchActionsPackage,
+          localRetrospectiveChatContextPackage,
+          localContextAwareChatTitlesAndStatesPackage,
+          localPurposeAwareCodexBranchingPackage,
+          localVisibleChatGptCreditsPackage,
+          localReadableAgentStudioRefinementPackage,
+          localEditableClientspaceBalancePackage,
+          localOwnerDevicePreviewPackage,
+          localSettledEmailHomepageCapturePackage,
+          localVisibleBuilderModelsPackage,
+          localSettledNavigationQualityPackage,
+          localCompactPhotoComposerPackage,
+          localReliableBuilderRepairPackage,
+          localAutomaticBuilderQualityRepairPackage,
+          localVisibleBuilderCodexVersionPackage,
+          localBuilderVersionDialogPackage,
+          localPublicOnlyManifestSourcesPackage,
+          localCompactCodexComposerNotificationsPackage,
+          localEmailReadyHomepagePreviewPackage,
+          localBrandedExactClientPreviewPackage,
+          localImmediateRehearsalPipelineIsolationPackage,
+          localVoiceDictatedCodexChatPackage,
+          localResilientCodexRuntimeUpdatesPackage,
+          localUniversalBuilderModelSettingsPackage,
+          localGuidedClientspaceTestPackage,
+          localRehearsalRecipientIsolationPackage,
+          localOversizedCodexConversationRecoveryPackage,
+          localCompatibleHandoffTimestampPackage,
+          localVerifiedPreviewCompletionPackage,
+          localAuthenticatedPreviewDeploymentPackage,
+          localIsolatedExactPreviewPackage,
+          localPublishedRepositoryFallbackPackage,
+          localAutomaticRehearsalPreviewPackage,
+          localContextualCodexChatTitlesPackage,
+          localReliableRehearsalCreationPackage,
+          localGuidedClientHandoffPackage,
+          localClientspaceRehearsalPackage,
+          localFailedChatContinuationPackage,
+          localCompatibleCodexFailureDisplayPackage,
+          localVisibleCodexFailuresPackage,
+          localStableChatReconnectionPackage,
+          localCompleteCodexReadPlaybackPackage,
+          localRecoveringCodexTranscriptsPackage,
           localUnifiedProposalPackage,
           localImmediateWebsiteCodexOpenPackage,
           localClientPreviewCodexIsolationPackage,
@@ -4276,7 +6416,114 @@ export class SiteforgeRepository {
         const stored = JSON.parse(localPackageRecord.value) as AgentPackage | AgentPackage[];
         const packages = Array.isArray(stored) ? stored : [stored];
         const missingPackages = [
-          localBoundedCodexQueuePackage,
+          localReliableAdminWebsitePreviewPackage,
+          localRenderedEmailCapturePackage,
+          localReliableCodexQueueHandoffPackage,
+          localContinuousClientEmailInboxPackage,
+          localStillHomepageEmailPackage,
+          localCompactInspectPackage,
+          localRailwayOnlyProductReleasesPackage,
+          localInspectEmailReplyCtaPackage,
+          localEvidenceLedHomepagePackage,
+          localResponsivePreviewLaunchPackage,
+          localSimplifiedWebsiteReviewPackage,
+          localExactRedesignComparisonPackage,
+          localCompactChatFeatureHistoryPackage,
+          localProxySafeLiveComparisonPackage,
+          localPolishedWebsiteCodexRecoveryPackage,
+          localInteractiveDeviceComparisonPackage,
+          localLiveSynchronizedComparisonPackage,
+          localReliableComparisonReviewEmailPackage,
+          localConciseClientspaceAccessPackage,
+          localResponsiveComparisonReviewPackage,
+          localPersistentWebsiteCodexPanelPackage,
+          localContinuousFeatureReleaseReconciliationPackage,
+          localRecoverableWebsiteCodexAccessPackage,
+          localCompatibleIntroductionLedgerPackage,
+          localResponsiveSplitComparisonEmailPackage,
+          localDesktopOnlyComparisonEmailPackage,
+          localPasswordlessClientspaceAccessPackage,
+          localEmailSafePairedComparisonPackage,
+          localPairedDeviceComparisonEmailPackage,
+          localInstantCachedCodexAccessPackage,
+          localTruthfulLiveCodexProgressPackage,
+          localDirectReplyComparisonIntroductionPackage,
+          localPrioritisedIntroductionStatusPackage,
+          localReconciledIntroductionReceiptPackage,
+          localRehearsalIntroductionResetPackage,
+          localHeroAnimatedHomepageCapturePackage,
+          localLiveAnimatedHomepageCapturePackage,
+          localReliableSmoothHomepageCapturePackage,
+          localSmoothHomepagePreviewLoopPackage,
+          localPersistedAnimatedHomepagePreviewPackage,
+          localAnimatedClientspaceHomepagePreviewPackage,
+          localAutomaticClientspaceHomepageCapturePackage,
+          localClientspaceDevelopmentQuoteReconfirmationPackage,
+          localClientspaceQuoteReconfirmationPackage,
+          localAccurateFeatureTitlesPackage,
+          localUninterruptedStudioChatPackage,
+          localAutomaticFeatureDevelopmentReleasePackage,
+          localActionableReleasePipelinePackage,
+          localMultiFeatureChatLineagePackage,
+          localChatFeatureHistoryPackage,
+          localReliableFeatureLedgerPackage,
+          localLeceEmailAndQuoteRecoveryPackage,
+          localProductReleaseOverviewPackage,
+          localDurableAiChatTitlesPackage,
+          localVisibleFeatureReleaseStatusPackage,
+          localManagedFeatureWordingPackage,
+          localAiInterpretedChatTitlesPackage,
+          localCompactCodexChatChromePackage,
+          localManualCodexUpdateRecoveryPackage,
+          localFeatureReleaseManagementPackage,
+          localPinnedTaggedCodexChatsPackage,
+          localPolishedDevicePreviewToolbarPackage,
+          localInterpretedChatDropdownTitlesPackage,
+          localRecoverableQuoteExpiryPackage,
+          localExpandedChatDropdownTitlesPackage,
+          localValidatedCodexBranchActionsPackage,
+          localRetrospectiveChatContextPackage,
+          localContextAwareChatTitlesAndStatesPackage,
+          localPurposeAwareCodexBranchingPackage,
+          localVisibleChatGptCreditsPackage,
+          localReadableAgentStudioRefinementPackage,
+          localEditableClientspaceBalancePackage,
+          localOwnerDevicePreviewPackage,
+          localSettledEmailHomepageCapturePackage,
+          localVisibleBuilderModelsPackage,
+          localSettledNavigationQualityPackage,
+          localCompactPhotoComposerPackage,
+          localReliableBuilderRepairPackage,
+          localAutomaticBuilderQualityRepairPackage,
+          localVisibleBuilderCodexVersionPackage,
+          localBuilderVersionDialogPackage,
+          localPublicOnlyManifestSourcesPackage,
+          localCompactCodexComposerNotificationsPackage,
+          localEmailReadyHomepagePreviewPackage,
+          localBrandedExactClientPreviewPackage,
+          localImmediateRehearsalPipelineIsolationPackage,
+          localVoiceDictatedCodexChatPackage,
+          localResilientCodexRuntimeUpdatesPackage,
+          localUniversalBuilderModelSettingsPackage,
+          localGuidedClientspaceTestPackage,
+          localRehearsalRecipientIsolationPackage,
+          localOversizedCodexConversationRecoveryPackage,
+          localCompatibleHandoffTimestampPackage,
+          localVerifiedPreviewCompletionPackage,
+          localAuthenticatedPreviewDeploymentPackage,
+          localIsolatedExactPreviewPackage,
+          localPublishedRepositoryFallbackPackage,
+          localAutomaticRehearsalPreviewPackage,
+          localContextualCodexChatTitlesPackage,
+          localReliableRehearsalCreationPackage,
+          localGuidedClientHandoffPackage,
+          localClientspaceRehearsalPackage,
+          localFailedChatContinuationPackage,
+          localCompatibleCodexFailureDisplayPackage,
+          localVisibleCodexFailuresPackage,
+          localStableChatReconnectionPackage,
+          localCompleteCodexReadPlaybackPackage,
+          localRecoveringCodexTranscriptsPackage,
           localUnifiedProposalPackage,
           localImmediateWebsiteCodexOpenPackage,
           localClientPreviewCodexIsolationPackage,
@@ -4480,7 +6727,112 @@ export class SiteforgeRepository {
         await this.put('meta', {
           id: localAgentPackageKey,
           value: JSON.stringify([
-            localBoundedCodexQueuePackage,
+            localReliableAdminWebsitePreviewPackage,
+            localRenderedEmailCapturePackage,
+            localReliableCodexQueueHandoffPackage,
+            localContinuousClientEmailInboxPackage,
+            localStillHomepageEmailPackage,
+            localCompactInspectPackage,
+            localRailwayOnlyProductReleasesPackage,
+            localInspectEmailReplyCtaPackage,
+            localEvidenceLedHomepagePackage,
+            localResponsivePreviewLaunchPackage,
+            localSimplifiedWebsiteReviewPackage,
+            localExactRedesignComparisonPackage,
+            localCompactChatFeatureHistoryPackage,
+            localProxySafeLiveComparisonPackage,
+            localPolishedWebsiteCodexRecoveryPackage,
+            localInteractiveDeviceComparisonPackage,
+            localLiveSynchronizedComparisonPackage,
+            localReliableComparisonReviewEmailPackage,
+            localConciseClientspaceAccessPackage,
+            localResponsiveComparisonReviewPackage,
+            localPersistentWebsiteCodexPanelPackage,
+            localContinuousFeatureReleaseReconciliationPackage,
+            localRecoverableWebsiteCodexAccessPackage,
+            localCompatibleIntroductionLedgerPackage,
+            localResponsiveSplitComparisonEmailPackage,
+            localDesktopOnlyComparisonEmailPackage,
+            localPasswordlessClientspaceAccessPackage,
+            localEmailSafePairedComparisonPackage,
+            localPairedDeviceComparisonEmailPackage,
+            localInstantCachedCodexAccessPackage,
+            localTruthfulLiveCodexProgressPackage,
+            localDirectReplyComparisonIntroductionPackage,
+            localPrioritisedIntroductionStatusPackage,
+            localReconciledIntroductionReceiptPackage,
+            localRehearsalIntroductionResetPackage,
+            localHeroAnimatedHomepageCapturePackage,
+            localLiveAnimatedHomepageCapturePackage,
+            localReliableSmoothHomepageCapturePackage,
+            localSmoothHomepagePreviewLoopPackage,
+            localPersistedAnimatedHomepagePreviewPackage,
+            localAnimatedClientspaceHomepagePreviewPackage,
+            localAutomaticClientspaceHomepageCapturePackage,
+            localClientspaceDevelopmentQuoteReconfirmationPackage,
+            localClientspaceQuoteReconfirmationPackage,
+            localAccurateFeatureTitlesPackage,
+            localUninterruptedStudioChatPackage,
+            localAutomaticFeatureDevelopmentReleasePackage,
+            localActionableReleasePipelinePackage,
+            localMultiFeatureChatLineagePackage,
+            localChatFeatureHistoryPackage,
+            localReliableFeatureLedgerPackage,
+            localLeceEmailAndQuoteRecoveryPackage,
+            localProductReleaseOverviewPackage,
+            localDurableAiChatTitlesPackage,
+            localAiInterpretedChatTitlesPackage,
+            localCompactCodexChatChromePackage,
+            localManualCodexUpdateRecoveryPackage,
+            localFeatureReleaseManagementPackage,
+            localPinnedTaggedCodexChatsPackage,
+            localPolishedDevicePreviewToolbarPackage,
+            localInterpretedChatDropdownTitlesPackage,
+            localRecoverableQuoteExpiryPackage,
+            localExpandedChatDropdownTitlesPackage,
+            localValidatedCodexBranchActionsPackage,
+            localRetrospectiveChatContextPackage,
+            localContextAwareChatTitlesAndStatesPackage,
+            localPurposeAwareCodexBranchingPackage,
+            localVisibleChatGptCreditsPackage,
+            localReadableAgentStudioRefinementPackage,
+            localEditableClientspaceBalancePackage,
+            localOwnerDevicePreviewPackage,
+            localSettledEmailHomepageCapturePackage,
+            localVisibleBuilderModelsPackage,
+            localSettledNavigationQualityPackage,
+            localCompactPhotoComposerPackage,
+            localReliableBuilderRepairPackage,
+            localAutomaticBuilderQualityRepairPackage,
+            localVisibleBuilderCodexVersionPackage,
+            localBuilderVersionDialogPackage,
+            localPublicOnlyManifestSourcesPackage,
+            localCompactCodexComposerNotificationsPackage,
+            localEmailReadyHomepagePreviewPackage,
+            localBrandedExactClientPreviewPackage,
+            localImmediateRehearsalPipelineIsolationPackage,
+            localVoiceDictatedCodexChatPackage,
+            localResilientCodexRuntimeUpdatesPackage,
+            localUniversalBuilderModelSettingsPackage,
+            localGuidedClientspaceTestPackage,
+            localRehearsalRecipientIsolationPackage,
+            localOversizedCodexConversationRecoveryPackage,
+            localCompatibleHandoffTimestampPackage,
+            localVerifiedPreviewCompletionPackage,
+            localAuthenticatedPreviewDeploymentPackage,
+            localIsolatedExactPreviewPackage,
+            localPublishedRepositoryFallbackPackage,
+            localAutomaticRehearsalPreviewPackage,
+            localContextualCodexChatTitlesPackage,
+            localReliableRehearsalCreationPackage,
+            localGuidedClientHandoffPackage,
+            localClientspaceRehearsalPackage,
+            localFailedChatContinuationPackage,
+            localCompatibleCodexFailureDisplayPackage,
+            localVisibleCodexFailuresPackage,
+            localStableChatReconnectionPackage,
+            localCompleteCodexReadPlaybackPackage,
+            localRecoveringCodexTranscriptsPackage,
             localUnifiedProposalPackage,
             localImmediateWebsiteCodexOpenPackage,
             localClientPreviewCodexIsolationPackage,
@@ -5901,9 +8253,6 @@ export class SiteforgeRepository {
       undefined,
       workspace.visualContentCandidates,
     );
-    generated.sourceSelections.pageUrls = [
-      ...new Set(workspace.capturedPages.map((page) => page.url)),
-    ];
     generated.sourceSelections.assetIds = [
       ...new Set(
         workspace.artifacts

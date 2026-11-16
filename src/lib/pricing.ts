@@ -1,6 +1,6 @@
 import type { BuildManifest, BuildManifestPage } from './domain';
 
-export const pricingScheduleVersion = 'made-solid-cold-prospect-v3.0';
+export const pricingScheduleVersion = 'made-solid-cold-prospect-v3.1';
 export const serviceTermsVersion = 'made-solid-au-services-v1.1';
 export const privacyNoticeVersion = 'made-solid-au-privacy-v1.1';
 export const quoteValidityDays = 14;
@@ -205,22 +205,24 @@ function paymentSchedule(totalCents: number): PricingPaymentMilestone[] {
     {
       sequence: 1,
       kind: 'commencement',
-      label: 'Project commencement',
-      dueTrigger: 'Due when the proposal is accepted and work is commissioned.',
+      label: 'Proposal acceptance',
+      dueTrigger: 'Due when the proposal is accepted and the project is activated.',
       amountCents: opening,
     },
     {
       sequence: 2,
       kind: 'progress',
-      label: 'Content and design approval',
-      dueTrigger: 'Due when the agreed structure, content and visual direction are approved.',
+      label: 'Content and refinement approval',
+      dueTrigger:
+        'Due when the client content, requested refinements and final design are approved.',
       amountCents: progress,
     },
     {
       sequence: 3,
       kind: 'release',
       label: 'Launch and handover',
-      dueTrigger: 'Due after final approval and before launch or source handover.',
+      dueTrigger:
+        'Due after final checks and before the website goes live or source files are transferred.',
       amountCents: totalCents - opening - progress,
     },
   ];
@@ -231,8 +233,8 @@ function outrightSchedule(totalCents: number): PricingPaymentMilestone[] {
     {
       sequence: 1,
       kind: 'commencement',
-      label: 'Project commissioning',
-      dueTrigger: 'Due when the proposal is accepted so delivery can be scheduled.',
+      label: 'Proposal acceptance',
+      dueTrigger: 'Due when the proposal is accepted and the project is activated.',
       amountCents: totalCents,
     },
   ];
@@ -252,8 +254,8 @@ function buildOfferChoices(
     {
       id: 'recommended-milestones',
       kind: 'milestones',
-      label: 'Build in three milestones',
-      summary: 'Commission the complete recommended launch scope across three fixed payments.',
+      label: 'Pay in three milestones',
+      summary: 'Approve the complete website proposal across three fixed payments.',
       scopeLabel: 'Recommended launch scope',
       totalCommitmentCents: totalCents,
       setupCents: paymentSchedule(totalCents)[0]?.amountCents ?? totalCents,
@@ -268,7 +270,8 @@ function buildOfferChoices(
       id: 'outright',
       kind: 'outright',
       label: 'Pay outright',
-      summary: 'One commissioning payment for the same complete scope and ownership outcome.',
+      summary:
+        'One payment on proposal acceptance for the same complete scope and ownership outcome.',
       scopeLabel: 'Recommended launch scope',
       totalCommitmentCents: totalCents,
       setupCents: totalCents,
@@ -325,15 +328,16 @@ function buildOfferChoices(
         {
           sequence: 1,
           kind: 'commencement',
-          label: 'Project commencement',
-          dueTrigger: 'Due when the focused launch is commissioned.',
+          label: 'Proposal acceptance',
+          dueTrigger:
+            'Due when the focused launch proposal is accepted and the project is activated.',
           amountCents: opening,
         },
         {
           sequence: 2,
           kind: 'release',
           label: 'Launch and handover',
-          dueTrigger: 'Due after final approval and before launch.',
+          dueTrigger: 'Due after final checks and before the website goes live.',
           amountCents: essentialsTotal - opening,
         },
       ],
@@ -680,8 +684,12 @@ export function formatAud(cents: number) {
   }).format(cents / 100);
 }
 
-// Dates and quote references identify a saved offer; only commercial/source changes invalidate it.
-export function pricingQuoteMatches(quote: PricingQuoteSnapshot, calculation: PricingCalculation) {
+// Dates and quote references identify a saved offer; commercial/source terms are compared
+// separately so an expired but otherwise unchanged quote can be explained and reconfirmed.
+export function pricingQuoteTermsMatch(
+  quote: PricingQuoteSnapshot,
+  calculation: PricingCalculation,
+) {
   const terms = (value: PricingCalculation | PricingQuoteSnapshot) =>
     JSON.stringify({
       pricingVersion: value.pricingVersion,
@@ -696,8 +704,15 @@ export function pricingQuoteMatches(quote: PricingQuoteSnapshot, calculation: Pr
     });
   return (
     quote.status === 'approved' &&
-    Date.parse(quote.validUntil) > Date.now() &&
     !calculation.reviewRequired &&
     terms(quote) === terms(calculation)
   );
+}
+
+export function pricingQuoteExpired(quote: PricingQuoteSnapshot, now = Date.now()) {
+  return !Number.isFinite(Date.parse(quote.validUntil)) || Date.parse(quote.validUntil) <= now;
+}
+
+export function pricingQuoteMatches(quote: PricingQuoteSnapshot, calculation: PricingCalculation) {
+  return pricingQuoteTermsMatch(quote, calculation) && !pricingQuoteExpired(quote);
 }

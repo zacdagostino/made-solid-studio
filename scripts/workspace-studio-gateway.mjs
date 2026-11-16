@@ -15,6 +15,7 @@ const sessionLifetimeMs = 8 * 60 * 60 * 1_000;
 const codexBranchPath = '/__made-solid/codex-branch';
 const codexBranchTimeoutMs = 120_000;
 const websiteCodexEmbed = 'website-codex';
+const websiteCodexAccessPath = '/__made-solid/website-codex-access';
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function requiredEnvironment(name, environment = process.env) {
@@ -160,6 +161,80 @@ function unavailable(response, status = 404) {
     'X-Robots-Tag': 'noindex, nofollow, noarchive',
   });
   response.end('Private Workspace Studio unavailable.');
+}
+
+function safeWebsiteReturn(requestUrl, configuration) {
+  const source = requestUrl.searchParams.get('return');
+  if (!configuration.websiteOrigin || !source || source.length > 2_000) return undefined;
+  try {
+    const destination = new URL(source);
+    if (
+      destination.origin !== configuration.websiteOrigin ||
+      destination.username ||
+      destination.password
+    ) {
+      return undefined;
+    }
+    return destination.href;
+  } catch {
+    return undefined;
+  }
+}
+
+export function websiteCodexAccessRequiredDocument(websiteOrigin, nonce) {
+  const targetOrigin = JSON.stringify(websiteOrigin).replaceAll('<', '\\u003c');
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Reconnecting Made Solid Codex</title>
+  </head>
+  <body>
+    <p>Reconnecting the private Codex workspace…</p>
+    <script nonce="${nonce}">
+      const notifyParent = () => {
+        window.parent.postMessage(
+          { source: 'made-solid-codex-panel', action: 'access-required' },
+          ${targetOrigin},
+        );
+      };
+      notifyParent();
+      window.setInterval(notifyParent, 500);
+    </script>
+  </body>
+</html>`;
+}
+
+function requestWebsiteCodexAccess(response, configuration, request) {
+  const nonce = randomBytes(18).toString('base64');
+  const document = websiteCodexAccessRequiredDocument(configuration.websiteOrigin, nonce);
+  response.writeHead(200, {
+    'Cache-Control': 'no-store',
+    'Content-Security-Policy': `default-src 'none'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors ${configuration.websiteOrigin}`,
+    'Content-Type': 'text/html; charset=utf-8',
+    'Referrer-Policy': 'no-referrer',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Robots-Tag': 'noindex, nofollow, noarchive',
+  });
+  if (request.method === 'HEAD') response.end();
+  else response.end(document);
+}
+
+function returnToWebsite(response, requestUrl, configuration) {
+  const destination = safeWebsiteReturn(requestUrl, configuration);
+  if (!destination) {
+    unavailable(response, 400);
+    return;
+  }
+  response.writeHead(303, {
+    'Cache-Control': 'no-store',
+    Location: destination,
+    'Referrer-Policy': 'no-referrer',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Robots-Tag': 'noindex, nofollow, noarchive',
+  });
+  response.end();
 }
 
 export function workspaceStudioReentryDocument(studioOrigin, nonce) {
@@ -324,7 +399,8 @@ export function startWorkspaceStudioGateway(configuration = workspaceStudioGatew
     }
     const websiteCodexRequest = requestsWebsiteCodexEmbed(request, requestUrl, configuration);
     if (!access) {
-      if (requestsDocument(request)) requestOwnerReentry(response, configuration, request);
+      if (websiteCodexRequest) requestWebsiteCodexAccess(response, configuration, request);
+      else if (requestsDocument(request)) requestOwnerReentry(response, configuration, request);
       else unavailable(response);
       return;
     }
@@ -334,6 +410,14 @@ export function startWorkspaceStudioGateway(configuration = workspaceStudioGatew
         return;
       }
       exchangeAccess(response, requestUrl, configuration);
+      return;
+    }
+    if (
+      requestUrl.pathname === websiteCodexAccessPath &&
+      requestsDocument(request) &&
+      (request.method === 'GET' || request.method === 'HEAD')
+    ) {
+      returnToWebsite(response, requestUrl, configuration);
       return;
     }
     proxyHttp(

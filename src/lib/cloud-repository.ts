@@ -17,6 +17,7 @@ import type {
   AuditObservation,
   AuditSpecialistTask,
   BuildManifest,
+  BuilderPreferences,
   BuilderArtifact,
   BuilderEvent,
   BuilderPreviewMode,
@@ -50,6 +51,7 @@ import type {
   TaxExpenseInput,
   Website,
 } from './domain';
+import { defaultBuilderPreferences, normalizeBuilderPreferences } from './builder-preferences';
 import {
   buildManifestSchemaVersion,
   codexBuilderContractVersion,
@@ -65,6 +67,7 @@ import {
   visualContentMatchesBrief,
 } from './redesign-brief';
 import { openAiApiFeaturesEnabled } from './ai-billing';
+import { studioRuntimeFetch } from './studio-runtime';
 
 type DatabaseRow = Record<string, unknown>;
 
@@ -102,6 +105,18 @@ function businessFromRow(row: DatabaseRow): Business {
     createdAt: readString(row, 'created_at'),
     updatedAt: readString(row, 'updated_at'),
   };
+}
+
+function isRehearsalProposalDraft(row: DatabaseRow) {
+  const draft = row.draft;
+  if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return false;
+  const rehearsal = (draft as DatabaseRow).rehearsal;
+  return Boolean(
+    rehearsal &&
+    typeof rehearsal === 'object' &&
+    !Array.isArray(rehearsal) &&
+    (rehearsal as DatabaseRow).schemaVersion === 1,
+  );
 }
 
 function websiteFromRow(row: DatabaseRow): Website {
@@ -763,6 +778,13 @@ function builderRunFromRow(row: DatabaseRow): BuilderRun {
         : 'queued',
     templateVersion: readString(row, 'template_version'),
     model: readOptionalString(row, 'model'),
+    reasoningEffort: readOptionalString(row, 'reasoning_effort'),
+    codexRuntimeVersion: readOptionalString(row, 'codex_runtime_version'),
+    executionProfileSource: ['recommended', 'custom', 'environment'].includes(
+      readString(row, 'execution_profile_source'),
+    )
+      ? (readString(row, 'execution_profile_source') as BuilderRun['executionProfileSource'])
+      : undefined,
     progressPhase: readString(row, 'progress_phase') || 'queued',
     progressDetail: readOptionalString(row, 'progress_detail'),
     totalItems: readNumber(row, 'total_items'),
@@ -1298,6 +1320,70 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     private readonly organizationId: string,
   ) {}
 
+  async getBuilderPreferences(): Promise<BuilderPreferences> {
+    const { data, error } = await this.client
+      .from('website_builder_preferences')
+      .select('*')
+      .eq('organization_id', this.organizationId)
+      .maybeSingle();
+    throwIfError(error);
+    if (!data) return defaultBuilderPreferences();
+    const row = data as DatabaseRow;
+    return normalizeBuilderPreferences({
+      pageTest: {
+        model: readOptionalString(row, 'page_test_model'),
+        reasoningEffort: readOptionalString(row, 'page_test_reasoning_effort'),
+      },
+      siteTest: {
+        model: readOptionalString(row, 'site_test_model'),
+        reasoningEffort: readOptionalString(row, 'site_test_reasoning_effort'),
+      },
+      fullSite: {
+        model: readOptionalString(row, 'full_site_model'),
+        reasoningEffort: readOptionalString(row, 'full_site_reasoning_effort'),
+      },
+      updatedAt: readOptionalString(row, 'updated_at'),
+    });
+  }
+
+  async saveBuilderPreferences(preferences: BuilderPreferences): Promise<BuilderPreferences> {
+    const normalized = normalizeBuilderPreferences(preferences);
+    const { data, error } = await this.client
+      .from('website_builder_preferences')
+      .upsert(
+        {
+          organization_id: this.organizationId,
+          page_test_model: normalized.pageTest.model ?? null,
+          page_test_reasoning_effort: normalized.pageTest.reasoningEffort ?? null,
+          site_test_model: normalized.siteTest.model ?? null,
+          site_test_reasoning_effort: normalized.siteTest.reasoningEffort ?? null,
+          full_site_model: normalized.fullSite.model ?? null,
+          full_site_reasoning_effort: normalized.fullSite.reasoningEffort ?? null,
+          updated_by: (await this.client.auth.getUser()).data.user?.id ?? null,
+        },
+        { onConflict: 'organization_id' },
+      )
+      .select('*')
+      .single();
+    throwIfError(error);
+    const row = data as DatabaseRow;
+    return normalizeBuilderPreferences({
+      pageTest: {
+        model: readOptionalString(row, 'page_test_model'),
+        reasoningEffort: readOptionalString(row, 'page_test_reasoning_effort'),
+      },
+      siteTest: {
+        model: readOptionalString(row, 'site_test_model'),
+        reasoningEffort: readOptionalString(row, 'site_test_reasoning_effort'),
+      },
+      fullSite: {
+        model: readOptionalString(row, 'full_site_model'),
+        reasoningEffort: readOptionalString(row, 'full_site_reasoning_effort'),
+      },
+      updatedAt: readOptionalString(row, 'updated_at'),
+    });
+  }
+
   async listAgentPackages() {
     const { data, error } = await this.client
       .from('agent_packages')
@@ -1419,7 +1505,25 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       .eq('organization_id', this.organizationId)
       .order('updated_at', { ascending: false });
     throwIfError(error);
-    return ((data ?? []) as DatabaseRow[]).map(businessFromRow);
+    const businessRows = (data ?? []) as DatabaseRow[];
+    const businessIds = businessRows.map((row) => readString(row, 'id')).filter(Boolean);
+    if (!businessIds.length) return [];
+
+    const { data: proposalDrafts, error: proposalDraftsError } = await this.client
+      .from('proposal_drafts')
+      .select('business_id,draft')
+      .in('business_id', businessIds);
+    throwIfError(proposalDraftsError);
+    const rehearsalBusinessIds = new Set(
+      ((proposalDrafts ?? []) as DatabaseRow[])
+        .filter(isRehearsalProposalDraft)
+        .map((row) => readString(row, 'business_id')),
+    );
+
+    return businessRows.map((row) => {
+      const business = businessFromRow(row);
+      return { ...business, isRehearsal: rehearsalBusinessIds.has(business.id) };
+    });
   }
 
   async getWorkspace(
@@ -1435,7 +1539,15 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     throwIfError(businessError);
     if (!businessRow) return undefined;
 
-    if (reconcileBuilderLifecycle) {
+    const { data: rehearsalDraft, error: rehearsalError } = await this.client
+      .from('proposal_drafts')
+      .select('draft')
+      .eq('business_id', businessId)
+      .maybeSingle();
+    throwIfError(rehearsalError);
+    const isRehearsal = rehearsalDraft?.draft?.rehearsal?.schemaVersion === 1;
+
+    if (reconcileBuilderLifecycle && !isRehearsal) {
       const { error: lifecycleError } = await this.client.rpc('reconcile_builder_run_lifecycle', {
         target_business_id: businessId,
       });
@@ -1900,7 +2012,7 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     throwIfError(outreachComplianceResult.error);
 
     return {
-      business: businessFromRow(businessRow as DatabaseRow),
+      business: { ...businessFromRow(businessRow as DatabaseRow), isRehearsal },
       website,
       captures: orderedCaptures,
       contacts: ((contacts.data ?? []) as DatabaseRow[]).map(contactFromRow),
@@ -2758,9 +2870,6 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
     if (!generated.draft.brandKit) {
       throw new Error('The approved Brand Kit could not be attached to the new brief revision.');
     }
-    generated.sourceSelections.pageUrls = [
-      ...new Set(workspace.capturedPages.map((page) => page.url)),
-    ];
     generated.sourceSelections.assetIds = [
       ...new Set(
         workspace.artifacts
@@ -2844,9 +2953,6 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
       undefined,
       workspace.visualContentCandidates,
     );
-    generated.sourceSelections.pageUrls = [
-      ...new Set(workspace.capturedPages.map((page) => page.url)),
-    ];
     generated.sourceSelections.assetIds = [
       ...new Set(
         workspace.artifacts
@@ -3094,15 +3200,23 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
   }
 
   async requestBuilderQualityRecheck(builderRunId: string, agentPackageId: string) {
-    const { data, error } = await this.client.rpc('request_builder_quality_recheck', {
-      target_builder_run_id: builderRunId,
-      requested_agent_package_id: agentPackageId,
+    const response = await studioRuntimeFetch('/__made-solid/builder-quality-repair', {
+      body: JSON.stringify({ builderRunId, agentPackageId }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
     });
-    throwIfError(error);
+    const payload = (await response.json().catch(() => ({}))) as DatabaseRow;
+    if (!response.ok) {
+      throw new Error(
+        readOptionalString(payload, 'detail') || 'The quality repair could not be queued.',
+      );
+    }
+    const runId = readOptionalString(payload, 'runId');
+    if (!runId) throw new Error('The protected builder did not return the quality repair run.');
     const { data: run, error: runError } = await this.client
       .from('builder_runs')
       .select('*, agent_packages(version), builder_artifacts(kind)')
-      .eq('id', data as string)
+      .eq('id', runId)
       .single();
     throwIfError(runError);
     return builderRunFromRow(run as DatabaseRow);
@@ -3213,14 +3327,20 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
   }
 
   async createBuilderPreviewUrl(builderRunId: string, mode: BuilderPreviewMode = 'ready') {
-    let entryPath = '';
+    const previewAccessRequest = Promise.resolve(
+      this.client.rpc('create_builder_preview_access', {
+        target_builder_run_id: builderRunId,
+        requested_mode: mode,
+      }),
+    );
     const { data: previewRun } = await this.client
       .from('builder_runs')
       .select('build_manifest_id, build_mode, target_source_url, target_source_urls')
       .eq('id', builderRunId)
       .maybeSingle();
     const run = recordValue(previewRun);
-    if (mode === 'ready') {
+    const entryPathRequest = (async () => {
+      if (mode !== 'ready') return '';
       const targetUrls = Array.isArray(run.target_source_urls)
         ? run.target_source_urls.filter((value): value is string => typeof value === 'string')
         : typeof run.target_source_url === 'string'
@@ -3244,14 +3364,16 @@ export class SupabaseWorkspaceRepository implements WorkspaceRepository {
             canonicalWebsiteUrl(page.url) === canonicalWebsiteUrl(firstTargetUrl),
         );
         const publicPath = readOptionalString(selectedEntry ?? {}, 'publicPath');
-        if (publicPath && publicPath !== '/')
-          entryPath = `${publicPath.replace(/^\/+|\/+$/g, '')}/`;
+        if (publicPath && publicPath !== '/') {
+          return `${publicPath.replace(/^\/+|\/+$/g, '')}/`;
+        }
       }
-    }
-    const { data, error } = await this.client.rpc('create_builder_preview_access', {
-      target_builder_run_id: builderRunId,
-      requested_mode: mode,
-    });
+      return '';
+    })();
+    const [{ data, error }, entryPath] = await Promise.all([
+      previewAccessRequest,
+      entryPathRequest,
+    ]);
     throwIfError(error);
     const access = recordValue(data);
     const token = typeof access.token === 'string' ? access.token : '';

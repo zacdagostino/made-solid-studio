@@ -11,6 +11,7 @@ import {
   responsiveBrowserContextOptions,
 } from './responsive-browser-profiles.mjs';
 import { assertPublicUrl, isRobotsAllowed } from './security.mjs';
+import { assertPublicWebsitePageUrl, isPublicWebsitePageUrl } from './public-page-url.mjs';
 import { selectVisualAssets, visualAssetKey, visualAssetScore } from './visual-assets.mjs';
 
 const artifactBucket = 'siteforge-artifacts';
@@ -223,7 +224,12 @@ function discoverPageUrls(homeUrl, links) {
   for (const link of links) {
     try {
       const url = new URL(link.href, home);
-      if (url.origin !== home.origin || !/^https?:$/.test(url.protocol)) continue;
+      if (
+        url.origin !== home.origin ||
+        !/^https?:$/.test(url.protocol) ||
+        !isPublicWebsitePageUrl(url.toString())
+      )
+        continue;
       if (
         /\.(?:pdf|jpg|jpeg|png|gif|webp|avif|svg|ico|zip|docx?|xlsx?|pptx?|mp4|webm|mp3|wav|css|js)$/i.test(
           url.pathname,
@@ -274,8 +280,10 @@ async function fetchWithSafeRedirects(url, dnsCache) {
 }
 
 async function fetchPublicHtml(targetUrl, dnsCache) {
+  assertPublicWebsitePageUrl(targetUrl);
   let currentUrl = targetUrl;
   for (let redirectCount = 0; redirectCount <= 5; redirectCount += 1) {
+    assertPublicWebsitePageUrl(currentUrl);
     await assertPublicUrl(currentUrl, dnsCache);
     const response = await fetch(currentUrl, {
       headers: {
@@ -292,6 +300,7 @@ async function fetchPublicHtml(targetUrl, dnsCache) {
         throw new Error('The page HTML exceeded the capture limit.');
       const html = await response.text();
       if (bytes(html) > maxHtmlBytes) throw new Error('The page HTML exceeded the capture limit.');
+      assertPublicWebsitePageUrl(currentUrl);
       return { html, response, finalUrl: currentUrl };
     }
     const location = response.headers.get('location');
@@ -309,7 +318,12 @@ function urlsFromSitemapDocument(xml, homeUrl) {
     const value = match[1].trim().replace(/&amp;/g, '&');
     try {
       const url = new URL(value, homeUrl);
-      if (url.origin !== new URL(homeUrl).origin || !/^https?:$/.test(url.protocol)) continue;
+      if (
+        url.origin !== new URL(homeUrl).origin ||
+        !/^https?:$/.test(url.protocol) ||
+        !isPublicWebsitePageUrl(url.toString())
+      )
+        continue;
       urls.push(url.toString());
     } catch {
       // Ignore malformed sitemap entries.
@@ -543,6 +557,7 @@ async function waitForVisualReadiness(page) {
 }
 
 async function openPublicPage(browser, targetUrl, dnsCache, viewport) {
+  assertPublicWebsitePageUrl(targetUrl);
   const context = await createCaptureContext(browser, viewport, dnsCache);
   const page = await context.newPage();
   try {
@@ -556,6 +571,7 @@ async function openPublicPage(browser, targetUrl, dnsCache, viewport) {
     await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => undefined);
     await waitForVisualReadiness(page);
     await assertPublicUrl(page.url(), dnsCache);
+    assertPublicWebsitePageUrl(page.url());
     return { context, page, response };
   } catch (error) {
     await context.close();

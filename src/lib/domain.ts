@@ -55,6 +55,7 @@ export type ArtifactKind =
   | 'preview';
 
 export type Business = {
+  isRehearsal?: boolean;
   id: string;
   kind: BusinessKind;
   name: string;
@@ -624,6 +625,17 @@ export type BuilderRunStatus =
   'queued' | 'running' | 'paused' | 'ready' | 'review_required' | 'failed' | 'cancelled';
 export type BuilderQualityStatus = 'passed' | 'needs_review' | 'failed' | 'not_run';
 export type BuilderRunMode = 'homepage_test' | 'page_test' | 'site_test' | 'full_site';
+export type BuilderProfileId = 'page_test' | 'site_test' | 'full_site';
+export type BuilderExecutionPreference = {
+  model?: string;
+  reasoningEffort?: string;
+};
+export type BuilderPreferences = {
+  pageTest: BuilderExecutionPreference;
+  siteTest: BuilderExecutionPreference;
+  fullSite: BuilderExecutionPreference;
+  updatedAt?: string;
+};
 export type AgentPackageStatus =
   'draft' | 'test_ready' | 'production_ready' | 'published' | 'superseded';
 export type AgentPackageProposalStatus =
@@ -698,6 +710,9 @@ export type BuilderRun = {
   status: BuilderRunStatus;
   templateVersion: string;
   model?: string;
+  reasoningEffort?: string;
+  codexRuntimeVersion?: string;
+  executionProfileSource?: 'recommended' | 'custom' | 'environment';
   progressPhase: string;
   progressDetail?: string;
   totalItems: number;

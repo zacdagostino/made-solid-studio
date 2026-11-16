@@ -1,4 +1,5 @@
 import * as Dialog from '@radix-ui/react-dialog';
+import { codexVisibleFailure, codexVisibleUserMessage } from '../lib/codex-visible-message';
 import {
   Activity,
   ArrowDown,
@@ -23,10 +24,13 @@ import {
   LoaderCircle,
   Maximize2,
   MessageSquareText,
+  Mic,
   MonitorUp,
   Pause,
+  PackageCheck,
   PanelsTopLeft,
   Pencil,
+  Pin,
   Play,
   Plus,
   RotateCcw,
@@ -38,6 +42,7 @@ import {
   SlidersHorizontal,
   Square,
   SquareTerminal,
+  Tags,
   Trash2,
   UsersRound,
   Volume2,
@@ -61,8 +66,10 @@ import {
 } from '../lib/codex-speech';
 import { studioRuntimeFetch } from '../lib/studio-runtime';
 import { openCodexPanelEvent } from '../lib/codex-panel-events';
+import { appendCodexDictation, maximumCodexPromptLength } from '../lib/codex-dictation';
 import { isSupabaseConfigured, usesLocalStorage } from '../lib/supabase';
 import {
+  codexConversationDropdownTitle,
   codexConversationRequestText,
   codexConversationTitle,
 } from '../lib/codex-conversation-title';
@@ -74,11 +81,73 @@ import {
   useMemo,
   useRef,
   useState,
+  useId,
   type ChangeEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import { Button, ButtonGroup, ConfirmationDialog, IconButton, StatusBadge } from './ui';
 import { MarkdownContent } from './MarkdownContent';
+import {
+  FeatureReleasesPanel,
+  type FeatureImplementation,
+  type FeatureRelease,
+} from './FeatureReleasesPanel';
+
+type CodexSpeechRecognitionResult = {
+  readonly isFinal: boolean;
+  readonly length: number;
+  readonly [index: number]: { readonly transcript: string };
+};
+
+type CodexSpeechRecognitionEvent = Event & {
+  readonly results: {
+    readonly length: number;
+    readonly [index: number]: CodexSpeechRecognitionResult;
+  };
+};
+
+type CodexSpeechRecognitionErrorEvent = Event & { readonly error: string };
+
+type CodexSpeechRecognition = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  maxAlternatives: number;
+  onend: (() => void) | null;
+  onerror: ((event: CodexSpeechRecognitionErrorEvent) => void) | null;
+  onresult: ((event: CodexSpeechRecognitionEvent) => void) | null;
+  onstart: (() => void) | null;
+  abort: () => void;
+  start: () => void;
+  stop: () => void;
+};
+
+type CodexSpeechRecognitionConstructor = new () => CodexSpeechRecognition;
+
+function codexSpeechRecognitionConstructor() {
+  if (typeof window === 'undefined') return undefined;
+  const speechWindow = window as typeof window & {
+    SpeechRecognition?: CodexSpeechRecognitionConstructor;
+    webkitSpeechRecognition?: CodexSpeechRecognitionConstructor;
+  };
+  return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
+}
+
+function codexDictationErrorMessage(error: string) {
+  if (error === 'not-allowed' || error === 'service-not-allowed') {
+    return 'Microphone access was blocked. Allow it in your browser settings, then try again.';
+  }
+  if (error === 'audio-capture') {
+    return 'No microphone is available. Connect or enable a microphone, then try again.';
+  }
+  if (error === 'no-speech') {
+    return 'No speech was heard. Press the microphone and try again.';
+  }
+  if (error === 'network') {
+    return 'Voice transcription could not reach the browser speech service. Check your connection and try again.';
+  }
+  return 'Voice transcription stopped unexpectedly. Press the microphone to try again.';
+}
 
 type CodexEffort = {
   id: string;
@@ -97,19 +166,28 @@ type CodexModel = {
 };
 
 type CodexThread = {
+  compactTitle?: string;
+  dropdownTitle?: string;
   id: string;
   name?: string;
   preview?: string;
+  previousPreview?: string;
+  contextPreviews?: string[];
   status: string;
   working?: boolean;
   activeFlags?: string[];
   updatedAt?: number;
   workingStartedAt?: number;
+  lastObservedAt?: number;
+  lastVisibleUpdateAt?: number;
   activeTurnId?: string;
   lastTurnStatus?: string;
+  failure?: string;
   interrupted?: boolean;
   discardable?: boolean;
+  pinned?: boolean;
   scope?: 'client' | 'universal';
+  tags?: string[];
 };
 
 type CodexUsageWindow = {
@@ -122,17 +200,42 @@ type CodexStatus = {
   status: 'ready' | 'unavailable';
   detail: string;
   threadIssue?: string;
+  historyLimited?: boolean;
+  historyHasMore?: boolean;
   account?: { type: string; planType: string };
   subscriptionUsage?: {
     primary?: CodexUsageWindow;
     secondary?: CodexUsageWindow;
+    credits?: {
+      hasCredits: boolean;
+      unlimited: boolean;
+      balance?: number;
+    };
+    includedUsageExhausted?: boolean;
+    usingCredits?: boolean;
   };
   billing?: {
     apiKeyConfigured: boolean;
     mode: 'chatgpt_subscription' | 'api_credits';
     label: string;
   };
-  capabilities?: { stopActiveTurn?: boolean };
+  capabilities?: { aiConversationTitles?: boolean; stopActiveTurn?: boolean };
+  runtimeUpdate?: {
+    currentVersion: string;
+    failureSummary: string | null;
+    latestVersion: string;
+    status:
+      | 'checking'
+      | 'current'
+      | 'downloading'
+      | 'failed'
+      | 'restart_pending'
+      | 'restarting'
+      | 'rollback'
+      | 'updated'
+      | 'waiting_for_idle';
+    statusChangedAt: string | null;
+  };
   thread?: CodexThread;
   threads: CodexThread[];
   messages: Array<{
@@ -145,6 +248,8 @@ type CodexStatus = {
     attachmentId?: string;
     attachmentIds?: string[];
     feedbackId?: string;
+    interruptionReason?: 'replaced' | 'stopped' | 'paused';
+    createdAt?: number;
     position?: number;
   }>;
   activities?: CodexActivity[];
@@ -167,6 +272,36 @@ type CodexStatus = {
     workMode?: 'direct' | 'team';
   }>;
 };
+
+// Bound authentication, response headers and body together. A suspended auth
+// refresh or response body must not hold the polling lock indefinitely.
+async function readCodexStatus(url: string) {
+  const controller = new AbortController();
+  let timeout: number | undefined;
+  try {
+    return await Promise.race([
+      (async () => {
+        const response = await studioRuntimeFetch(url, {
+          cache: 'no-store',
+          headers: { Accept: 'application/json' },
+          signal: controller.signal,
+        });
+        const body = response.headers.get('content-type')?.includes('application/json')
+          ? ((await response.json()) as CodexStatus)
+          : undefined;
+        return { response, body };
+      })(),
+      new Promise<never>((_, reject) => {
+        timeout = window.setTimeout(() => {
+          controller.abort();
+          reject(new Error('The conversation update timed out.'));
+        }, 12_000);
+      }),
+    ]);
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
 
 function canBranchCodexMessage(
   message: CodexStatus['messages'][number],
@@ -295,8 +430,10 @@ const codexPreferencesEndpoint = '/__made-solid/codex-preferences';
 const aiBillingModeEndpoint = '/__made-solid/ai-billing-mode';
 const browserCaptureSource = 'made-solid-browser-capture';
 const codexPreferencesKey = 'made-solid-codex-preferences-v1';
+const dismissedRuntimeUpdateKeyStorage = 'made-solid-codex-runtime-update-dismissed-v1';
 const codexDraftKey = 'made-solid-codex-draft-v1';
 const codexChatSessionKey = 'made-solid-codex-chat-session-v1';
+const codexLatestChatCacheKey = 'made-solid-codex-latest-chat-v1';
 const codexConversationLifecycleKey = 'made-solid-codex-conversation-lifecycle-v1';
 const maximumPhotoBytes = 15 * 1024 * 1024;
 const maximumDraftAttachments = 5;
@@ -411,8 +548,95 @@ type CodexConversationLifecycle = {
   workingByThread: Record<string, boolean>;
 };
 
+function readDismissedRuntimeUpdateKey() {
+  if (typeof window === 'undefined') return '';
+  try {
+    return window.localStorage.getItem(dismissedRuntimeUpdateKeyStorage) || '';
+  } catch {
+    return '';
+  }
+}
+
+function persistDismissedRuntimeUpdateKey(key: string) {
+  try {
+    window.localStorage.setItem(dismissedRuntimeUpdateKeyStorage, key);
+  } catch {
+    // Dismissal still applies for this mounted chat when browser storage is unavailable.
+  }
+}
+
 function scopedStorageKey(base: string, workspaceDirectory?: string) {
   return workspaceDirectory ? `${base}:client:${workspaceDirectory}` : base;
+}
+
+type CodexLatestChatCache = {
+  cachedAt: number;
+  status: CodexStatus;
+  version: 1;
+};
+
+function readLatestCodexChat(
+  workspaceDirectory?: string,
+  selectedThreadId?: string,
+): CodexStatus | undefined {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    const cached = JSON.parse(
+      window.localStorage.getItem(scopedStorageKey(codexLatestChatCacheKey, workspaceDirectory)) ||
+        '{}',
+    ) as Partial<CodexLatestChatCache>;
+    const status = cached.status;
+    if (
+      cached.version !== 1 ||
+      !status ||
+      !Array.isArray(status.messages) ||
+      !Array.isArray(status.threads) ||
+      !Array.isArray(status.models) ||
+      !Array.isArray(status.agents) ||
+      (selectedThreadId && status.thread?.id !== selectedThreadId)
+    ) {
+      return undefined;
+    }
+    return status;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeLatestCodexChat(status: CodexStatus, workspaceDirectory?: string) {
+  if (!status.thread) return;
+  const boundedStatus: CodexStatus = {
+    ...status,
+    activities: status.activities?.slice(-200),
+    agents: [],
+    interruptingCount: 0,
+    messages: status.messages.slice(-120),
+    queuedCount: 0,
+    queuedMessages: [],
+    runtimeUpdate: undefined,
+    thread: {
+      ...status.thread,
+      activeFlags: [],
+      activeTurnId: undefined,
+      working: false,
+      workingStartedAt: undefined,
+    },
+    threads: status.threads.slice(0, 100).map((thread) => ({
+      ...thread,
+      activeFlags: [],
+      activeTurnId: undefined,
+      working: false,
+      workingStartedAt: undefined,
+    })),
+  };
+  try {
+    window.localStorage.setItem(
+      scopedStorageKey(codexLatestChatCacheKey, workspaceDirectory),
+      JSON.stringify({ cachedAt: Date.now(), status: boundedStatus, version: 1 }),
+    );
+  } catch {
+    // The live chat remains available when private browser storage is unavailable or full.
+  }
 }
 
 function readCodexChatSession(workspaceDirectory?: string): CodexChatSession {
@@ -736,16 +960,22 @@ function usageResetLabel(resetsAt: number | undefined) {
   }).format(new Date(resetsAt * 1_000));
 }
 
+function creditBalanceLabel(balance: number | undefined) {
+  if (balance === undefined) return undefined;
+  return new Intl.NumberFormat('en-AU', { maximumFractionDigits: 4 }).format(balance);
+}
+
 function CodexSubscriptionUsage({ usage }: { usage: CodexStatus['subscriptionUsage'] }) {
   const windows = [usage?.primary, usage?.secondary].filter((window): window is CodexUsageWindow =>
     Boolean(window),
   );
+  const creditBalance = creditBalanceLabel(usage?.credits?.balance);
   return (
     <section aria-labelledby="codex-subscription-usage-title" className="codex-subscription-usage">
       <header>
         <span>
-          <strong id="codex-subscription-usage-title">Codex subscription usage</strong>
-          <small>Live usage from your signed-in ChatGPT plan</small>
+          <strong id="codex-subscription-usage-title">Codex plan and credits</strong>
+          <small>Live usage from your signed-in ChatGPT account</small>
         </span>
         {windows.length === 1 ? (
           <strong className="codex-subscription-usage__total">
@@ -781,6 +1011,33 @@ function CodexSubscriptionUsage({ usage }: { usage: CodexStatus['subscriptionUsa
         </div>
       ) : (
         <p>Usage is temporarily unavailable. Your Codex chat remains connected.</p>
+      )}
+      {usage?.credits ? (
+        <div
+          className={`codex-credit-usage${usage.usingCredits ? ' is-active' : ''}`}
+          role="status"
+        >
+          <CreditCard aria-hidden="true" size={17} />
+          <span>
+            <strong>
+              {usage.usingCredits
+                ? 'Using ChatGPT credits now'
+                : usage.credits.hasCredits
+                  ? 'ChatGPT credits available'
+                  : 'No ChatGPT credits available'}
+            </strong>
+            <small>
+              {usage.credits.unlimited
+                ? 'Unlimited credit access reported by ChatGPT'
+                : creditBalance
+                  ? `${creditBalance} credits remaining${usage.includedUsageExhausted ? ' after included usage reached its limit' : ''}`
+                  : 'The current credit balance is unavailable'}
+            </small>
+          </span>
+          {usage.usingCredits ? <b>Active</b> : null}
+        </div>
+      ) : (
+        <p>ChatGPT credit usage is temporarily unavailable.</p>
       )}
     </section>
   );
@@ -840,7 +1097,7 @@ function CodexConversationLoading({ transition }: { transition: ConversationTran
   const creating = transition.kind === 'create';
   const branching = transition.kind === 'branch';
   return (
-    <div className="codex-conversation-loading" role="status">
+    <div className={`codex-conversation-loading${creating ? ' is-creating' : ''}`} role="status">
       <div className="codex-conversation-loading__status">
         <span aria-hidden="true" className="codex-conversation-loading__icon">
           <Bot size={19} />
@@ -855,7 +1112,7 @@ function CodexConversationLoading({ transition }: { transition: ConversationTran
           </strong>
           <small>
             {creating
-              ? 'Preparing a fresh Codex workspace…'
+              ? 'You can start typing while Studio prepares the conversation.'
               : branching
                 ? 'Copying context through the selected reply…'
                 : `Loading ${transition.label}…`}
@@ -867,21 +1124,23 @@ function CodexConversationLoading({ transition }: { transition: ConversationTran
           <span />
         </span>
       </div>
-      <div aria-hidden="true" className="codex-conversation-loading__skeletons">
-        <span className="codex-conversation-loading__skeleton is-assistant">
-          <i />
-          <i />
-          <i />
-        </span>
-        <span className="codex-conversation-loading__skeleton is-user">
-          <i />
-          <i />
-        </span>
-        <span className="codex-conversation-loading__skeleton is-assistant is-short">
-          <i />
-          <i />
-        </span>
-      </div>
+      {!creating ? (
+        <div aria-hidden="true" className="codex-conversation-loading__skeletons">
+          <span className="codex-conversation-loading__skeleton is-assistant">
+            <i />
+            <i />
+            <i />
+          </span>
+          <span className="codex-conversation-loading__skeleton is-user">
+            <i />
+            <i />
+          </span>
+          <span className="codex-conversation-loading__skeleton is-assistant is-short">
+            <i />
+            <i />
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1078,8 +1337,23 @@ function lastUsedTime(timestamp: number | undefined, now: number) {
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(usedAt);
 }
 
+function featureDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? 'Recently'
+    : new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date);
+}
+
 function threadTitle(thread: CodexThread | undefined) {
   return codexConversationTitle(thread);
+}
+
+function threadDropdownTitle(thread: CodexThread | undefined) {
+  return codexConversationDropdownTitle(thread);
+}
+
+function threadHasCompletedWork(thread: CodexThread | undefined) {
+  return ['complete', 'completed'].includes(thread?.lastTurnStatus ?? '');
 }
 
 function threadLastUsedAt(thread: CodexThread | undefined) {
@@ -1087,6 +1361,35 @@ function threadLastUsedAt(thread: CodexThread | undefined) {
     (timestamp): timestamp is number => typeof timestamp === 'number',
   );
   return timestamps.length ? Math.max(...timestamps) : undefined;
+}
+
+function organizedThreads(threads: CodexThread[]) {
+  return [...threads].sort(
+    (left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)),
+  );
+}
+
+type ThreadFeatureEntry = {
+  feature: FeatureRelease;
+  implementations: FeatureImplementation[];
+  latest?: FeatureImplementation;
+};
+
+function featureEntriesForThread(features: FeatureRelease[], threadId: string) {
+  if (!threadId) return [];
+  return features
+    .flatMap((feature): ThreadFeatureEntry[] => {
+      const implementations = feature.implementations.filter(
+        (implementation) => implementation.threadId === threadId,
+      );
+      if (!implementations.length && !feature.linkedThreadIds?.includes(threadId)) return [];
+      return [{ feature, implementations, latest: implementations.at(-1) }];
+    })
+    .sort((left, right) =>
+      String(right.latest?.completedAt ?? right.feature.updatedAt).localeCompare(
+        String(left.latest?.completedAt ?? left.feature.updatedAt),
+      ),
+    );
 }
 
 async function waitForHiddenCaptureUi() {
@@ -1155,6 +1458,8 @@ export function CodexFeedbackPanel({
   portalContainer?: HTMLElement | null;
   workspaceDirectory?: string;
 }) {
+  const composerPromptId = useId();
+  const dictationStatusId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const conversationTriggerRef = useRef<HTMLButtonElement>(null);
   const chatPreferencesTriggerRef = useRef<HTMLButtonElement>(null);
@@ -1163,6 +1468,9 @@ export function CodexFeedbackPanel({
   const conversationTransitionRef = useRef<ConversationTransition>();
   const statusRefreshInFlightRef = useRef(0);
   const initialChatSessionRef = useRef(readCodexChatSession(workspaceDirectory));
+  const initialCachedStatusRef = useRef(
+    readLatestCodexChat(workspaceDirectory, initialChatSessionRef.current.selectedThreadId),
+  );
   const initialConversationLifecycleRef = useRef(readCodexConversationLifecycle());
   const workingByThreadRef = useRef(initialConversationLifecycleRef.current.workingByThread);
   const unseenCompletionThreadIdsRef = useRef(
@@ -1176,6 +1484,9 @@ export function CodexFeedbackPanel({
   const restoredChatThreadRef = useRef('');
   const chatSessionRef = useRef(initialChatSessionRef.current);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const dictationRecognitionRef = useRef<CodexSpeechRecognition>();
+  const dictationBasePromptRef = useRef('');
+  const dictationEndNoticeRef = useRef<{ tone: 'status' | 'error'; text: string } | undefined>();
   const temporaryQuestionTextareaRef = useRef<HTMLTextAreaElement>(null);
   const temporaryQuestionAbortRef = useRef<AbortController>();
   const photoInputRef = useRef<HTMLInputElement>(null);
@@ -1214,7 +1525,11 @@ export function CodexFeedbackPanel({
   const [phase, setPhase] = useState<PanelPhase>(() =>
     page || initialChatSessionRef.current.isOpen ? 'compose' : 'closed',
   );
-  const [status, setStatus] = useState<CodexStatus>();
+  const [status, setStatus] = useState<CodexStatus | undefined>(initialCachedStatusRef.current);
+  const cachedStatusFingerprintRef = useRef('');
+  const [panelView, setPanelView] = useState<'chat' | 'features'>('chat');
+  const [featureIndex, setFeatureIndex] = useState<FeatureRelease[]>([]);
+  const [expandedFeatureThreadId, setExpandedFeatureThreadId] = useState('');
   const [enteringTimelineIds, setEnteringTimelineIds] = useState<Set<string>>(() => new Set());
   const [selectedModelId, setSelectedModelId] = useState(() => readCodexPreferences().modelId);
   const [selectedEffort, setSelectedEffort] = useState(() => {
@@ -1239,9 +1554,26 @@ export function CodexFeedbackPanel({
   const [selection, setSelection] = useState<Selection>();
   const [draftAttachments, setDraftAttachments] = useState<DraftAttachment[]>([]);
   const [prompt, setPrompt] = useState(() => readCodexDraft(workspaceDirectory));
+  const [dictationState, setDictationState] = useState<
+    'idle' | 'starting' | 'listening' | 'stopping'
+  >('idle');
+  const [dictationNotice, setDictationNotice] = useState<{
+    tone: 'status' | 'error';
+    text: string;
+  }>();
   const [selectedExcerpt, setSelectedExcerpt] = useState<CodexExcerpt>();
   const [temporaryQuestion, setTemporaryQuestion] = useState<TemporaryQuestion>();
   const [error, setError] = useState<string>();
+  const [statusConnectionIssue, setStatusConnectionIssue] = useState<{
+    detail: string;
+    startedAt: number;
+  }>();
+  const [isCheckingStatus, setIsCheckingStatus] = useState(false);
+  const [dismissedRuntimeUpdateKey, setDismissedRuntimeUpdateKey] = useState(
+    readDismissedRuntimeUpdateKey,
+  );
+  const [retryingRuntimeUpdate, setRetryingRuntimeUpdate] = useState(false);
+  const [runtimeUpdateRetryError, setRuntimeUpdateRetryError] = useState('');
   const [browserCaptureAvailable, setBrowserCaptureAvailable] = useState(false);
   const [clock, setClock] = useState(() => Date.now());
   const [unseenCompletionThreadIds, setUnseenCompletionThreadIds] = useState(
@@ -1265,9 +1597,17 @@ export function CodexFeedbackPanel({
   const [deleteQueueId, setDeleteQueueId] = useState('');
   const [isStoppingTurn, setIsStoppingTurn] = useState(false);
   const [isCreatingThread, setIsCreatingThread] = useState(false);
+  const [submissionNotice, setSubmissionNotice] = useState('');
+  const [isRepairingThread, setIsRepairingThread] = useState(false);
+  const [repairStatus, setRepairStatus] = useState('');
   const [deleteConversationId, setDeleteConversationId] = useState('');
   const [isDeletingConversation, setIsDeletingConversation] = useState(false);
   const [deleteConversationError, setDeleteConversationError] = useState('');
+  const [organizeConversationId, setOrganizeConversationId] = useState('');
+  const [organizeConversationPinned, setOrganizeConversationPinned] = useState(false);
+  const [organizeConversationTags, setOrganizeConversationTags] = useState('');
+  const [organizeConversationError, setOrganizeConversationError] = useState('');
+  const [isOrganizingConversation, setIsOrganizingConversation] = useState(false);
   const [conversationTransition, setConversationTransition] = useState<ConversationTransition>();
   const [isResumingThread, setIsResumingThread] = useState(false);
   const [teamResumeState, setTeamResumeState] = useState<TeamResumeState>();
@@ -1303,6 +1643,7 @@ export function CodexFeedbackPanel({
   const [autoReadCodex, setAutoReadCodex] = useState(() => readCodexPreferences().autoReadCodex);
   const [runtimePreferencesReady, setRuntimePreferencesReady] = useState(false);
   const [runtimePreferencesHydrated, setRuntimePreferencesHydrated] = useState(false);
+  const runtimePreferencesSnapshotRef = useRef('');
   const [selectedSpeechModel, setSelectedSpeechModel] = useState('chirp3-hd');
   const [voicePreviewState, setVoicePreviewState] = useState<'idle' | 'loading' | 'playing'>(
     'idle',
@@ -1313,6 +1654,8 @@ export function CodexFeedbackPanel({
     'speechSynthesis' in window &&
     'SpeechSynthesisUtterance' in window;
   const speechSupported = deviceSpeechSupported || cloudSpeechConfiguration?.available === true;
+  const dictationSupported = Boolean(codexSpeechRecognitionConstructor());
+  const isDictating = dictationState !== 'idle';
   const selectedCloudSpeechVoice = cloudSpeechConfiguration?.voices.find(
     ({ id }) => id === selectedSpeechVoice,
   );
@@ -1483,6 +1826,109 @@ export function CodexFeedbackPanel({
     },
     [clearCloudSpeech, clearSpeechTimers, stopVoicePreview],
   );
+
+  const stopCodexDictation = useCallback(
+    (text = 'Dictation stopped. Review the message, then send it when you are ready.') => {
+      const recognition = dictationRecognitionRef.current;
+      if (!recognition) return;
+      dictationEndNoticeRef.current = { tone: 'status', text };
+      setDictationState('stopping');
+      setDictationNotice({ tone: 'status', text: 'Stopping dictation…' });
+      try {
+        recognition.stop();
+      } catch {
+        recognition.abort();
+        dictationRecognitionRef.current = undefined;
+        setDictationState('idle');
+        setDictationNotice(dictationEndNoticeRef.current);
+      }
+    },
+    [],
+  );
+
+  const startCodexDictation = useCallback(() => {
+    const SpeechRecognition = codexSpeechRecognitionConstructor();
+    if (!SpeechRecognition) {
+      setDictationNotice({
+        tone: 'error',
+        text: 'Voice input is not available in this browser. Use a current Chrome or Safari browser.',
+      });
+      return;
+    }
+
+    stopCodexSpeech(false);
+    const recognition = new SpeechRecognition();
+    dictationRecognitionRef.current = recognition;
+    dictationBasePromptRef.current = prompt;
+    dictationEndNoticeRef.current = {
+      tone: 'status',
+      text: 'Dictation ended. Review the message, then send it when you are ready.',
+    };
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = codexSpeechLanguage;
+    recognition.maxAlternatives = 1;
+    recognition.onstart = () => {
+      if (dictationRecognitionRef.current !== recognition) return;
+      setDictationState('listening');
+      setDictationNotice({
+        tone: 'status',
+        text: 'Listening… Speak naturally, then press Stop dictation to review your message.',
+      });
+    };
+    recognition.onresult = (event) => {
+      if (dictationRecognitionRef.current !== recognition) return;
+      let transcript = '';
+      for (let index = 0; index < event.results.length; index += 1) {
+        transcript += `${event.results[index][0]?.transcript ?? ''} `;
+      }
+      const nextPrompt = appendCodexDictation(dictationBasePromptRef.current, transcript);
+      setPrompt(nextPrompt);
+      if (
+        nextPrompt.length === maximumCodexPromptLength &&
+        appendCodexDictation(
+          dictationBasePromptRef.current,
+          transcript,
+          maximumCodexPromptLength + 1,
+        ).length > maximumCodexPromptLength
+      ) {
+        stopCodexDictation(
+          'Dictation stopped because the message reached 4,000 characters. Review it before sending.',
+        );
+      }
+    };
+    recognition.onerror = (event) => {
+      if (dictationRecognitionRef.current !== recognition) return;
+      if (event.error === 'aborted' && dictationEndNoticeRef.current?.tone === 'status') return;
+      const notice = { tone: 'error' as const, text: codexDictationErrorMessage(event.error) };
+      dictationEndNoticeRef.current = undefined;
+      setDictationNotice(notice);
+    };
+    recognition.onend = () => {
+      if (dictationRecognitionRef.current !== recognition) return;
+      dictationRecognitionRef.current = undefined;
+      setDictationState('idle');
+      if (dictationEndNoticeRef.current) {
+        setDictationNotice(dictationEndNoticeRef.current);
+      }
+      dictationEndNoticeRef.current = undefined;
+    };
+
+    setError(undefined);
+    setDictationState('starting');
+    setDictationNotice({ tone: 'status', text: 'Starting microphone…' });
+    setIsComposerExpanded(true);
+    try {
+      recognition.start();
+    } catch {
+      dictationRecognitionRef.current = undefined;
+      setDictationState('idle');
+      setDictationNotice({
+        tone: 'error',
+        text: 'The microphone could not start. Check browser permission and try again.',
+      });
+    }
+  }, [prompt, stopCodexDictation, stopCodexSpeech]);
 
   const playStoredCodexSpeech = useCallback(
     (messageId: string) => {
@@ -2172,9 +2618,8 @@ export function CodexFeedbackPanel({
     const scrollingUp = log.scrollTop < previousChatScrollTopRef.current - 1;
     previousChatScrollTopRef.current = log.scrollTop;
     updateChatFollowingLatest(followingLatest);
-    if (!followingLatest && scrollingUp) {
+    if (!followingLatest && scrollingUp && document.activeElement !== composerTextareaRef.current) {
       setIsComposerExpanded(false);
-      composerTextareaRef.current?.blur();
     }
     saveChatPosition();
   }, [mountedChatLog, saveChatPosition, updateChatFollowingLatest]);
@@ -2191,6 +2636,7 @@ export function CodexFeedbackPanel({
       setConversationPickerOpen(false);
       setExpandedAgentId('');
       setTeamResumeState(undefined);
+      setRepairStatus('');
     },
     [saveChatPosition, stopCodexSpeech, updateChatSession],
   );
@@ -2218,17 +2664,11 @@ export function CodexFeedbackPanel({
         if (requestedThreadId) query.set('threadId', requestedThreadId);
         if (workspaceDirectory) query.set('workspace', workspaceDirectory);
         if (requestedScope) query.set('threadScope', requestedScope);
-        const controller = new AbortController();
-        const timeout = window.setTimeout(() => controller.abort(), 12_000);
-        const response = await studioRuntimeFetch(
+        const { response, body } = await readCodexStatus(
           `${statusEndpoint}${query.size ? `?${query.toString()}` : ''}`,
-          {
-            headers: { Accept: 'application/json' },
-            signal: controller.signal,
-          },
         );
-        window.clearTimeout(timeout);
         if (requestSequence !== statusRequestSequenceRef.current) return false;
+        if (requestedThreadId !== selectedThreadIdRef.current) return false;
         if (
           response.status === 404 ||
           !response.headers.get('content-type')?.includes('application/json')
@@ -2236,8 +2676,8 @@ export function CodexFeedbackPanel({
           setIsSupported(false);
           return false;
         }
+        setStatusConnectionIssue(undefined);
         if (!response.ok) {
-          const failure = (await response.json().catch(() => ({}))) as { detail?: string };
           setIsSupported(true);
           setStatus((current) => ({
             account: current?.account,
@@ -2245,37 +2685,75 @@ export function CodexFeedbackPanel({
             agents: current?.agents ?? [],
             billing: current?.billing,
             capabilities: current?.capabilities,
-            detail: failure.detail || 'The Codex service is reconnecting. Try again shortly.',
+            detail: body?.detail || 'The Codex service is reconnecting. Try again shortly.',
             messages: current?.messages ?? [],
             models: current?.models ?? [],
             queuedCount: current?.queuedCount ?? 0,
             queuedMessages: current?.queuedMessages ?? [],
             status: 'unavailable',
             subscriptionUsage: current?.subscriptionUsage,
+            runtimeUpdate: body?.runtimeUpdate ?? current?.runtimeUpdate,
             thread: current?.thread,
+            threadIssue: current?.threadIssue,
             threads: current?.threads ?? [],
           }));
           return false;
         }
-        const receivedStatus = (await response.json()) as CodexStatus;
+        if (!body) return false;
+        const receivedStatus = body;
         const nextThreads = receivedStatus.threads.filter(
           (thread) => !deletedThreadIdsRef.current.has(thread.id),
         );
         const nextStatus = {
           ...receivedStatus,
+          messages: receivedStatus.messages.map((message) =>
+            message.role === 'user'
+              ? { ...message, text: codexVisibleUserMessage(message.text) }
+              : message,
+          ),
           thread:
             receivedStatus.thread && !deletedThreadIdsRef.current.has(receivedStatus.thread.id)
               ? receivedStatus.thread
               : nextThreads[0],
           threads: nextThreads,
         };
+        if (nextStatus.thread)
+          nextStatus.thread = {
+            ...nextStatus.thread,
+            failure: codexVisibleFailure(nextStatus.thread),
+          };
         setIsSupported(true);
         if (requestedThreadId !== selectedThreadIdRef.current) return false;
         recordConversationLifecycle(
           nextStatus,
           phase !== 'closed' ? nextStatus.thread?.id : undefined,
         );
-        setStatus(nextStatus);
+        setStatus((current) => {
+          const sameConversation = current?.thread?.id === nextStatus.thread?.id;
+          const missingTranscript = Boolean(
+            current?.messages.length && !nextStatus.messages.length,
+          );
+          if (
+            sameConversation &&
+            current?.messages.length &&
+            (nextStatus.threadIssue || missingTranscript)
+          ) {
+            return {
+              ...nextStatus,
+              threadIssue:
+                'Reconnecting to this conversation. Showing the last loaded messages; updates will retry automatically.',
+              detail: 'Reconnecting to this conversation. Showing the last loaded messages.',
+              thread: current.thread,
+              threads: nextStatus.threads.map((thread) =>
+                thread.id === current.thread?.id ? { ...thread, ...current.thread } : thread,
+              ),
+              messages: current.messages,
+              activities: current.activities,
+              agents: current.agents,
+            };
+          }
+          return nextStatus;
+        });
         if (
           nextStatus.thread &&
           (!requestedThreadId ||
@@ -2298,9 +2776,15 @@ export function CodexFeedbackPanel({
           }
         }
         return true;
-      } catch {
+      } catch (cause) {
         if (requestSequence !== statusRequestSequenceRef.current) return false;
-        setIsSupported((current) => (current === undefined ? false : current));
+        // A timeout or offline transition is not evidence that this surface is unsupported.
+        // Keep the launcher usable and the cached transcript visible while polling retries.
+        setStatusConnectionIssue((current) => ({
+          detail:
+            cause instanceof Error ? cause.message : 'Studio could not refresh this conversation.',
+          startedAt: current?.startedAt ?? Date.now(),
+        }));
         return false;
       } finally {
         statusRefreshInFlightRef.current = Math.max(0, statusRefreshInFlightRef.current - 1);
@@ -2363,6 +2847,36 @@ export function CodexFeedbackPanel({
     );
     return () => window.clearInterval(interval);
   }, [pollingActiveWork, refreshStatus]);
+
+  useEffect(() => {
+    if (isSupported !== true || status?.status !== 'ready' || !status.thread) return;
+    const fingerprint = JSON.stringify([
+      status.thread.id,
+      status.thread.updatedAt,
+      status.thread.working,
+      status.messages.map(({ id, phase, text, turnStatus }) => [id, phase, text, turnStatus]),
+      status.activities?.map(({ id, outcome, status: activityStatus }) => [
+        id,
+        outcome,
+        activityStatus,
+      ]),
+      status.queuedMessages?.map(({ id, position }) => [id, position]),
+      status.threads.map(({ id, updatedAt, working }) => [id, updatedAt, working]),
+    ]);
+    if (fingerprint === cachedStatusFingerprintRef.current) return;
+    cachedStatusFingerprintRef.current = fingerprint;
+    writeLatestCodexChat(status, workspaceDirectory);
+  }, [isSupported, status, workspaceDirectory]);
+
+  const checkForChatUpdates = useCallback(async () => {
+    if (isCheckingStatus) return;
+    setIsCheckingStatus(true);
+    try {
+      await refreshStatus(selectedThreadIdRef.current, selectedThreadScopeRef.current, true);
+    } finally {
+      setIsCheckingStatus(false);
+    }
+  }, [isCheckingStatus, refreshStatus]);
 
   useEffect(() => {
     const refreshVisibleChat = () => {
@@ -2600,6 +3114,38 @@ export function CodexFeedbackPanel({
     };
   }, [stopCodexSpeech]);
 
+  useEffect(() => {
+    if (phase !== 'closed') return;
+    stopCodexDictation('Dictation stopped when the Codex chat closed. Your words remain saved.');
+  }, [phase, stopCodexDictation]);
+
+  useEffect(() => {
+    const stopForHiddenPage = () => {
+      if (document.visibilityState === 'visible') return;
+      stopCodexDictation(
+        'Dictation stopped when Studio moved to the background. Your words remain saved.',
+      );
+    };
+    const stopForNavigation = () =>
+      stopCodexDictation('Dictation stopped when you left this view. Your words remain saved.');
+    document.addEventListener('visibilitychange', stopForHiddenPage);
+    window.addEventListener('hashchange', stopForNavigation);
+    window.addEventListener('pagehide', stopForNavigation);
+    return () => {
+      document.removeEventListener('visibilitychange', stopForHiddenPage);
+      window.removeEventListener('hashchange', stopForNavigation);
+      window.removeEventListener('pagehide', stopForNavigation);
+      const recognition = dictationRecognitionRef.current;
+      if (!recognition) return;
+      dictationRecognitionRef.current = undefined;
+      recognition.onstart = null;
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+      recognition.abort();
+    };
+  }, [stopCodexDictation]);
+
   useLayoutEffect(() => {
     if (phase !== 'compose' && phase !== 'sending-chat') return;
     const threadId = selectedThreadId || status?.thread?.id || '';
@@ -2712,6 +3258,13 @@ export function CodexFeedbackPanel({
   useEffect(() => setSelectedExcerpt(undefined), [selectedThreadId]);
 
   const displayedThreadId = selectedThreadId || status?.thread?.id || '';
+  const conversationBlocksComposer = Boolean(
+    conversationTransition && conversationTransition.kind !== 'create',
+  );
+  const composerHasThreadIssue = Boolean(
+    status?.threadIssue && conversationTransition?.kind !== 'create',
+  );
+  const selectedThreadFeatures = featureEntriesForThread(featureIndex, displayedThreadId);
   const pendingChatAccepted = Boolean(
     pendingChatMessage &&
     status?.thread?.id === pendingChatMessage.threadId &&
@@ -2757,7 +3310,8 @@ export function CodexFeedbackPanel({
         .find((message) => message.role === 'user' && message.text.trim())?.text,
   );
 
-  const activeAgents = status?.agents?.filter((agent) => agent.working) ?? [];
+  const activeAgents =
+    isSupported === true ? (status?.agents?.filter((agent) => agent.working) ?? []) : [];
   const transcriptEntries = useMemo(() => {
     const messages = (status?.messages ?? []).map((message, index) => ({
       kind: 'message' as const,
@@ -2831,6 +3385,15 @@ export function CodexFeedbackPanel({
     }
     return contexts;
   }, [transcriptEntries]);
+  const featureByTurnId = useMemo(() => {
+    const entries = new Map<string, ThreadFeatureEntry>();
+    for (const entry of selectedThreadFeatures) {
+      for (const implementation of entry.implementations) {
+        entries.set(implementation.turnId, entry);
+      }
+    }
+    return entries;
+  }, [selectedThreadFeatures]);
   const interruptedAgents = status?.agents?.filter((agent) => agent.status === 'interrupted') ?? [];
   const selectedTeamResumeState =
     teamResumeState?.threadId === (selectedThreadId || status?.thread?.id)
@@ -2897,10 +3460,12 @@ export function CodexFeedbackPanel({
   const isCodexWorking = status?.thread?.working === true || currentActiveAgents.length > 0;
   const hasUnseenCompletion = unseenCompletionThreadIds.size > 0;
   const hasActiveTeam = currentActiveAgents.length > 0;
-  const anyConversationWorking = status?.threads.some((thread) => thread.working) === true;
-  const queuedCount = status?.queuedCount ?? 0;
-  const interruptingCount = status?.interruptingCount ?? 0;
+  const anyConversationWorking =
+    isSupported === true && status?.threads.some((thread) => thread.working) === true;
+  const queuedCount = isSupported === true ? (status?.queuedCount ?? 0) : 0;
+  const interruptingCount = isSupported === true ? (status?.interruptingCount ?? 0) : 0;
   const activeFlags = status?.thread?.activeFlags ?? [];
+  const activeTurnId = status?.thread?.activeTurnId;
   const hasActiveProgressUpdate =
     status?.messages.some(
       (message) =>
@@ -2908,27 +3473,100 @@ export function CodexFeedbackPanel({
         message.phase === 'commentary' &&
         (!status.thread?.activeTurnId || message.turnId === status.thread.activeTurnId),
     ) === true;
+  const hasActiveActivity =
+    status?.activities?.some((activity) => !activeTurnId || activity.turnId === activeTurnId) ===
+    true;
+  const hasActiveVisibleUpdate = hasActiveProgressUpdate || hasActiveActivity;
+  const workingStartedAt = timestampMilliseconds(status?.thread?.workingStartedAt);
+  const lastObservedAt = timestampMilliseconds(status?.thread?.lastObservedAt);
+  const lastVisibleUpdateAt = timestampMilliseconds(status?.thread?.lastVisibleUpdateAt);
+  const activeTurnAge = workingStartedAt ? Math.max(0, clock - workingStartedAt) : 0;
+  const visibleUpdateAge = lastVisibleUpdateAt
+    ? Math.max(0, clock - lastVisibleUpdateAt)
+    : hasActiveVisibleUpdate
+      ? 0
+      : activeTurnAge;
+  const activitySignalAge = lastObservedAt ? Math.max(0, clock - lastObservedAt) : activeTurnAge;
+  const isWorkWaitState =
+    activeFlags.includes('waitingOnApproval') || activeFlags.includes('waitingOnUserInput');
+  const hasDelayedVisibleUpdate =
+    isCodexWorking && !isWorkWaitState && !isStoppingTurn && visibleUpdateAge >= 60_000;
+  const hasRecentNativeActivity = Boolean(lastObservedAt && activitySignalAge < 90_000);
+  const isPossiblyStalled =
+    hasDelayedVisibleUpdate && activeTurnAge >= 120_000 && !hasRecentNativeActivity;
+  const hasWorkingConnectionIssue = isCodexWorking && Boolean(statusConnectionIssue);
+  const workNeedsAttention =
+    hasWorkingConnectionIssue || hasDelayedVisibleUpdate || isPossiblyStalled;
   const workingTitle =
     isStoppingTurn || interruptingCount
       ? 'Stopping the current turn'
-      : activeFlags.includes('waitingOnApproval')
-        ? 'Waiting for approval'
-        : activeFlags.includes('waitingOnUserInput')
-          ? 'Waiting for your input'
-          : hasActiveProgressUpdate
-            ? 'Working through the next step'
-            : 'Getting oriented';
+      : hasWorkingConnectionIssue
+        ? 'Live updates disconnected'
+        : isPossiblyStalled
+          ? `No activity signal for ${elapsedTime(lastObservedAt || workingStartedAt, clock)}`
+          : hasDelayedVisibleUpdate && hasRecentNativeActivity
+            ? 'Codex is active; details are delayed'
+            : hasDelayedVisibleUpdate
+              ? 'No visible update yet'
+              : activeFlags.includes('waitingOnApproval')
+                ? 'Waiting for approval'
+                : activeFlags.includes('waitingOnUserInput')
+                  ? 'Waiting for your input'
+                  : hasActiveProgressUpdate
+                    ? 'Working through the next step'
+                    : 'Getting oriented';
   const workingDetail = isStoppingTurn
     ? 'Sending the stop request for this conversation and its active agent team.'
     : interruptingCount
       ? `${interruptingCount} ${interruptingCount === 1 ? 'message is' : 'messages are'} lined up next`
-      : activeFlags.includes('waitingOnApproval')
-        ? 'Codex will continue as soon as the requested approval is available.'
-        : activeFlags.includes('waitingOnUserInput')
-          ? 'Codex needs your response before it can continue safely.'
-          : hasActiveProgressUpdate
-            ? 'The latest progress is above. Another update will appear after the next verified step.'
-            : 'Reading your request and workspace context before acting.';
+      : hasWorkingConnectionIssue
+        ? `Studio could not refresh this chat: ${statusConnectionIssue?.detail} Codex may still be working, but this transcript can be out of date.`
+        : isPossiblyStalled
+          ? 'Studio is connected, but Codex has not produced a new activity signal. The turn may be stuck. Check once, then stop it if nothing changes.'
+          : hasDelayedVisibleUpdate && hasRecentNativeActivity
+            ? 'Studio can see Codex working, but its progress messages have not reached the transcript. Check now; stopping is safe if the delay continues.'
+            : hasDelayedVisibleUpdate
+              ? 'Codex still reports this turn as working, but no commentary or observable activity has appeared. Check now to rule out a delayed transcript.'
+              : activeFlags.includes('waitingOnApproval')
+                ? 'Codex will continue as soon as the requested approval is available.'
+                : activeFlags.includes('waitingOnUserInput')
+                  ? 'Codex needs your response before it can continue safely.'
+                  : hasActiveProgressUpdate
+                    ? 'The latest progress is above. Another update will appear after the next verified step.'
+                    : 'Reading your request and workspace context before acting.';
+  const runtimeUpdateNoticeKey = status?.runtimeUpdate
+    ? [
+        status.runtimeUpdate.status,
+        status.runtimeUpdate.statusChangedAt ?? '',
+        status.runtimeUpdate.currentVersion,
+        status.runtimeUpdate.latestVersion,
+        status.runtimeUpdate.failureSummary ?? '',
+      ].join(':')
+    : '';
+  const runtimeUpdateNoticeDismissed =
+    Boolean(runtimeUpdateNoticeKey) && dismissedRuntimeUpdateKey === runtimeUpdateNoticeKey;
+
+  const dismissRuntimeUpdateNotice = () => {
+    persistDismissedRuntimeUpdateKey(runtimeUpdateNoticeKey);
+    setDismissedRuntimeUpdateKey(runtimeUpdateNoticeKey);
+  };
+
+  const retryRuntimeUpdate = async () => {
+    if (retryingRuntimeUpdate) return;
+    setRetryingRuntimeUpdate(true);
+    setRuntimeUpdateRetryError('');
+    try {
+      const { retryCodexUpdate } = await import('../lib/codex-runtime-updates');
+      await retryCodexUpdate();
+      await refreshStatus();
+    } catch (cause) {
+      setRuntimeUpdateRetryError(
+        cause instanceof Error ? cause.message : 'Codex could not retry the update. Try again.',
+      );
+    } finally {
+      setRetryingRuntimeUpdate(false);
+    }
+  };
 
   useEffect(() => {
     if (!isCodexWorking && !anyConversationWorking) return;
@@ -2953,6 +3591,27 @@ export function CodexFeedbackPanel({
     return () => document.removeEventListener('pointerdown', closeOnOutsidePointer);
   }, [conversationPickerOpen]);
 
+  const loadFeatureIndex = useCallback(async () => {
+    try {
+      const response = await studioRuntimeFetch('/__made-solid/feature-releases', {
+        cache: 'no-store',
+        headers: { Accept: 'application/json' },
+      });
+      const payload = (await response.json().catch(() => undefined)) as
+        { features?: FeatureRelease[] } | undefined;
+      if (response.ok && Array.isArray(payload?.features)) setFeatureIndex(payload.features);
+    } catch {
+      // Older production runtimes may not expose Feature Releases yet; chat remains available.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (phase === 'closed') return;
+    void loadFeatureIndex();
+    const timer = window.setInterval(() => void loadFeatureIndex(), 5_000);
+    return () => window.clearInterval(timer);
+  }, [loadFeatureIndex, phase]);
+
   useEffect(() => {
     if (!embedded || window.parent === window) return;
     window.parent.postMessage(
@@ -2970,14 +3629,30 @@ export function CodexFeedbackPanel({
   const selectedThread =
     status?.threads.find((thread) => thread.id === (selectedThreadId || status?.thread?.id)) ??
     status?.thread;
+  const featureTitleForThread = (thread: CodexThread | undefined) =>
+    featureEntriesForThread(featureIndex, thread?.id || '')[0]?.feature.title;
+  const displayedThreadTitle = (thread: CodexThread | undefined) =>
+    featureTitleForThread(thread) || threadTitle(thread);
+  const failedTurnRecoveryMessage = status?.thread?.failure
+    ? [...(status.messages ?? [])]
+        .reverse()
+        .find((message) => canBranchCodexMessage(message, status.thread, status.messages))
+    : undefined;
   const conversationPendingDeletion = status?.threads.find(
     (thread) => thread.id === deleteConversationId,
+  );
+  const conversationPendingOrganization = status?.threads.find(
+    (thread) => thread.id === organizeConversationId,
   );
   const clientWorkspaceLabel = workspaceDirectory
     ? workspaceDirectory.replace(/[._-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
     : '';
-  const clientThreads = (status?.threads ?? []).filter((thread) => thread.scope === 'client');
-  const universalThreads = (status?.threads ?? []).filter((thread) => thread.scope !== 'client');
+  const clientThreads = organizedThreads(
+    (status?.threads ?? []).filter((thread) => thread.scope === 'client'),
+  );
+  const universalThreads = organizedThreads(
+    (status?.threads ?? []).filter((thread) => thread.scope !== 'client'),
+  );
   const selectedModel = availableModels.find((model) => model.id === selectedModelId);
   const temporaryQuestionModel =
     availableModels.find((model) => /(?:^|[-_.])luna(?:$|[-_.])/i.test(model.id)) ??
@@ -3026,21 +3701,20 @@ export function CodexFeedbackPanel({
       speechStyle: selectedSpeechStyle,
       speechVoice: selectedSpeechVoice,
     } satisfies CodexPreferences;
-    window.localStorage.setItem(codexPreferencesKey, JSON.stringify(preferences));
+    const serializedPreferences = JSON.stringify(preferences);
+    window.localStorage.setItem(codexPreferencesKey, serializedPreferences);
     if (!runtimePreferencesReady) return;
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => {
-      void studioRuntimeFetch(codexPreferencesEndpoint, {
-        body: JSON.stringify({ preferences }),
-        headers: { 'Content-Type': 'application/json' },
-        method: 'PUT',
-        signal: controller.signal,
-      }).catch(() => undefined);
-    }, 250);
-    return () => {
-      window.clearTimeout(timeout);
-      controller.abort();
-    };
+    if (!runtimePreferencesSnapshotRef.current) {
+      runtimePreferencesSnapshotRef.current = serializedPreferences;
+      return;
+    }
+    if (runtimePreferencesSnapshotRef.current === serializedPreferences) return;
+    runtimePreferencesSnapshotRef.current = serializedPreferences;
+    void studioRuntimeFetch(codexPreferencesEndpoint, {
+      body: JSON.stringify({ preferences }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'PUT',
+    }).catch(() => undefined);
   }, [
     autoReadCodex,
     effortPreferences,
@@ -3184,7 +3858,81 @@ export function CodexFeedbackPanel({
     }
   };
 
+  const openConversationOrganization = (thread: CodexThread) => {
+    setOrganizeConversationId(thread.id);
+    setOrganizeConversationPinned(thread.pinned === true);
+    setOrganizeConversationTags((thread.tags ?? []).join(', '));
+    setOrganizeConversationError('');
+    setConversationPickerOpen(false);
+  };
+
+  const saveConversationOrganization = async () => {
+    const thread = status?.threads.find((candidate) => candidate.id === organizeConversationId);
+    if (!thread || isOrganizingConversation) return;
+    const tags = organizeConversationTags
+      .split(',')
+      .map((tag) => tag.trim().replace(/\s+/g, ' '))
+      .filter((tag, index, values) => tag && values.indexOf(tag) === index);
+    if (tags.length > 8) {
+      setOrganizeConversationError('Use no more than 8 tags per chat.');
+      return;
+    }
+    if (tags.some((tag) => tag.length > 24)) {
+      setOrganizeConversationError('Keep each tag to 24 characters or fewer.');
+      return;
+    }
+    setIsOrganizingConversation(true);
+    setOrganizeConversationError('');
+    try {
+      const response = await studioRuntimeFetch(feedbackEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          action: 'update-thread-organization',
+          pinned: organizeConversationPinned,
+          tags,
+          threadId: thread.id,
+          threadScope: thread.scope || (workspaceDirectory ? 'client' : 'universal'),
+          workspace: workspaceDirectory,
+        }),
+      });
+      const result = (await response.json()) as {
+        detail?: string;
+        pinned?: boolean;
+        tags?: string[];
+      };
+      if (!response.ok || !Array.isArray(result.tags)) {
+        throw new Error(result.detail || 'This chat could not be organised.');
+      }
+      setStatus((current) =>
+        current
+          ? {
+              ...current,
+              thread:
+                current.thread?.id === thread.id
+                  ? { ...current.thread, pinned: result.pinned, tags: result.tags }
+                  : current.thread,
+              threads: current.threads.map((candidate) =>
+                candidate.id === thread.id
+                  ? { ...candidate, pinned: result.pinned, tags: result.tags }
+                  : candidate,
+              ),
+            }
+          : current,
+      );
+      setOrganizeConversationId('');
+    } catch (cause) {
+      setOrganizeConversationError(
+        cause instanceof Error ? cause.message : 'This chat could not be organised.',
+      );
+    } finally {
+      setIsOrganizingConversation(false);
+    }
+  };
+
   const beginConversationTransition = (transition: ConversationTransition) => {
+    // Invalidate a poll that began before switching or creating conversations.
+    statusRequestSequenceRef.current += 1;
     conversationTransitionRef.current = transition;
     setConversationTransition(transition);
   };
@@ -3203,6 +3951,10 @@ export function CodexFeedbackPanel({
     beginConversationTransition({ id: transitionId, kind: 'create', label: 'New chat' });
     setIsCreatingThread(true);
     setError(undefined);
+    setComposerSettingsOpen(false);
+    setChatPreferencesOpen(false);
+    setIsComposerExpanded(true);
+    window.requestAnimationFrame(() => composerTextareaRef.current?.focus({ preventScroll: true }));
     try {
       await discardEmptyConversation(selectedThreadId || status?.thread?.id || '');
       const response = await studioRuntimeFetch(feedbackEndpoint, {
@@ -3229,6 +3981,9 @@ export function CodexFeedbackPanel({
         current
           ? {
               ...current,
+              status: 'ready',
+              detail: 'New Codex conversation created.',
+              threadIssue: undefined,
               thread: newThread,
               threads: [
                 newThread,
@@ -3255,7 +4010,47 @@ export function CodexFeedbackPanel({
     }
   };
 
-  const branchConversation = async (message: CodexStatus['messages'][number]) => {
+  const repairConversation = async () => {
+    const sourceThreadId = selectedThreadId || status?.thread?.id || '';
+    const sourceThreadScope = selectedThread?.scope;
+    if (!sourceThreadId || isRepairingThread || conversationTransition) return;
+    setIsRepairingThread(true);
+    setRepairStatus('');
+    setError(undefined);
+    try {
+      const response = await studioRuntimeFetch(branchEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          action: 'repair-thread',
+          threadId: sourceThreadId,
+          threadScope: sourceThreadScope || (workspaceDirectory ? 'client' : 'universal'),
+          workspace: workspaceDirectory,
+        }),
+      });
+      const result = (await response.json()) as {
+        detail?: string;
+        repairStarted?: boolean;
+      };
+      if (!response.ok || !result.repairStarted) {
+        throw new Error(result.detail || 'This conversation could not be repaired.');
+      }
+      setRepairStatus(
+        result.detail ||
+          'Chat repair started. Recent messages remain available while Codex compacts the saved context.',
+      );
+      await refreshStatus(sourceThreadId, sourceThreadScope, true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'This conversation could not be repaired.');
+    } finally {
+      setIsRepairingThread(false);
+    }
+  };
+
+  const branchConversation = async (
+    message: CodexStatus['messages'][number],
+    { recovery = false }: { recovery?: boolean } = {},
+  ) => {
     const sourceThreadId = selectedThreadId || status?.thread?.id || '';
     const sourceThreadScope = selectedThread?.scope;
     if (
@@ -3279,6 +4074,7 @@ export function CodexFeedbackPanel({
           action: 'branch-thread',
           threadId: sourceThreadId,
           turnId: message.turnId,
+          branchPurpose: recovery ? 'recovery' : 'intentional',
           threadScope: sourceThreadScope || (workspaceDirectory ? 'client' : 'universal'),
           workspace: workspaceDirectory,
         }),
@@ -3312,6 +4108,101 @@ export function CodexFeedbackPanel({
     }
   };
 
+  const revealFeatureImplementation = async (implementation: FeatureImplementation) => {
+    setPanelView('chat');
+    setConversationPickerOpen(false);
+    setError(undefined);
+    selectConversation(implementation.threadId, implementation.threadScope);
+    await refreshStatus(implementation.threadId, implementation.threadScope, true);
+    const focusFeatureTurn = (attempt = 0) => {
+      const target = document.querySelector<HTMLElement>(
+        `[data-feature-turn-id="${CSS.escape(implementation.turnId)}"]`,
+      );
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        target.focus({ preventScroll: true });
+        return;
+      }
+      if (attempt < 60) {
+        window.requestAnimationFrame(() => focusFeatureTurn(attempt + 1));
+        return;
+      }
+      setError('That feature is outside the recently loaded part of this chat.');
+    };
+    window.requestAnimationFrame(() => focusFeatureTurn());
+  };
+
+  const revealThreadFeature = async (thread: CodexThread, entry: ThreadFeatureEntry) => {
+    if (entry.latest) {
+      await revealFeatureImplementation(entry.latest);
+      return;
+    }
+    setConversationPickerOpen(false);
+    if (thread.id !== displayedThreadId) await switchConversation(thread);
+  };
+
+  const continueFeature = async (
+    feature: FeatureRelease,
+    implementation: FeatureImplementation,
+    draftPrompt?: string,
+  ) => {
+    if (conversationTransition) return;
+    setPanelView('chat');
+    const transitionId = conversationTransitionIdRef.current + 1;
+    conversationTransitionIdRef.current = transitionId;
+    beginConversationTransition({ id: transitionId, kind: 'branch', label: 'Feature follow-up' });
+    setError(undefined);
+    try {
+      const response = await studioRuntimeFetch(branchEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          action: 'branch-thread',
+          branchPurpose: 'intentional',
+          featureId: feature.id,
+          threadId: implementation.threadId,
+          turnId: implementation.turnId,
+          threadScope: implementation.threadScope,
+          workspace: workspaceDirectory,
+        }),
+      });
+      const result = await readBranchResponse(response);
+      if (!response.ok || !result.thread?.id) {
+        throw new Error(result.detail || 'The feature follow-up could not be created.');
+      }
+      const linkResponse = await studioRuntimeFetch('/__made-solid/feature-releases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          action: 'link-thread',
+          featureId: feature.id,
+          sourceThreadId: implementation.threadId,
+          threadId: result.thread.id,
+        }),
+      }).catch(() => undefined);
+      selectConversation(result.thread.id, result.thread.scope);
+      await refreshStatus(result.thread.id, result.thread.scope, true);
+      if (!linkResponse?.ok) {
+        setError(
+          'The follow-up chat was created, but Feature Releases could not attach it to this feature. You can retry from the feature detail.',
+        );
+      }
+      if (draftPrompt) {
+        setPrompt(draftPrompt);
+        setIsComposerExpanded(true);
+      }
+      window.requestAnimationFrame(() => composerTextareaRef.current?.focus());
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : 'The feature follow-up could not be created.',
+      );
+      selectConversation(implementation.threadId, implementation.threadScope);
+      await refreshStatus(implementation.threadId, implementation.threadScope, true);
+    } finally {
+      finishConversationTransition(transitionId);
+    }
+  };
+
   const switchConversation = async (thread: CodexThread) => {
     if (
       conversationTransition ||
@@ -3326,7 +4217,7 @@ export function CodexFeedbackPanel({
     beginConversationTransition({
       id: transitionId,
       kind: 'switch',
-      label: threadTitle(thread),
+      label: displayedThreadTitle(thread),
     });
     setError(undefined);
     selectConversation(thread.id, thread.scope);
@@ -3576,8 +4467,6 @@ export function CodexFeedbackPanel({
         if (omitted) messages.push(`Only ${maximumDraftAttachments} images can be attached.`);
         setError(messages.join(' '));
       }
-      setIsComposerExpanded(true);
-      window.requestAnimationFrame(() => composerTextareaRef.current?.focus());
     } finally {
       setIsPreparingPhoto(false);
     }
@@ -3761,11 +4650,13 @@ export function CodexFeedbackPanel({
     }
     if (!preserveDraft) {
       setPrompt('');
+      setDictationNotice(undefined);
       setDraftAttachments([]);
       setIsComposerExpanded(false);
     }
     setPhase('sending-chat');
     setError(undefined);
+    setSubmissionNotice('');
     window.requestAnimationFrame(scrollChatToLatest);
     try {
       const response = await studioRuntimeFetch(feedbackEndpoint, {
@@ -3785,7 +4676,7 @@ export function CodexFeedbackPanel({
           workspace: workspaceDirectory,
         }),
       });
-      const result = (await response.json()) as { id?: string; detail?: string };
+      const result = (await response.json()) as { id?: string; detail?: string; status?: string };
       if (!response.ok) throw new Error(result.detail || 'Codex could not accept this feedback.');
       const resultId = result.id;
       if (!submittedAttachments.length) {
@@ -3796,6 +4687,9 @@ export function CodexFeedbackPanel({
         if (resultId) {
           setPendingVisualMessage((current) => (current ? { ...current, id: resultId } : current));
         }
+      }
+      if (result.detail?.includes('Workspace Agent reconnects')) {
+        setSubmissionNotice(result.detail);
       }
       setPhase('compose');
       await refreshStatus();
@@ -3983,6 +4877,18 @@ export function CodexFeedbackPanel({
   };
 
   const closePanel = () => {
+    if (embedded && window.parent !== window) {
+      window.parent.postMessage(
+        {
+          action: 'close',
+          source: 'made-solid-codex-panel',
+          ready: isSupported !== undefined,
+          open: false,
+          expanded: false,
+        },
+        '*',
+      );
+    }
     saveChatPosition();
     updateChatSession({ isOpen: false });
     restoredChatThreadRef.current = '';
@@ -4042,7 +4948,7 @@ export function CodexFeedbackPanel({
           {!page ? <Dialog.Overlay className="codex-feedback-overlay" /> : null}
           <Dialog.Content
             aria-describedby="codex-feedback-description"
-            className={`codex-feedback-dialog codex-chat-dialog${embedded ? ' is-embedded' : ''}${page ? ' is-page' : ''}`}
+            className={`codex-feedback-dialog codex-chat-dialog${embedded ? ' is-embedded' : ''}${page ? ' is-page' : ''}${panelView === 'features' ? ' is-feature-view' : ''}`}
             onCloseAutoFocus={(event) => {
               event.preventDefault();
               triggerRef.current?.focus();
@@ -4075,33 +4981,88 @@ export function CodexFeedbackPanel({
                 <span className="codex-feedback-dialog__icon" aria-hidden="true">
                   <Bot size={20} />
                 </span>
-                <div>
+                <div className="codex-feedback-dialog__identity-copy">
                   <Dialog.Title>
                     {workspaceDirectory ? `${clientWorkspaceLabel} website editor` : 'Codex'}{' '}
                     <span aria-hidden="true">Workspace Agent</span>
                   </Dialog.Title>
-                  <div className="codex-feedback-dialog__status">
-                    <span
-                      aria-hidden="true"
-                      className={status?.status === 'ready' ? 'is-ready' : ''}
-                    />
-                    <span>
-                      {status?.billing?.label ?? 'ChatGPT subscription'} ·{' '}
-                      {status?.thread ? 'connected' : 'waiting'}
-                    </span>
-                    <StatusBadge tone={status?.thread ? 'success' : 'warning'}>
-                      {activeAgents.length
-                        ? `${activeAgents.length} agent${activeAgents.length === 1 ? '' : 's'}`
-                        : status?.thread?.working
-                          ? 'Working'
-                          : status?.queuedCount
-                            ? `${status.queuedCount} queued`
-                            : status?.thread?.interrupted
-                              ? 'Interrupted'
-                              : status?.thread
-                                ? 'Ready'
-                                : 'Waiting'}
-                    </StatusBadge>
+                  <div className="codex-feedback-dialog__meta">
+                    <div className="codex-feedback-dialog__status">
+                      <span
+                        aria-hidden="true"
+                        className={
+                          isSupported === true && status?.status === 'ready' ? 'is-ready' : ''
+                        }
+                      />
+                      <span>
+                        {status?.billing?.mode === 'api_credits'
+                          ? 'OpenAI API billing'
+                          : status?.subscriptionUsage?.usingCredits
+                            ? `Using ChatGPT credits${creditBalanceLabel(status.subscriptionUsage.credits?.balance) ? ` · ${creditBalanceLabel(status.subscriptionUsage.credits?.balance)} left` : ''}`
+                            : 'ChatGPT plan'}{' '}
+                        ·{' '}
+                        {isSupported === undefined
+                          ? 'waiting to connect'
+                          : status?.status === 'unavailable'
+                            ? 'reconnecting'
+                            : status?.thread
+                              ? 'connected'
+                              : 'waiting'}
+                      </span>
+                      <StatusBadge
+                        tone={
+                          isSupported === true &&
+                          status?.thread &&
+                          status.status !== 'unavailable' &&
+                          !status.thread.failure
+                            ? 'success'
+                            : 'warning'
+                        }
+                      >
+                        {isSupported === undefined
+                          ? 'Waiting'
+                          : status?.status === 'unavailable'
+                            ? 'Reconnecting'
+                            : status?.thread?.failure
+                              ? 'Failed'
+                              : activeAgents.length
+                                ? `${activeAgents.length} agent${activeAgents.length === 1 ? '' : 's'}`
+                                : status?.thread?.working
+                                  ? 'Working'
+                                  : status?.queuedCount
+                                    ? `${status.queuedCount} queued`
+                                    : status?.thread?.interrupted
+                                      ? 'Interrupted'
+                                      : status?.thread
+                                        ? 'Ready'
+                                        : 'Waiting'}
+                      </StatusBadge>
+                    </div>
+                    <section
+                      aria-label="Chat workspace scope"
+                      className="codex-workspace-scope"
+                      title={
+                        workspaceDirectory
+                          ? 'Client chats can edit this website only. Universal Studio chats remain available in the conversation picker.'
+                          : 'These conversations aren’t tied to one client website.'
+                      }
+                    >
+                      {workspaceDirectory ? (
+                        <PanelsTopLeft aria-hidden="true" size={13} />
+                      ) : (
+                        <Globe2 aria-hidden="true" size={13} />
+                      )}
+                      <strong>
+                        {workspaceDirectory
+                          ? `Editing only ${clientWorkspaceLabel}`
+                          : 'Universal Studio chats'}
+                      </strong>
+                      <span className="sr-only">
+                        {workspaceDirectory
+                          ? 'Client chats can edit this website only. Universal Studio chats remain available in the conversation picker.'
+                          : 'These conversations aren’t tied to one client website.'}
+                      </span>
+                    </section>
                   </div>
                 </div>
               </div>
@@ -4117,33 +5078,176 @@ export function CodexFeedbackPanel({
             <Dialog.Description className="sr-only" id="codex-feedback-description">
               {workspaceDirectory
                 ? `Chat with Codex about the ${clientWorkspaceLabel} client website or open a universal Studio chat. Other client conversations are hidden.`
-                : 'Chat with the subscription-only Codex Workspace Agent and optionally attach a photo or screenshot.'}
+                : 'Chat with the Codex Workspace Agent and optionally attach a photo or screenshot.'}
             </Dialog.Description>
-            <section aria-label="Chat workspace scope" className="codex-workspace-scope">
-              {workspaceDirectory ? (
-                <PanelsTopLeft aria-hidden="true" size={18} />
-              ) : (
-                <Globe2 aria-hidden="true" size={18} />
-              )}
-              <span>
-                <strong>
-                  {workspaceDirectory
-                    ? `Editing only ${clientWorkspaceLabel}`
-                    : 'Universal Studio chats'}
-                </strong>
-                <small>
-                  {workspaceDirectory
-                    ? 'Client chats can edit this website only. Universal Studio chats remain available below.'
-                    : 'These conversations aren’t tied to one client website.'}
-                </small>
-              </span>
-            </section>
-            {status?.status === 'unavailable' ? (
-              <p className="codex-feedback-error" role="status">
-                <CircleAlert aria-hidden="true" size={18} />
-                {status.detail}
-              </p>
+            <div aria-label="Codex workspace views" className="codex-workspace-tabs" role="tablist">
+              <Button
+                aria-controls="codex-chat-view"
+                aria-selected={panelView === 'chat'}
+                onClick={() => setPanelView('chat')}
+                role="tab"
+                size="small"
+                variant={panelView === 'chat' ? 'secondary' : 'quiet'}
+              >
+                <MessageSquareText aria-hidden="true" size={15} /> Chat
+              </Button>
+              <Button
+                aria-controls="codex-features-view"
+                aria-selected={panelView === 'features'}
+                onClick={() => setPanelView('features')}
+                role="tab"
+                size="small"
+                variant={panelView === 'features' ? 'secondary' : 'quiet'}
+              >
+                <PackageCheck aria-hidden="true" size={15} /> Features
+              </Button>
+            </div>
+            {panelView === 'features' ? (
+              <div className="feature-releases-view" id="codex-features-view" role="tabpanel">
+                <FeatureReleasesPanel
+                  active
+                  onContinue={(feature, implementation, draftPrompt) =>
+                    void continueFeature(feature, implementation, draftPrompt)
+                  }
+                  onFeaturesChange={setFeatureIndex}
+                  onOpenChat={(implementation) => void revealFeatureImplementation(implementation)}
+                />
+              </div>
             ) : null}
+            <div className="codex-chat-context" id="codex-chat-view">
+              {status?.billing?.mode !== 'api_credits' &&
+              status?.subscriptionUsage?.usingCredits ? (
+                <div className="codex-active-credit-notice" role="status">
+                  <CreditCard aria-hidden="true" size={17} />
+                  <span>
+                    <strong>Using ChatGPT credits now</strong>
+                    <small>
+                      Weekly included usage is at its limit
+                      {creditBalanceLabel(status.subscriptionUsage.credits?.balance)
+                        ? ` · ${creditBalanceLabel(status.subscriptionUsage.credits?.balance)} credits remaining`
+                        : ''}
+                    </small>
+                  </span>
+                </div>
+              ) : null}
+              {status?.status === 'unavailable' ? (
+                <p className="codex-feedback-error" role="status">
+                  <CircleAlert aria-hidden="true" size={18} />
+                  {status.detail}
+                </p>
+              ) : status?.thread?.failure ? (
+                <section aria-label="Failed Codex turn" className="codex-turn-failure">
+                  <p className="codex-feedback-error" role="status">
+                    <CircleAlert aria-hidden="true" size={18} />
+                    <span>{status.thread.failure}</span>
+                  </p>
+                  {failedTurnRecoveryMessage ? (
+                    <div className="codex-turn-failure__recovery">
+                      <small>
+                        Continue from the last successful reply. The failed message won’t be sent
+                        again.
+                      </small>
+                      <Button
+                        disabled={Boolean(conversationTransition)}
+                        onClick={() =>
+                          void branchConversation(failedTurnRecoveryMessage, { recovery: true })
+                        }
+                        size="small"
+                        variant="secondary"
+                      >
+                        <GitFork aria-hidden="true" size={15} />
+                        Continue in a new chat
+                      </Button>
+                    </div>
+                  ) : null}
+                </section>
+              ) : null}
+              {status?.runtimeUpdate &&
+              !runtimeUpdateNoticeDismissed &&
+              [
+                'checking',
+                'downloading',
+                'waiting_for_idle',
+                'restart_pending',
+                'restarting',
+              ].includes(status.runtimeUpdate.status) ? (
+                <aside aria-label="Codex update notification" className="codex-update-notice">
+                  <LoaderCircle aria-hidden="true" className="is-spinning" size={18} />
+                  <span role="status">
+                    <strong>
+                      {status.runtimeUpdate.status === 'checking'
+                        ? 'Checking for a Codex update'
+                        : status.runtimeUpdate.status === 'downloading'
+                          ? `Preparing Codex v${status.runtimeUpdate.latestVersion}`
+                          : status.runtimeUpdate.status === 'waiting_for_idle'
+                            ? 'Update ready; waiting for active work'
+                            : 'Workspace Agent is reconnecting'}
+                    </strong>
+                    <small>
+                      {['restart_pending', 'restarting'].includes(status.runtimeUpdate.status)
+                        ? 'You can keep reading and sending. New messages are saved and will send automatically after reconnection.'
+                        : 'Chat remains available while the update continues.'}
+                    </small>
+                  </span>
+                  <IconButton
+                    className="codex-update-notice__dismiss"
+                    label="Dismiss Codex update notification"
+                    onClick={dismissRuntimeUpdateNotice}
+                    variant="quiet"
+                  >
+                    <X aria-hidden="true" size={16} />
+                  </IconButton>
+                </aside>
+              ) : null}
+              {status?.runtimeUpdate &&
+              !runtimeUpdateNoticeDismissed &&
+              ['failed', 'rollback'].includes(status.runtimeUpdate.status) ? (
+                <aside
+                  aria-label="Codex update error notification"
+                  className="codex-update-notice is-error"
+                >
+                  <CircleAlert aria-hidden="true" size={18} />
+                  <span role="status">
+                    <strong>
+                      {status.runtimeUpdate.status === 'rollback'
+                        ? 'Codex update rolled back safely'
+                        : 'Codex update stopped'}
+                    </strong>
+                    <small>
+                      {status.runtimeUpdate.failureSummary ||
+                        'The update could not finish. The current working version remains available.'}{' '}
+                      Chat remains available; you can keep sending messages.
+                    </small>
+                    {runtimeUpdateRetryError ? (
+                      <small className="codex-update-notice__error">
+                        {runtimeUpdateRetryError}
+                      </small>
+                    ) : null}
+                  </span>
+                  <Button
+                    disabled={retryingRuntimeUpdate}
+                    onClick={() => void retryRuntimeUpdate()}
+                    size="small"
+                    variant="secondary"
+                  >
+                    {retryingRuntimeUpdate ? (
+                      <LoaderCircle aria-hidden="true" className="is-spinning" size={15} />
+                    ) : (
+                      <RotateCcw aria-hidden="true" size={15} />
+                    )}
+                    {retryingRuntimeUpdate ? 'Retrying…' : 'Retry update'}
+                  </Button>
+                  <IconButton
+                    className="codex-update-notice__dismiss"
+                    label="Dismiss Codex update notification"
+                    onClick={dismissRuntimeUpdateNotice}
+                    variant="quiet"
+                  >
+                    <X aria-hidden="true" size={16} />
+                  </IconButton>
+                </aside>
+              ) : null}
+            </div>
             <p aria-live="polite" className="sr-only" role="status">
               {speechStatus}
             </p>
@@ -4173,7 +5277,7 @@ export function CodexFeedbackPanel({
                         ? 'Starting a new chat'
                         : conversationTransition?.kind === 'branch'
                           ? 'Branching conversation'
-                          : threadTitle(selectedThread)}
+                          : displayedThreadTitle(selectedThread)}
                     </strong>
                     <small>
                       {workspaceDirectory ? (
@@ -4183,17 +5287,21 @@ export function CodexFeedbackPanel({
                           {selectedThread?.scope === 'universal' ? 'Universal' : 'This client'}
                         </span>
                       ) : null}
-                      {conversationTransition
-                        ? conversationTransition.kind === 'create'
-                          ? 'Preparing conversation'
-                          : conversationTransition.kind === 'branch'
-                            ? 'Copying conversation'
-                            : 'Loading conversation'
-                        : selectedThread?.working
-                          ? 'Working'
-                          : selectedThread?.interrupted
-                            ? 'Interrupted'
-                            : 'Last used'}
+                      {isSupported === undefined
+                        ? 'Saved chat · waiting to connect'
+                        : conversationTransition
+                          ? conversationTransition.kind === 'create'
+                            ? 'Preparing conversation'
+                            : conversationTransition.kind === 'branch'
+                              ? 'Copying conversation'
+                              : 'Loading conversation'
+                          : selectedThread?.working
+                            ? 'Running'
+                            : selectedThread?.interrupted
+                              ? 'Interrupted'
+                              : threadHasCompletedWork(selectedThread)
+                                ? 'Completed'
+                                : 'Ready'}
                       {!conversationTransition ? (
                         <>
                           {' '}
@@ -4214,7 +5322,11 @@ export function CodexFeedbackPanel({
                 <IconButton
                   className="codex-conversation-picker__new"
                   disabled={
-                    !status || !selectedModel || isCreatingThread || Boolean(conversationTransition)
+                    isSupported !== true ||
+                    !status ||
+                    !selectedModel ||
+                    isCreatingThread ||
+                    Boolean(conversationTransition)
                   }
                   label={
                     workspaceDirectory ? `New ${clientWorkspaceLabel} website chat` : 'New chat'
@@ -4274,7 +5386,10 @@ export function CodexFeedbackPanel({
                               (message) => message.threadId === thread.id,
                             );
                             const deletionBlocked = thread.working || queuedWork;
-                            const title = threadTitle(thread);
+                            const threadFeatures = featureEntriesForThread(featureIndex, thread.id);
+                            const title =
+                              threadFeatures[0]?.feature.title || threadDropdownTitle(thread);
+                            const featureHistoryExpanded = expandedFeatureThreadId === thread.id;
                             return (
                               <div className="codex-conversation-picker__row" key={thread.id}>
                                 <Button
@@ -4291,13 +5406,15 @@ export function CodexFeedbackPanel({
                                   variant="quiet"
                                 >
                                   <span
-                                    className={`codex-conversation-picker__state${unseenCompletion && !thread.working ? ' is-unread' : ''}`}
+                                    className={`codex-conversation-picker__state${thread.working ? ' is-running' : threadHasCompletedWork(thread) ? ' is-completed' : ''}${unseenCompletion && !thread.working ? ' is-unread' : ''}`}
                                     aria-hidden="true"
                                   >
                                     {thread.working ? (
                                       <LoaderCircle className="is-spinning" size={16} />
                                     ) : unseenCompletion ? (
                                       <BellRing size={15} />
+                                    ) : threadHasCompletedWork(thread) ? (
+                                      <CircleCheck size={16} />
                                     ) : selected ? (
                                       <Check size={16} />
                                     ) : (
@@ -4305,16 +5422,33 @@ export function CodexFeedbackPanel({
                                     )}
                                   </span>
                                   <span className="codex-conversation-picker__option-copy">
-                                    <strong>{title}</strong>
+                                    <strong title={title}>
+                                      {thread.pinned ? (
+                                        <Pin aria-label="Pinned chat" size={13} />
+                                      ) : null}
+                                      <span>{title}</span>
+                                    </strong>
+                                    {thread.tags?.length ? (
+                                      <span
+                                        aria-label={`Tags: ${thread.tags.join(', ')}`}
+                                        className="codex-conversation-picker__tags"
+                                      >
+                                        {thread.tags.map((tag) => (
+                                          <span key={tag}>{tag}</span>
+                                        ))}
+                                      </span>
+                                    ) : null}
                                     <small>
                                       <span>
                                         {thread.working
-                                          ? 'Working'
+                                          ? 'Running'
                                           : unseenCompletion
-                                            ? 'Finished · Unread'
+                                            ? 'Completed · Unread'
                                             : thread.interrupted
                                               ? 'Interrupted'
-                                              : 'Ready'}
+                                              : threadHasCompletedWork(thread)
+                                                ? 'Completed'
+                                                : 'Ready'}
                                       </span>
                                       <time
                                         dateTime={
@@ -4329,6 +5463,44 @@ export function CodexFeedbackPanel({
                                     </small>
                                   </span>
                                 </Button>
+                                <IconButton
+                                  aria-expanded={featureHistoryExpanded}
+                                  className="codex-conversation-picker__features"
+                                  disabled={
+                                    !threadFeatures.length || Boolean(conversationTransition)
+                                  }
+                                  label={`${featureHistoryExpanded ? 'Hide' : 'Show'} feature history for ${title}`}
+                                  onClick={() =>
+                                    setExpandedFeatureThreadId(
+                                      featureHistoryExpanded ? '' : thread.id,
+                                    )
+                                  }
+                                  role="menuitem"
+                                  title={
+                                    threadFeatures.length
+                                      ? `${threadFeatures.length} ${threadFeatures.length === 1 ? 'feature' : 'features'}`
+                                      : 'No completed feature work yet'
+                                  }
+                                  variant="quiet"
+                                >
+                                  <PackageCheck aria-hidden="true" size={15} />
+                                  {threadFeatures.length ? (
+                                    <span>{threadFeatures.length}</span>
+                                  ) : null}
+                                </IconButton>
+                                <IconButton
+                                  className="codex-conversation-picker__organize"
+                                  disabled={
+                                    Boolean(conversationTransition) || isOrganizingConversation
+                                  }
+                                  label={`Organize ${title}`}
+                                  onClick={() => openConversationOrganization(thread)}
+                                  role="menuitem"
+                                  title={`Pin or tag ${title}`}
+                                  variant="quiet"
+                                >
+                                  <Tags aria-hidden="true" size={15} />
+                                </IconButton>
                                 <IconButton
                                   className="codex-conversation-picker__delete"
                                   disabled={
@@ -4351,6 +5523,40 @@ export function CodexFeedbackPanel({
                                 >
                                   <Trash2 aria-hidden="true" size={15} />
                                 </IconButton>
+                                {featureHistoryExpanded ? (
+                                  <div
+                                    aria-label={`${title} feature history`}
+                                    className="codex-conversation-picker__feature-history"
+                                    role="group"
+                                  >
+                                    <span>
+                                      <PackageCheck aria-hidden="true" size={14} /> Feature history
+                                    </span>
+                                    {threadFeatures.map((entry) => (
+                                      <Button
+                                        className="codex-conversation-picker__feature-link"
+                                        key={entry.feature.id}
+                                        onClick={() => void revealThreadFeature(thread, entry)}
+                                        role="menuitem"
+                                        size="small"
+                                        variant="quiet"
+                                      >
+                                        <span>
+                                          <strong>{entry.feature.title}</strong>
+                                          <span className="codex-feature-history__summary">
+                                            {entry.feature.summary}
+                                          </span>
+                                          <small>
+                                            {entry.implementations.length
+                                              ? `${entry.implementations.length} ${entry.implementations.length === 1 ? 'update' : 'updates'} · ${featureDate(entry.latest?.completedAt ?? entry.feature.updatedAt)}`
+                                              : 'Linked follow-up'}
+                                          </small>
+                                        </span>
+                                        <CornerDownRight aria-hidden="true" size={14} />
+                                      </Button>
+                                    ))}
+                                  </div>
+                                ) : null}
                               </div>
                             );
                           })
@@ -4365,6 +5571,46 @@ export function CodexFeedbackPanel({
                 ) : null}
               </div>
             </div>
+
+            {selectedThreadFeatures.length && selectedThread ? (
+              <details className="codex-chat-feature-history" key={selectedThread.id}>
+                <summary>
+                  <span>
+                    <PackageCheck aria-hidden="true" size={16} />
+                    <strong>Feature history</strong>
+                  </span>
+                  <small>
+                    {selectedThreadFeatures.length}{' '}
+                    {selectedThreadFeatures.length === 1 ? 'feature' : 'features'} in this chat
+                  </small>
+                  <ChevronDown aria-hidden="true" size={15} />
+                </summary>
+                <ol>
+                  {selectedThreadFeatures.map((entry) => (
+                    <li key={entry.feature.id}>
+                      <Button
+                        onClick={() => void revealThreadFeature(selectedThread, entry)}
+                        size="small"
+                        variant="quiet"
+                      >
+                        <span>
+                          <strong>{entry.feature.title}</strong>
+                          <span className="codex-feature-history__summary">
+                            {entry.feature.summary}
+                          </span>
+                          <small>
+                            {entry.implementations.length
+                              ? `${entry.implementations.length} ${entry.implementations.length === 1 ? 'update' : 'updates'} · ${featureDate(entry.latest?.completedAt ?? entry.feature.updatedAt)}`
+                              : 'Current linked feature'}
+                          </small>
+                        </span>
+                        <CornerDownRight aria-hidden="true" size={14} />
+                      </Button>
+                    </li>
+                  ))}
+                </ol>
+              </details>
+            ) : null}
 
             <div
               className={`codex-chat-transcript${activeSpeechMessage ? ' has-speech-dock' : ''}${latestUserRequest ? ' has-latest-request' : ''}`}
@@ -4488,7 +5734,7 @@ export function CodexFeedbackPanel({
                   ) : null}
                 </section>
               ) : null}
-              {latestUserRequest ? (
+              {latestUserRequest && !conversationTransition ? (
                 <aside aria-label="Your latest request" className="codex-chat-latest-request">
                   <MessageSquareText aria-hidden="true" size={14} />
                   <span>
@@ -4511,11 +5757,54 @@ export function CodexFeedbackPanel({
                   <CodexConversationLoading transition={conversationTransition} />
                 ) : (
                   <>
-                    {status?.threadIssue ? (
-                      <p className="codex-feedback-error" role="alert">
-                        <CircleAlert aria-hidden="true" size={18} />
-                        {status.threadIssue}
-                      </p>
+                    {status?.threadIssue || status?.historyLimited ? (
+                      <div
+                        className={`codex-history-recovery${status.threadIssue ? ' is-error' : ''}`}
+                        role={status.threadIssue ? 'alert' : 'status'}
+                      >
+                        <span aria-hidden="true" className="codex-history-recovery__icon">
+                          {status.threadIssue ? (
+                            <CircleAlert size={18} />
+                          ) : (
+                            <CircleCheck size={18} />
+                          )}
+                        </span>
+                        <span className="codex-history-recovery__copy">
+                          <strong>
+                            {status.threadIssue
+                              ? 'Conversation needs repair'
+                              : 'Recent history loaded'}
+                          </strong>
+                          <small>
+                            {status.threadIssue
+                              ? status.threadIssue
+                              : `This chat is too large to load all at once. Studio loaded the newest messages${status.historyHasMore ? '; earlier messages remain safely stored' : ''}.`}
+                          </small>
+                          {selectedThread?.working ? (
+                            <small>
+                              Repair is available when the current Codex request finishes.
+                            </small>
+                          ) : null}
+                          {repairStatus ? <small>{repairStatus}</small> : null}
+                        </span>
+                        <Button
+                          disabled={
+                            isRepairingThread ||
+                            Boolean(conversationTransition) ||
+                            Boolean(selectedThread?.working)
+                          }
+                          onClick={() => void repairConversation()}
+                          size="small"
+                          variant="secondary"
+                        >
+                          {isRepairingThread ? (
+                            <LoaderCircle aria-hidden="true" className="is-spinning" size={15} />
+                          ) : (
+                            <Wrench aria-hidden="true" size={15} />
+                          )}
+                          {isRepairingThread ? 'Repairing…' : 'Repair chat'}
+                        </Button>
+                      </div>
                     ) : null}
                     {transcriptEntries.length
                       ? transcriptEntries.map((entry) => {
@@ -4547,8 +5836,28 @@ export function CodexFeedbackPanel({
                           const supportsSpeechReadAlong = isReadableCodexMessage;
                           const isReadingThisReply = speechMessageId === message.id;
                           const activityContext = activityContextByMessageId.get(message.id);
+                          const messageFeature = message.turnId
+                            ? featureByTurnId.get(message.turnId)
+                            : undefined;
                           return (
                             <Fragment key={`message:${message.id}`}>
+                              {messageFeature &&
+                              message.role === 'assistant' &&
+                              message.phase !== 'commentary' ? (
+                                <div
+                                  className="codex-chat-feature-marker"
+                                  data-feature-id={messageFeature.feature.id}
+                                  data-feature-turn-id={message.turnId}
+                                  role="note"
+                                  tabIndex={-1}
+                                >
+                                  <PackageCheck aria-hidden="true" size={15} />
+                                  <span>
+                                    <small>Feature</small>
+                                    <strong>{messageFeature.feature.title}</strong>
+                                  </span>
+                                </div>
+                              ) : null}
                               <article
                                 className={`codex-chat-message codex-chat-message--${message.role}${
                                   message.role === 'assistant' && message.phase === 'commentary'
@@ -4560,6 +5869,7 @@ export function CodexFeedbackPanel({
                                 data-explains-activity-ids={activityContext?.activityIds.join(' ')}
                                 data-phase={message.phase}
                                 data-message-id={message.id}
+                                data-turn-id={message.turnId}
                               >
                                 <header className="codex-chat-message__header">
                                   <strong>
@@ -4738,6 +6048,25 @@ export function CodexFeedbackPanel({
                                   }
                                   altPrefix="Image attached to your message"
                                 />
+                                {message.role === 'user' && message.interruptionReason ? (
+                                  <div className="codex-chat-message__interruption" role="note">
+                                    <CircleAlert aria-hidden="true" size={14} />
+                                    <span>
+                                      <strong>
+                                        {message.interruptionReason === 'replaced'
+                                          ? 'Previous turn was replaced'
+                                          : message.interruptionReason === 'stopped'
+                                            ? 'Turn stopped before a reply'
+                                            : 'Turn paused before a reply'}
+                                      </strong>
+                                      <small>
+                                        {message.interruptionReason === 'replaced'
+                                          ? 'Codex stopped this request when the newer message was moved ahead. This request is saved, but it is no longer being worked on.'
+                                          : 'This request is saved. Resume it from the interruption notice or send it again in a new chat if you still need it completed.'}
+                                      </small>
+                                    </span>
+                                  </div>
+                                ) : null}
                               </article>
                               {(agentTeamsAfterMessage.get(message.id) ?? []).map((team) => (
                                 <AgentTeamPanel
@@ -4973,7 +6302,7 @@ export function CodexFeedbackPanel({
                     ) : null}
                     {(isCodexWorking && !hasActiveTeam) || queuedCount ? (
                       <div
-                        className={`codex-working-status${isCodexWorking ? ' codex-generating-message' : ''}`}
+                        className={`codex-working-status${isCodexWorking ? ' codex-generating-message' : ''}${workNeedsAttention ? ' is-delayed' : ''}`}
                       >
                         <span className="sr-only" role="status">
                           {isCodexWorking
@@ -4981,7 +6310,13 @@ export function CodexFeedbackPanel({
                             : `Codex has ${queuedCount} queued ${queuedCount === 1 ? 'request' : 'requests'}.`}
                         </span>
                         <span aria-hidden="true" className="codex-working-status__icon">
-                          {isCodexWorking ? <Bot size={17} /> : <Clock3 size={17} />}
+                          {workNeedsAttention ? (
+                            <CircleAlert size={17} />
+                          ) : isCodexWorking ? (
+                            <Bot size={17} />
+                          ) : (
+                            <Clock3 size={17} />
+                          )}
                         </span>
                         <span className="codex-working-status__copy">
                           <strong>
@@ -5010,6 +6345,34 @@ export function CodexFeedbackPanel({
                             ? elapsedTime(status?.thread?.workingStartedAt, clock)
                             : 'Queued'}
                         </time>
+                        {isCodexWorking && workNeedsAttention ? (
+                          <ButtonGroup className="codex-working-status__actions">
+                            <Button
+                              disabled={isCheckingStatus}
+                              onClick={() => void checkForChatUpdates()}
+                              size="small"
+                              variant="secondary"
+                            >
+                              <RotateCw
+                                aria-hidden="true"
+                                className={isCheckingStatus ? 'is-spinning' : undefined}
+                                size={14}
+                              />
+                              {isCheckingStatus ? 'Checking…' : 'Check now'}
+                            </Button>
+                            <Button
+                              disabled={
+                                isStoppingTurn || status?.capabilities?.stopActiveTurn === false
+                              }
+                              onClick={() => void stopActiveTurn()}
+                              size="small"
+                              variant="quiet"
+                            >
+                              <Square aria-hidden="true" size={13} />
+                              Stop Codex
+                            </Button>
+                          </ButtonGroup>
+                        ) : null}
                       </div>
                     ) : null}
                   </>
@@ -5030,7 +6393,7 @@ export function CodexFeedbackPanel({
             <section
               aria-busy={Boolean(conversationTransition)}
               aria-label="Message composer"
-              className={`codex-composer-surface ${isComposerExpanded ? 'is-expanded' : 'is-collapsed'}${phase === 'sending-chat' ? ' is-sending' : ''}${conversationTransition ? ' is-loading-conversation' : ''}`}
+              className={`codex-composer-surface ${isComposerExpanded ? 'is-expanded' : 'is-collapsed'}${phase === 'sending-chat' ? ' is-sending' : ''}${conversationBlocksComposer ? ' is-loading-conversation' : ''}`}
             >
               {draftAttachments.length ? (
                 <div aria-label="Selected images" className="codex-composer-draft-attachments">
@@ -5063,35 +6426,82 @@ export function CodexFeedbackPanel({
                     : `${draftAttachments.length} of ${maximumDraftAttachments} images selected`}
                 </p>
               ) : null}
-              <label className="codex-feedback-prompt codex-feedback-prompt--compose">
-                <span>Message to Codex</span>
-                <textarea
-                  disabled={
-                    phase === 'sending-chat' ||
-                    Boolean(conversationTransition) ||
-                    Boolean(status?.threadIssue)
-                  }
-                  maxLength={4_000}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  onBlur={() => {
-                    if (
-                      (!prompt.trim() && draftAttachments.length === 0) ||
-                      !chatFollowingLatestRef.current
-                    )
-                      setIsComposerExpanded(false);
-                  }}
-                  onFocus={() => {
-                    setIsComposerExpanded(true);
-                    if (chatFollowingLatestRef.current) {
-                      window.requestAnimationFrame(scrollChatToLatest);
+              <div className="codex-feedback-prompt codex-feedback-prompt--compose">
+                <span id={`${composerPromptId}-label`}>Message to Codex</span>
+                <div className="codex-composer-dictation-field">
+                  <textarea
+                    aria-describedby={dictationNotice ? dictationStatusId : undefined}
+                    aria-labelledby={`${composerPromptId}-label`}
+                    disabled={
+                      phase === 'sending-chat' ||
+                      conversationBlocksComposer ||
+                      composerHasThreadIssue
                     }
-                  }}
-                  placeholder="Ask Codex to build, change, check, or explain…"
-                  ref={composerTextareaRef}
-                  rows={isComposerExpanded ? 3 : 1}
-                  value={prompt}
-                />
-              </label>
+                    id={composerPromptId}
+                    maxLength={maximumCodexPromptLength}
+                    onChange={(event) => {
+                      setPrompt(event.target.value);
+                      if (!isDictating) setDictationNotice(undefined);
+                    }}
+                    onBlur={() => {
+                      if (
+                        (!prompt.trim() && draftAttachments.length === 0) ||
+                        !chatFollowingLatestRef.current
+                      )
+                        setIsComposerExpanded(false);
+                    }}
+                    onFocus={() => {
+                      setIsComposerExpanded(true);
+                      if (chatFollowingLatestRef.current) {
+                        window.requestAnimationFrame(scrollChatToLatest);
+                      }
+                    }}
+                    placeholder="Ask Codex to build, change, check, or explain…"
+                    readOnly={isDictating}
+                    ref={composerTextareaRef}
+                    rows={isComposerExpanded ? 3 : 1}
+                    value={prompt}
+                  />
+                  {dictationSupported ? (
+                    <IconButton
+                      aria-pressed={isDictating}
+                      className={`codex-dictation-button${isDictating ? ' is-listening' : ''}`}
+                      disabled={
+                        phase === 'sending-chat' ||
+                        Boolean(conversationTransition) ||
+                        Boolean(status?.threadIssue)
+                      }
+                      label={
+                        isDictating
+                          ? dictationState === 'stopping'
+                            ? 'Stopping dictation'
+                            : 'Stop dictation'
+                          : 'Start voice input'
+                      }
+                      onClick={() => (isDictating ? stopCodexDictation() : startCodexDictation())}
+                      variant="quiet"
+                    >
+                      {dictationState === 'stopping' ? (
+                        <LoaderCircle aria-hidden="true" className="is-spinning" size={18} />
+                      ) : isDictating ? (
+                        <Square aria-hidden="true" fill="currentColor" size={15} />
+                      ) : (
+                        <Mic aria-hidden="true" size={18} />
+                      )}
+                    </IconButton>
+                  ) : null}
+                </div>
+                {dictationNotice ? (
+                  <p
+                    aria-live={dictationNotice.tone === 'error' ? 'assertive' : 'polite'}
+                    className={`codex-dictation-status${dictationNotice.tone === 'error' ? ' is-error' : ''}`}
+                    id={dictationStatusId}
+                  >
+                    {dictationState === 'listening' ? <span aria-hidden="true" /> : null}
+                    {dictationNotice.text}
+                  </p>
+                ) : null}
+              </div>
 
               <div className="codex-composer-attachments">
                 <input
@@ -5108,6 +6518,7 @@ export function CodexFeedbackPanel({
                     phase === 'sending-chat' ||
                     Boolean(conversationTransition) ||
                     Boolean(status?.threadIssue) ||
+                    isDictating ||
                     isPreparingPhoto ||
                     !selectedModel?.supportsImages
                   }
@@ -5126,6 +6537,7 @@ export function CodexFeedbackPanel({
                     phase === 'sending-chat' ||
                     Boolean(conversationTransition) ||
                     Boolean(status?.threadIssue) ||
+                    isDictating ||
                     isPreparingPhoto ||
                     !selectedModel?.supportsImages
                   }
@@ -5140,6 +6552,7 @@ export function CodexFeedbackPanel({
                     phase === 'sending-chat' ||
                     Boolean(conversationTransition) ||
                     Boolean(status?.threadIssue) ||
+                    isDictating ||
                     !status?.thread ||
                     !selectedModel ||
                     !selectedModel.supportsImages
@@ -5168,7 +6581,7 @@ export function CodexFeedbackPanel({
                   aria-controls="codex-composer-settings"
                   aria-expanded={composerSettingsOpen}
                   className={composerSettingsOpen ? 'is-active' : ''}
-                  disabled={Boolean(conversationTransition)}
+                  disabled={Boolean(conversationTransition) || isDictating}
                   label="Run setup"
                   onClick={() =>
                     setComposerSettingsOpen((open) => {
@@ -5184,7 +6597,7 @@ export function CodexFeedbackPanel({
                   aria-controls="codex-chat-preferences"
                   aria-expanded={chatPreferencesOpen}
                   className={chatPreferencesOpen ? 'is-active' : ''}
-                  disabled={Boolean(conversationTransition)}
+                  disabled={Boolean(conversationTransition) || isDictating}
                   label="Chat settings"
                   onClick={() => {
                     setComposerSettingsOpen(false);
@@ -5201,6 +6614,7 @@ export function CodexFeedbackPanel({
                   <IconButton
                     disabled={
                       Boolean(conversationTransition) ||
+                      isDictating ||
                       isStoppingTurn ||
                       !status?.thread ||
                       !stopActiveTurnSupported
@@ -5226,8 +6640,10 @@ export function CodexFeedbackPanel({
                   <IconButton
                     disabled={
                       phase === 'sending-chat' ||
+                      isSupported !== true ||
                       Boolean(conversationTransition) ||
                       Boolean(status?.threadIssue) ||
+                      isDictating ||
                       isPreparingPhoto ||
                       !status?.thread ||
                       !selectedModel ||
@@ -5252,6 +6668,11 @@ export function CodexFeedbackPanel({
                 <p className="codex-feedback-error" role="alert">
                   <CircleAlert aria-hidden="true" size={18} />
                   {error}
+                </p>
+              ) : null}
+              {submissionNotice ? (
+                <p className="codex-composer-notice" role="status">
+                  {submissionNotice}
                 </p>
               ) : null}
 
@@ -5290,6 +6711,23 @@ export function CodexFeedbackPanel({
                     <>
                       <CodexSubscriptionUsage usage={status?.subscriptionUsage} />
                       <Button
+                        className="codex-agent-mode"
+                        onClick={() => {
+                          closePanel();
+                          window.location.hash = '#/settings/codex-updates';
+                        }}
+                        variant="quiet"
+                      >
+                        <RotateCw aria-hidden="true" size={17} />
+                        <span className="codex-agent-mode__copy">
+                          <strong>Codex updates</strong>
+                          <small>Check the runtime or retry a stopped update</small>
+                        </span>
+                        <span aria-hidden="true" className="codex-agent-mode__state">
+                          Open
+                        </span>
+                      </Button>
+                      <Button
                         aria-pressed={status?.billing?.mode === 'api_credits'}
                         className={`codex-agent-mode${status?.billing?.mode === 'api_credits' ? ' is-active' : ''}`}
                         disabled={
@@ -5310,15 +6748,15 @@ export function CodexFeedbackPanel({
                         <span className="codex-agent-mode__copy">
                           <strong>
                             {status?.billing?.mode === 'api_credits'
-                              ? 'OpenAI API credits'
-                              : 'Use API credits'}
+                              ? 'OpenAI API billing'
+                              : 'Use separate API billing'}
                           </strong>
                           <small>
                             {status?.billing?.apiKeyConfigured
                               ? status.billing.mode === 'api_credits'
-                                ? 'Separately billed for Studio chat, builders, and AI analysis'
-                                : 'Switch here if your ChatGPT subscription allowance runs out'
-                              : 'Add a server-side OpenAI API key in Railway to enable this'}
+                                ? 'Uses the server API key, not your ChatGPT credit balance'
+                                : 'Optional server API-key billing, separate from ChatGPT credits'
+                              : 'No server API key is configured; ChatGPT credits are separate'}
                           </small>
                         </span>
                         <span aria-hidden="true" className="codex-agent-mode__state">
@@ -5966,6 +7404,71 @@ export function CodexFeedbackPanel({
                 </footer>
               </>
             ) : null}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+      <Dialog.Root
+        onOpenChange={(open) => {
+          if (open || isOrganizingConversation) return;
+          setOrganizeConversationId('');
+          setOrganizeConversationError('');
+        }}
+        open={Boolean(conversationPendingOrganization)}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="confirmation-overlay" />
+          <Dialog.Content
+            className="confirmation-dialog codex-organize-dialog"
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              conversationTriggerRef.current?.focus();
+            }}
+          >
+            <Dialog.Title>Organize chat</Dialog.Title>
+            <Dialog.Description>
+              Pin this chat above other chats in its section, or add up to 8 tags.
+            </Dialog.Description>
+            <label className="codex-organize-dialog__pin">
+              <span>
+                <strong>Pin chat</strong>
+                <small>Keep this conversation at the top of its chat section.</small>
+              </span>
+              <input
+                checked={organizeConversationPinned}
+                disabled={isOrganizingConversation}
+                onChange={(event) => setOrganizeConversationPinned(event.target.checked)}
+                type="checkbox"
+              />
+            </label>
+            <label className="codex-organize-dialog__tags">
+              <span>Tags</span>
+              <input
+                disabled={isOrganizingConversation}
+                maxLength={199}
+                onChange={(event) => setOrganizeConversationTags(event.target.value)}
+                placeholder="e.g. Client work, Urgent, Ideas"
+                value={organizeConversationTags}
+              />
+              <small>Separate tag names with commas. Each tag can be up to 24 characters.</small>
+            </label>
+            {organizeConversationError ? (
+              <p className="confirmation-dialog__error" role="alert">
+                {organizeConversationError}
+              </p>
+            ) : null}
+            <ButtonGroup className="confirmation-dialog__actions">
+              <Dialog.Close asChild>
+                <Button disabled={isOrganizingConversation} variant="secondary">
+                  Cancel
+                </Button>
+              </Dialog.Close>
+              <Button
+                disabled={isOrganizingConversation}
+                onClick={() => void saveConversationOrganization()}
+              >
+                {isOrganizingConversation ? 'Saving' : 'Save organization'}
+              </Button>
+            </ButtonGroup>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>

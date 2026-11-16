@@ -33,6 +33,7 @@ async function studioRuntimeAccessToken() {
 }
 
 function embeddedWorkspaceCodexDirectory() {
+  if (typeof window === 'undefined') return undefined;
   if (window.location.pathname !== '/__made-solid/workspace-codex') return undefined;
   const directory = new URLSearchParams(window.location.search).get('workspace') ?? '';
   return /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(directory) ? directory : undefined;

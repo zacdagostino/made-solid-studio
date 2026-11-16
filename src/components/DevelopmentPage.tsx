@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { studioRuntimeFetch } from '../lib/studio-runtime';
+import { devicePreviewUrl } from '../lib/device-preview';
 import { developmentStudioUrl, isDevelopmentStudio } from '../lib/studio-surface';
 import { Button, ButtonGroup, ButtonLink, Eyebrow, StatusBadge } from './ui';
 import './DevelopmentPage.css';
@@ -383,12 +384,16 @@ export function DevelopmentPage() {
               <p>Private owner-only preview from the editable website repository.</p>
             </div>
             <ButtonLink
-              href={websitePreviewUrl}
+              href={devicePreviewUrl(websitePreviewUrl, {
+                device: 'desktop',
+                label: 'Made Solid website',
+                returnUrl: window.location.href,
+              })}
               rel="noreferrer"
               target="_blank"
               variant="secondary"
             >
-              Open full screen <ArrowUpRight aria-hidden="true" size={16} />
+              Preview devices <ArrowUpRight aria-hidden="true" size={16} />
             </ButtonLink>
           </header>
           <iframe

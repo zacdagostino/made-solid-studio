@@ -37,6 +37,7 @@ export type CodexUpdateStatus = {
     | 'unavailable'
     | 'updated'
     | 'waiting_for_idle';
+  statusChangedAt: string | null;
   updateAvailable: boolean;
   updatedAt: string | null;
 };
@@ -67,6 +68,14 @@ export function readCodexUpdateStatus(): Promise<CodexUpdateStatus> {
 export function checkCodexUpdatesNow(): Promise<CodexUpdateStatus> {
   return codexUpdateRequest({
     body: JSON.stringify({ action: 'check' }),
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    method: 'POST',
+  });
+}
+
+export function retryCodexUpdate(): Promise<CodexUpdateStatus> {
+  return codexUpdateRequest({
+    body: JSON.stringify({ action: 'retry' }),
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     method: 'POST',
   });

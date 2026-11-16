@@ -21,6 +21,8 @@ if (process.env.SITEFORGE_EXTERNAL_BUILDER !== '1') {
 }
 if (process.env.MADE_SOLID_HANDOFF_URL && process.env.MADE_SOLID_HANDOFF_SECRET) {
   workerScripts.push(['made-solid-handoffs', 'made-solid-handoff-worker.mjs']);
+  workerScripts.push(['clientspace-balances', 'clientspace-balance-worker.mjs']);
+  workerScripts.push(['client-email-inbox', 'client-email-inbox-worker.mjs']);
 }
 if (
   (process.env.MADE_SOLID_REPORT_PREVIEW_URL || process.env.MADE_SOLID_HANDOFF_URL) &&
